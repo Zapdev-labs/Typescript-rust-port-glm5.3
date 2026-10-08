@@ -1722,3 +1722,23 @@ unary ±).
 (dump 13, symbols 15, program 15, fixture matrix 9/9); the 300-slice
 **384/384 byte-identical, divergence 0** — full driver parity at
 parse+bind depth holds through S2.
+
+## Full-port coverage ledger (cross-checked 2026-10-08)
+
+Every Go package under `tsc/internal/` (51 dirs) maps to a SPEC crate —
+no orphaned surface. Landed (33 crates): Layer 0 all 10 (collections,
+stringutil, jsnum, nativepath, tspath, json, locale, debug, repo, core);
+Layer 1 six of ten (diagnostics, vfs, contentmapper, glob, packagejson,
+semver — sourcemap, symlinks, tracing, spanmap-landed*); Layer 2 all 5
+(ast, scanner, parser, astnav-in-binder-shims*, binder); Layer 3 all 5
+(module, tsoptions, compiler, outputpaths, bundled); Layer 4 one of five
+(checker — the M6 long pole in flight; evaluator, pseudochecker,
+nodebuilder, modulespecifiers pending); Layer 6 two of ~15 (testutil,
+testrunner — the conformance gate tooling). Remaining: 22 crates across
+Layer 4 tail, Layer 5 back end (printer, transformers, transpile,
+diagnosticwriter), and Layer 6 drivers/services (execute, fswatch,
+format, ls, project, lsp+lsproto, jsonrpc, ipc, api, fourslash, pprof,
+osutil-landed*). (*spanmap landed as a crate; astnav + osutil landed
+early; their Layer-table placement differs from this ledger's simple
+count.) The full mapping is SPEC §3's layer tables; this ledger records
+the cross-check ran and the plan covers the complete Go port.
