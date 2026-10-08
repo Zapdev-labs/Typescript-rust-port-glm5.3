@@ -2214,7 +2214,6 @@ fn factory_members(s: &Schema, key: &str) -> Vec<FactoryMember> {
     s.node_def(key)
         .members
         .iter()
-        .filter(|m| !m.no_factory)
         .map(|m| {
             let r = s.resolve_member(key, m);
             FactoryMember {
@@ -2231,6 +2230,10 @@ fn factory_members(s: &Schema, key: &str) -> Vec<FactoryMember> {
                 r,
             }
         })
+        // Go schema.ts: `noFactory = goOnly || field.noFactory || member.noFactory`
+        // — the resolved flag, not the raw member's (CaseOrDefaultClause's
+        // goOnly FallthroughFlowNode is excluded from New* params).
+        .filter(|fm| !fm.r.no_factory)
         .collect()
 }
 

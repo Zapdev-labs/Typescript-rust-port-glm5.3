@@ -284,3 +284,57 @@ a view type over unsafe punning. Raw outputs: ~/bench-results/phase0 (rig).
 - Validation: CARGO_TARGET_DIR=/tmp/tsrs-pkg cargo test -p tsc-packagejson
   16/16 green; clippy --all-targets clean for the crate (pre-existing
   tsc-tspath warnings untouched); cargo check green.
+
+## 2026-10-07 gen-ast + crates/ast — NodeFactory (M3 wave 2)
+- gen-ast now emits a third output, `crates/ast/src/factory_generated.rs`
+  (7339 lines): the per-kind `New*`/`Update*` constructors, generated from the
+  same ast.json with generate-go-ast.ts's exact rules — members filtered by
+  the *resolved* noFactory (schema.ts folds goOnly in: CaseOrDefaultClause's
+  FallthroughFlowNode is not a New* param), `isKindParam` members become the
+  `kind: Kind` argument (Token/BindingPattern/ForInOrOfStatement/...),
+  `isNodeFlagsMember` members set Node.Flags (bitmask-masked where ast.json
+  says: PropertyAccessExpression & NodeFlagsOptionalChain), other `bitmask`
+  members mask into the data field (StringLiteral & TokenFlagsStringLiteralFlags),
+  `hasTextContent` bumps text_count, and kind-alias constructors
+  (NewJSTypeAliasDeclaration, NewJSImportDeclaration) plus Go's per-node
+  Update switch are mirrored. Uncovered struct fields (flow/symbol links,
+  facts, RawText on NoSubstitutionTemplateLiteral) take Go's fresh-struct zero
+  values. 193 New* + 166 Update* generated — 1:1 with Go ast_generated.go
+  (verified: full inventory order-parity test + a 359/359 positional
+  signature cross-check).
+- Mapping: Go `*Node` children → NodeId (mandatory slots use `NodeId::NONE`
+  for Go nil), `*NodeList`/`*ModifierList` → Option<NodeList>/Option<ModifierList>,
+  string params → `&str` (payload owns the copy — Go shares source slices),
+  `[]string` raw → Vec<Box<str>>, `any` → Arc<dyn Any>. Param names are the
+  snake_cased member names (so `Type` is `type_`, matching the struct field,
+  where Go says `typeNode`); argument ORDER is Go's exactly.
+- NodeFactory core is hand-written in factory.rs: it BORROWS the NodeStore
+  arena (`&mut dyn NodeStore`, SPEC §5.1) and returns NodeId handles; the
+  parser flow is SourceFile::new (file node pre-allocated at arena slot 0,
+  since SourceFile::payload assumes nodes[0]) → NodeFactory::new(&mut file) →
+  build → factory.new_source_file(statements, eof) (Go's
+  f.NewSourceFile(opts, text, ...) — opts/text live on the arena owner here;
+  it stamps node_count/text_count into the payload where Go's parser assigns
+  `result.NodeCount = p.factory.NodeCount()`). Go's NodeFactoryHooks
+  (OnCreate/OnUpdate/OnClone) are deferred (transformer-era; parser passes
+  none). UpdateSourceFile is an in-place payload write (PORT: the arena
+  holds exactly one SourceFile node, so the Go fresh-node + copyFrom +
+  updateNode reduces to in-place; identity never changes).
+- NodeStore gained `file_id()` (required method; SourceFile + the visitor
+  TestStore implement it) — the factory's NewSourceFile needs it to address
+  slot 0; Go has no counterpart (pointer graph).
+- Token cache ported: TokenCacheKey{parent: NodeId, loc: TextRange} +
+  SourceFile::get_or_create_token + create_token (Go ast.go, verbatim kind
+  dispatch; token text is copied from the source slice, PORT). The cache is a
+  SourceFile field as in Go. The scoped factory inside create_token is
+  discarded, so cached tokens never hit parse counters (Go's separate
+  tokenFactory).
+- Tests: 57/57 green (48 prior + 9 new: inventory parity against the
+  hand-extracted Go list, constructor/flags/for_each_child order, Update
+  identity + flags/loc copy, new_source_file counters, token cache incl. the
+  kind-mismatch panic, modifier lists; plus the generated compile-time
+  addressability probe for all 359 methods). node_size_is_48_bytes untouched
+  and green. `gen-ast --check` green/idempotent for all three outputs;
+  clippy -p tsc-ast -p gen-ast --all-targets clean (tsc-tspath warnings are
+  another worker's in-flight crate); bench-harness check green; tsc-scanner's
+  60 errors are all inside its own in-flight files (none reference crates/ast).

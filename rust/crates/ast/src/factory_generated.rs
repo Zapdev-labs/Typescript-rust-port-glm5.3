@@ -575,13 +575,13 @@ impl NodeFactory<'_> {
         updated
     }
 
-    /// Go: `func (f *NodeFactory) NewCaseOrDefaultClause(Kind, Expression, Statements, FallthroughFlowNode) *Node` (ast_generated.go).
-    pub fn new_case_or_default_clause(&mut self, kind: Kind, expression: NodeId, statements: Option<NodeList>, fallthrough_flow_node: Option<FlowNodeId>) -> NodeId {
+    /// Go: `func (f *NodeFactory) NewCaseOrDefaultClause(Kind, Expression, Statements) *Node` (ast_generated.go).
+    pub fn new_case_or_default_clause(&mut self, kind: Kind, expression: NodeId, statements: Option<NodeList>) -> NodeId {
         let data = CaseOrDefaultClause {
             facts: 0,
             expression,
             statements,
-            fallthrough_flow_node,
+            fallthrough_flow_node: None,
         };
         self.new_node(kind, NodeFlags::NONE, NodeData::CaseOrDefaultClause(Box::new(data)))
     }
@@ -590,7 +590,7 @@ impl NodeFactory<'_> {
     /// returns `node` unchanged when every member matches (Go returns the
     /// original `*Node`), else a fresh node with Flags/Loc copied from the
     /// original (Go `updateNode`).
-    pub fn update_case_or_default_clause(&mut self, node: NodeId, expression: NodeId, statements: Option<NodeList>, fallthrough_flow_node: Option<FlowNodeId>) -> NodeId {
+    pub fn update_case_or_default_clause(&mut self, node: NodeId, expression: NodeId, statements: Option<NodeList>) -> NodeId {
         let (flags, loc, kind, changed) = {
             let n = self.store.node(node);
             let d = n.as_case_or_default_clause().unwrap_or_else(|| panic!("UpdateCaseOrDefaultClause: node {node} does not carry CaseOrDefaultClause data"));
@@ -599,14 +599,13 @@ impl NodeFactory<'_> {
                 n.loc,
                 n.kind,
                 expression != d.expression
-                || statements != d.statements
-                || fallthrough_flow_node != d.fallthrough_flow_node,
+                || statements != d.statements,
             )
         };
         if !changed {
             return node;
         }
-        let updated = self.new_case_or_default_clause(kind, expression, statements, fallthrough_flow_node);
+        let updated = self.new_case_or_default_clause(kind, expression, statements);
         let u = self.store.node_mut(updated);
         u.flags = flags;
         u.loc = loc;
@@ -1114,8 +1113,8 @@ impl NodeFactory<'_> {
         updated
     }
 
-    /// Go: `func (f *NodeFactory) NewFunctionDeclaration(modifiers, AsteriskToken, name, TypeParameters, Parameters, Type, FullSignature, Body, ReturnFlowNode) *Node` (ast_generated.go).
-    pub fn new_function_declaration(&mut self, modifiers: Option<ModifierList>, asterisk_token: Option<NodeId>, name: Option<NodeId>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>, return_flow_node: Option<FlowNodeId>) -> NodeId {
+    /// Go: `func (f *NodeFactory) NewFunctionDeclaration(modifiers, AsteriskToken, name, TypeParameters, Parameters, Type, FullSignature, Body) *Node` (ast_generated.go).
+    pub fn new_function_declaration(&mut self, modifiers: Option<ModifierList>, asterisk_token: Option<NodeId>, name: Option<NodeId>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>) -> NodeId {
         let data = FunctionDeclaration {
             flow_node: None,
             symbol: None,
@@ -1132,7 +1131,7 @@ impl NodeFactory<'_> {
             end_flow_node: None,
             facts: 0,
             name,
-            return_flow_node,
+            return_flow_node: None,
         };
         self.new_node(Kind::FunctionDeclaration, NodeFlags::NONE, NodeData::FunctionDeclaration(Box::new(data)))
     }
@@ -1141,7 +1140,7 @@ impl NodeFactory<'_> {
     /// returns `node` unchanged when every member matches (Go returns the
     /// original `*Node`), else a fresh node with Flags/Loc copied from the
     /// original (Go `updateNode`).
-    pub fn update_function_declaration(&mut self, node: NodeId, modifiers: Option<ModifierList>, asterisk_token: Option<NodeId>, name: Option<NodeId>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>, return_flow_node: Option<FlowNodeId>) -> NodeId {
+    pub fn update_function_declaration(&mut self, node: NodeId, modifiers: Option<ModifierList>, asterisk_token: Option<NodeId>, name: Option<NodeId>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>) -> NodeId {
         let (flags, loc, _kind, changed) = {
             let n = self.store.node(node);
             let d = n.as_function_declaration().unwrap_or_else(|| panic!("UpdateFunctionDeclaration: node {node} does not carry FunctionDeclaration data"));
@@ -1156,14 +1155,13 @@ impl NodeFactory<'_> {
                 || parameters != d.parameters
                 || type_ != d.type_
                 || full_signature != d.full_signature
-                || body != d.body
-                || return_flow_node != d.return_flow_node,
+                || body != d.body,
             )
         };
         if !changed {
             return node;
         }
-        let updated = self.new_function_declaration(modifiers, asterisk_token, name, type_parameters, parameters, type_, full_signature, body, return_flow_node);
+        let updated = self.new_function_declaration(modifiers, asterisk_token, name, type_parameters, parameters, type_, full_signature, body);
         let u = self.store.node_mut(updated);
         u.flags = flags;
         u.loc = loc;
@@ -1969,8 +1967,8 @@ impl NodeFactory<'_> {
         updated
     }
 
-    /// Go: `func (f *NodeFactory) NewConstructorDeclaration(modifiers, TypeParameters, Parameters, Type, FullSignature, Body, ReturnFlowNode) *Node` (ast_generated.go).
-    pub fn new_constructor_declaration(&mut self, modifiers: Option<ModifierList>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>, return_flow_node: Option<FlowNodeId>) -> NodeId {
+    /// Go: `func (f *NodeFactory) NewConstructorDeclaration(modifiers, TypeParameters, Parameters, Type, FullSignature, Body) *Node` (ast_generated.go).
+    pub fn new_constructor_declaration(&mut self, modifiers: Option<ModifierList>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>) -> NodeId {
         let data = ConstructorDeclaration {
             symbol: None,
             modifiers,
@@ -1984,7 +1982,7 @@ impl NodeFactory<'_> {
             body,
             end_flow_node: None,
             facts: 0,
-            return_flow_node,
+            return_flow_node: None,
         };
         self.new_node(Kind::Constructor, NodeFlags::NONE, NodeData::ConstructorDeclaration(Box::new(data)))
     }
@@ -1993,7 +1991,7 @@ impl NodeFactory<'_> {
     /// returns `node` unchanged when every member matches (Go returns the
     /// original `*Node`), else a fresh node with Flags/Loc copied from the
     /// original (Go `updateNode`).
-    pub fn update_constructor_declaration(&mut self, node: NodeId, modifiers: Option<ModifierList>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>, return_flow_node: Option<FlowNodeId>) -> NodeId {
+    pub fn update_constructor_declaration(&mut self, node: NodeId, modifiers: Option<ModifierList>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>) -> NodeId {
         let (flags, loc, _kind, changed) = {
             let n = self.store.node(node);
             let d = n.as_constructor_declaration().unwrap_or_else(|| panic!("UpdateConstructorDeclaration: node {node} does not carry ConstructorDeclaration data"));
@@ -2006,14 +2004,13 @@ impl NodeFactory<'_> {
                 || parameters != d.parameters
                 || type_ != d.type_
                 || full_signature != d.full_signature
-                || body != d.body
-                || return_flow_node != d.return_flow_node,
+                || body != d.body,
             )
         };
         if !changed {
             return node;
         }
-        let updated = self.new_constructor_declaration(modifiers, type_parameters, parameters, type_, full_signature, body, return_flow_node);
+        let updated = self.new_constructor_declaration(modifiers, type_parameters, parameters, type_, full_signature, body);
         let u = self.store.node_mut(updated);
         u.flags = flags;
         u.loc = loc;
@@ -2363,8 +2360,8 @@ impl NodeFactory<'_> {
         self.new_node(Kind::SemicolonClassElement, NodeFlags::NONE, NodeData::SemicolonClassElement(Box::new(data)))
     }
 
-    /// Go: `func (f *NodeFactory) NewClassStaticBlockDeclaration(modifiers, Body, ReturnFlowNode) *Node` (ast_generated.go).
-    pub fn new_class_static_block_declaration(&mut self, modifiers: Option<ModifierList>, body: NodeId, return_flow_node: Option<FlowNodeId>) -> NodeId {
+    /// Go: `func (f *NodeFactory) NewClassStaticBlockDeclaration(modifiers, Body) *Node` (ast_generated.go).
+    pub fn new_class_static_block_declaration(&mut self, modifiers: Option<ModifierList>, body: NodeId) -> NodeId {
         let data = ClassStaticBlockDeclaration {
             symbol: None,
             modifiers,
@@ -2372,7 +2369,7 @@ impl NodeFactory<'_> {
             next_container: None,
             facts: 0,
             body,
-            return_flow_node,
+            return_flow_node: None,
         };
         self.new_node(Kind::ClassStaticBlockDeclaration, NodeFlags::NONE, NodeData::ClassStaticBlockDeclaration(Box::new(data)))
     }
@@ -2381,7 +2378,7 @@ impl NodeFactory<'_> {
     /// returns `node` unchanged when every member matches (Go returns the
     /// original `*Node`), else a fresh node with Flags/Loc copied from the
     /// original (Go `updateNode`).
-    pub fn update_class_static_block_declaration(&mut self, node: NodeId, modifiers: Option<ModifierList>, body: NodeId, return_flow_node: Option<FlowNodeId>) -> NodeId {
+    pub fn update_class_static_block_declaration(&mut self, node: NodeId, modifiers: Option<ModifierList>, body: NodeId) -> NodeId {
         let (flags, loc, _kind, changed) = {
             let n = self.store.node(node);
             let d = n.as_class_static_block_declaration().unwrap_or_else(|| panic!("UpdateClassStaticBlockDeclaration: node {node} does not carry ClassStaticBlockDeclaration data"));
@@ -2390,14 +2387,13 @@ impl NodeFactory<'_> {
                 n.loc,
                 n.kind,
                 modifiers != d.modifiers
-                || body != d.body
-                || return_flow_node != d.return_flow_node,
+                || body != d.body,
             )
         };
         if !changed {
             return node;
         }
-        let updated = self.new_class_static_block_declaration(modifiers, body, return_flow_node);
+        let updated = self.new_class_static_block_declaration(modifiers, body);
         let u = self.store.node_mut(updated);
         u.flags = flags;
         u.loc = loc;
@@ -2672,8 +2668,8 @@ impl NodeFactory<'_> {
         updated
     }
 
-    /// Go: `func (f *NodeFactory) NewFunctionExpression(modifiers, AsteriskToken, name, TypeParameters, Parameters, Type, FullSignature, Body, ReturnFlowNode) *Node` (ast_generated.go).
-    pub fn new_function_expression(&mut self, modifiers: Option<ModifierList>, asterisk_token: Option<NodeId>, name: Option<NodeId>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>, return_flow_node: Option<FlowNodeId>) -> NodeId {
+    /// Go: `func (f *NodeFactory) NewFunctionExpression(modifiers, AsteriskToken, name, TypeParameters, Parameters, Type, FullSignature, Body) *Node` (ast_generated.go).
+    pub fn new_function_expression(&mut self, modifiers: Option<ModifierList>, asterisk_token: Option<NodeId>, name: Option<NodeId>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>) -> NodeId {
         let data = FunctionExpression {
             symbol: None,
             modifiers,
@@ -2689,7 +2685,7 @@ impl NodeFactory<'_> {
             flow_node: None,
             facts: 0,
             name,
-            return_flow_node,
+            return_flow_node: None,
         };
         self.new_node(Kind::FunctionExpression, NodeFlags::NONE, NodeData::FunctionExpression(Box::new(data)))
     }
@@ -2698,7 +2694,7 @@ impl NodeFactory<'_> {
     /// returns `node` unchanged when every member matches (Go returns the
     /// original `*Node`), else a fresh node with Flags/Loc copied from the
     /// original (Go `updateNode`).
-    pub fn update_function_expression(&mut self, node: NodeId, modifiers: Option<ModifierList>, asterisk_token: Option<NodeId>, name: Option<NodeId>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>, return_flow_node: Option<FlowNodeId>) -> NodeId {
+    pub fn update_function_expression(&mut self, node: NodeId, modifiers: Option<ModifierList>, asterisk_token: Option<NodeId>, name: Option<NodeId>, type_parameters: Option<NodeList>, parameters: Option<NodeList>, type_: Option<NodeId>, full_signature: Option<NodeId>, body: Option<NodeId>) -> NodeId {
         let (flags, loc, _kind, changed) = {
             let n = self.store.node(node);
             let d = n.as_function_expression().unwrap_or_else(|| panic!("UpdateFunctionExpression: node {node} does not carry FunctionExpression data"));
@@ -2713,14 +2709,13 @@ impl NodeFactory<'_> {
                 || parameters != d.parameters
                 || type_ != d.type_
                 || full_signature != d.full_signature
-                || body != d.body
-                || return_flow_node != d.return_flow_node,
+                || body != d.body,
             )
         };
         if !changed {
             return node;
         }
-        let updated = self.new_function_expression(modifiers, asterisk_token, name, type_parameters, parameters, type_, full_signature, body, return_flow_node);
+        let updated = self.new_function_expression(modifiers, asterisk_token, name, type_parameters, parameters, type_, full_signature, body);
         let u = self.store.node_mut(updated);
         u.flags = flags;
         u.loc = loc;
