@@ -1820,7 +1820,7 @@ impl Checker {
     /// Go: `func (c *Checker) getSignatureFromDeclaration(declaration) *Signature`
     /// (S8). TODO(port M6 S8): the declaration→signature resolution;
     /// permissive None.
-    fn get_signature_from_declaration(&mut self, declaration: NodeId) -> Option<SignatureId> {
+    pub(crate) fn get_signature_from_declaration(&mut self, declaration: NodeId) -> Option<SignatureId> {
         let _ = declaration;
         None
     }
@@ -1888,17 +1888,21 @@ impl Checker {
         None
     }
 
-    /// TODO(port M6 S3): `checkRightHandSideOfForOf` → the iterated-type
-    /// machinery; permissive errorType.
+    /// `checkRightHandSideOfForOf` (checker.go:18081) — REPLACED by the
+    /// M6 S3 real body (statements.rs); this wrapper keeps the S2 call
+    /// sites' non-optional TypeId shape (Go's nil iterated type maps to the
+    /// errorType answer the S2 spine used).
     fn check_right_hand_side_of_for_of(&mut self, statement: NodeId) -> TypeId {
-        let _ = statement;
-        self.error_type()
+        match self.check_right_hand_side_of_for_of_real(statement) {
+            Some(t) => t,
+            None => self.error_type(),
+        }
     }
 
     /// Go: `func (c *Checker) getExtractStringType(t *Type) *Type` (S10) —
     /// TODO(port M6 S10): the mapped-type/string-literal extraction; the
     /// identity keeps the for-in arm's stringType answer dominant.
-    fn get_extract_string_type(&mut self, t: TypeId) -> TypeId {
+    pub(crate) fn get_extract_string_type(&mut self, t: TypeId) -> TypeId {
         let _ = t;
         self.string_type()
     }
@@ -2203,18 +2207,13 @@ impl Checker {
         None
     }
 
-    /// Go: `func (c *Checker) isNullOrUndefined(node *ast.Node) bool`.
+    /// `isNullOrUndefined` (checker.go:18070) — REPLACED by the M6 S3 real
+    /// body (statements.rs); kept as a thin alias for the S2 call sites.
+    /// PORT note: the S2 stub skipped only *parenthesized* wrappers
+    /// (walk_up_parenthesized_expressions); Go's `SkipParentheses` and S3's
+    /// real body use the full skip.
     fn is_null_or_undefined(&mut self, node: NodeId) -> bool {
-        let expr = ast_shims::walk_up_parenthesized_expressions(self.store(), node)
-            .unwrap_or(node);
-        let n = self.store().node(expr);
-        if ast_shims::is_null_literal(n) {
-            return true;
-        }
-        if tsc_ast::is_identifier(n) {
-            return self.get_resolved_symbol(expr) == Some(self.undefined_symbol());
-        }
-        false
+        self.is_null_or_undefined_real(node)
     }
 
     /// Go: `func (c *Checker) tryGetTypeFromTypeNode(node *ast.Node) *Type`.
@@ -3487,7 +3486,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getTypeOfAccessors(symbol *ast.Symbol) *Type`.
-    fn get_type_of_accessors(&mut self, symbol: SymbolId) -> TypeId {
+    pub(crate) fn get_type_of_accessors(&mut self, symbol: SymbolId) -> TypeId {
         if self.value_symbol_links.get(symbol).resolved_type.is_none() {
             if !self.push_type_resolution(
                 TypeSystemEntity::Symbol(symbol),
@@ -4362,7 +4361,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) computeEnumMemberValues(node)` (24472).
-    fn compute_enum_member_values(&mut self, node: NodeId) {
+    pub(crate) fn compute_enum_member_values(&mut self, node: NodeId) {
         let computed = self
             .node_links
             .get(node)

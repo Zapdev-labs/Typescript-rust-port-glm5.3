@@ -848,7 +848,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkSourceElements(nodes []*ast.Node)`.
-    fn check_source_elements(&mut self, nodes: &[NodeId]) {
+    pub(crate) fn check_source_elements(&mut self, nodes: &[NodeId]) {
         for &node in nodes {
             if self.is_canceled() {
                 break;
@@ -858,7 +858,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkSourceElement(node *ast.Node) bool`.
-    fn check_source_element(&mut self, node: Option<NodeId>) -> bool {
+    pub(crate) fn check_source_element(&mut self, node: Option<NodeId>) -> bool {
         if let Some(node) = node {
             let save_current_node = self.current_node;
             let save_within_unreachable_code = self.within_unreachable_code;
@@ -1069,7 +1069,7 @@ impl Checker {
     }
 
     /// The file NodeId a node belongs to (Go: `ast.GetSourceFileOfNode`).
-    fn get_source_file_node_of(&self, node: NodeId) -> NodeId {
+    pub(crate) fn get_source_file_node_of(&self, node: NodeId) -> NodeId {
         let store = self.program.node_store();
         let mut current = node;
         loop {

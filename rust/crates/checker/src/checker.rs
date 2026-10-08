@@ -497,6 +497,21 @@ pub struct Checker {
     /// Go: `thisExpandoLocations map[*ast.Symbol]*ast.Node` (nullable value —
     /// Go caches the expando location per symbol, nil included).
     pub(crate) this_expando_locations: FxHashMap<SymbolId, Option<NodeId>>,
+    // ── M6 S3 (statements.rs): the statement/declaration-check state ──
+    /// Go: `flowAnalysisDisabled bool` (checker.go) — the flag checkBlock
+    /// saves/restores around function/module blocks (the flow engine is W3;
+    /// the flag rides through untouched).
+    pub(crate) flow_analysis_disabled: bool,
+    /// Go: `iterationTypesCache map[IterationTypesKey]IterationTypes`
+    /// (checker.go:6419) — the S3 iteration family's cache.
+    pub(crate) iteration_types_cache:
+        FxHashMap<crate::statements::IterationTypesKey, crate::statements::IterationTypes>,
+    /// Go: `mergedExportsChecked collections.Set[*ast.Symbol]` — the
+    /// checkExportsOnMergedDeclarations once-per-symbol set.
+    pub(crate) merged_exports_checked: FxHashSet<SymbolId>,
+    /// Go: `moduleImportAttributesTypes map[*ast.Symbol]*Type` — the
+    /// module-attributes cache getTypeOfModuleImportAttributes reads.
+    pub(crate) module_import_attributes_types: FxHashMap<SymbolId, TypeId>,
 }
 
 /// Go: `func createFileIndexMap(files []*ast.SourceFile) map[*ast.SourceFile]int`.
@@ -1427,6 +1442,10 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         pattern_for_type: FxHashMap::default(),
         this_expando_kinds: FxHashMap::default(),
         this_expando_locations: FxHashMap::default(),
+        flow_analysis_disabled: false,
+        iteration_types_cache: FxHashMap::default(),
+        merged_exports_checked: FxHashSet::default(),
+        module_import_attributes_types: FxHashMap::default(),
     };
 
     // Go: countGlobalSymbols sizes the globals table — a capacity hint; the
