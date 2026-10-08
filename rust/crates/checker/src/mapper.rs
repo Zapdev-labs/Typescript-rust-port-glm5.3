@@ -28,6 +28,13 @@
 //     in the checker cannot capture it (self-referential), so the checker is
 //     the callback's first argument (PORT-noted per constructor).
 
+// The mapper machinery's consumers are the M6 S7 instantiateType engine and
+// the S5/inference waves (mapper.go is W1's "foundational for the later
+// relater/instantiation waves" file); until those land, the surface is
+// test-driven — the spike's Checker-skeleton convention of silencing the
+// dead-code analysis applies (remove with the S7 wave).
+#![allow(dead_code)]
+
 use crate::todo_shapes::{InferenceContextId, InferenceInfo, TypeMapperId};
 use crate::types::TypeId;
 use crate::Checker;
@@ -46,6 +53,13 @@ pub enum TypeMapperKind {
 }
 
 // TypeMapperData
+
+/// PORT (clippy type_complexity): Go's `targets []func() *Type` thunks —
+/// the checker-table thunks take the checker as their argument (see
+/// `DeferredTypeMapper`).
+pub(crate) type DeferredThunk = Box<dyn Fn(&mut Checker) -> TypeId>;
+/// PORT (clippy type_complexity): Go's `fn func(*Type) *Type`.
+pub(crate) type MapperFn = Box<dyn Fn(&mut Checker, TypeId) -> TypeId>;
 
 /// Go: `type TypeMapperData interface` + the eight concrete impls (each of
 /// which embeds `TypeMapperBase`, itself embedding `TypeMapper`; the port's
@@ -73,14 +87,14 @@ pub enum TypeMapperData {
     /// their argument instead.
     Deferred {
         sources: Vec<TypeId>,
-        targets: Vec<Box<dyn Fn(&mut Checker) -> TypeId>>,
+        targets: Vec<DeferredThunk>,
     },
     /// Go: `type FunctionTypeMapper struct { TypeMapperBase; fn func(*Type) *Type }`.
     ///
     /// PORT: same as Deferred — the function takes the checker as its first
     /// argument.
     Function {
-        f: Box<dyn Fn(&mut Checker, TypeId) -> TypeId>,
+        f: MapperFn,
     },
     /// Go: `type MergedTypeMapper struct { TypeMapperBase; m1, m2 *TypeMapper }`.
     Merged {
@@ -381,7 +395,7 @@ impl Checker {
     pub(crate) fn new_deferred_type_mapper(
         &mut self,
         sources: &[TypeId],
-        targets: Vec<Box<dyn Fn(&mut Checker) -> TypeId>>,
+        targets: Vec<DeferredThunk>,
     ) -> TypeMapperId {
         let id = TypeMapperId(self.type_mappers.len() as u32);
         self.type_mappers.push(TypeMapperData::Deferred {
@@ -394,7 +408,7 @@ impl Checker {
     /// Go: `func newFunctionTypeMapper(fn func(*Type) *Type) *TypeMapper`.
     pub(crate) fn new_function_type_mapper(
         &mut self,
-        f: Box<dyn Fn(&mut Checker, TypeId) -> TypeId>,
+        f: MapperFn,
     ) -> TypeMapperId {
         let id = TypeMapperId(self.type_mappers.len() as u32);
         self.type_mappers.push(TypeMapperData::Function { f });
@@ -610,8 +624,9 @@ mod tests {
         assert_eq!(map(&mut c, m1, a), b);
         assert_eq!(c.mapper_kind(m1), TypeMapperKind::Unknown);
         // DeferredTypeMapper likewise.
-        let m2 = c.new_deferred_type_mapper(&[a], vec![Box::new(|c: &mut Checker| c.bigint_type())]);
-        assert_eq!(map(&mut c, m2, a), c.bigint_type());
+        let bigint = c.bigint_type();
+        let m2 = c.new_deferred_type_mapper(&[a], vec![Box::new(move |c: &mut Checker| c.bigint_type())]);
+        assert_eq!(map(&mut c, m2, a), bigint);
         assert_eq!(c.mapper_kind(m2), TypeMapperKind::Unknown);
         // FunctionTypeMapper overrides only Map — base Kind AND base
         // MapsThisOnly both show through.
@@ -631,7 +646,8 @@ mod tests {
         let m = c.new_deferred_type_mapper(&[a], vec![Box::new(|c: &mut Checker| c.number_type())]);
         assert_eq!(map(&mut c, m, a), c.number_type());
         // A non-matching type never invokes the thunk.
-        assert_eq!(map(&mut c, m, c.bigint_type()), c.bigint_type());
+        let bigint = c.bigint_type();
+        assert_eq!(map(&mut c, m, bigint), bigint);
     }
 
     #[test]
@@ -674,14 +690,17 @@ mod tests {
         // mergeTypeMappers(m1, m2) builds a Merged mapper.
         let merged = c.merge_type_mappers(Some(s), Some(s)).unwrap();
         assert_eq!(c.mapper_kind(merged), TypeMapperKind::Merged);
-        // prependTypeMapping puts the new simple mapping FIRST (m2 runs
-        // after it): d→b composed with a→b maps a→b and d→b.
+        // prependTypeMapping puts the new simple mapping FIRST (the existing
+        // mapper runs after it): d→b composed with a→b maps a→b and d→b.
         let prepended = c.prepend_type_mapping(d, b, Some(s));
         assert_eq!(map(&mut c, prepended, d), b);
         assert_eq!(map(&mut c, prepended, a), b);
-        // appendTypeMapping puts it LAST: a→b composed with d→a maps d→a→b.
+        // appendTypeMapping puts it LAST (Go: `newMergedTypeMapper(mapper,
+        // newSimpleTypeMapper(...))` + `m2.Map(m1.Map(t))`): the existing
+        // mapper a→b runs first, the new d→a mapping after it — so d→a, and
+        // a→b→b (the new mapping doesn't see the mapped output).
         let appended = c.append_type_mapping(Some(s), d, a);
-        assert_eq!(map(&mut c, appended, d), b);
+        assert_eq!(map(&mut c, appended, d), a);
         assert_eq!(map(&mut c, appended, a), b);
         // Nil-mapper arms both build the bare simple mapping.
         let bare = c.prepend_type_mapping(a, b, None);
@@ -728,7 +747,8 @@ mod tests {
         assert!(c.inference_contexts[ctx.0 as usize].inferences[0].is_fixed);
         assert_eq!(c.inference_contexts[ctx.0 as usize].inferences[0].inferred_type, None);
         // A non-matching type passes through untouched.
-        assert_eq!(map(&mut c, fixing, c.bigint_type()), c.bigint_type());
+        let bigint = c.bigint_type();
+        assert_eq!(map(&mut c, fixing, bigint), bigint);
         // A non-fixing mapper never touches the isFixed flag.
         let non_fixing = c.new_inference_type_mapper(ctx, false);
         c.inference_contexts[ctx.0 as usize].inferences[0].is_fixed = false;
@@ -740,19 +760,21 @@ mod tests {
     fn backreference_mapper_maps_the_inference_tail_to_unknown() {
         let mut c = new_checker();
         let ctx = InferenceContextId(c.inference_contexts.len() as u32);
+        let (string, number, bigint) = (c.string_type(), c.number_type(), c.bigint_type());
+        let unknown = c.unknown_type();
         c.inference_contexts.push(InferenceContext {
             inferences: vec![
-                InferenceInfo { type_parameter: c.string_type(), ..Default::default() },
-                InferenceInfo { type_parameter: c.number_type(), ..Default::default() },
-                InferenceInfo { type_parameter: c.bigint_type(), ..Default::default() },
+                InferenceInfo { type_parameter: string, ..Default::default() },
+                InferenceInfo { type_parameter: number, ..Default::default() },
+                InferenceInfo { type_parameter: bigint, ..Default::default() },
             ],
         });
         let m = c.new_backreference_mapper(ctx, 1);
         // Only the tail (index 1..) maps to unknownType; the head passes
         // through — the forward-references Go's comment describes.
-        assert_eq!(map(&mut c, m, c.string_type()), c.string_type());
-        assert_eq!(map(&mut c, m, c.number_type()), c.unknown_type());
-        assert_eq!(map(&mut c, m, c.bigint_type()), c.unknown_type());
+        assert_eq!(map(&mut c, m, string), string);
+        assert_eq!(map(&mut c, m, number), unknown);
+        assert_eq!(map(&mut c, m, bigint), unknown);
     }
 
     #[test]
@@ -814,11 +836,15 @@ pub(crate) mod tests_support {
     use crate::types::{
         ObjectFlags, Type, TypeData, TypeFlags, TypeId, TypeParameter,
     };
+    use tsc_core::scriptkind::ScriptKind;
 
     /// A no-source-file program: NewChecker seeds the symbol table and the
-    /// intrinsic types through the §5.5 seam and never touches the node store.
+    /// intrinsic types through the §5.5 seam. The node store is an empty
+    /// parsed file (nothing in these tests dereferences nodes, but the
+    /// exports-side wrappers fetch the store eagerly).
     struct EmptyProgramImpl {
         options: tsc_core::options_generated::CompilerOptions,
+        source_file: tsc_ast::SourceFile,
         symbols: Vec<tsc_ast::Symbol>,
     }
 
@@ -831,7 +857,7 @@ pub(crate) mod tests_support {
         }
         fn bind_source_files(&mut self) {}
         fn node_store(&self) -> &dyn tsc_ast::NodeStore {
-            unreachable!("the mapper tests never touch the node store")
+            &self.source_file
         }
         fn symbol(&self, id: tsc_ast::SymbolId) -> &tsc_ast::Symbol {
             &self.symbols[id.0 as usize]
@@ -846,8 +872,10 @@ pub(crate) mod tests_support {
     }
 
     pub(crate) fn new_empty_checker() -> Checker {
+        let source_file = tsc_parser::parse_source_file(Default::default(), "", ScriptKind::JS);
         crate::new_checker(Box::new(EmptyProgramImpl {
             options: Default::default(),
+            source_file,
             symbols: Vec::new(),
         }))
     }

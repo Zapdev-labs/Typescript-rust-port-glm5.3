@@ -25,5 +25,6 @@ tsc-module = { path = "../module" }
 tsc-tsoptions = { path = "../tsoptions" }
 tsc-compiler = { path = "../compiler" }
 tsc-bundled = { path = "../bundled" }
+tsc-testrunner = { path = "../tsc-testrunner" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

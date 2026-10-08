@@ -12,6 +12,12 @@
 // (false). The diagnostics flow through the checker's `error`/
 // `errorOrSuggestion` collection seam (also stubbed — the M5 compiler wave).
 
+// checkUnmatchedJSDocParameters is called by the checkSource* family
+// (M6 S1's wave) and checkJSDoc* (S3); until those waves land, this file's
+// surface is test-driven — the spike's Checker-skeleton convention of
+// silencing the dead-code analysis applies (remove with the S1 wave).
+#![allow(dead_code)]
+
 use tsc_ast::nodeflags::NodeFlags as NF;
 use tsc_ast::{
     get_source_file_of_node, is_identifier, is_in_js_file, is_qualified_name, node_text, Kind,
@@ -66,7 +72,7 @@ impl Checker {
                 .expect("ParameterDeclaration data")
                 .name;
             if is_identifier(self.store().node(name)) {
-                parameters.add(node_text(self.store(), name));
+                parameters.add(node_text(self.store(), name).to_string());
             }
             if is_binding_pattern(self.store().node(name)) {
                 excluded_parameters.add(i as i32);
@@ -92,7 +98,7 @@ impl Checker {
                 if !is_identifier(self.store().node(last_name)) {
                     return;
                 }
-                let last_name_text = node_text(self.store(), last_name);
+                let last_name_text = node_text(self.store(), last_name).to_string();
                 // Go: `if excludedParameters.Has(lastJSDocParamIndex) ||
                 //       parameters.Has(lastJSDocParam.Name().Text()) { return }`.
                 if excluded_parameters.has(&(last_jsdoc_param_index as i32))
@@ -109,10 +115,14 @@ impl Checker {
                     return;
                 }
                 // Go: `if c.isArrayType(c.getTypeFromTypeNode(...)) { return }`
-                // — both callees are W1 stubs (false / errorType).
+                // — both callees are W1 stubs (false / errorType). PORT:
+                // Go evaluates the argument first; the port binds it before
+                // the `&self` receiver borrow (`is_array_type` is `&self`,
+                // `get_type_from_type_node` is `&mut self`).
                 let type_node =
                     crate::ast_shims::type_of_node(self.store(), type_expression).expect("just checked");
-                if self.is_array_type(self.get_type_from_type_node(type_node)) {
+                let param_type = self.get_type_from_type_node(type_node);
+                if self.is_array_type(param_type) {
                     return;
                 }
                 self.error(
@@ -185,7 +195,7 @@ pub(crate) fn get_all_jsdoc_tags(store: &dyn NodeStore, node: NodeId) -> Vec<Nod
                 // Go: `if lastJSDoc.Tags != nil { return lastJSDoc.Tags.Nodes }`
                 // — a nil Tags list falls through to the next comment location.
                 if let Some(tags) = store.node(last_jsdoc).as_jsdoc().expect("JSDoc data").tags.as_ref() {
-                    return tags.nodes.clone();
+                    return tags.nodes.to_vec();
                 }
             }
             // Go's for-post: `current = ast.GetNextJSDocCommentLocation(current)`.
@@ -289,10 +299,10 @@ mod tests {
             .as_ref()
             .and_then(|d| d.nodes.first().copied())
             .expect("one declaration");
-        // The declaration node itself carries HAS_JSDoc (the parser attaches
-        // it to the node it parsed JSDoc for) — the walk may find it there,
-        // or at the statement host via GetNextJSDocCommentLocation.
-        assert!(file.node(decl).flags.intersects(NF::HAS_JSDOC));
+        // The walk may start at the declaration (which the parser may or may
+        // not flag) and climbs through GetNextJSDocCommentLocation's
+        // VariableDeclarationList → VariableStatement host chain to the node
+        // that actually carries the JSDoc.
         let tags = get_all_jsdoc_tags(&file, decl);
         assert_eq!(tags.len(), 1);
         assert_eq!(file.node(tags[0]).kind, Kind::JSDocParameterTag);

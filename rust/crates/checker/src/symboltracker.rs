@@ -9,23 +9,28 @@
 // *NodeBuilderContext` — a shared mutable pointer into the nodebuilder
 // serialization state. The port holds `Rc<RefCell<NodeBuilderContext>>`
 // (the checker is single-threaded; the standard Rust shape for a Go shared
-// pointer) and takes the symbol payload by reference in `track_symbol`
-// because the tracker has no checker access (§5.4). The nodebuilder wave
-// (M6 wave 4) revisits both shapes when it lands the real context.
+// pointer). Go's `*ast.Symbol` splits into the payload reference plus the
+// `SymbolId` the tracked args record (§5.5 — see the trait PORT note in
+// todo_shapes). The nodebuilder wave (M6 wave 4) revisits both shapes when
+// it lands the real context.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use tsc_ast::{NodeId, Symbol, SymbolFlags};
+use tsc_ast::{NodeId, Symbol, SymbolFlags, SymbolId};
 
 use crate::todo_shapes::{NodeBuilderContext, SymbolTracker, TrackedSymbolArgs};
 
 /// Go: `type SymbolTrackerImpl struct { context *NodeBuilderContext; inner
 /// nodebuilder.SymbolTracker; DisableTrackSymbol bool }`.
-pub struct SymbolTrackerImpl<'ctx> {
+///
+/// The `'inner` lifetime is the Rust bound for the boxed inner tracker (Go's
+/// interface indirection through `*SymbolTrackerImpl` layers — see
+/// `take_inner_if_impl`).
+pub struct SymbolTrackerImpl<'inner> {
     /// PORT: Go's `context *NodeBuilderContext` — see the module PORT note.
-    context: Rc<RefCell<NodeBuilderContext<'ctx>>>,
-    inner: Option<Box<dyn SymbolTracker<'ctx> + 'ctx>>,
+    context: Rc<RefCell<NodeBuilderContext>>,
+    inner: Option<Box<dyn SymbolTracker<'inner> + 'inner>>,
     pub disable_track_symbol: bool,
 }
 
@@ -35,10 +40,10 @@ pub struct SymbolTrackerImpl<'ctx> {
 /// `tracker` (`for { t, ok := tracker.(*SymbolTrackerImpl); if !ok { break };
 /// tracker = t.inner }`) so re-wrapping is idempotent — the port does the
 /// same through the trait's `take_inner_if_impl` seam (see todo_shapes).
-pub fn new_symbol_tracker_impl<'ctx>(
-    context: Rc<RefCell<NodeBuilderContext<'ctx>>>,
-    tracker: Option<Box<dyn SymbolTracker<'ctx> + 'ctx>>,
-) -> SymbolTrackerImpl<'ctx> {
+pub fn new_symbol_tracker_impl<'inner>(
+    context: Rc<RefCell<NodeBuilderContext>>,
+    tracker: Option<Box<dyn SymbolTracker<'inner> + 'inner>>,
+) -> SymbolTrackerImpl<'inner> {
     let mut tracker = tracker;
     loop {
         let Some(mut t) = tracker else { break };
@@ -59,17 +64,19 @@ pub fn new_symbol_tracker_impl<'ctx>(
     }
 }
 
-impl<'ctx> SymbolTracker<'ctx> for SymbolTrackerImpl<'ctx> {
+impl<'inner> SymbolTracker<'inner> for SymbolTrackerImpl<'inner> {
     /// Go: `func (this *SymbolTrackerImpl) TrackSymbol(symbol *ast.Symbol, enclosingDeclaration *ast.Node, meaning ast.SymbolFlags) bool`.
+    #[allow(clippy::too_many_arguments)]
     fn track_symbol(
         &mut self,
         symbol: &Symbol,
+        symbol_id: SymbolId,
         enclosing_declaration: Option<NodeId>,
         meaning: SymbolFlags,
     ) -> bool {
         if !self.disable_track_symbol {
             if let Some(inner) = self.inner.as_mut() {
-                if inner.track_symbol(symbol, enclosing_declaration, meaning) {
+                if inner.track_symbol(symbol, symbol_id, enclosing_declaration, meaning) {
                     self.on_diagnostic_reported();
                     return true;
                 }
@@ -81,7 +88,7 @@ impl<'ctx> SymbolTracker<'ctx> for SymbolTrackerImpl<'ctx> {
                     .borrow_mut()
                     .tracked_symbols
                     .push(TrackedSymbolArgs {
-                        symbol,
+                        symbol: symbol_id,
                         enclosing_declaration,
                         meaning,
                     });
@@ -172,7 +179,7 @@ impl<'ctx> SymbolTracker<'ctx> for SymbolTrackerImpl<'ctx> {
     /// PORT (the unwrap seam): returns the inner tracker so
     /// `new_symbol_tracker_impl`'s loop can strip impl layers (Go:
     /// `tracker = t.inner`).
-    fn take_inner_if_impl(&mut self) -> Option<Box<dyn SymbolTracker<'ctx> + 'ctx>> {
+    fn take_inner_if_impl(&mut self) -> Option<Box<dyn SymbolTracker<'inner> + 'inner>> {
         self.inner.take()
     }
 }
@@ -199,7 +206,7 @@ mod tests {
     /// A test mock for the nodebuilder-side inner tracker: counts reports and
     /// answers `track_symbol` with a configured result.
     struct MockTracker {
-        track_calls: usize,
+        tracked: Vec<(SymbolId, Option<NodeId>, SymbolFlags)>,
         report_track: bool,
         reports: usize,
     }
@@ -208,10 +215,11 @@ mod tests {
         fn track_symbol(
             &mut self,
             _symbol: &Symbol,
-            _enclosing_declaration: Option<NodeId>,
-            _meaning: SymbolFlags,
+            symbol_id: SymbolId,
+            enclosing_declaration: Option<NodeId>,
+            meaning: SymbolFlags,
         ) -> bool {
-            self.track_calls += 1;
+            self.tracked.push((symbol_id, enclosing_declaration, meaning));
             self.report_track
         }
         fn report_inaccessible_this_error(&mut self) {
@@ -249,7 +257,11 @@ mod tests {
     }
 
     fn mock<'a>(report_track: bool) -> Box<dyn SymbolTracker<'a> + 'a> {
-        Box::new(MockTracker { track_calls: 0, report_track, reports: 0 })
+        Box::new(MockTracker {
+            tracked: Vec::new(),
+            report_track,
+            reports: 0,
+        })
     }
 
     fn value_symbol() -> Symbol {
@@ -265,10 +277,10 @@ mod tests {
         let context = Rc::new(RefCell::new(NodeBuilderContext::default()));
         let mut tracker = new_symbol_tracker_impl(context.clone(), None);
         let sym = value_symbol();
-        assert!(!tracker.track_symbol(&sym, None, SymbolFlags::VALUE));
+        assert!(!tracker.track_symbol(&sym, SymbolId(1), None, SymbolFlags::VALUE));
         assert_eq!(context.borrow().tracked_symbols.len(), 1);
+        assert_eq!(context.borrow().tracked_symbols[0].symbol, SymbolId(1));
         assert_eq!(context.borrow().tracked_symbols[0].meaning, SymbolFlags::VALUE);
-        assert_eq!(context.borrow().tracked_symbols[0].symbol.flags, SymbolFlags::PROPERTY);
         assert!(!context.borrow().reported_diagnostic);
     }
 
@@ -277,7 +289,7 @@ mod tests {
         let context = Rc::new(RefCell::new(NodeBuilderContext::default()));
         let mut tracker = new_symbol_tracker_impl(context.clone(), None);
         let sym = type_parameter_symbol();
-        tracker.track_symbol(&sym, None, SymbolFlags::TYPE);
+        tracker.track_symbol(&sym, SymbolId(2), None, SymbolFlags::TYPE);
         assert!(context.borrow().tracked_symbols.is_empty());
     }
 
@@ -287,7 +299,7 @@ mod tests {
         let mut tracker = new_symbol_tracker_impl(context.clone(), None);
         tracker.disable_track_symbol = true;
         let sym = value_symbol();
-        assert!(!tracker.track_symbol(&sym, None, SymbolFlags::VALUE));
+        assert!(!tracker.track_symbol(&sym, SymbolId(1), None, SymbolFlags::VALUE));
         assert!(context.borrow().tracked_symbols.is_empty());
     }
 
@@ -298,7 +310,7 @@ mod tests {
         let sym = value_symbol();
         // Go: `if this.inner != nil && this.inner.TrackSymbol(...) {
         // this.onDiagnosticReported(); return true }`.
-        assert!(tracker.track_symbol(&sym, None, SymbolFlags::VALUE));
+        assert!(tracker.track_symbol(&sym, SymbolId(1), None, SymbolFlags::VALUE));
         assert!(context.borrow().reported_diagnostic);
         assert!(context.borrow().tracked_symbols.is_empty());
     }
@@ -308,7 +320,7 @@ mod tests {
         let context = Rc::new(RefCell::new(NodeBuilderContext::default()));
         let mut tracker = new_symbol_tracker_impl(context.clone(), Some(mock(false)));
         let sym = value_symbol();
-        assert!(!tracker.track_symbol(&sym, None, SymbolFlags::VALUE));
+        assert!(!tracker.track_symbol(&sym, SymbolId(1), None, SymbolFlags::VALUE));
         assert_eq!(context.borrow().tracked_symbols.len(), 1);
         assert!(!context.borrow().reported_diagnostic);
     }
@@ -348,7 +360,7 @@ mod tests {
         let wrapped = new_symbol_tracker_impl(context.clone(), Some(mock(true)));
         let mut tracker = new_symbol_tracker_impl(context.clone(), Some(Box::new(wrapped)));
         let sym = value_symbol();
-        assert!(tracker.track_symbol(&sym, None, SymbolFlags::VALUE));
+        assert!(tracker.track_symbol(&sym, SymbolId(1), None, SymbolFlags::VALUE));
         // The mock's handled-tracking propagated through exactly one layer.
         assert!(context.borrow().reported_diagnostic);
         assert!(context.borrow().tracked_symbols.is_empty());

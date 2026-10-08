@@ -158,9 +158,16 @@ pub type PatternForTypeKey = ();
 /// its inner tracker; every other implementation returns None).
 pub trait SymbolTracker<'inner> {
     /// Go: `TrackSymbol(symbol *ast.Symbol, enclosingDeclaration *ast.Node, meaning ast.SymbolFlags) bool`.
+    ///
+    /// PORT: Go's `*ast.Symbol` splits into the payload reference (the flags
+    /// reads the impl performs) and the `SymbolId` (the §5.5 identity the
+    /// tracked args record) — the nodebuilder call sites carry both (they
+    /// walk the checker's symbols).
+    #[allow(clippy::too_many_arguments)]
     fn track_symbol(
         &mut self,
         symbol: &tsc_ast::Symbol,
+        symbol_id: tsc_ast::SymbolId,
         enclosing_declaration: Option<NodeId>,
         meaning: SymbolFlags,
     ) -> bool;
@@ -203,24 +210,24 @@ pub trait SymbolTracker<'inner> {
 /// Go: `type TrackedSymbolArgs struct` (checker/nodebuilderimpl.go:30 — M6
 /// wave 4's file; only the three fields symboltracker.go appends are carried).
 ///
-/// PORT: Go's `symbol *ast.Symbol` becomes `&'sym Symbol` — the args record
-/// the symbol payload alongside its enclosing declaration; the nodebuilder
-/// wave owns the final lifetime story (the program arena outlives every
-/// context, so the borrow is sound).
+/// PORT: Go's `symbol *ast.Symbol` → `SymbolId` (the §5.5 identity; the
+/// late-painted-statements consumer resolves the payload through the
+/// program arena).
 #[derive(Clone, Copy, Debug)]
-pub struct TrackedSymbolArgs<'sym> {
-    pub symbol: &'sym tsc_ast::Symbol,
+pub struct TrackedSymbolArgs {
+    pub symbol: tsc_ast::SymbolId,
     pub enclosing_declaration: Option<NodeId>,
     pub meaning: SymbolFlags,
 }
 
 /// Go: `type NodeBuilderContext struct` (checker/nodebuilderimpl.go:64 — M6
 /// wave 4's file). The two fields symboltracker.go touches are carried; the
-/// full struct (~25 fields) lands with the nodebuilder-impl wave.
+/// full struct (~25 fields, incl. the Host) lands with the nodebuilder-impl
+/// wave.
 #[derive(Debug, Default)]
-pub struct NodeBuilderContext<'sym> {
+pub struct NodeBuilderContext {
     /// Go: `trackedSymbols []*TrackedSymbolArgs`.
-    pub tracked_symbols: Vec<TrackedSymbolArgs<'sym>>,
+    pub tracked_symbols: Vec<TrackedSymbolArgs>,
     /// Go: `reportedDiagnostic bool`.
     pub reported_diagnostic: bool,
 }

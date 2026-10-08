@@ -16,6 +16,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
+mod conformance_seam;
 mod micro;
 mod parse;
 mod parser_seam;
@@ -36,6 +37,7 @@ fn main() {
         "resolvereact" => showconfig_seam::run_resolvereact(&args[1..]),
         "symbols" => symbols_seam::run_symbols(&args[1..]),
         "program" => program_seam::run_program(&args[1..]),
+        "conformance" => conformance_seam::run_conformance(&args[1..]),
         _ => usage(),
     }
 }
@@ -48,6 +50,7 @@ fn usage() -> ! {
     eprintln!("       tsc-bench resolvereact --corpus <dir>   (per-specifier NDJSON + summary)");
     eprintln!("       tsc-bench symbols --corpus <dir> [--fuzz <dir>]   (per-file NDJSON: binder symbol tables)");
     eprintln!("       tsc-bench program --corpus <dir> | --file <path>   (per-root NDJSON: Program load/bind/parse-diag counts)");
+    eprintln!("       tsc-bench conformance --corpus <dir> --baselines <dir> [--suite S] [--limit N] [--filter P] [--stage parse|bind] [--local-root <dir>]");
     std::process::exit(2);
 }
 

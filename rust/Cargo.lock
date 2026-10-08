@@ -22,6 +22,7 @@ dependencies = [
  "tsc-jsnum",
  "tsc-module",
  "tsc-parser",
+ "tsc-testrunner",
  "tsc-tsoptions",
  "tsc-tspath",
  "tsc-vfs",

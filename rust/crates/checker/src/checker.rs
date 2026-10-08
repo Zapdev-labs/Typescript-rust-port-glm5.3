@@ -1468,10 +1468,21 @@ impl Checker {
         self.type_resolutions.is_empty()
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    // W1 callee stubs + early landings (Go checker.go functions the W1
+    // periphery files — mapper.go / jsdoc.go / exports.go — need; the S-waves
+    // replace the stub bodies and absorb the early landings).
+    //
+    // W1: until the S-waves land, this whole section is reached only through
+    // the test-driven mapper/jsdoc/exports surface — the spike's dead-code
+    // silencing convention applies (drop the allows as the waves arrive).
+    // ────────────────────────────────────────────────────────────────────────
+
     /// Go: `func (c *Checker) error(node *ast.Node, message, args...)` —
     /// diagnostic creation; the plumbing lands with the M5 compiler crate
     /// (`ast.Diagnostic` collection on the program). Go's variadic args
     /// port as a slice.
+    #[allow(dead_code)] // wired by the M5 compiler wave's diagnostics collection
     pub(crate) fn error(
         &mut self,
         _node: NodeId,
@@ -1484,6 +1495,7 @@ impl Checker {
     /// Go: `func (c *Checker) errorOrSuggestion(isSuggestion bool, node *ast.Node, message *diagnostics.Message, args...)`
     /// — same collection seam as `error`. Permissive W1 stub (no-op); the
     /// M5 compiler wave wires both.
+    #[allow(dead_code)] // wired by the M5 compiler wave's diagnostics collection
     pub(crate) fn error_or_suggestion(
         &mut self,
         _is_suggestion: bool,
@@ -1503,6 +1515,7 @@ impl Checker {
     /// Go: `func getNonDistributedTypeParameter(t *Type) *Type`
     /// (checker.go:23533). EARLY LANDING (mapper.go calls it; the body is
     /// arena-self-contained) — the S7 checker.go wave keeps it here.
+    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn get_non_distributed_type_parameter(&self, t: TypeId) -> TypeId {
         let ty = self.type_(t);
         if ty.flags.intersects(TypeFlags::TYPE_PARAMETER) {
@@ -1521,6 +1534,7 @@ impl Checker {
     /// identity — Go's `instantiateType` returns `t` unchanged for an
     /// identity mapping, so composite-mapper flows stay exact for
     /// identity mappers until S7 lands.
+    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn instantiate_type(&mut self, t: TypeId, mapper: TypeMapperId) -> TypeId {
         let _ = mapper;
         // TODO(port M6 S7): instantiateTypeWorker + the activeMappers caches.
@@ -1530,6 +1544,7 @@ impl Checker {
     /// Go: `func (c *Checker) inferFromIntraExpressionSites(n *InferenceContext)`
     /// (inference.go — M6 wave 2). No-op W1 stub (mapper.go's
     /// InferenceTypeMapper is its only W1 caller).
+    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn infer_from_intra_expression_sites(&mut self, n: InferenceContextId) {
         // TODO(port M6 inference wave): drain intra-expression inference sites.
         let _ = n;
@@ -1538,6 +1553,7 @@ impl Checker {
     /// Go: `func (c *Checker) getInferredType(n *InferenceContext, index int) *Type`
     /// (inference.go — M6 wave 2). Obvious-error W1 stub: `errorType`
     /// (mapper.go's InferenceTypeMapper is its only W1 caller).
+    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn get_inferred_type(&mut self, n: InferenceContextId, index: usize) -> TypeId {
         let _ = (n, index);
         // TODO(port M6 inference wave): the real inference commitment.
@@ -1547,6 +1563,7 @@ impl Checker {
     /// Go: `func (c *Checker) containsArgumentsReference(node *ast.Node) bool`
     /// (checker.go:32675 — S4's flow-walk family). Permissive W1 stub: false
     /// (jsdoc.go's `arguments`-matching arm stays dormant until then).
+    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn contains_arguments_reference(&mut self, node: NodeId) -> bool {
         // TODO(port M6 S4): the subtree walk for `arguments` references.
         let _ = node;
@@ -1555,6 +1572,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) isArrayType(t *Type) bool` (checker.go:24005 —
     /// needs the global array types, S7). Permissive W1 stub: false.
+    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn is_array_type(&self, t: TypeId) -> bool {
         // TODO(port M6 S7): t.objectFlags&Reference && target is globalArrayType/ReadonlyArrayType.
         let _ = t;
@@ -1565,6 +1583,7 @@ impl Checker {
     /// (checker.go:23295 — S5). Obvious-error W1 stub: `errorType`
     /// (jsdoc.go's `arguments`-matching arm is the only W1 caller, and it is
     /// itself gated by the `containsArgumentsReference` stub).
+    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn get_type_from_type_node(&mut self, node: NodeId) -> TypeId {
         // TODO(port M6 S5): the type-node resolution family.
         let _ = node;
@@ -1577,6 +1596,7 @@ impl Checker {
     // ────────────────────────────────────────────────────────────────────────
 
     /// Go: `func (c *Checker) pushActiveMapper(mapper *TypeMapper)`.
+    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn push_active_mapper(&mut self, mapper: TypeMapperId) {
         self.active_mappers.push(mapper);
         // PORT: Go grows `activeTypeMappersCaches` reusing the spare slice
@@ -1588,6 +1608,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) popActiveMapper()`.
+    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn pop_active_mapper(&mut self) {
         // PORT: Go nils the popped slot for GC; the port's drop does that.
         self.active_mappers.pop();
@@ -1598,11 +1619,13 @@ impl Checker {
 
     /// Go: `func (c *Checker) findActiveMapper(mapper *TypeMapper) int` —
     /// Go returns -1 when absent; the port returns `Option` (PORT).
+    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn find_active_mapper(&self, mapper: TypeMapperId) -> Option<usize> {
         self.active_mappers.iter().rposition(|m| *m == mapper)
     }
 
     /// Go: `func (c *Checker) clearActiveMapperCaches()`.
+    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn clear_active_mapper_caches(&mut self) {
         for cache in &mut self.active_type_mappers_caches {
             cache.clear();

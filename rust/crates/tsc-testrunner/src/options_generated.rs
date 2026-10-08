@@ -223,8 +223,8 @@ mod tests {
     #[test]
     fn table_has_the_generated_entry_count() {
         assert_eq!(OPTION_TABLE.len(), 88);
-        // the five enum kinds (verified against the generator's output)
-        assert_eq!(OPTION_TABLE.iter().filter(|(_, _, k)| *k == OptKind::Enum).count(), 5);
+        // the six enum kinds (verified against the generator's output)
+        assert_eq!(OPTION_TABLE.iter().filter(|(_, _, k)| *k == OptKind::Enum).count(), 6);
     }
 
     #[test]

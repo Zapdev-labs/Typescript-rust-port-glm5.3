@@ -488,9 +488,12 @@ pub fn get_next_jsdoc_comment_location(store: &dyn NodeStore, node: NodeId) -> O
             let declarations = &p
                 .as_variable_declaration_list()
                 .expect("VariableDeclarationList data")
-                .declarations
-                .expect("VariableDeclarationList has declarations");
-            if declarations.nodes.first() == Some(&node) {
+                .declarations;
+            if declarations
+                .as_ref()
+                .and_then(|d| d.nodes.first())
+                == Some(&node)
+            {
                 Some(parent)
             } else {
                 None

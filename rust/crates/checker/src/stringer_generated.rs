@@ -27,6 +27,10 @@ impl fmt::Display for SignatureKind {
         // Go: `idx := int(i) - 0; if i < 0 || idx >= len(_SignatureKind_index)-1 {
         //           return "SignatureKind(" + strconv.FormatInt(int64(i), 10) + ")" }`
         let i = *self as i32;
+        // PORT (clippy identity_op): Go's generated `idx := int(i) - 0` keeps
+        // the `- 0` (the generator's uniform offset form); the port drops the
+        // no-op subtraction — the tests below pin the arithmetic.
+        #[allow(clippy::identity_op)]
         let idx = i - 0;
         if i < 0 || idx >= SIGNATURE_KIND_INDEX.len() as i32 - 1 {
             return write!(f, "SignatureKind({i})");
@@ -68,6 +72,9 @@ mod tests {
     #[test]
     fn out_of_range_falls_back_to_the_numeric_form() {
         let i = 2i32; // past SignatureKindConstruct
+        // (Mirrors the generated `- 0` form; the Display impl drops it — see
+        // the PORT note there.)
+        #[allow(clippy::identity_op)]
         let idx = i - 0;
         assert!(i < 0 || idx >= SIGNATURE_KIND_INDEX.len() as i32 - 1);
         assert_eq!(format!("SignatureKind({i})"), "SignatureKind(2)");

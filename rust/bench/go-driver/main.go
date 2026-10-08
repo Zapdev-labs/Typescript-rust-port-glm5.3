@@ -68,6 +68,8 @@ func main() {
 		runSymbols(os.Args[2:])
 	case "program":
 		runProgram(os.Args[2:])
+	case "conformance":
+		runConformance(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -83,6 +85,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       go-bench resolvereact --corpus <dir>   (per-specifier NDJSON + summary)")
 	fmt.Fprintln(os.Stderr, "       go-bench symbols --corpus <dir> [--fuzz <dir>]   (per-file NDJSON: binder symbol tables)")
 	fmt.Fprintln(os.Stderr, "       go-bench program --corpus <dir> | --file <path>   (per-root NDJSON: Program load/bind/parse-diag counts)")
+	fmt.Fprintln(os.Stderr, "       go-bench conformance --corpus <dir> --baselines <dir> [--suite S] [--limit N] [--filter P] [--stage parse|bind] [--local-root <dir>]   (per-case NDJSON: baseline verdicts)")
 	os.Exit(2)
 }
 
@@ -1503,7 +1506,7 @@ type countingFS struct {
 }
 
 func (c *countingFS) CaseSensitivity() tspath.CaseSensitivity { return c.inner.CaseSensitivity() }
-func (c *countingFS) FileExists(p tspath.RootedFilePath) bool  { return c.inner.FileExists(p) }
+func (c *countingFS) FileExists(p tspath.RootedFilePath) bool { return c.inner.FileExists(p) }
 func (c *countingFS) ReadFile(p tspath.RootedFilePath) (string, bool) {
 	contents, ok := c.inner.ReadFile(p)
 	if ok {
@@ -1529,7 +1532,7 @@ func (c *countingFS) DirectoryExists(p tspath.RootedDirectoryPath) bool {
 func (c *countingFS) GetAccessibleEntries(p tspath.RootedDirectoryPath) vfs.Entries {
 	return c.inner.GetAccessibleEntries(p)
 }
-func (c *countingFS) Stat(p tspath.RootedPath) vfs.FileInfo      { return c.inner.Stat(p) }
+func (c *countingFS) Stat(p tspath.RootedPath) vfs.FileInfo { return c.inner.Stat(p) }
 func (c *countingFS) Realpath(p tspath.RootedPath) tspath.RootedPath {
 	return c.inner.Realpath(p)
 }

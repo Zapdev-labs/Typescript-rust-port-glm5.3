@@ -230,8 +230,9 @@ fn flatten_chain(out: &mut String, chain: &Diagnostic, level: usize) {
 
 /// Go: `minimalDiagnosticsToString` with `pretty=false` —
 /// `WriteFormatDiagnostics`: per diagnostic
-/// `file(line+1,char+1): category TScode: message\r\n` (no file prefix for
-/// globals).
+/// `file(line+1,char+1): category PREFIXcode: message\r\n` (no file prefix
+/// for globals; PREFIX is the diagnostic's source or "TS" — Go's
+/// `diagnosticPrefix`).
 fn minimal_diagnostics_to_string(diagnostics: &[&ErrorBaselineDiagnostic<'_>]) -> String {
     let mut out = String::new();
     for d in diagnostics {
@@ -243,11 +244,19 @@ fn minimal_diagnostics_to_string(diagnostics: &[&ErrorBaselineDiagnostic<'_>]) -
             out.push_str(&format!("({},{})", line + 1, character + 1));
             out.push_str(": ");
         }
-        out.push_str(&format!("{} TS{}: ", diag.category().name(), diag.code()));
+        out.push_str(&format!("{} {}: ", diag.category().name(), diagnostic_prefix(diag)));
         out.push_str(&d.localize());
         out.push_str(HARNESS_NEWLINE);
     }
     out
+}
+
+/// Go: `diagnosticPrefix` — the diagnostic's source or "TS".
+fn diagnostic_prefix(diag: &Diagnostic) -> String {
+    if !diag.source().is_empty() {
+        return diag.source().to_string();
+    }
+    "TS".to_string()
 }
 
 /// Go: `scanner.GetECMALineAndUTF16CharacterOfPosition` over a text +
@@ -448,10 +457,13 @@ fn output_error_text(
         if line.is_empty() {
             continue;
         }
+        // Go: `!!! %s TS%d: %s` — the literal TS prefix (no diagnosticPrefix
+        // here; that is WriteFormatDiagnostic's rule above).
         err_lines.push(format!("!!! {} TS{}: {}", diag.category().name(), diag.code(), line));
     }
     for info in diag.related_information() {
-        // PORT: no location prefix (see the module header).
+        // PORT: no location prefix (see the module header; Go's format is
+        // `!!! related TS%d%s: %s` with the location in the middle).
         err_lines.push(format!("!!! related TS{}: {}", info.code(), localize_diagnostic(info)));
     }
     let mut first = true;

@@ -2208,17 +2208,32 @@ fn find_matching_parameter(
         let name = store.node(parameter).name();
         let name_kind = name.map(|n| store.node(n).kind).unwrap_or(Kind::Unknown);
         if name_kind == Kind::Identifier {
-            let parameter_text = name.map(|n| node_text(store, n)).unwrap_or("");
-            let tag_name = store
-                .node(parameter_tag)
-                .as_jsdoc_parameter_or_property_tag()
-                .expect("JSDocParameterOrPropertyTag data")
-                .name;
-            let tag_name_text = node_text(store, tag_name);
-            if (parameter_text == tag_name_text)
-                || (parameter_index as i64 == tag_index && tag_name_text.is_empty())
-            {
-                return Some(parameter);
+            // Go guards the tag-name Text() read with
+            // `parameterTag.Name().Kind == ast.KindIdentifier` (the name may
+            // be a QualifiedName, e.g. `@param ns.b`) — the tag comparison
+            // only applies to plain-identifier tag names.
+            let tag_name_kind = store
+                .node(
+                    store
+                        .node(parameter_tag)
+                        .as_jsdoc_parameter_or_property_tag()
+                        .expect("JSDocParameterOrPropertyTag data")
+                        .name,
+                )
+                .kind;
+            if tag_name_kind == Kind::Identifier {
+                let parameter_text = name.map(|n| node_text(store, n)).unwrap_or("");
+                let tag_name = store
+                    .node(parameter_tag)
+                    .as_jsdoc_parameter_or_property_tag()
+                    .expect("JSDocParameterOrPropertyTag data")
+                    .name;
+                let tag_name_text = node_text(store, tag_name);
+                if (parameter_text == tag_name_text)
+                    || (parameter_index as i64 == tag_index && tag_name_text.is_empty())
+                {
+                    return Some(parameter);
+                }
             }
         } else if parameter_index as i64 == tag_index {
             return Some(parameter);

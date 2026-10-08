@@ -207,7 +207,7 @@ impl Checker {
     /// Go: `func (c *Checker) IsArrayType(t *Type) bool` → `c.isArrayType(t)`
     /// (checker.go:24005 — S7's global array types) is likewise collapsed
     /// onto checker.rs's stub (false until S7).
-
+    ///
     /// Go: `func (c *Checker) IsArrayLikeType(t *Type) bool` →
     /// `c.isArrayLikeType(t)` (checker.go:24049 — needs global array types +
     /// the relater, S7/S10).
@@ -670,13 +670,15 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) GetWidenedLiteralType(t *Type) *Type` →
-    /// `c.getWidenedLiteralType(t)` (checker.go — S9). Identity is the
-    /// permissive value (Go widens only fresh literals).
-    pub fn get_widened_literal_type(&mut self, t: TypeId) -> TypeId {
-        // TODO(port M6 S9): the fresh-literal widening.
-        t
-    }
-
+    /// `c.getWidenedLiteralType(t)` (checker.go — S9). COLLAPSED PAIR: the
+    /// spike already ported the literal-widening slice as checker.rs's
+    /// `get_widened_literal_type` — that is this wrapper's target; the S9
+    /// wave completes it.
+    ///
+    /// Go: `func (c *Checker) GetWidenedType(t *Type) *Type` →
+    /// `c.getWidenedType(t)` (checker.go — S9) is likewise collapsed onto
+    /// checker.rs's `get_widened_type`.
+    ///
     /// Go: `func (c *Checker) IsTypeAssignableTo(source *Type, target *Type) bool`
     /// → `c.isTypeAssignableTo(source, target)` (relater.go — M6 wave 2).
     pub fn is_type_assignable_to(&mut self, source: TypeId, target: TypeId) -> bool {
@@ -716,13 +718,11 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) GetWidenedType(t *Type) *Type` →
-    /// `c.getWidenedType(t)` (checker.go — S9). Identity is the permissive
-    /// value (no widening).
-    pub fn get_widened_type(&mut self, t: TypeId) -> TypeId {
-        // TODO(port M6 S9): getWidenedTypeWithContext.
-        t
-    }
-
+    /// `c.getWidenedType(t)` (checker.go — S9). COLLAPSED PAIR: the spike
+    /// already ported the entry as checker.rs's `get_widened_type` (the
+    /// requires-widening arm panics with its M6 banner until S9); that is
+    /// this wrapper's target.
+    ///
     /// Go: `func (c *Checker) CompareSymbols(s1, s2 *ast.Symbol) int` →
     /// `c.compareSymbols(s1, s2)` — the `compareSymbols` STRUCT FIELD Go
     /// assigns in NewChecker (`c.compareSymbols = c.compareSymbolsWorker`,
@@ -826,7 +826,7 @@ mod tests {
         assert!(!c.type_has_call_or_construct_signatures(t));
         assert!(!c.is_array_like_type(t));
         assert!(!c.is_array_type(t));
-        assert_eq!(c.get_type_predicate_of_signature(SignatureId(0)), None);
+        assert!(c.get_type_predicate_of_signature(SignatureId(0)).is_none());
         assert_eq!(c.get_true_type_of_conditional_type(t), None);
         assert_eq!(c.get_false_type_of_conditional_type(t), None);
         assert_eq!(c.get_constraint_of_type_parameter(t), None);
@@ -854,7 +854,7 @@ mod tests {
 
     #[test]
     fn tuple_type_target_requires_the_tuple_target_identity() {
-        let mut c = new_checker();
+        let c = new_checker();
         // Intrinsic types are not tuple references — is_tuple_type is false,
         // so IsTupleTypeTarget is false (Go: isTupleType(t) && t.Target() == t).
         let t = c.string_type();
@@ -873,7 +873,7 @@ mod tests {
 
     #[test]
     fn free_function_wrappers_delegate_to_utilities() {
-        let c = new_checker();
+        let mut c = new_checker();
         let t = c.string_type();
         // isTypeUsableAsPropertyName: string literal types are; string is not.
         let literal = c.get_string_literal_type("a");
