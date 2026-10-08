@@ -1689,3 +1689,36 @@ byte-identical: fixture matrix 9/9, program 15, dump 13, symbols 15, and
 the 300-slice **384/384 records byte-identical (gap-2 divergence 1 → 0)**;
 climb stays 37.2% (parity first; the removed diagnostics were Rust-only
 vs the reference — see rust/CONFORMANCE.md).
+
+## M6 S2 — the getTypeOfSymbol spine + declared types + circularity
+
+typeofsymbol.rs (~4,850 ln), final state 82cace033b. S2 owns the
+circularity machinery (push/popTypeResolution, the
+typeResolutions/resolutionStart stack — the S2×S7×S8 triangle's anchor)
+and the declared-type family incl. the 381-ln getDeclaredTypeOfClassOrInterface,
+the variable-like chain, binding patterns, widen* with the WideningContext
+arena, the enum machinery, aliases, optionality.
+
+**Three real bugs found by the wave's own gate demos** (the spike tests
+grew 5 demos: class thisType promotion + instantiations seeding, thisless
+interface, enum machinery, type-alias S5 seam, class anonymous value type):
+1. Enum members were INVISIBLE — the member walk used the
+   class/interface-only `getMembersOfDeclaration` subset where Go walks
+   `declaration.Members()`; every enum took the computed-enum fallback.
+2. `evaluate_stub`'s string-literal arm read the raw source text WITH
+   quotes; Go reads `expr.Text()` (the parser-stored unquoted token).
+3. The pub `get_symbol_of_declaration` twin in exports.rs was still the
+   unconditional-None stub — masking every enum member symbol — while
+   the real free fn existed unused.
+
+**Stub directions pinned by tests**: S7 multi-constituent unions →
+errorType (single-constituent identity), S5 type nodes → errorType, S6
+merged/late-bound identity + is_thisless_interface conservative-false,
+S9/S10 flow/facts identity, evaluator literal-only (numeric/string +
+unary ±).
+
+**Validation**: tsc-checker 90 lib + 12 integration; workspace green
+(81 suites); clippy zero (11 new-code lints fixed); twins byte-identical
+(dump 13, symbols 15, program 15, fixture matrix 9/9); the 300-slice
+**384/384 byte-identical, divergence 0** — full driver parity at
+parse+bind depth holds through S2.
