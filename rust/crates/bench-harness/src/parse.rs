@@ -826,49 +826,6 @@ mod tests {
 
         std::fs::remove_dir_all(&root).unwrap();
     }
-        let root = temp_fixture("walk");
-        write(&root.join("b.tsx"), "let x = 1;\n");
-        write(&root.join("a.ts"), "let a = 1;\n");
-        write(&root.join("c.mts"), "");
-        write(&root.join("d.cts"), "");
-        write(&root.join("e.d.ts"), "declare const e: number;\n");
-        write(&root.join("UP.TS"), ""); // Go lowercases: indexed
-        write(&root.join("skip.js"), ""); // wrong extension
-        write(&root.join("noext"), "");
-        write(&root.join("x.txt"), "");
-        for skip in SKIP_DIRS {
-            let dir = root.join(skip);
-            std::fs::create_dir_all(&dir).unwrap();
-            write(&dir.join("inside.ts"), "SHOULD NOT BE INDEXED");
-        }
-        let sub = root.join("sub");
-        std::fs::create_dir_all(&sub).unwrap();
-        write(&sub.join("z.ts"), "");
-
-        let (files, read_errs) = index_corpus(root.to_str().unwrap()).unwrap();
-        let names: Vec<&str> = files.iter().map(|f| f.file_name.base_name()).collect();
-        // Sorted by path, skip dirs excluded, .d.ts/.TS indexed, others not.
-        assert_eq!(
-            names,
-            vec!["UP.TS", "a.ts", "b.tsx", "c.mts", "d.cts", "e.d.ts", "z.ts"]
-        );
-        assert_eq!(read_errs, 0);
-        // Bytes come from the raw file content (UTF-8 passthrough):
-        // b.tsx "let x = 1;\n" (11) + a.ts "let a = 1;\n" (11)
-        // + e.d.ts "declare const e: number;\n" (25); the rest are empty.
-        assert_eq!(files.iter().map(|f| f.bytes).sum::<i64>(), 47);
-        // Precomputed parse inputs (contract rule 4): FileName + PathKey.
-        for f in &files {
-            assert_eq!(f.path_key.as_string(), f.file_name.as_string());
-            assert_ne!(f.file_name.as_string(), "");
-        }
-        let tsx = files.iter().find(|f| f.file_name.base_name() == "b.tsx").unwrap();
-        assert_eq!(tsx.script_kind, ScriptKind::TSX);
-        let ts = files.iter().find(|f| f.file_name.base_name() == "a.ts").unwrap();
-        assert_eq!(ts.script_kind, ScriptKind::TS);
-
-        std::fs::remove_dir_all(&root).unwrap();
-    }
 
     #[cfg(unix)]
     #[test]

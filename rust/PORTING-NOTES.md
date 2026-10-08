@@ -435,3 +435,20 @@ a view type over unsafe punning. Raw outputs: ~/bench-results/phase0 (rig).
   regex, `\4`/`\47`/`\477`/`\0`/`\08`/`\011`/`\177`/`\377`/`\400`/
   `\077`/`\77`/`\310`/`\7`) IDENTICAL; tsc-scanner 6/6, tsc-parser
   10/10, testdata gate 176/176 panics=0.
+
+### M3 follow-up — corpus walk global sort is a raw-path string sort (bench-harness)
+
+- **`sort.Strings` vs `PathBuf` Ord** (parse.rs `index_corpus`): both
+  drivers sort the walked file list globally, but Go sorts the raw path
+  STRINGS while the port sorted `Vec<PathBuf>` — PathBuf's `Ord` is
+  component-wise, so on the one file/dir prefix collision in the corpus
+  (`declarations.ts` vs `declarations/`) the orders differ: Go's string
+  sort puts the FILE first ('.' 0x2E < '/' 0x2F); component-wise puts the
+  directory first. All parse-mode aggregates are commutative sums, so
+  shape parity held regardless — the dump's per-file slot order exposed
+  it (found by the full-corpus dump diff). Fix: sort by the encoded path
+  bytes (`as_os_str().cmp`), mirroring `sort.Strings`; regression test
+  `corpus_walk_sorts_by_raw_path_bytes_not_components`.
+- Validation: full tsc/testdata corpus (12,957 files) dump diff
+  IDENTICAL — every file, node, diagnostic, position, arg, histogram
+  byte-identical between go-bench and tsc-bench.
