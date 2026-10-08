@@ -2,8 +2,13 @@
 name = "gen-ast"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+rust-version = true
 license.workspace = true
+
+[dependencies]
+indexmap = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
