@@ -452,3 +452,107 @@ a view type over unsafe punning. Raw outputs: ~/bench-results/phase0 (rig).
 - Validation: full tsc/testdata corpus (12,957 files) dump diff
   IDENTICAL — every file, node, diagnostic, position, arg, histogram
   byte-identical between go-bench and tsc-bench.
+
+### M4 wave A — the binder (rust/crates/binder)
+
+Ported tsc/internal/binder @ ec47d33c: binder.go (2,801 lines → binder.rs,
+4,200) + nameresolver.go (506 → nameresolver.rs, 910); referenceresolver.go
+is deferred to the emit wave per the M4 milestone note in SPEC.md. Shims
+(dedup candidates, folded back when the owning wave lands):
+ast_shims.rs (1,908 — utilities.go subset + Go's lazily-assigned
+GetNodeId/GetSymbolId link-store ids), node_data.rs (667 — the Go
+nodeData interface dispatchers over the frozen generated payloads),
+scanner_shims.rs (178 — GetErrorRangeForNode plus re-exports of the
+scanner package's ported helpers).
+
+- **Symbol/flow arenas** (the crate-wide PORT contract, SPEC §5.10): Go's
+  GC `*Symbol`/`*FlowNode`/`*FlowList` become SymbolId/FlowNodeId/
+  FlowListId indexes into Binder-owned Vecs, handed back as `BindResult`
+  (the node payloads keep the handles; ids are per-file and the M5
+  program merge re-bases them). `bind_source_file` returns
+  `Option<BindResult>` — None via the bind_once latch Go enforces on
+  SourceFile.
+- **TableLoc enum** replaces Go's `*ast.SymbolTable` map-reference
+  parameter (declareSymbol/declareModuleAndExportName each pass exactly
+  one of Locals(NodeId)/Exports(SymbolId)/Members(SymbolId)/GlobalExports).
+- **LabelSlot** replaces Go's method-value `getTarget(activeLabel)` param
+  (Break/Continue); ActiveLabel is a Box chain with break_target/
+  continue_target slots.
+- **bind_each_child** collects children into a Vec first: Node is borrowed
+  out of the store the Binder mutates mid-walk (Go iterated the live
+  struct).
+- **NameResolver hooks** are `Option<Box<dyn FnMut...>>` fields (Go's
+  checker-supplied closures with defaults); `Resolve` is a faithful port of
+  the scope-climbing loop including the Decorator/ExportSpecifier location
+  reassignment, which the loop tail consumes (lastLocation = location, NOT
+  the pre-switch node — a subtle Go behavior the port initially got wrong
+  and the unused-assignment warnings exposed).
+- Two Go-faithfulness notes: getStrictModeBlockScopeFunctionDeclarationMessage
+  is dead code in the Go tree too (kept verbatim under #[allow(dead_code)]);
+  ReturnStatement gets NO flow node in Go (bindReturnStatement only
+  rewires currentFlow) — the smoke test asserts identifiers and the
+  container end/return flow nodes instead.
+- Validation: smoke 13/13; testdata bind gate (parser gate's walk rules +
+  fuzz seeds, parse+bind under catch_unwind) 176/176 panics=0 with
+  127,783 symbols / 200,815 flow nodes / 6 bind diagnostics;
+  clippy zero warnings on tsc-binder; tsc-ast / tsc-parser / bench-harness
+  unaffected. Gate command: `CARGO_TARGET_DIR=/tmp/tsrs-binder cargo test
+  -p tsc-binder --test testdata_gate -- --ignored --nocapture`.
+
+### M5 module resolution (rust/crates/module)
+
+Ported tsc/internal/module @ ec47d33c: resolver.go (2,648 → resolver.rs,
+4,750), types.go (types.rs), util.go (util.rs), cache.go (cache.rs),
+staticresolver.go (staticresolver.rs); plus a deliberately in-crate port of
+tsc/internal/vfs/vfsmatch (vfsmatch.rs — the vfs crate skipped that
+subpackage; hoist into tsc-vfs when a second consumer appears).
+
+- **Resolver trait** (Go `Resolver` interface): `Arc<dyn Resolver>` mirrors
+  Go interface values (vfs crate precedent). `ResolveModuleName`'s vestigial
+  error channel (always nil at this revision) is dropped — the result tuple
+  is `(Option<Arc<ResolvedModule>>, Vec<DiagAndArgs>)` where the Option is
+  always Some (Go returns a non-nil `*ResolvedModule` even for unresolved
+  modules; `ResolvedModule::is_resolved` mirrors Go's nil-tolerant
+  `IsResolved()` as an associated fn over `Option<&Self>`). Cache-hit
+  results hand back the cached `Arc` directly (no clone).
+- **Tracer ownership**: Go's `resolutionState` shares a `*tracer` with its
+  parent state (loadModuleFromTargetExportOrImport swaps name/
+  containingDirectory and restores them). The port makes the tracer an
+  owned `Option<Tracer>` slot that is `take()`n into nested states and
+  restored on return; `trace!` expands to `write_trace(&mut tracer, ...)`.
+- **LoaderKind enum**: Go's loadModuleFromNearestNodeModulesDirectory
+  closures become a Copy enum (NodeRelative / SpecificNodeModulesDirectory /
+  DirectoryWorker) dispatched by run_loader; closures can't capture `&mut`
+  state twice.
+- **ParsedPatternsCache** keys on the `paths` mapping CONTENT (Vec snapshot)
+  instead of Go's `*OrderedMap` pointer — CompilerOptions owns the map by
+  value, so there is no stable pointer; cached patterns are a pure function
+  of content (behavioral superset, identical results).
+- **packagejson: added `PackageJson::new(fields, parseable)`** — the crate's
+  private `OnceLock` typesVersions state made cross-crate struct-update
+  construction illegal (`..Default::default()` from outside the crate).
+  The constructor is the port of Go's `PackageJson{Fields: ..., Parseable: ...}`
+  literal (lazy state starts unset, like Go's zero sync.Once).
+- **Race tests** (Go channels + goroutines): `Gate` (Mutex<bool> + Condvar;
+  `close` = channel close, `wait_closed` = `t.Context().Done()` timeout
+  receive) and `Arrivals` (counting Condvar) replace `chan struct{}`;
+  `blockingFS`/`flipFileExistsFS`/`caseInsensitiveViewFS` are hand-written
+  `Fs` delegation wrappers (Go embeds vfs.FS); panics are caught with
+  `catch_unwind(AssertUnwindSafe(..))` + `resume_unwind` (Go `recover()`).
+- **Tests ported**: 32 of 33 Go tests (37 Rust tests incl. table-test
+  sub-cases): resolver_test.rs (28 incl. the two 3526/1290/4478 race
+  regressions), resolver_internal_test.rs (4), staticresolver_test.rs (1).
+  `TestResolverSharedData` is SKIPPED: it reflects over the Go type graph
+  via `testutil.CheckDataOnly`; Rust has no runtime reflection and
+  ResolutionData's Arc-only shape is enforced by its type definition.
+- **Two port bugs the tests caught**: (1) `parse_node_module_package_root`
+  used the unchecked `RootedDirectoryPath::from` where Go uses
+  `RootedDirectoryPathFromAbsolute` (normalizes), yielding `/a/node_modules/`
+  with a trailing separator; (2) `new_static_resolutions` iterated the
+  (empty) map instead of the entries Vec after a capacity-fix refactor,
+  dropping every static resolution.
+- Validation: `cargo test -p tsc-module` 37/37 (incl. all three
+  deterministic race tests); `tsc-packagejson` 16/16 after the
+  `PackageJson::new` addition; `cargo clippy -p tsc-module --all-targets`
+  zero warnings; `cargo check -p bench-harness` green. Gate: `CARGO_TARGET_DIR=/tmp/tsrs-module cargo test -p tsc-module`.
+
