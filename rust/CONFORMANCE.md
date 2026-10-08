@@ -64,7 +64,36 @@ Build discipline for the runs above: `CARGO_TARGET_DIR` outside the repo,
 scratch and binaries under `$HOME` (see `rust/BENCHMARKS.md` for the
 twin-run conventions).
 
-## Measured numbers (2026-10-08, first green slice)
+## Measured numbers
+
+### 2026-10-08 — gap-1 closure (removed-option diagnostics + the
+### AST-config-node surface)
+
+**Twin parity (the wave's gate)**: the 300-case slice now runs
+**byte-identical on 383/384 records (99.7%)** — down from 81 divergent.
+The single residual is gap 2 exactly (`asyncArrowFunction_allowJs.ts`:
+Rust reports 4 TS8009-family parse diagnostics where Go scopes them to
+the checker).
+
+| driver | records | match | mismatch | missing-baseline | panic |
+|--------|---------|-------|----------|------------------|-------|
+| Rust   | 384 | 143 (37.2%) | 163 | 78 | 0 |
+| Go twin| 384 | 143 (37.2%) | 163 | 78 | 0 |
+
+Both drivers double-run deterministic; the fixture matrix twin
+(`rust/bench/gates/conformance-matrix`) stays byte-identical at
+9/9 `match`; the program gate (`rust/bench/gates/program-matrix`)
+regression stays byte-identical (15 records).
+
+**Why the climb % dropped from 55.5% to 37.2%**: closing the gap makes
+Rust emit Go's removed-option diagnostics (TS5102/TS5108) with the same
+config-node positions — twin parity first (the dispatch note's
+expectation: the pre-wave Rust "matched more" only because it emitted
+nothing where Go emitted config-positioned diagnostics the reference
+baselines don't carry at parse+bind depth). The ≥90% M6-done gate
+re-measures at full depth once the checker waves land.
+
+### 2026-10-08, first green slice (pre gap-1)
 
 **Fixture matrix** (9 cases: clean parse, multifile include, parse
 error, expected parse error, in-test tsconfig, option variant, reference
@@ -84,9 +113,9 @@ configuration):
 | Rust   | 384 | 213 (**55.5%**) | 163 | 8 | 0 |
 | Go twin| 384 | 143 (37.2%)     | 163 | 78 | 0 |
 
-Twin parity on the slice: **304/384 records byte-identical** (79.2%).
-All 80 divergent records trace to two program-layer gaps (below), none
-to the runner structure. Runtime: ~69 s Rust (dev profile) vs ~10 s Go.
+Twin parity on the slice: 304/384 records byte-identical (79.2%). All 80
+divergent records traced to the program-layer gaps (below), none to the
+runner structure. Runtime: ~69 s Rust (dev profile) vs ~10 s Go.
 
 **M5 program gate regression**: `tsc-bench program` vs `go-bench
 program` over `rust/bench/gates/program-matrix` — byte-identical
@@ -96,38 +125,48 @@ program` over `rust/bench/gates/program-matrix` — byte-identical
 
 | gate | target | measured | state |
 |------|--------|----------|-------|
-| first green slice | fixture matrix twin identical + climb ≥ 50% | matrix identical; 55.5% | **PASS** |
-| M6 done | climb ≥ 90% on the 300-case slice | 55.5% | blocked (below) |
+| first green slice | fixture matrix twin identical + climb ≥ 50% | matrix identical; 55.5% (pre gap-1) | **PASS** |
+| gap-1 closure | twin divergence ≤ gap 2's residual on the 300-slice | 1 divergent record (gap 2 only) | **PASS** |
+| M6 done | climb ≥ 90% on the 300-case slice | 37.2% at parse+bind (twin-parity first; re-measures at full depth with the checker waves) | blocked (below) |
 
 A test is counted "pass" in the legacy table only when its full baseline
 set is byte-identical to the reference tree; the climb % above is the
 single-`.errors.txt` slice at parse+bind depth.
 
-## Known gaps (all program-layer, surfaced by the twin)
+## Known gaps
 
-1. **Removed-option diagnostics (TS5102/TS5108)** — Go's
-   `verifyCompilerOptions` (`tsc/internal/compiler/program.go`)
-   reports removed compiler options and enum values
-   (`target=ES5`, `downlevelIteration`, …) as program diagnostics
-   anchored at the config source file. ~78 of the 80 divergent
-   records. Porting needs the AST-config-node diagnostic machinery
-   (`CreateDiagnosticForNodeInSourceFile`) — the same surface the
-   include-reason `GetMatchedFileSpec` gap needs (below).
+1. ~~**Removed-option diagnostics (TS5102/TS5108)**~~ — **CLOSED (gap-1
+   wave)**: `verifyCompilerOptions`'s removed-option arm is ported
+   (`crates/compiler/src/program.rs`, the `OptionDiagnosticContext`
+   machinery) over the config-node surface (`tsoptions`'s
+   `TsConfigSourceFile` + the config-syntax walks +
+   `CreateDiagnosticForNodeInSourceFile`'s positioned form). The
+   REMAINDER of Go's `verifyCompilerOptions` (the strict/composite/
+   paths/jsx/moduleKind arms, `verifyProjectReferences`, the
+   emit-path-uniqueness loop) and the AST→value config conversion
+   (`convertConfigFileToObject`) stay deferred to the full AST-config
+   wave — the plug points are PORT-noted in
+   `crates/compiler/src/program.rs::verify_compiler_options`.
 2. **JS parse-diagnostic scope (TS8009)** — the Rust parser reports
    `'async' modifier can only be used in TypeScript files` for `.js`
    units at parse depth where Go emits it from the checker
-   (`asyncArrowFunction_allowJs`, 1 record, 4 diagnostics).
-3. **Include-reason matched-spec arms** — the RootFile reason always
-   renders "Root file specified for compilation"; Go's
-   `GetMatchedFileSpec`/`GetMatchedIncludeSpec` ("Part of 'files' list
-   in tsconfig.json", "Matched by include pattern …") and their
-   related-info arms are unported (the fixture matrix avoids the arm;
-   it fires on tsconfig `files` entries that fail to load).
+   (`asyncArrowFunction_allowJs`, 1 record, 4 diagnostics). **The sole
+   residual twin divergence (383/384 identical).**
+3. ~~**Include-reason matched-spec arms**~~ — **CLOSED (rode the same
+   wave)**: `GetMatchedFileSpec`/`GetMatchedIncludeSpec` are ported on
+   `ParsedCommandLine` (the as-written specs: `file_spec_by_path`,
+   before-substitution lists), and `fileInclude.go`'s
+   `computeDiagnostic` RootFile arm + `toRelatedInfo`'s
+   files/include/types/lib/target arms read them through the config AST.
 4. **Related-info location** — the Rust `ast::Diagnostic` carries
    related files as node ids (the PORTING-NOTES file-id gap), so both
    conformance drivers render `!!! related TSxxxx: <message>` without
    the `file(line,col)` prefix. Parse-level diagnostics do not carry
    related information in practice.
+5. **verifyCompilerOptions' non-removed arms** (new, the deferred
+   AST-config wave above) — none fire on the 300-slice (the twin proves
+   it: the residual is gap 2 alone), but they are unported and will
+   surface when real-tsconfig corpora run.
 
 ## Subtleties (PORT notes kept in the crates)
 

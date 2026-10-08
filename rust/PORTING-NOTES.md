@@ -1472,3 +1472,72 @@ tsc-parser 15 passed (reparser fix); clippy zero warnings
 (tsc-checker + tsc-parser); program/symbols/dump twins byte-identical
 post-change (the reparser fix warranted the dump re-run); bench-harness
 builds (it does not depend on tsc-checker).
+
+## 2026-10-08 crates/tsoptions + crates/compiler — M6 gap-1: the config-node
+## diagnostic surface (removed-option diagnostics TS5102/TS5108 + the
+## include-reason matched-spec arms)
+Go `verifyCompilerOptions` (tsc/internal/compiler/program.go:909) positions
+option diagnostics on the tsconfig AST (`CreateDiagnosticForNodeInSourceFile`),
+and `fileInclude.go`'s RootFile reason arms report the as-written `files`/
+`include` specs. The wave ports the minimum that surface needs:
+
+- **crates/tsoptions/src/tsconfigparsing.rs (new ~230 ln section)** —
+  `TsConfigSourceFile` + `new_tsconfig_source_file_from_file_path` (Go:
+  `NewTsconfigSourceFileFromFilePath`; the config text parses as a JSON
+  SourceFile through `tsc-parser`, ScriptKind::JSON) +
+  `get_ts_config_object_literal_expression`/`for_each_property_assignment`/
+  `for_each_ts_config_prop_array`/`get_ts_config_prop_array_element_value`/
+  `get_options_syntax_by_array_element_value`/`get_callback_for_finding_property_assignment_by_value`
+  (Go's config-syntax walks, exact "return callback result, even None"
+  semantics). `ParsedCommandLine` gains Go's `ConfigFile` field
+  (`config_file`), populated on the `get_parsed_command_line_of_config_file_path`
+  route ONLY — the AST is the position surface; values/errors still come from
+  the text parser (Go's `convertConfigFileToObject` AST→value conversion is
+  the deferred full AST-config wave). Plus `config_name`/`get_matched_file_spec`/
+  `get_matched_include_spec` (Go parsedcommandline.go) over the new
+  `file_spec_by_path` + before-substitution spec lists.
+- **crates/tsoptions/src/ast_shims.rs (new, 96 ln)** — `TryGetTextOfPropertyName`
+  + the `Node.Text()`/`Expression()` arms the walks read (Go ast/utilities.go;
+  ast crate doesn't port them yet — compiler/binder ast_shims precedent, dedup
+  candidate).
+- **crates/tsoptions/src/errors.rs** — `CreateDiagnosticForNodeInSourceFile`
+  is the REAL positioned form now (`scanner::skip_trivia(text, node.Loc.Pos())`
+  .. `node.End()`); the OrCompilerDiagnostic variant degrades exactly on Go's
+  nil file/node inputs.
+- **crates/compiler/src/program.rs** — `verifyCompilerOptions`' removed-option
+  arm (the "Removed in TS7" block, Go order preserved: baseUrl/outFile/target
+  ES5/module AMD|System|UMD/moduleResolution Classic|node10/alwaysStrict
+  false/esModuleInterop false/allowSyntheticDefaultImports false/
+  downlevelIteration) through the `OptionDiagnosticContext` closure-bundle
+  mirror; baseUrl's `Use_0_instead` chain carries Go's
+  `encoding/json`-escaped paths suggestion (hand-rolled `json_marshal_string`
+  with HTML escaping ON — compiler crate has no serde_json). The REMAINDER of
+  `verifyCompilerOptions` (strict/composite/paths/jsx/moduleKind arms,
+  verifyProjectReferences, emit-path uniqueness) is PORT-noted at
+  `verify_compiler_options` with its plug points (the context's
+  `create_diagnostic_for_option` + Go's createDiagnosticForOptionName/
+  createOptionValueDiagnostic fold).
+- **crates/compiler/src/file_include.rs + include_processor.rs** — the RootFile
+  `computeDiagnostic` arm (Part of 'files' list / Matched by include pattern /
+  default-include / Root file) and `toRelatedInfo`'s files/include/types/lib/
+  target arms through the config AST; `getCompilerOptionsObjectLiteralSyntax`
+  memo restored (Go includeprocessor.go).
+
+**PORT (Send/Sync, the wave's one forced deviation)**: Go shares the frozen
+`*ast.SourceFile` config AST across worker threads freely; Rust's
+`tsc_ast::SourceFile` carries parser-era `Cell` fields (not `Sync`, not
+`Arc`-shareable) while `ParsedCommandLine` must stay `Send + Sync` (the
+loader's worker groups share it) — and the workspace forbids `unsafe`.
+The config AST therefore rides behind a `Mutex` inside `TsConfigSourceFile`,
+read through `lock_source_file()` guards. Deadlock rule (both lock sites
+documented): `to_related_info` computes the include processor's
+`getCompilerOptionsObjectLiteralSyntax` memo BEFORE taking the guard (the
+memo walk locks too).
+
+**Validation**: tsc-tsoptions 45 (41 + 4 new configsyntax tests — Go's
+parsedcommandline_test.go "Config file specs are owned by the parsed command
+line" + the walk/position contracts); tsc-compiler 7 lib + 5 integration
+(+1 removed-option arm test); clippy zero warnings both crates; 300-slice twin
+divergence 81 → **1** (gap 2's asyncArrowFunction_allowJs TS8009 alone);
+fixture twin byte-identical 9/9 match; program-matrix twin byte-identical
+(15 records); see rust/CONFORMANCE.md for the climb re-measurement.
