@@ -338,3 +338,32 @@ a view type over unsafe punning. Raw outputs: ~/bench-results/phase0 (rig).
   clippy -p tsc-ast -p gen-ast --all-targets clean (tsc-tspath warnings are
   another worker's in-flight crate); bench-harness check green; tsc-scanner's
   60 errors are all inside its own in-flight files (none reference crates/ast).
+
+## M3 Wave 3 — parser (parser/jsdoc/references/utilities; reparser deferred)
+
+- `parse_source_file(opts, source_text, script_kind) -> SourceFile` by value at
+  the crate root — the bench seam's pinned signature (Go can return nil only
+  through dead-in-practice paths; PORT-noted in the seam module).
+- Pool: Go's `parserPool sync.Pool` → plain per-call `Parser` construct
+  (PORT; revisit in the hardening pass — the pool exists to amortize the
+  state struct, which Rust moves for free).
+- `references.go`: `file`-derived reads (`IsDeclarationFile`,
+  `IsExternalModule`) are loop-invariant → hoisted into the entry snapshot;
+  mutable file state batched through a `ReferenceCollector` and written back
+  once at exit (Go interleaves appends with the walk). Go's `file` param
+  became dead after the hoist and was dropped.
+- `GetLeading/TrailingCommentRanges` live in the parser crate (Go keeps them
+  in the scanner package, but they need `NodeFactory`, which the scanner
+  worker excluded — consumer hosts them, PORT-bannered).
+- Two race-blocker bugs found by the first corpus run + the testdata gate:
+  (1) generated `for_each_child` emitted mandatory `NodeId` slots without
+  Go's `visit()` nil filter, so `NodeId::NONE` (the nil mapping for
+  JSDoc-only slots like `PropertyAssignment.Type`) leaked to walkers — fixed
+  in gen-ast (179 guarded emissions) + regenerated;
+  (2) `get_external_module_name`'s `ExportDeclaration` arm downcast to
+  `ImportDeclaration` data — panicked on every `export … from` (4/176
+  testdata files); now dispatches per-kind like Go's `ModuleSpecifier()`,
+  `export { a };` correctly yields none.
+- Phase A first green: 1.051× at threads=1 / 0.629× at threads=16 on the
+  Excalidraw corpus (nodes/errors/shape byte-identical to the Go driver);
+  see rust/BENCHMARKS.md for the provisional-load caveat.

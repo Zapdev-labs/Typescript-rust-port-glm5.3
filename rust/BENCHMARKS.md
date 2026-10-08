@@ -78,9 +78,29 @@ runs and thread counts (`--threads 4`), run totals scale exactly with
 487377d6e977e9ef exactly at threads=1/K=1. Go's cost is ~289 ns/node;
 the ≤1.30× gate is 330.9 ms (~376 ns/node).**
 
+**2026-10-08 04:20 — FIRST GREEN: 1.051× at threads=1; 0.629× at threads=16.**
+Rust reproduces the contract exactly: nodes 881,067, errors 0, shape_hash
+487377d6e977e9ef at both thread counts (byte-identical to the Go driver and
+the locked baseline). Verdict: **FIRST GREEN (≤1.30×)**; hardening to ≤1.00×
+is next (gap: ~5%). Peak RSS: Rust 18.9 MB vs Go 37.2 MB (t=1) and 43.6 MB vs
+77.3 MB (t=16) — well under the ≤1.0× gate.
+
+*Provisional timing caveat:* the rig was concurrently loaded by an unrelated
+syzkaller campaign (load avg 33 on 16 cores) — Go's same-day median was
+313.3 ms vs its locked 254.5 ms quiet baseline (~23% contention inflation,
+both sides equally contended so the ratio is meaningful). Official quiet-rig
+timing re-run pending; the shape/nodes/errors equality above is
+load-independent and authoritative.
+
 | date | git (rust) | threads | wall median (rust) | wall median (go) | rust/go | RSS rust/go | MB/s rust | shape_hash |
 |---|---|---|---|---|---|---|---|---|
 | 2026-10-07 | (pre-M3) | 1 | — | 254.5 | — | — | — | 487377d6e977e9ef (go) |
+| 2026-10-08 | f3870978d9 | 1 | 329.3 | 313.3 (loaded) | 1.051 | 18.9/37.2 MB | 24.1 | 487377d6e977e9ef ✓ |
+| 2026-10-08 | f3870978d9 | 16 | 89.3 | 141.9 (loaded) | 0.629 | 43.6/77.3 MB | 88.7 | 487377d6e977e9ef ✓ |
+
+threads=16: Rust is already **1.59× faster** than Go (89.3 vs 141.9 ms) and
+scales better (5.71× vs 2.21× single→16-thread). The hardening gap is
+single-threaded (~374 vs ~355 ns/node under contention).
 
 ## Phase B — program race (M4/M5 gates)
 
