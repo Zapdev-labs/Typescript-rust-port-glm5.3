@@ -11,8 +11,11 @@ workspace = true
 [dependencies]
 rustc-hash = { workspace = true }
 
+serde_json = { workspace = true }
+
 tsc-ast = { path = "../ast" }
 tsc-collections = { path = "../collections" }
+tsc-contentmapper = { path = "../contentmapper" }
 tsc-core = { path = "../core" }
 tsc-diagnostics = { path = "../diagnostics" }
 tsc-glob = { path = "../glob" }

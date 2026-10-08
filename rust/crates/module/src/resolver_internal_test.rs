@@ -8,24 +8,22 @@
 
 use std::sync::Arc;
 
-use tsc_core::compileroptions::{ResolutionModeCommonJS, ResolutionModeESM};
-use tsc_core::options_generated::{CompilerOptions, ModuleKind, ModuleResolutionKind};
-use tsc_core::tristate::Tristate;
+use tsc_core::options_generated::CompilerOptions;
 use tsc_tspath::{
-    CaseSensitivity, RootedDirectoryPath, RootedFilePath, RootedPath, rooted_directory_path_from_absolute,
+    CaseSensitivity, RootedDirectoryPath, RootedPath, rooted_directory_path_from_absolute,
     rooted_directory_path_from_normalized, rooted_file_path_from_normalized,
 };
-use tsc_vfs::Entries;
 
-use crate::cache::new_resolution_data;
+use crate::cache::ResolutionData;
 use crate::resolver::{
-    DefaultResolver, ResolutionCandidate, ResolutionState, normalize_path_for_cjs_resolution,
+    DefaultResolver, ResolutionCandidate, ResolutionState, ResolvedOpt, normalize_path_for_cjs_resolution,
     resolve_resolution_candidate,
 };
-use crate::types::{Extensions, ResolutionHost, ResolverOptions};
+use crate::types::{Extensions, ResolutionHost};
 
 // resolutionTestInputs mirrors the Go test host (declared in resolver_test.go,
-// reused by this file's package).
+// shared by the whole package; the Rust port places it here so both test
+// modules can use it).
 pub(crate) struct ResolutionTestInputs {
     pub(crate) fs: Arc<dyn tsc_vfs::Fs>,
     pub(crate) cwd: RootedDirectoryPath,
@@ -40,15 +38,21 @@ impl ResolutionHost for ResolutionTestInputs {
     }
 }
 
-fn test_resolver_options(host: ResolutionTestInputs, opts: CompilerOptions) -> ResolverOptions {
-    ResolverOptions {
-        host: Arc::new(host),
-        compiler_options: Arc::new(opts),
-        typings_location: RootedDirectoryPath::default(),
-        project_name: String::new(),
-        extra_extensions: Vec::new(),
-        package_json_cache: None,
-    }
+// Go's tests build `&resolutionState{resolver: &DefaultResolver{fs: fs}, ...}`
+// with a zero ResolutionData; the port's bare resolver uses the default
+// ResolutionData (an empty package.json info cache at the zero case
+// sensitivity), which the exercised code paths never touch.
+fn bare_resolver(fs: Arc<dyn tsc_vfs::Fs>) -> DefaultResolver {
+    DefaultResolver::bare(Arc::new(ResolutionData::default()), fs)
+}
+
+fn state_for(resolver: &DefaultResolver, compiler_options: CompilerOptions) -> ResolutionState<'_> {
+    // PORT: Go overrides the embedded `compilerOptions` field in the struct
+    // literal; the port sets the field after `newMinimal` copies it from the
+    // (empty) resolver data.
+    let mut state = ResolutionState::new_minimal(resolver);
+    state.compiler_options = Arc::new(compiler_options);
+    state
 }
 
 #[track_caller]
@@ -71,6 +75,8 @@ fn assert_candidate(
 #[test]
 fn normalize_path_for_cjs_resolution_preserves_directory_intent() {
     struct Case {
+        // Go uses this only for the subtest name.
+        #[allow(dead_code)]
         name: &'static str,
         containing_directory: &'static str,
         module_name: &'static str,
@@ -140,11 +146,10 @@ fn package_json_path_with_trailing_separator_does_not_resolve_as_file() {
         [("/project/index.d.ts", "export {};")],
         CaseSensitivity::CaseSensitive,
     );
-    let resolver = DefaultResolver::bare(new_resolution_data(&bare_options()), Arc::clone(&fs) as Arc<dyn tsc_vfs::Fs>);
-    let mut state = ResolutionState::new_minimal(&resolver);
-    state.compiler_options = Arc::new(CompilerOptions::default());
+    let resolver = bare_resolver(Arc::clone(&fs));
+    let mut state = state_for(&resolver, CompilerOptions::default());
 
-    let candidate = resolve_resolution_candidate("/project", "index.d.ts/");
+    let candidate = resolve_resolution_candidate("/project", &["index.d.ts/"]);
     let result = state.load_file_name_from_package_json_field(
         Extensions::extensionsDeclaration,
         &candidate,
@@ -155,31 +160,6 @@ fn package_json_path_with_trailing_separator_does_not_resolve_as_file() {
         "directory-only candidate resolved as {:?}",
         result.map(|r| r.path)
     );
-}
-
-fn bare_options() -> ResolverOptions {
-    ResolverOptions {
-        host: Arc::new(BareHost),
-        compiler_options: Arc::new(CompilerOptions::default()),
-        typings_location: RootedDirectoryPath::default(),
-        project_name: String::new(),
-        extra_extensions: Vec::new(),
-        package_json_cache: None,
-    }
-}
-
-// Go writes `&DefaultResolver{fs: fs}` with a zero ResolutionData; the port's
-// DefaultResolver::bare needs *some* host to construct the default
-// ResolutionData (the case-sensitivity of its package.json cache).
-struct BareHost;
-
-impl ResolutionHost for BareHost {
-    fn fs(&self) -> Arc<dyn tsc_vfs::Fs> {
-        tsc_vfs::vfstest::from_map([], CaseSensitivity::default())
-    }
-    fn get_current_directory(&self) -> RootedDirectoryPath {
-        RootedDirectoryPath::default()
-    }
 }
 
 #[test]
@@ -198,18 +178,17 @@ fn extension_replacement_preserves_empty_and_dot_stems() {
             [(test.expected, "export {};")],
             CaseSensitivity::CaseSensitive,
         );
-        let resolver = DefaultResolver::bare(
-            new_resolution_data(&bare_options()),
-            Arc::clone(&fs) as Arc<dyn tsc_vfs::Fs>,
+        let resolver = bare_resolver(Arc::clone(&fs));
+        let mut state = state_for(
+            &resolver,
+            CompilerOptions {
+                module_suffixes: vec![".native".to_string(), String::new()],
+                ..Default::default()
+            },
         );
-        let mut state = ResolutionState::new_minimal(&resolver);
-        state.compiler_options = Arc::new(CompilerOptions {
-            module_suffixes: vec![".native".to_string(), String::new()],
-            ..Default::default()
-        });
         let result = state.load_module_from_file_no_implicit_extensions(
             Extensions::extensionsTypeScript | Extensions::extensionsDeclaration,
-            &resolve_resolution_candidate("/project", test.import_name),
+            &resolve_resolution_candidate("/project", &[test.import_name]),
         );
         let result = result
             .unwrap_or_else(|| panic!("got no result, expected {}", test.expected));
@@ -219,18 +198,19 @@ fn extension_replacement_preserves_empty_and_dot_stems() {
 
 #[test]
 fn output_directories_remove_trailing_separators() {
-    let fs =
-        tsc_vfs::vfstest::from_map([], CaseSensitivity::CaseSensitive);
-    let resolver = DefaultResolver::bare(
-        new_resolution_data(&bare_options()),
-        Arc::clone(&fs) as Arc<dyn tsc_vfs::Fs>,
+    let fs = tsc_vfs::vfstest::from_map(
+        std::iter::empty::<(&str, &str)>(),
+        CaseSensitivity::CaseSensitive,
     );
-    let mut state = ResolutionState::new_minimal(&resolver);
-    state.compiler_options = Arc::new(CompilerOptions {
-        declaration_dir: rooted_directory_path_from_absolute("/project/types/"),
-        out_dir: rooted_directory_path_from_absolute("/project/dist/"),
-        ..Default::default()
-    });
+    let resolver = bare_resolver(Arc::clone(&fs));
+    let state = state_for(
+        &resolver,
+        CompilerOptions {
+            declaration_dir: rooted_directory_path_from_absolute("/project/types/"),
+            out_dir: rooted_directory_path_from_absolute("/project/dist/"),
+            ..Default::default()
+        },
+    );
 
     let directories = state.get_output_directories();
     let expected = [
@@ -241,15 +221,4 @@ fn output_directories_remove_trailing_separators() {
     for (i, directory) in directories.iter().enumerate() {
         assert_eq!(directory, &expected[i], "directory {i}");
     }
-    // Silence unused warnings for ported-but-unused imports.
-    let _ = (
-        ResolutionModeCommonJS,
-        ResolutionModeESM,
-        ModuleKind::ESNext,
-        ModuleResolutionKind::Bundler,
-        Tristate::TSTrue,
-        RootedFilePath::default(),
-        Entries::default(),
-        test_resolver_options,
-    );
 }

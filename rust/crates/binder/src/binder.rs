@@ -25,48 +25,44 @@
 // are per-file; the M5 program merge re-bases them into the program-level
 // arenas (SPEC §5.10), same scheme as flow.rs's flow-node ids.
 
-use std::cell::Cell;
-
 use tsc_ast::{
-    has_syntactic_modifier, is_binary_expression, is_class_declaration, is_class_expression,
-    is_export_assignment, is_export_specifier, is_function_declaration, is_function_expression,
-    is_identifier, is_module_declaration, is_namespace_export, is_optional_chain,
-    is_private_identifier, is_property_name_literal, is_string_or_numeric_literal_like,
+    has_syntactic_modifier, is_binary_expression, is_class_declaration, is_export_assignment,
+    is_export_specifier, is_function_declaration, is_function_expression, is_identifier,
+    is_module_declaration, is_namespace_export, is_optional_chain, is_private_identifier,
     is_type_alias_declaration, is_variable_declaration, is_variable_statement, node_is_missing,
-    node_is_present, node_text, Diagnostic, Kind, ModifierFlags, NodeFlags, NodeId, NodeList,
-    NodeStore, SourceFile, Symbol, SymbolFlags, SymbolId, SymbolTable,
-    PatternAmbientModule, INTERNAL_SYMBOL_NAME_CALL, INTERNAL_SYMBOL_NAME_CLASS,
-    INTERNAL_SYMBOL_NAME_COMPUTED, INTERNAL_SYMBOL_NAME_CONSTRUCTOR, INTERNAL_SYMBOL_NAME_DEFAULT,
-    INTERNAL_SYMBOL_NAME_EXPORT_EQUALS, INTERNAL_SYMBOL_NAME_EXPORT_STAR, INTERNAL_SYMBOL_NAME_FUNCTION,
-    INTERNAL_SYMBOL_NAME_GLOBAL, INTERNAL_SYMBOL_NAME_INDEX, INTERNAL_SYMBOL_NAME_JSX_ATTRIBUTES,
-    INTERNAL_SYMBOL_NAME_MISSING, INTERNAL_SYMBOL_NAME_MODULE_EXPORTS, INTERNAL_SYMBOL_NAME_NEW,
-    INTERNAL_SYMBOL_NAME_OBJECT, INTERNAL_SYMBOL_NAME_PREFIX, INTERNAL_SYMBOL_NAME_TYPE,
-    INTERNAL_SYMBOL_NAME_ASSIGNMENT_DECLARATION,
+    node_is_present, node_text, Diagnostic, FlowNodeId, Kind, ModifierFlags, NodeFlags, NodeId,
+    NodeList, NodeStore, SourceFile, Symbol, SymbolFlags, SymbolId, PatternAmbientModule,
+    INTERNAL_SYMBOL_NAME_CALL, INTERNAL_SYMBOL_NAME_CLASS, INTERNAL_SYMBOL_NAME_COMPUTED,
+    INTERNAL_SYMBOL_NAME_CONSTRUCTOR, INTERNAL_SYMBOL_NAME_DEFAULT, INTERNAL_SYMBOL_NAME_EXPORT_EQUALS,
+    INTERNAL_SYMBOL_NAME_EXPORT_STAR, INTERNAL_SYMBOL_NAME_FUNCTION, INTERNAL_SYMBOL_NAME_GLOBAL,
+    INTERNAL_SYMBOL_NAME_INDEX, INTERNAL_SYMBOL_NAME_JSX_ATTRIBUTES, INTERNAL_SYMBOL_NAME_MISSING,
+    INTERNAL_SYMBOL_NAME_NEW, INTERNAL_SYMBOL_NAME_OBJECT,
+    INTERNAL_SYMBOL_NAME_PREFIX, INTERNAL_SYMBOL_NAME_TYPE, INTERNAL_SYMBOL_NAME_ASSIGNMENT_DECLARATION,
 };
 use tsc_ast::flow::{
-    FlowFlags, FlowList, FlowListId, FlowNode, FlowNodeData, FlowNodeId, FlowReduceLabelData,
+    FlowFlags, FlowList, FlowListId, FlowNode, FlowNodeData, FlowReduceLabelData,
     FlowSwitchClauseData,
 };
 use tsc_collections::Set;
 use tsc_core::pattern::try_parse_pattern;
 use tsc_core::text::TextRange;
 use tsc_diagnostics::Message;
-use tsc_tspath::extension::remove_file_extension;
+use tsc_tspath::remove_file_extension;
 
 use crate::ast_shims::{
     get_assignment_declaration_kind, get_combined_modifier_flags, get_containing_class,
     get_immediately_invoked_function_expression, get_module_instance_state, get_name_of_declaration,
     has_dynamic_name, is_ambient_module, is_assignment_target, is_block_or_catch_scoped,
-    is_boolean_literal, is_destructuring_assignment, is_dotted_name, is_entity_name_expression,
-    is_expression_of_optional_chain_root, is_external_module, is_external_or_common_js_module,
-    is_for_in_or_of_statement, is_function_expression_or_arrow_function, is_global_scope_augmentation,
+    is_boolean_literal, is_declaration_statement, is_destructuring_assignment, is_dotted_name,
+    is_entity_name_expression, is_expression_of_optional_chain_root, is_external_module,
+    is_external_or_common_js_module, is_for_in_or_of_statement, is_global_scope_augmentation,
     is_identifier_name, is_in_top_level_context, is_json_source_file, is_left_hand_side_expression,
-    is_module_augmentation_external, is_module_exports_access_expression, is_nullish_coalesce,
-    is_object_literal_method, is_object_literal_or_class_expression_method_or_accessor,
-    is_optional_chain_root, is_outermost_optional_chain, is_part_of_parameter_declaration,
-    is_part_of_type_query, is_potentially_executable_node, is_push_or_unshift_identifier,
-    is_signed_numeric_literal, is_variable_declaration_initialized_to_require, ModuleInstanceState,
-    JSDeclarationKind,
+    is_module_augmentation_external, is_nullish_coalesce, is_object_literal_method,
+    is_object_literal_or_class_expression_method_or_accessor, is_optional_chain_root,
+    is_outermost_optional_chain, is_part_of_parameter_declaration, is_part_of_type_query,
+    is_potentially_executable_node, is_property_name_literal, is_push_or_unshift_identifier,
+    is_signed_numeric_literal, is_string_literal_like, is_string_or_numeric_literal_like,
+    is_variable_declaration_initialized_to_require, ModuleInstanceState, JSDeclarationKind,
 };
 use crate::node_data;
 use crate::scanner_shims::{
@@ -106,6 +102,12 @@ impl ContainerFlags {
     #[inline]
     pub const fn intersects(self, other: ContainerFlags) -> bool {
         (self.0 & other.0) != 0
+    }
+
+    /// Go: `flags | other` (same shape as tsc-ast's define_flags union).
+    #[inline]
+    pub const fn union(self, other: ContainerFlags) -> ContainerFlags {
+        ContainerFlags(self.0 | other.0)
     }
 }
 
@@ -275,7 +277,7 @@ impl<'f> Binder<'f> {
 
     /// Go: `file.SymbolCount = b.symbolCount` + the arena handoff (PORT,
     /// see the header note).
-    fn into_result(mut self) -> BindResult {
+    fn into_result(self) -> BindResult {
         self.file.payload_mut().symbol_count = self.symbol_count;
         BindResult {
             symbol_count: self.symbol_count,
@@ -350,9 +352,11 @@ impl<'f> Binder<'f> {
     /// Go: `func (b *Binder) newSymbol(flags ast.SymbolFlags, name string) *ast.Symbol`.
     fn new_symbol(&mut self, flags: SymbolFlags, name: &str) -> SymbolId {
         self.symbol_count += 1;
-        let mut symbol = Symbol::default();
-        symbol.flags = flags;
-        symbol.name = name.to_string();
+        let symbol = Symbol {
+            flags,
+            name: name.to_string(),
+            ..Symbol::default()
+        };
         self.symbols.push(symbol);
         SymbolId(self.symbols.len() as u32 - 1)
     }
@@ -379,6 +383,7 @@ impl<'f> Binder<'f> {
 
     /// Go: `func (b *Binder) declareSymbolEx(...) *ast.Symbol` — verbatim,
     /// with the TableLoc shim standing in for the Go map reference.
+    #[allow(clippy::too_many_arguments)] // Go: declareSymbolEx has 8 params
     fn declare_symbol_ex(
         &mut self,
         symbol_table: TableLoc,
@@ -1490,7 +1495,7 @@ impl<'f> Binder<'f> {
             self.emit_flags |= NodeFlags::HAS_ASYNC_FUNCTIONS;
         }
         self.set_flow_node_field(node, self.current_flow);
-        let mut binding_name = INTERNAL_SYMBOL_NAME_FUNCTION;
+        let mut binding_name = INTERNAL_SYMBOL_NAME_FUNCTION.to_string();
         if is_function_expression(self.file.node(node)) {
             let name = match &self.file.node(node).data {
                 tsc_ast::NodeData::FunctionExpression(d) => d.name,
@@ -1498,10 +1503,10 @@ impl<'f> Binder<'f> {
             };
             if let Some(name) = name {
                 self.check_strict_mode_function_name(node);
-                binding_name = node_text(&*self.file, name);
+                binding_name = node_text(&*self.file, name).to_string();
             }
         }
-        self.bind_anonymous_declaration(node, SymbolFlags::FUNCTION, binding_name);
+        self.bind_anonymous_declaration(node, SymbolFlags::FUNCTION, &binding_name);
     }
 
     /// Go: `func (b *Binder) bindCallExpression(node *ast.Node)`.
@@ -1540,10 +1545,10 @@ impl<'f> Binder<'f> {
             }
             Kind::ClassExpression => {
                 let name_text = match name {
-                    Some(name) => node_text(&*self.file, name),
-                    None => INTERNAL_SYMBOL_NAME_CLASS,
+                    Some(name) => node_text(&*self.file, name).to_string(),
+                    None => INTERNAL_SYMBOL_NAME_CLASS.to_string(),
                 };
-                self.bind_anonymous_declaration(node, SymbolFlags::CLASS, name_text);
+                self.bind_anonymous_declaration(node, SymbolFlags::CLASS, &name_text);
             }
             _ => {}
         }
@@ -1967,7 +1972,9 @@ impl<'f> Binder<'f> {
     /// Go: `func (b *Binder) bindBlockScopedDeclaration(node, symbolFlags, symbolExcludes)`.
     fn bind_block_scoped_declaration(&mut self, node: NodeId, symbol_flags: SymbolFlags, symbol_excludes: SymbolFlags) {
         match self.file.node(self.block_scope_container).kind {
-            Kind::ModuleDeclaration => self.declare_module_member(node, symbol_flags, symbol_excludes),
+            Kind::ModuleDeclaration => {
+                self.declare_module_member(node, symbol_flags, symbol_excludes);
+            }
             Kind::SourceFile => {
                 if is_external_or_common_js_module(self.file) {
                     self.declare_module_member(node, symbol_flags, symbol_excludes);
@@ -1979,15 +1986,17 @@ impl<'f> Binder<'f> {
                     node,
                     symbol_flags,
                     symbol_excludes,
-                )
+                );
             }
-            _ => self.declare_symbol(
-                TableLoc::Locals(self.block_scope_container),
-                None, /*parent*/
-                node,
-                symbol_flags,
-                symbol_excludes,
-            ),
+            _ => {
+                self.declare_symbol(
+                    TableLoc::Locals(self.block_scope_container),
+                    None, /*parent*/
+                    node,
+                    symbol_flags,
+                    symbol_excludes,
+                );
+            }
         }
     }
 
@@ -2028,11 +2037,10 @@ impl<'f> Binder<'f> {
             }
             return None;
         }
-        let symbol = get_initializer_symbol(self, self.lookup_entity(expression, container));
+        let entity = self.lookup_entity(expression, container);
+        let symbol = get_initializer_symbol(self, entity);
         if let Some(symbol) = symbol {
-            let Some(name) = crate::ast_shims::get_element_or_property_access_name(&*self.file, node) else {
-                return None;
-            };
+            let name = crate::ast_shims::get_element_or_property_access_name(&*self.file, node)?;
             let name_text = node_text(&*self.file, name).to_string();
             return self.symbols[symbol.0 as usize].exports.get(&name_text).copied();
         }
@@ -2169,6 +2177,10 @@ impl<'f> Binder<'f> {
     }
 
     /// Go: `func (b *Binder) getStrictModeBlockScopeFunctionDeclarationMessage(node)`.
+    ///
+    /// PORT: dead code in the Go tree as well (defined at binder.go:1380,
+    /// never called anywhere in tsc/internal) — kept verbatim for parity.
+    #[allow(dead_code)]
     fn get_strict_mode_block_scope_function_declaration_message(&self, node: NodeId) -> &'static Message {
         // Provide specialized messages to help the user understand why we think they're in strict mode.
         if get_containing_class(&*self.file, node).is_some() {
@@ -2264,7 +2276,7 @@ impl<'f> Binder<'f> {
             tsc_ast::NodeData::LabeledStatement(d) => (d.label, d.statement),
             _ => unreachable!("checkStrictModeLabeledStatement on LabeledStatement"),
         };
-        if tsc_ast::is_declaration_statement(self.file.node(statement))
+        if is_declaration_statement(self.file.node(statement))
             || is_variable_statement(self.file.node(statement))
         {
             self.error_on_first_token(label, &tsc_diagnostics::A_LABEL_IS_NOT_ALLOWED_HERE, &[]);
@@ -2391,20 +2403,18 @@ impl<'f> Binder<'f> {
             }
             if !self.flow(self.current_flow).flags.intersects(FlowFlags::UNREACHABLE)
                 && container_flags.intersects(ContainerFlags::IS_FUNCTION_LIKE)
+                && node_data::has_body_data(self.file.node(node))
+                && node_data::body_of(&*self.file, node)
+                    .is_some_and(|b| node_is_present(self.file.node(b)))
             {
-                if node_data::has_body_data(self.file.node(node)) {
-                    let body = node_data::body_of(&*self.file, node);
-                    if body.is_some_and(|b| node_is_present(self.file.node(b))) {
-                        {
-                            let n = self.file.node_mut(node);
-                            n.flags |= NodeFlags::HAS_IMPLICIT_RETURN;
-                            if self.has_explicit_return {
-                                n.flags |= NodeFlags::HAS_EXPLICIT_RETURN;
-                            }
-                        }
-                        node_data::set_end_flow_node(&mut *self.file, node, Some(self.current_flow));
+                {
+                    let n = self.file.node_mut(node);
+                    n.flags |= NodeFlags::HAS_IMPLICIT_RETURN;
+                    if self.has_explicit_return {
+                        n.flags |= NodeFlags::HAS_EXPLICIT_RETURN;
                     }
                 }
+                node_data::set_end_flow_node(&mut *self.file, node, Some(self.current_flow));
             }
             if self.seen_this_keyword {
                 self.file.node_mut(node).flags |= NodeFlags::CONTAINS_THIS;
@@ -2629,10 +2639,7 @@ impl<'f> Binder<'f> {
     fn set_continue_target(&mut self, node: NodeId, target: FlowNodeId) -> FlowNodeId {
         let mut node = node;
         let mut label = self.active_label_list.as_deref_mut();
-        loop {
-            let Some(l) = label else {
-                break;
-            };
+        while let Some(l) = label {
             let Some(parent) = crate::ast_shims::parent_of(&*self.file, node) else {
                 break;
             };
@@ -2766,7 +2773,8 @@ impl<'f> Binder<'f> {
     /// Go: `func (b *Binder) bindWhileStatement(node *ast.Node)`.
     fn bind_while_statement(&mut self, node: NodeId) {
         let stmt = self.file.node(node).as_while_statement().expect("WhileStatement data").clone();
-        let pre_while_label = self.set_continue_target(node, self.create_loop_label());
+        let loop_label = self.create_loop_label();
+        let pre_while_label = self.set_continue_target(node, loop_label);
         let pre_body_label = self.create_branch_label();
         let post_while_label = self.create_branch_label();
         self.add_antecedent(pre_while_label, self.current_flow);
@@ -2782,7 +2790,8 @@ impl<'f> Binder<'f> {
     fn bind_do_statement(&mut self, node: NodeId) {
         let stmt = self.file.node(node).as_do_statement().expect("DoStatement data").clone();
         let pre_do_label = self.create_loop_label();
-        let pre_condition_label = self.set_continue_target(node, self.create_branch_label());
+        let branch_label = self.create_branch_label();
+        let pre_condition_label = self.set_continue_target(node, branch_label);
         let post_do_label = self.create_branch_label();
         self.add_antecedent(pre_do_label, self.current_flow);
         self.current_flow = pre_do_label;
@@ -2808,7 +2817,8 @@ impl<'f> Binder<'f> {
             self.bind(stmt.incrementor);
             return;
         }
-        let pre_loop_label = self.set_continue_target(node, self.create_loop_label());
+        let loop_label = self.create_loop_label();
+        let pre_loop_label = self.set_continue_target(node, loop_label);
         let pre_body_label = self.create_branch_label();
         let pre_incrementor_label = self.create_branch_label();
         let post_loop_label = self.create_branch_label();
@@ -2843,7 +2853,8 @@ impl<'f> Binder<'f> {
             self.bind(Some(stmt.statement));
             return;
         }
-        let pre_loop_label = self.set_continue_target(node, self.create_loop_label());
+        let loop_label = self.create_loop_label();
+        let pre_loop_label = self.set_continue_target(node, loop_label);
         let post_loop_label = self.create_branch_label();
         self.add_antecedent(pre_loop_label, self.current_flow);
         self.current_flow = pre_loop_label;
@@ -2917,7 +2928,7 @@ impl<'f> Binder<'f> {
     ) {
         self.bind(label);
         if let Some(label) = label {
-            let label_text = node_text(&*self.file, label);
+            let label_text = node_text(&*self.file, label).to_string();
             if let Some(target) = self.find_active_label_target(&label_text, slot) {
                 self.bind_break_or_continue_flow(Some(target));
             }
@@ -3008,7 +3019,8 @@ impl<'f> Binder<'f> {
             let normal_antecedents = self.flow(normal_exit_label).antecedents;
             let exception_antecedents = self.flow(exception_label).antecedents;
             let return_antecedents = self.flow(return_label).antecedents;
-            let combined = self.combine_flow_lists(normal_antecedents, self.combine_flow_lists(exception_antecedents, return_antecedents));
+            let exception_and_return = self.combine_flow_lists(exception_antecedents, return_antecedents);
+            let combined = self.combine_flow_lists(normal_antecedents, exception_and_return);
             self.flow_mut(finally_label).antecedents = combined;
             self.current_flow = finally_label;
             self.bind(Some(finally_block));
@@ -3222,8 +3234,7 @@ impl<'f> Binder<'f> {
             .clone();
         if expr.operator == Kind::ExclamationToken {
             let save_true_target = self.current_true_target;
-            self.current_true_target = self.current_false_target;
-            self.current_false_target = save_true_target;
+            std::mem::swap(&mut self.current_true_target, &mut self.current_false_target);
             self.bind_each_child(node);
             self.current_false_target = self.current_true_target;
             self.current_true_target = save_true_target;
@@ -3531,10 +3542,10 @@ impl<'f> Binder<'f> {
             Kind::CallExpression => {
                 self.bind(node_data::question_dot_token_of(&*self.file, node));
                 let type_arguments = match &self.file.node(node).data {
-                    tsc_ast::NodeData::CallExpression(d) => d.type_arguments.as_ref(),
+                    tsc_ast::NodeData::CallExpression(d) => d.type_arguments.clone(),
                     _ => None,
                 };
-                self.bind_node_list(type_arguments);
+                self.bind_node_list(type_arguments.as_ref());
                 let arguments = node_data::arguments_of(&*self.file, node).to_vec();
                 self.bind_each(&arguments);
             }
@@ -3870,13 +3881,13 @@ fn has_narrowable_argument(store: &dyn NodeStore, expr: NodeId) -> bool {
             return true;
         }
     }
-    if tsc_ast::is_property_access_expression(store.node(call.expression)) {
-        if contains_narrowable_reference(
+    if tsc_ast::is_property_access_expression(store.node(call.expression))
+        && contains_narrowable_reference(
             store,
             node_data::expression_of(store, call.expression).expect("access expression"),
-        ) {
-            return true;
-        }
+        )
+    {
+        return true;
     }
     false
 }
@@ -3931,7 +3942,7 @@ fn is_narrowable_operand(store: &dyn NodeStore, expr: NodeId) -> bool {
 fn is_narrowing_type_of_operands(store: &dyn NodeStore, expr1: NodeId, expr2: NodeId) -> bool {
     tsc_ast::is_type_of_expression(store.node(expr1))
         && is_narrowable_operand(store, node_data::expression_of(store, expr1).expect("TypeOfExpression expression"))
-        && tsc_ast::is_string_literal_like(store.node(expr2))
+        && is_string_literal_like(store.node(expr2))
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -4007,7 +4018,7 @@ fn is_eval_or_arguments_identifier(store: &dyn NodeStore, node: NodeId) -> bool 
 /// Should be called only on prologue directives (ast.IsPrologueDirective(node) should be true).
 fn is_use_strict_prologue_directive(source_file: &SourceFile, node: NodeId) -> bool {
     let expression = node_data::expression_of(source_file, node).expect("ExpressionStatement expression");
-    let node_text = tsc_scanner::get_source_text_of_node_from_source_file(
+    let node_text = tsc_scanner::utilities::get_source_text_of_node_from_source_file(
         source_file,
         expression,
         false, /*includeTrivia*/
@@ -4157,10 +4168,7 @@ fn is_statement_condition(store: &dyn NodeStore, node: NodeId) -> bool {
 /// Go: `func isTopLevelLogicalExpression(node *ast.Node) bool`.
 fn is_top_level_logical_expression(store: &dyn NodeStore, node: NodeId) -> bool {
     let mut node = node;
-    loop {
-        let Some(parent) = crate::ast_shims::parent_of(store, node) else {
-            break;
-        };
+    while let Some(parent) = crate::ast_shims::parent_of(store, node) {
         let is_exclam_prefix = tsc_ast::is_prefix_unary_expression(store.node(parent))
             && store
                 .node(parent)

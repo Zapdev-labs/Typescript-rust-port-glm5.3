@@ -16,9 +16,9 @@ use tsc_ast::{
     is_arrow_function, is_assignment_operator, is_binary_expression, is_binding_element,
     is_call_expression, is_class_declaration, is_class_expression, is_class_static_block_declaration,
     is_constructor_declaration, is_element_access_expression, is_enum_declaration,
-    is_function_declaration, is_function_expression, is_identifier, is_method_or_accessor,
-    is_module_declaration, is_non_null_expression, is_numeric_literal,
-    is_object_literal_expression, is_parenthesized_expression, is_prefix_unary_expression,
+    is_function_declaration, is_function_expression, is_identifier, is_module_declaration,
+    is_non_null_expression, is_numeric_literal, is_object_literal_expression,
+    is_parameter_declaration, is_parenthesized_expression, is_prefix_unary_expression,
     is_property_access_expression, is_property_declaration, is_source_file, is_type_reference_node,
     is_variable_statement, Kind, ModifierFlags, Node, NodeData, NodeFlags, NodeId, NodeStore,
     SourceFile, Symbol, SymbolId, INTERNAL_SYMBOL_NAME_DEFAULT,
@@ -75,7 +75,7 @@ pub fn parent_of(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
 
 /// Go: `node.Text()` for the text-bearing kinds the binder reads.
 #[inline]
-pub fn node_text<'a>(store: &'a dyn NodeStore, node: NodeId) -> &'a str {
+pub fn node_text(store: &dyn NodeStore, node: NodeId) -> &str {
     tsc_ast::node_text(store, node)
 }
 
@@ -139,9 +139,7 @@ pub fn is_assignment_target(store: &dyn NodeStore, node: NodeId) -> bool {
 pub fn get_assignment_target(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
     let mut node = node;
     loop {
-        let Some(parent) = parent_of(store, node) else {
-            return None;
-        };
+        let parent = parent_of(store, node)?;
         match store.node(parent).kind {
             Kind::BinaryExpression => {
                 let expr = store
@@ -242,11 +240,12 @@ pub fn is_logical_or_coalescing_binary_expression(store: &dyn NodeStore, node: N
     is_binary_expression(n)
         && is_logical_or_coalescing_binary_operator(
             store
-                .node(node)
-                .as_binary_expression()
-                .expect("BinaryExpression data")
-                .operator_token
-                .pipe(|t| store.node(t).kind),
+                .node(store
+                    .node(node)
+                    .as_binary_expression()
+                    .expect("BinaryExpression data")
+                    .operator_token)
+                .kind,
         )
 }
 
@@ -256,11 +255,12 @@ pub fn is_logical_or_coalescing_assignment_expression(store: &dyn NodeStore, nod
     is_binary_expression(n)
         && tsc_ast::is_logical_or_coalescing_assignment_operator(
             store
-                .node(node)
-                .as_binary_expression()
-                .expect("BinaryExpression data")
-                .operator_token
-                .pipe(|t| store.node(t).kind),
+                .node(store
+                    .node(node)
+                    .as_binary_expression()
+                    .expect("BinaryExpression data")
+                    .operator_token)
+                .kind,
         )
 }
 
@@ -868,7 +868,9 @@ pub fn get_non_assigned_name_of_declaration(
                 JSDeclarationKind::ObjectDefinePropertyValue | JSDeclarationKind::ObjectDefinePropertyExports => {
                     return node_data::arguments_of(store, declaration).get(1).copied();
                 }
-                JSDeclarationKind::None => {}
+                // Go: JSDeclarationKindModuleExports and the rest fall
+                // through to `return nil`.
+                JSDeclarationKind::None | JSDeclarationKind::ModuleExports => {}
             }
             None
         }
@@ -1098,18 +1100,17 @@ pub fn get_assignment_declaration_kind(store: &dyn NodeStore, node: NodeId) -> J
                 }
             }
         }
-        Kind::CallExpression => {
+        Kind::CallExpression
             if tsc_ast::utilities::is_in_js_file(store.node(node))
-                && is_bindable_object_define_property_call(store, node)
+                && is_bindable_object_define_property_call(store, node) =>
+        {
+            let entity_name = node_data::arguments_of(store, node)[0];
+            if is_exports_identifier(store, entity_name)
+                || is_module_exports_access_expression(store, entity_name)
             {
-                let entity_name = node_data::arguments_of(store, node)[0];
-                if is_exports_identifier(store, entity_name)
-                    || is_module_exports_access_expression(store, entity_name)
-                {
-                    return JSDeclarationKind::ObjectDefinePropertyExports;
-                }
-                return JSDeclarationKind::ObjectDefinePropertyValue;
+                return JSDeclarationKind::ObjectDefinePropertyExports;
             }
+            return JSDeclarationKind::ObjectDefinePropertyValue;
         }
         _ => {}
     }
@@ -1603,10 +1604,7 @@ fn get_module_instance_state_for_alias_target(
         return ModuleInstanceState::Instantiated;
     }
     let name_text = node_text(store, name);
-    loop {
-        let Some(p) = pop_ancestor(ancestors, node, store) else {
-            break;
-        };
+    while let Some(p) = pop_ancestor(ancestors, node, store) {
         let pk = store.node(p).kind;
         if pk == Kind::Block || pk == Kind::ModuleBlock || pk == Kind::SourceFile {
             let mut found = ModuleInstanceState::Unknown;
@@ -1711,24 +1709,22 @@ pub fn get_declaration_of_kind(
     symbol: SymbolId,
     kind: Kind,
 ) -> Option<NodeId> {
-    for &declaration in &symbols[symbol.0 as usize].declarations {
-        if store.node(declaration).kind == kind {
-            return Some(declaration);
-        }
-    }
-    None
+    symbols[symbol.0 as usize]
+        .declarations
+        .iter()
+        .copied()
+        .find(|&declaration| store.node(declaration).kind == kind)
 }
 
 /// Go: `func FindConstructorDeclaration(node *ClassLikeDeclaration) *Node`.
 pub fn find_constructor_declaration(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
-    for &member in node_data::members_of(store, node) {
-        if is_constructor_declaration(store.node(member))
-            && tsc_ast::node_is_present(store.node(body_of_or_missing(store, member)))
-        {
-            return Some(member);
-        }
-    }
-    None
+    node_data::members_of(store, node)
+        .iter()
+        .copied()
+        .find(|&member| {
+            is_constructor_declaration(store.node(member))
+                && tsc_ast::node_is_present(store.node(body_of_or_missing(store, member)))
+        })
 }
 
 fn body_of_or_missing(store: &dyn NodeStore, member: NodeId) -> NodeId {

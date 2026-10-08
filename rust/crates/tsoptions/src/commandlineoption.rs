@@ -341,3 +341,44 @@ pub fn rooted_directory_path_as_value(path: &RootedDirectoryPath) -> CompilerOpt
 pub fn source_map_location_as_value(path: &SourceMapLocation) -> CompilerOptionsValue {
     CompilerOptionsValue::Str(path.as_string().to_owned())
 }
+
+impl PartialEq for CompilerOptionsValue {
+    /// Structural equality over the value tree (Go compares `any` values with
+    /// `==`, which is structural for the types this closed enum models).
+    /// OrderedMap equality is key-by-key, order-insensitive — like Go's maps.
+    fn eq(&self, other: &Self) -> bool {
+        use CompilerOptionsValue::*;
+        match (self, other) {
+            (Null, Null) => true,
+            (Bool(a), Bool(b)) => a == b,
+            (Int(a), Int(b)) => a == b,
+            // Go's `any` holds float64 for JSON numbers, so 1 == 1.0 there.
+            (Int(a), Float(b)) | (Float(b), Int(a)) => *a as f64 == *b,
+            (Float(a), Float(b)) => a == b,
+            (Str(a), Str(b)) => a == b,
+            (StrArray(a), StrArray(b)) => a == b,
+            (Array(a), Array(b)) => a == b,
+            (Object(a), Object(b)) => {
+                a.size() == b.size()
+                    && a.entries()
+                        .all(|(k, v)| b.get(k).is_some_and(|other| v == other))
+            }
+            (PathsMap(a), PathsMap(b)) => {
+                a.size() == b.size()
+                    && a.entries()
+                        .all(|(k, v)| b.get(k).is_some_and(|other| v == other))
+            }
+            (PluginImports(a), PluginImports(b)) => {
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.name == y.name)
+            }
+            (Tristate(a), Tristate(b)) => a == b,
+            (JsxEmit(a), JsxEmit(b)) => a == b,
+            (ModuleKind(a), ModuleKind(b)) => a == b,
+            (ModuleResolutionKind(a), ModuleResolutionKind(b)) => a == b,
+            (ModuleDetectionKind(a), ModuleDetectionKind(b)) => a == b,
+            (NewLineKind(a), NewLineKind(b)) => a == b,
+            (ScriptTarget(a), ScriptTarget(b)) => a == b,
+            _ => false,
+        }
+    }
+}

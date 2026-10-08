@@ -17,9 +17,14 @@
 //     the Go return shape.
 
 use tsc_collections::{OrderedMap, Set};
-use tsc_core::options_generated::{BuildOptions, CompilerOptions, PluginImport, TypeAcquisition};
+use tsc_core::options_generated::{
+    BuildOptions, CompilerOptions, JsxEmit, ModuleDetectionKind, ModuleKind, ModuleResolutionKind,
+    NewLineKind, PluginImport, ScriptTarget, TypeAcquisition,
+};
 use tsc_core::tristate::Tristate;
-use tsc_tspath::{CaseSensitivity, RootedDirectoryPath, RootedFilePath};
+use tsc_tspath::{
+    CaseSensitivity, RootedDirectoryPath, RootedFilePath, RootedPath, SourceMapLocation,
+};
 
 use crate::commandlineoption::{CommandLineOption, CommandLineOptionKind, CompilerOptionsValue};
 use crate::namemap::{build_name_map, command_line_compiler_options_map};
@@ -27,8 +32,7 @@ use crate::parsinghelpers::{
     get_substituted_path_with_config_dir_template,
     get_substituted_string_array_with_config_dir_template, parse_directory_name,
     parse_directory_names, parse_file_name, parse_file_or_directory_name, parse_number,
-    parse_string, parse_string_array, parse_string_map, parse_tristate,
-    starts_with_config_dir_template, to_source_map_location,
+    parse_string, parse_string_array, parse_string_map, parse_tristate, to_source_map_location,
 };
 use crate::showconfig::{serialize_compiler_option_enum_list, serialize_compiler_option_path};
 use crate::tsconfigparsing::ParsedCompilerOptions;
@@ -1951,7 +1955,7 @@ pub fn serialize_compiler_options(
     let mut result = OrderedMap::with_size_hint(32);
     if options.allow_js == Tristate::TSTrue || options.allow_js == Tristate::TSFalse {
         result.set(
-            "allowJs",
+            "allowJs".to_string(),
             CompilerOptionsValue::Bool(options.allow_js == Tristate::TSTrue),
         );
     }
@@ -1959,7 +1963,7 @@ pub fn serialize_compiler_options(
         || options.allow_arbitrary_extensions == Tristate::TSFalse
     {
         result.set(
-            "allowArbitraryExtensions",
+            "allowArbitraryExtensions".to_string(),
             CompilerOptionsValue::Bool(options.allow_arbitrary_extensions == Tristate::TSTrue),
         );
     }
@@ -1967,7 +1971,7 @@ pub fn serialize_compiler_options(
         || options.allow_importing_ts_extensions == Tristate::TSFalse
     {
         result.set(
-            "allowImportingTsExtensions",
+            "allowImportingTsExtensions".to_string(),
             CompilerOptionsValue::Bool(options.allow_importing_ts_extensions == Tristate::TSTrue),
         );
     }
@@ -1975,7 +1979,7 @@ pub fn serialize_compiler_options(
         || options.allow_umd_global_access == Tristate::TSFalse
     {
         result.set(
-            "allowUmdGlobalAccess",
+            "allowUmdGlobalAccess".to_string(),
             CompilerOptionsValue::Bool(options.allow_umd_global_access == Tristate::TSTrue),
         );
     }
@@ -1983,7 +1987,7 @@ pub fn serialize_compiler_options(
         || options.allow_unreachable_code == Tristate::TSFalse
     {
         result.set(
-            "allowUnreachableCode",
+            "allowUnreachableCode".to_string(),
             CompilerOptionsValue::Bool(options.allow_unreachable_code == Tristate::TSTrue),
         );
     }
@@ -1991,7 +1995,7 @@ pub fn serialize_compiler_options(
         || options.allow_unused_labels == Tristate::TSFalse
     {
         result.set(
-            "allowUnusedLabels",
+            "allowUnusedLabels".to_string(),
             CompilerOptionsValue::Bool(options.allow_unused_labels == Tristate::TSTrue),
         );
     }
@@ -1999,7 +2003,7 @@ pub fn serialize_compiler_options(
         || options.assume_changes_only_affect_direct_dependencies == Tristate::TSFalse
     {
         result.set(
-            "assumeChangesOnlyAffectDirectDependencies",
+            "assumeChangesOnlyAffectDirectDependencies".to_string(),
             CompilerOptionsValue::Bool(
                 options.assume_changes_only_affect_direct_dependencies == Tristate::TSTrue,
             ),
@@ -2007,19 +2011,19 @@ pub fn serialize_compiler_options(
     }
     if options.check_js == Tristate::TSTrue || options.check_js == Tristate::TSFalse {
         result.set(
-            "checkJs",
+            "checkJs".to_string(),
             CompilerOptionsValue::Bool(options.check_js == Tristate::TSTrue),
         );
     }
     if !options.custom_conditions.is_empty() {
         result.set(
-            "customConditions",
+            "customConditions".to_string(),
             CompilerOptionsValue::StrArray(options.custom_conditions.clone()),
         );
     }
     if options.composite == Tristate::TSTrue || options.composite == Tristate::TSFalse {
         result.set(
-            "composite",
+            "composite".to_string(),
             CompilerOptionsValue::Bool(options.composite == Tristate::TSTrue),
         );
     }
@@ -2027,13 +2031,13 @@ pub fn serialize_compiler_options(
         || options.emit_declaration_only == Tristate::TSFalse
     {
         result.set(
-            "emitDeclarationOnly",
+            "emitDeclarationOnly".to_string(),
             CompilerOptionsValue::Bool(options.emit_declaration_only == Tristate::TSTrue),
         );
     }
     if options.emit_bom == Tristate::TSTrue || options.emit_bom == Tristate::TSFalse {
         result.set(
-            "emitBOM",
+            "emitBOM".to_string(),
             CompilerOptionsValue::Bool(options.emit_bom == Tristate::TSTrue),
         );
     }
@@ -2041,19 +2045,19 @@ pub fn serialize_compiler_options(
         || options.emit_decorator_metadata == Tristate::TSFalse
     {
         result.set(
-            "emitDecoratorMetadata",
+            "emitDecoratorMetadata".to_string(),
             CompilerOptionsValue::Bool(options.emit_decorator_metadata == Tristate::TSTrue),
         );
     }
     if options.declaration == Tristate::TSTrue || options.declaration == Tristate::TSFalse {
         result.set(
-            "declaration",
+            "declaration".to_string(),
             CompilerOptionsValue::Bool(options.declaration == Tristate::TSTrue),
         );
     }
     if !options.declaration_dir.is_empty() {
         result.set(
-            "declarationDir",
+            "declarationDir".to_string(),
             CompilerOptionsValue::Str(serialize_compiler_option_path(
                 &options.declaration_dir.as_path(),
                 config_file_path,
@@ -2063,7 +2067,7 @@ pub fn serialize_compiler_options(
     }
     if options.declaration_map == Tristate::TSTrue || options.declaration_map == Tristate::TSFalse {
         result.set(
-            "declarationMap",
+            "declarationMap".to_string(),
             CompilerOptionsValue::Bool(options.declaration_map == Tristate::TSTrue),
         );
     }
@@ -2071,7 +2075,7 @@ pub fn serialize_compiler_options(
         || options.deduplicate_packages == Tristate::TSFalse
     {
         result.set(
-            "deduplicatePackages",
+            "deduplicatePackages".to_string(),
             CompilerOptionsValue::Bool(options.deduplicate_packages == Tristate::TSTrue),
         );
     }
@@ -2079,7 +2083,7 @@ pub fn serialize_compiler_options(
         || options.disable_size_limit == Tristate::TSFalse
     {
         result.set(
-            "disableSizeLimit",
+            "disableSizeLimit".to_string(),
             CompilerOptionsValue::Bool(options.disable_size_limit == Tristate::TSTrue),
         );
     }
@@ -2087,7 +2091,7 @@ pub fn serialize_compiler_options(
         || options.disable_source_of_project_reference_redirect == Tristate::TSFalse
     {
         result.set(
-            "disableSourceOfProjectReferenceRedirect",
+            "disableSourceOfProjectReferenceRedirect".to_string(),
             CompilerOptionsValue::Bool(
                 options.disable_source_of_project_reference_redirect == Tristate::TSTrue,
             ),
@@ -2097,7 +2101,7 @@ pub fn serialize_compiler_options(
         || options.disable_solution_searching == Tristate::TSFalse
     {
         result.set(
-            "disableSolutionSearching",
+            "disableSolutionSearching".to_string(),
             CompilerOptionsValue::Bool(options.disable_solution_searching == Tristate::TSTrue),
         );
     }
@@ -2105,7 +2109,7 @@ pub fn serialize_compiler_options(
         || options.disable_referenced_project_load == Tristate::TSFalse
     {
         result.set(
-            "disableReferencedProjectLoad",
+            "disableReferencedProjectLoad".to_string(),
             CompilerOptionsValue::Bool(options.disable_referenced_project_load == Tristate::TSTrue),
         );
     }
@@ -2113,7 +2117,7 @@ pub fn serialize_compiler_options(
         || options.erasable_syntax_only == Tristate::TSFalse
     {
         result.set(
-            "erasableSyntaxOnly",
+            "erasableSyntaxOnly".to_string(),
             CompilerOptionsValue::Bool(options.erasable_syntax_only == Tristate::TSTrue),
         );
     }
@@ -2121,7 +2125,7 @@ pub fn serialize_compiler_options(
         || options.exact_optional_property_types == Tristate::TSFalse
     {
         result.set(
-            "exactOptionalPropertyTypes",
+            "exactOptionalPropertyTypes".to_string(),
             CompilerOptionsValue::Bool(options.exact_optional_property_types == Tristate::TSTrue),
         );
     }
@@ -2129,7 +2133,7 @@ pub fn serialize_compiler_options(
         || options.experimental_decorators == Tristate::TSFalse
     {
         result.set(
-            "experimentalDecorators",
+            "experimentalDecorators".to_string(),
             CompilerOptionsValue::Bool(options.experimental_decorators == Tristate::TSTrue),
         );
     }
@@ -2137,7 +2141,7 @@ pub fn serialize_compiler_options(
         || options.force_consistent_casing_in_file_names == Tristate::TSFalse
     {
         result.set(
-            "forceConsistentCasingInFileNames",
+            "forceConsistentCasingInFileNames".to_string(),
             CompilerOptionsValue::Bool(
                 options.force_consistent_casing_in_file_names == Tristate::TSTrue,
             ),
@@ -2146,7 +2150,7 @@ pub fn serialize_compiler_options(
     if options.isolated_modules == Tristate::TSTrue || options.isolated_modules == Tristate::TSFalse
     {
         result.set(
-            "isolatedModules",
+            "isolatedModules".to_string(),
             CompilerOptionsValue::Bool(options.isolated_modules == Tristate::TSTrue),
         );
     }
@@ -2154,19 +2158,19 @@ pub fn serialize_compiler_options(
         || options.isolated_declarations == Tristate::TSFalse
     {
         result.set(
-            "isolatedDeclarations",
+            "isolatedDeclarations".to_string(),
             CompilerOptionsValue::Bool(options.isolated_declarations == Tristate::TSTrue),
         );
     }
     if !options.ignore_deprecations.is_empty() {
         result.set(
-            "ignoreDeprecations",
+            "ignoreDeprecations".to_string(),
             CompilerOptionsValue::Str(options.ignore_deprecations.clone()),
         );
     }
     if options.import_helpers == Tristate::TSTrue || options.import_helpers == Tristate::TSFalse {
         result.set(
-            "importHelpers",
+            "importHelpers".to_string(),
             CompilerOptionsValue::Bool(options.import_helpers == Tristate::TSTrue),
         );
     }
@@ -2174,49 +2178,49 @@ pub fn serialize_compiler_options(
         || options.inline_source_map == Tristate::TSFalse
     {
         result.set(
-            "inlineSourceMap",
+            "inlineSourceMap".to_string(),
             CompilerOptionsValue::Bool(options.inline_source_map == Tristate::TSTrue),
         );
     }
     if options.inline_sources == Tristate::TSTrue || options.inline_sources == Tristate::TSFalse {
         result.set(
-            "inlineSources",
+            "inlineSources".to_string(),
             CompilerOptionsValue::Bool(options.inline_sources == Tristate::TSTrue),
         );
     }
     if options.incremental == Tristate::TSTrue || options.incremental == Tristate::TSFalse {
         result.set(
-            "incremental",
+            "incremental".to_string(),
             CompilerOptionsValue::Bool(options.incremental == Tristate::TSTrue),
         );
     }
     if options.jsx != JsxEmit::None {
         let value = serialize_compiler_option_enum(&CompilerOptionsValue::JsxEmit(options.jsx));
         if !value.is_empty() {
-            result.set("jsx", CompilerOptionsValue::Str(value));
+            result.set("jsx".to_string(), CompilerOptionsValue::Str(value));
         }
     }
     if !options.jsx_factory.is_empty() {
         result.set(
-            "jsxFactory",
+            "jsxFactory".to_string(),
             CompilerOptionsValue::Str(options.jsx_factory.clone()),
         );
     }
     if !options.jsx_fragment_factory.is_empty() {
         result.set(
-            "jsxFragmentFactory",
+            "jsxFragmentFactory".to_string(),
             CompilerOptionsValue::Str(options.jsx_fragment_factory.clone()),
         );
     }
     if !options.jsx_import_source.is_empty() {
         result.set(
-            "jsxImportSource",
+            "jsxImportSource".to_string(),
             CompilerOptionsValue::Str(options.jsx_import_source.clone()),
         );
     }
     if !options.lib.is_empty() {
         result.set(
-            "lib",
+            "lib".to_string(),
             CompilerOptionsValue::StrArray(serialize_compiler_option_enum_list(
                 &options.lib,
                 crate::declarations_generated::lib_map(),
@@ -2225,13 +2229,13 @@ pub fn serialize_compiler_options(
     }
     if options.lib_replacement == Tristate::TSTrue || options.lib_replacement == Tristate::TSFalse {
         result.set(
-            "libReplacement",
+            "libReplacement".to_string(),
             CompilerOptionsValue::Bool(options.lib_replacement == Tristate::TSTrue),
         );
     }
     if !options.map_root.is_empty() {
         result.set(
-            "mapRoot",
+            "mapRoot".to_string(),
             CompilerOptionsValue::Str(options.map_root.as_string().to_owned()),
         );
     }
@@ -2239,7 +2243,7 @@ pub fn serialize_compiler_options(
         let value =
             serialize_compiler_option_enum(&CompilerOptionsValue::ModuleKind(options.module));
         if !value.is_empty() {
-            result.set("module", CompilerOptionsValue::Str(value));
+            result.set("module".to_string(), CompilerOptionsValue::Str(value));
         }
     }
     if options.module_resolution != ModuleResolutionKind::Unknown {
@@ -2247,12 +2251,15 @@ pub fn serialize_compiler_options(
             options.module_resolution,
         ));
         if !value.is_empty() {
-            result.set("moduleResolution", CompilerOptionsValue::Str(value));
+            result.set(
+                "moduleResolution".to_string(),
+                CompilerOptionsValue::Str(value),
+            );
         }
     }
     if !options.module_suffixes.is_empty() {
         result.set(
-            "moduleSuffixes",
+            "moduleSuffixes".to_string(),
             CompilerOptionsValue::StrArray(options.module_suffixes.clone()),
         );
     }
@@ -2261,25 +2268,28 @@ pub fn serialize_compiler_options(
             options.module_detection,
         ));
         if !value.is_empty() {
-            result.set("moduleDetection", CompilerOptionsValue::Str(value));
+            result.set(
+                "moduleDetection".to_string(),
+                CompilerOptionsValue::Str(value),
+            );
         }
     }
     if options.new_line != NewLineKind::None {
         let value =
             serialize_compiler_option_enum(&CompilerOptionsValue::NewLineKind(options.new_line));
         if !value.is_empty() {
-            result.set("newLine", CompilerOptionsValue::Str(value));
+            result.set("newLine".to_string(), CompilerOptionsValue::Str(value));
         }
     }
     if options.no_emit == Tristate::TSTrue || options.no_emit == Tristate::TSFalse {
         result.set(
-            "noEmit",
+            "noEmit".to_string(),
             CompilerOptionsValue::Bool(options.no_emit == Tristate::TSTrue),
         );
     }
     if options.no_check == Tristate::TSTrue || options.no_check == Tristate::TSFalse {
         result.set(
-            "noCheck",
+            "noCheck".to_string(),
             CompilerOptionsValue::Bool(options.no_check == Tristate::TSTrue),
         );
     }
@@ -2287,20 +2297,20 @@ pub fn serialize_compiler_options(
         || options.no_fallthrough_cases_in_switch == Tristate::TSFalse
     {
         result.set(
-            "noFallthroughCasesInSwitch",
+            "noFallthroughCasesInSwitch".to_string(),
             CompilerOptionsValue::Bool(options.no_fallthrough_cases_in_switch == Tristate::TSTrue),
         );
     }
     if options.no_implicit_any == Tristate::TSTrue || options.no_implicit_any == Tristate::TSFalse {
         result.set(
-            "noImplicitAny",
+            "noImplicitAny".to_string(),
             CompilerOptionsValue::Bool(options.no_implicit_any == Tristate::TSTrue),
         );
     }
     if options.no_implicit_this == Tristate::TSTrue || options.no_implicit_this == Tristate::TSFalse
     {
         result.set(
-            "noImplicitThis",
+            "noImplicitThis".to_string(),
             CompilerOptionsValue::Bool(options.no_implicit_this == Tristate::TSTrue),
         );
     }
@@ -2308,19 +2318,19 @@ pub fn serialize_compiler_options(
         || options.no_implicit_returns == Tristate::TSFalse
     {
         result.set(
-            "noImplicitReturns",
+            "noImplicitReturns".to_string(),
             CompilerOptionsValue::Bool(options.no_implicit_returns == Tristate::TSTrue),
         );
     }
     if options.no_emit_helpers == Tristate::TSTrue || options.no_emit_helpers == Tristate::TSFalse {
         result.set(
-            "noEmitHelpers",
+            "noEmitHelpers".to_string(),
             CompilerOptionsValue::Bool(options.no_emit_helpers == Tristate::TSTrue),
         );
     }
     if options.no_lib == Tristate::TSTrue || options.no_lib == Tristate::TSFalse {
         result.set(
-            "noLib",
+            "noLib".to_string(),
             CompilerOptionsValue::Bool(options.no_lib == Tristate::TSTrue),
         );
     }
@@ -2328,7 +2338,7 @@ pub fn serialize_compiler_options(
         || options.no_property_access_from_index_signature == Tristate::TSFalse
     {
         result.set(
-            "noPropertyAccessFromIndexSignature",
+            "noPropertyAccessFromIndexSignature".to_string(),
             CompilerOptionsValue::Bool(
                 options.no_property_access_from_index_signature == Tristate::TSTrue,
             ),
@@ -2338,21 +2348,21 @@ pub fn serialize_compiler_options(
         || options.no_unchecked_indexed_access == Tristate::TSFalse
     {
         result.set(
-            "noUncheckedIndexedAccess",
+            "noUncheckedIndexedAccess".to_string(),
             CompilerOptionsValue::Bool(options.no_unchecked_indexed_access == Tristate::TSTrue),
         );
     }
     if options.no_emit_on_error == Tristate::TSTrue || options.no_emit_on_error == Tristate::TSFalse
     {
         result.set(
-            "noEmitOnError",
+            "noEmitOnError".to_string(),
             CompilerOptionsValue::Bool(options.no_emit_on_error == Tristate::TSTrue),
         );
     }
     if options.no_unused_locals == Tristate::TSTrue || options.no_unused_locals == Tristate::TSFalse
     {
         result.set(
-            "noUnusedLocals",
+            "noUnusedLocals".to_string(),
             CompilerOptionsValue::Bool(options.no_unused_locals == Tristate::TSTrue),
         );
     }
@@ -2360,13 +2370,13 @@ pub fn serialize_compiler_options(
         || options.no_unused_parameters == Tristate::TSFalse
     {
         result.set(
-            "noUnusedParameters",
+            "noUnusedParameters".to_string(),
             CompilerOptionsValue::Bool(options.no_unused_parameters == Tristate::TSTrue),
         );
     }
     if options.no_resolve == Tristate::TSTrue || options.no_resolve == Tristate::TSFalse {
         result.set(
-            "noResolve",
+            "noResolve".to_string(),
             CompilerOptionsValue::Bool(options.no_resolve == Tristate::TSTrue),
         );
     }
@@ -2374,7 +2384,7 @@ pub fn serialize_compiler_options(
         || options.no_implicit_override == Tristate::TSFalse
     {
         result.set(
-            "noImplicitOverride",
+            "noImplicitOverride".to_string(),
             CompilerOptionsValue::Bool(options.no_implicit_override == Tristate::TSTrue),
         );
     }
@@ -2382,7 +2392,7 @@ pub fn serialize_compiler_options(
         || options.no_unchecked_side_effect_imports == Tristate::TSFalse
     {
         result.set(
-            "noUncheckedSideEffectImports",
+            "noUncheckedSideEffectImports".to_string(),
             CompilerOptionsValue::Bool(
                 options.no_unchecked_side_effect_imports == Tristate::TSTrue,
             ),
@@ -2390,7 +2400,7 @@ pub fn serialize_compiler_options(
     }
     if !options.out_dir.is_empty() {
         result.set(
-            "outDir",
+            "outDir".to_string(),
             CompilerOptionsValue::Str(serialize_compiler_option_path(
                 &options.out_dir.as_path(),
                 config_file_path,
@@ -2400,21 +2410,21 @@ pub fn serialize_compiler_options(
     }
     if options.paths.is_some() {
         result.set(
-            "paths",
+            "paths".to_string(),
             CompilerOptionsValue::PathsMap(options.paths.clone().unwrap()),
         );
     }
     if !options.plugins.is_empty() {
         result.set(
-            "plugins",
-            CompilerOptionsValue::StrArray(options.plugins.clone()),
+            "plugins".to_string(),
+            CompilerOptionsValue::PluginImports(options.plugins.clone()),
         );
     }
     if options.preserve_const_enums == Tristate::TSTrue
         || options.preserve_const_enums == Tristate::TSFalse
     {
         result.set(
-            "preserveConstEnums",
+            "preserveConstEnums".to_string(),
             CompilerOptionsValue::Bool(options.preserve_const_enums == Tristate::TSTrue),
         );
     }
@@ -2422,7 +2432,7 @@ pub fn serialize_compiler_options(
         || options.preserve_symlinks == Tristate::TSFalse
     {
         result.set(
-            "preserveSymlinks",
+            "preserveSymlinks".to_string(),
             CompilerOptionsValue::Bool(options.preserve_symlinks == Tristate::TSTrue),
         );
     }
@@ -2430,7 +2440,7 @@ pub fn serialize_compiler_options(
         || options.resolve_json_module == Tristate::TSFalse
     {
         result.set(
-            "resolveJsonModule",
+            "resolveJsonModule".to_string(),
             CompilerOptionsValue::Bool(options.resolve_json_module == Tristate::TSTrue),
         );
     }
@@ -2438,7 +2448,7 @@ pub fn serialize_compiler_options(
         || options.resolve_package_json_exports == Tristate::TSFalse
     {
         result.set(
-            "resolvePackageJsonExports",
+            "resolvePackageJsonExports".to_string(),
             CompilerOptionsValue::Bool(options.resolve_package_json_exports == Tristate::TSTrue),
         );
     }
@@ -2446,13 +2456,13 @@ pub fn serialize_compiler_options(
         || options.resolve_package_json_imports == Tristate::TSFalse
     {
         result.set(
-            "resolvePackageJsonImports",
+            "resolvePackageJsonImports".to_string(),
             CompilerOptionsValue::Bool(options.resolve_package_json_imports == Tristate::TSTrue),
         );
     }
     if options.remove_comments == Tristate::TSTrue || options.remove_comments == Tristate::TSFalse {
         result.set(
-            "removeComments",
+            "removeComments".to_string(),
             CompilerOptionsValue::Bool(options.remove_comments == Tristate::TSTrue),
         );
     }
@@ -2460,7 +2470,7 @@ pub fn serialize_compiler_options(
         || options.rewrite_relative_import_extensions == Tristate::TSFalse
     {
         result.set(
-            "rewriteRelativeImportExtensions",
+            "rewriteRelativeImportExtensions".to_string(),
             CompilerOptionsValue::Bool(
                 options.rewrite_relative_import_extensions == Tristate::TSTrue,
             ),
@@ -2468,13 +2478,13 @@ pub fn serialize_compiler_options(
     }
     if !options.react_namespace.is_empty() {
         result.set(
-            "reactNamespace",
+            "reactNamespace".to_string(),
             CompilerOptionsValue::Str(options.react_namespace.clone()),
         );
     }
     if !options.root_dir.is_empty() {
         result.set(
-            "rootDir",
+            "rootDir".to_string(),
             CompilerOptionsValue::Str(serialize_compiler_option_path(
                 &options.root_dir.as_path(),
                 config_file_path,
@@ -2484,7 +2494,7 @@ pub fn serialize_compiler_options(
     }
     if !options.root_dirs.is_empty() {
         result.set(
-            "rootDirs",
+            "rootDirs".to_string(),
             CompilerOptionsValue::StrArray(
                 options
                     .root_dirs
@@ -2505,7 +2515,7 @@ pub fn serialize_compiler_options(
     }
     if options.skip_lib_check == Tristate::TSTrue || options.skip_lib_check == Tristate::TSFalse {
         result.set(
-            "skipLibCheck",
+            "skipLibCheck".to_string(),
             CompilerOptionsValue::Bool(options.skip_lib_check == Tristate::TSTrue),
         );
     }
@@ -2513,13 +2523,13 @@ pub fn serialize_compiler_options(
         || options.stable_type_ordering == Tristate::TSFalse
     {
         result.set(
-            "stableTypeOrdering",
+            "stableTypeOrdering".to_string(),
             CompilerOptionsValue::Bool(options.stable_type_ordering == Tristate::TSTrue),
         );
     }
     if options.strict == Tristate::TSTrue || options.strict == Tristate::TSFalse {
         result.set(
-            "strict",
+            "strict".to_string(),
             CompilerOptionsValue::Bool(options.strict == Tristate::TSTrue),
         );
     }
@@ -2527,7 +2537,7 @@ pub fn serialize_compiler_options(
         || options.strict_bind_call_apply == Tristate::TSFalse
     {
         result.set(
-            "strictBindCallApply",
+            "strictBindCallApply".to_string(),
             CompilerOptionsValue::Bool(options.strict_bind_call_apply == Tristate::TSTrue),
         );
     }
@@ -2535,7 +2545,7 @@ pub fn serialize_compiler_options(
         || options.strict_builtin_iterator_return == Tristate::TSFalse
     {
         result.set(
-            "strictBuiltinIteratorReturn",
+            "strictBuiltinIteratorReturn".to_string(),
             CompilerOptionsValue::Bool(options.strict_builtin_iterator_return == Tristate::TSTrue),
         );
     }
@@ -2543,7 +2553,7 @@ pub fn serialize_compiler_options(
         || options.strict_function_types == Tristate::TSFalse
     {
         result.set(
-            "strictFunctionTypes",
+            "strictFunctionTypes".to_string(),
             CompilerOptionsValue::Bool(options.strict_function_types == Tristate::TSTrue),
         );
     }
@@ -2551,7 +2561,7 @@ pub fn serialize_compiler_options(
         || options.strict_null_checks == Tristate::TSFalse
     {
         result.set(
-            "strictNullChecks",
+            "strictNullChecks".to_string(),
             CompilerOptionsValue::Bool(options.strict_null_checks == Tristate::TSTrue),
         );
     }
@@ -2559,13 +2569,13 @@ pub fn serialize_compiler_options(
         || options.strict_property_initialization == Tristate::TSFalse
     {
         result.set(
-            "strictPropertyInitialization",
+            "strictPropertyInitialization".to_string(),
             CompilerOptionsValue::Bool(options.strict_property_initialization == Tristate::TSTrue),
         );
     }
     if options.strip_internal == Tristate::TSTrue || options.strip_internal == Tristate::TSFalse {
         result.set(
-            "stripInternal",
+            "stripInternal".to_string(),
             CompilerOptionsValue::Bool(options.strip_internal == Tristate::TSTrue),
         );
     }
@@ -2573,19 +2583,19 @@ pub fn serialize_compiler_options(
         || options.skip_default_lib_check == Tristate::TSFalse
     {
         result.set(
-            "skipDefaultLibCheck",
+            "skipDefaultLibCheck".to_string(),
             CompilerOptionsValue::Bool(options.skip_default_lib_check == Tristate::TSTrue),
         );
     }
     if options.source_map == Tristate::TSTrue || options.source_map == Tristate::TSFalse {
         result.set(
-            "sourceMap",
+            "sourceMap".to_string(),
             CompilerOptionsValue::Bool(options.source_map == Tristate::TSTrue),
         );
     }
     if !options.source_root.is_empty() {
         result.set(
-            "sourceRoot",
+            "sourceRoot".to_string(),
             CompilerOptionsValue::Str(options.source_root.as_string().to_owned()),
         );
     }
@@ -2593,19 +2603,19 @@ pub fn serialize_compiler_options(
         let value =
             serialize_compiler_option_enum(&CompilerOptionsValue::ScriptTarget(options.target));
         if !value.is_empty() {
-            result.set("target", CompilerOptionsValue::Str(value));
+            result.set("target".to_string(), CompilerOptionsValue::Str(value));
         }
     }
     if options.trace_resolution == Tristate::TSTrue || options.trace_resolution == Tristate::TSFalse
     {
         result.set(
-            "traceResolution",
+            "traceResolution".to_string(),
             CompilerOptionsValue::Bool(options.trace_resolution == Tristate::TSTrue),
         );
     }
     if !options.ts_build_info_file.is_empty() {
         result.set(
-            "tsBuildInfoFile",
+            "tsBuildInfoFile".to_string(),
             CompilerOptionsValue::Str(serialize_compiler_option_path(
                 &options.ts_build_info_file.as_path(),
                 config_file_path,
@@ -2615,7 +2625,7 @@ pub fn serialize_compiler_options(
     }
     if !options.type_roots.is_empty() {
         result.set(
-            "typeRoots",
+            "typeRoots".to_string(),
             CompilerOptionsValue::StrArray(
                 options
                     .type_roots
@@ -2636,7 +2646,7 @@ pub fn serialize_compiler_options(
     }
     if !options.types.is_empty() {
         result.set(
-            "types",
+            "types".to_string(),
             CompilerOptionsValue::StrArray(options.types.clone()),
         );
     }
@@ -2644,7 +2654,7 @@ pub fn serialize_compiler_options(
         || options.use_define_for_class_fields == Tristate::TSFalse
     {
         result.set(
-            "useDefineForClassFields",
+            "useDefineForClassFields".to_string(),
             CompilerOptionsValue::Bool(options.use_define_for_class_fields == Tristate::TSTrue),
         );
     }
@@ -2652,7 +2662,7 @@ pub fn serialize_compiler_options(
         || options.use_unknown_in_catch_variables == Tristate::TSFalse
     {
         result.set(
-            "useUnknownInCatchVariables",
+            "useUnknownInCatchVariables".to_string(),
             CompilerOptionsValue::Bool(options.use_unknown_in_catch_variables == Tristate::TSTrue),
         );
     }
@@ -2660,13 +2670,13 @@ pub fn serialize_compiler_options(
         || options.verbatim_module_syntax == Tristate::TSFalse
     {
         result.set(
-            "verbatimModuleSyntax",
+            "verbatimModuleSyntax".to_string(),
             CompilerOptionsValue::Bool(options.verbatim_module_syntax == Tristate::TSTrue),
         );
     }
     if options.max_node_module_js_depth.is_some() {
         result.set(
-            "maxNodeModuleJsDepth",
+            "maxNodeModuleJsDepth".to_string(),
             CompilerOptionsValue::Int(options.max_node_module_js_depth.unwrap()),
         );
     }
@@ -2674,19 +2684,19 @@ pub fn serialize_compiler_options(
         || options.allow_synthetic_default_imports == Tristate::TSFalse
     {
         result.set(
-            "allowSyntheticDefaultImports",
+            "allowSyntheticDefaultImports".to_string(),
             CompilerOptionsValue::Bool(options.allow_synthetic_default_imports == Tristate::TSTrue),
         );
     }
     if options.always_strict == Tristate::TSTrue || options.always_strict == Tristate::TSFalse {
         result.set(
-            "alwaysStrict",
+            "alwaysStrict".to_string(),
             CompilerOptionsValue::Bool(options.always_strict == Tristate::TSTrue),
         );
     }
     if !options.base_url.is_empty() {
         result.set(
-            "baseUrl",
+            "baseUrl".to_string(),
             CompilerOptionsValue::Str(serialize_compiler_option_path(
                 &options.base_url.as_path(),
                 config_file_path,
@@ -2698,7 +2708,7 @@ pub fn serialize_compiler_options(
         || options.downlevel_iteration == Tristate::TSFalse
     {
         result.set(
-            "downlevelIteration",
+            "downlevelIteration".to_string(),
             CompilerOptionsValue::Bool(options.downlevel_iteration == Tristate::TSTrue),
         );
     }
@@ -2706,13 +2716,13 @@ pub fn serialize_compiler_options(
         || options.es_module_interop == Tristate::TSFalse
     {
         result.set(
-            "esModuleInterop",
+            "esModuleInterop".to_string(),
             CompilerOptionsValue::Bool(options.es_module_interop == Tristate::TSTrue),
         );
     }
     if !options.out_file.is_empty() {
         result.set(
-            "outFile",
+            "outFile".to_string(),
             CompilerOptionsValue::Str(serialize_compiler_option_path(
                 &options.out_file.as_path(),
                 config_file_path,
@@ -2722,7 +2732,7 @@ pub fn serialize_compiler_options(
     }
     if options.diagnostics == Tristate::TSTrue || options.diagnostics == Tristate::TSFalse {
         result.set(
-            "diagnostics",
+            "diagnostics".to_string(),
             CompilerOptionsValue::Bool(options.diagnostics == Tristate::TSTrue),
         );
     }
@@ -2730,13 +2740,13 @@ pub fn serialize_compiler_options(
         || options.extended_diagnostics == Tristate::TSFalse
     {
         result.set(
-            "extendedDiagnostics",
+            "extendedDiagnostics".to_string(),
             CompilerOptionsValue::Bool(options.extended_diagnostics == Tristate::TSTrue),
         );
     }
     if !options.generate_cpu_profile.is_empty() {
         result.set(
-            "generateCpuProfile",
+            "generateCpuProfile".to_string(),
             CompilerOptionsValue::Str(serialize_compiler_option_path(
                 &options.generate_cpu_profile.as_path(),
                 config_file_path,
@@ -2746,7 +2756,7 @@ pub fn serialize_compiler_options(
     }
     if !options.generate_trace.is_empty() {
         result.set(
-            "generateTrace",
+            "generateTrace".to_string(),
             CompilerOptionsValue::Str(serialize_compiler_option_path(
                 &options.generate_trace.as_path(),
                 config_file_path,
@@ -2756,7 +2766,7 @@ pub fn serialize_compiler_options(
     }
     if options.explain_files == Tristate::TSTrue || options.explain_files == Tristate::TSFalse {
         result.set(
-            "explainFiles",
+            "explainFiles".to_string(),
             CompilerOptionsValue::Bool(options.explain_files == Tristate::TSTrue),
         );
     }
@@ -2768,140 +2778,140 @@ pub fn serialize_compiler_option_enum(value: &CompilerOptionsValue) -> String {
     match value {
         CompilerOptionsValue::JsxEmit(value) => {
             if *value == JsxEmit::Preserve {
-                return "preserve";
+                return "preserve".to_string();
             }
             if *value == JsxEmit::ReactNative {
-                return "react-native";
+                return "react-native".to_string();
             }
             if *value == JsxEmit::ReactJSX {
-                return "react-jsx";
+                return "react-jsx".to_string();
             }
             if *value == JsxEmit::ReactJSXDev {
-                return "react-jsxdev";
+                return "react-jsxdev".to_string();
             }
             if *value == JsxEmit::React {
-                return "react";
+                return "react".to_string();
             }
         }
         CompilerOptionsValue::ModuleKind(value) => {
             if *value == ModuleKind::CommonJS {
-                return "commonjs";
+                return "commonjs".to_string();
             }
             if *value == ModuleKind::AMD {
-                return "amd";
+                return "amd".to_string();
             }
             if *value == ModuleKind::System {
-                return "system";
+                return "system".to_string();
             }
             if *value == ModuleKind::UMD {
-                return "umd";
+                return "umd".to_string();
             }
             if *value == ModuleKind::ES2015 {
-                return "es6";
+                return "es6".to_string();
             }
             if *value == ModuleKind::ES2020 {
-                return "es2020";
+                return "es2020".to_string();
             }
             if *value == ModuleKind::ES2022 {
-                return "es2022";
+                return "es2022".to_string();
             }
             if *value == ModuleKind::ESNext {
-                return "esnext";
+                return "esnext".to_string();
             }
             if *value == ModuleKind::Node16 {
-                return "node16";
+                return "node16".to_string();
             }
             if *value == ModuleKind::Node18 {
-                return "node18";
+                return "node18".to_string();
             }
             if *value == ModuleKind::Node20 {
-                return "node20";
+                return "node20".to_string();
             }
             if *value == ModuleKind::NodeNext {
-                return "nodenext";
+                return "nodenext".to_string();
             }
             if *value == ModuleKind::Preserve {
-                return "preserve";
+                return "preserve".to_string();
             }
         }
         CompilerOptionsValue::ModuleResolutionKind(value) => {
             if *value == ModuleResolutionKind::Node16 {
-                return "node16";
+                return "node16".to_string();
             }
             if *value == ModuleResolutionKind::NodeNext {
-                return "nodenext";
+                return "nodenext".to_string();
             }
             if *value == ModuleResolutionKind::Bundler {
-                return "bundler";
+                return "bundler".to_string();
             }
             if *value == ModuleResolutionKind::Classic {
-                return "classic";
+                return "classic".to_string();
             }
             if *value == ModuleResolutionKind::Node10 {
-                return "node";
+                return "node".to_string();
             }
         }
         CompilerOptionsValue::ModuleDetectionKind(value) => {
             if *value == ModuleDetectionKind::Auto {
-                return "auto";
+                return "auto".to_string();
             }
             if *value == ModuleDetectionKind::Legacy {
-                return "legacy";
+                return "legacy".to_string();
             }
             if *value == ModuleDetectionKind::Force {
-                return "force";
+                return "force".to_string();
             }
         }
         CompilerOptionsValue::NewLineKind(value) => {
             if *value == NewLineKind::CRLF {
-                return "crlf";
+                return "crlf".to_string();
             }
             if *value == NewLineKind::LF {
-                return "lf";
+                return "lf".to_string();
             }
         }
         CompilerOptionsValue::ScriptTarget(value) => {
             if *value == ScriptTarget::ES5 {
-                return "es5";
+                return "es5".to_string();
             }
             if *value == ScriptTarget::ES2015 {
-                return "es6";
+                return "es6".to_string();
             }
             if *value == ScriptTarget::ES2016 {
-                return "es2016";
+                return "es2016".to_string();
             }
             if *value == ScriptTarget::ES2017 {
-                return "es2017";
+                return "es2017".to_string();
             }
             if *value == ScriptTarget::ES2018 {
-                return "es2018";
+                return "es2018".to_string();
             }
             if *value == ScriptTarget::ES2019 {
-                return "es2019";
+                return "es2019".to_string();
             }
             if *value == ScriptTarget::ES2020 {
-                return "es2020";
+                return "es2020".to_string();
             }
             if *value == ScriptTarget::ES2021 {
-                return "es2021";
+                return "es2021".to_string();
             }
             if *value == ScriptTarget::ES2022 {
-                return "es2022";
+                return "es2022".to_string();
             }
             if *value == ScriptTarget::ES2023 {
-                return "es2023";
+                return "es2023".to_string();
             }
             if *value == ScriptTarget::ES2024 {
-                return "es2024";
+                return "es2024".to_string();
             }
             if *value == ScriptTarget::ES2025 {
-                return "es2025";
+                return "es2025".to_string();
             }
             if *value == ScriptTarget::ES2026 {
-                return "es2026";
+                return "es2026".to_string();
             }
             if *value == ScriptTarget::ESNext {
-                return "esnext";
+                return "esnext".to_string();
             }
         }
         _ => {}

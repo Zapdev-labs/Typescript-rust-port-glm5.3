@@ -10,7 +10,8 @@ use tsc_semver::{Version, must_parse, try_parse_version_range};
 use tsc_tspath::{
     EXTENSION_CJS, EXTENSION_CTS, EXTENSION_DCTS, EXTENSION_DMTS, EXTENSION_DTS, EXTENSION_JS,
     EXTENSION_JSON, EXTENSION_JSX, EXTENSION_MJS, EXTENSION_MTS, EXTENSION_TS, EXTENSION_TSX,
-    RootedDirectoryPath, RootedFilePath, try_get_extension_from_path,
+    RootedDirectoryPath, RootedFilePath, rooted_directory_path_from_absolute,
+    try_get_extension_from_path,
 };
 
 use crate::resolver::move_to_next_directory_separator_if_available;
@@ -65,7 +66,9 @@ fn parse_node_module_package_root(path: &str, is_directory: bool) -> RootedDirec
             is_directory,
         );
     }
-    RootedDirectoryPath::from(&path[..index_after_package_name])
+    // Go: `tspath.RootedDirectoryPathFromAbsolute` — normalizes the slice
+    // (dropping any trailing separator).
+    rooted_directory_path_from_absolute(&path[..index_after_package_name])
 }
 
 /// Go: `func ParsePackageName(moduleName string) (packageName, rest string)`.

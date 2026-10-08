@@ -9,6 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+serde_json = { workspace = true }
+
 tsc-ast = { path = "../ast" }
 tsc-collections = { path = "../collections" }
 tsc-core = { path = "../core" }

@@ -81,6 +81,18 @@ struct VersionPathsState {
 }
 
 impl PackageJson {
+    /// New constructs a PackageJson from its parsed fields — the port's
+    /// equivalent of Go's `PackageJson{Fields: ..., Parseable: ...}` literal
+    /// (the lazily-computed typesVersions state starts unset, like Go's zero
+    /// sync.Once).
+    pub fn new(fields: Fields, parseable: bool) -> PackageJson {
+        PackageJson {
+            fields,
+            parseable,
+            version_paths_state: OnceLock::new(),
+        }
+    }
+
     /// GetVersionPaths computes (once) the typesVersions entry matching the
     /// running TypeScript version and replays the recorded trace messages to
     /// `trace`, if provided.

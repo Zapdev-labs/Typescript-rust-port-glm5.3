@@ -12,22 +12,37 @@ use tsc_ast::{
     is_parameter_declaration, is_source_file, Kind, ModifierFlags, Node, NodeFlags, NodeId,
     NodeStore, Symbol, SymbolFlags, SymbolId, SymbolTable, INTERNAL_SYMBOL_NAME_DEFAULT,
 };
-use tsc_core::compileroptions::CompilerOptions;
+use tsc_core::options_generated::{CompilerOptions, ScriptTarget};
 use tsc_core::tristate::Tristate;
 use tsc_diagnostics::Message;
 
 use crate::ast_shims;
 use crate::node_data;
 
+// Go hook-closure types (the checker-supplied `Option<Box<dyn FnMut...>>`
+// fields below; Go declared these as named func-field types inline).
+type GetSymbolOfDeclarationHook<'a> = Box<dyn FnMut(NodeId) -> Option<SymbolId> + 'a>;
+type ErrorHook<'a> = Box<dyn FnMut(NodeId, &'static Message, &[String]) + 'a>;
+type LookupHook<'a> = Box<dyn FnMut(&SymbolTable, &str, SymbolFlags) -> Option<SymbolId> + 'a>;
+type SetRequiresScopeChangeCacheHook<'a> = Box<dyn FnMut(NodeId, Tristate) + 'a>;
+type GetRequiresScopeChangeCacheHook<'a> = Box<dyn FnMut(NodeId) -> Tristate + 'a>;
+type OnPropertyWithInvalidInitializerHook<'a> =
+    Box<dyn FnMut(NodeId, &str, NodeId, Option<SymbolId>) -> bool + 'a>;
+type OnFailedToResolveSymbolHook<'a> =
+    Box<dyn FnMut(NodeId, &str, SymbolFlags, Option<&'static Message>) + 'a>;
+type OnSuccessfullyResolvedSymbolHook<'a> = Box<
+    dyn FnMut(NodeId, Option<SymbolId>, SymbolFlags, Option<NodeId>, Option<NodeId>, bool) + 'a,
+>;
+
 /// Go: `type NameResolver struct` — the checker-owned hook fields + the
 /// port's store/arena/globals borrow parameters (see the header note).
 pub struct NameResolver<'a, 'f> {
     pub compiler_options: &'a CompilerOptions,
     /// Go: `GetSymbolOfDeclaration func(*ast.Node) *ast.Symbol`.
-    pub get_symbol_of_declaration: Option<Box<dyn FnMut(NodeId) -> Option<SymbolId> + 'a>>,
+    pub get_symbol_of_declaration: Option<GetSymbolOfDeclarationHook<'a>>,
     /// Go: `Error func(location, message, args...) *ast.Diagnostic` — the
     /// port's hook carries pre-stringified args (Go's `args ...any`).
-    pub error: Option<Box<dyn FnMut(NodeId, &'static Message, &[String]) + 'a>>,
+    pub error: Option<ErrorHook<'a>>,
     /// Go: `Globals ast.SymbolTable`.
     pub globals: &'f SymbolTable,
     /// Go: `ArgumentsSymbol *ast.Symbol`.
@@ -40,23 +55,19 @@ pub struct NameResolver<'a, 'f> {
     /// Go: `RequireSymbol *ast.Symbol`.
     pub require_symbol: Option<SymbolId>,
     /// Go: `Lookup func(symbols, name, meaning) *ast.Symbol`.
-    pub lookup: Option<Box<dyn FnMut(&SymbolTable, &str, SymbolFlags) -> Option<SymbolId> + 'a>>,
+    pub lookup: Option<LookupHook<'a>>,
     /// Go: `SymbolReferenced func(symbol, meaning)`.
     pub symbol_referenced: Option<Box<dyn FnMut(SymbolId, SymbolFlags) + 'a>>,
     /// Go: `SetRequiresScopeChangeCache func(node, value core.Tristate)`.
-    pub set_requires_scope_change_cache: Option<Box<dyn FnMut(NodeId, Tristate) + 'a>>,
+    pub set_requires_scope_change_cache: Option<SetRequiresScopeChangeCacheHook<'a>>,
     /// Go: `GetRequiresScopeChangeCache func(node) core.Tristate`.
-    pub get_requires_scope_change_cache: Option<Box<dyn FnMut(NodeId) -> Tristate + 'a>>,
+    pub get_requires_scope_change_cache: Option<GetRequiresScopeChangeCacheHook<'a>>,
     /// Go: `OnPropertyWithInvalidInitializer func(location, name, declaration, result) bool`.
-    pub on_property_with_invalid_initializer:
-        Option<Box<dyn FnMut(NodeId, &str, NodeId, Option<SymbolId>) -> bool + 'a>>,
+    pub on_property_with_invalid_initializer: Option<OnPropertyWithInvalidInitializerHook<'a>>,
     /// Go: `OnFailedToResolveSymbol func(location, name, meaning, nameNotFoundMessage)`.
-    pub on_failed_to_resolve_symbol:
-        Option<Box<dyn FnMut(NodeId, &str, SymbolFlags, Option<&'static Message>) + 'a>>,
+    pub on_failed_to_resolve_symbol: Option<OnFailedToResolveSymbolHook<'a>>,
     /// Go: `OnSuccessfullyResolvedSymbol func(location, result, meaning, lastLocation, associatedDeclarationForContainingInitializerOrBindingName, withinDeferredContext)`.
-    pub on_successfully_resolved_symbol: Option<
-        Box<dyn FnMut(NodeId, Option<SymbolId>, SymbolFlags, Option<NodeId>, Option<NodeId>, bool) + 'a>,
-    >,
+    pub on_successfully_resolved_symbol: Option<OnSuccessfullyResolvedSymbolHook<'a>>,
 
     // Port-only context (see the header note): the store + symbol arena the
     // default implementations and flag reads resolve through.
@@ -104,15 +115,16 @@ impl<'a, 'f> NameResolver<'a, 'f> {
             }
             let is_module_attributes = is_module_declaration(self.store.node(loc))
                 && last_location.is_some_and(|l| {
-                    match &self.store.node(loc).data {
+                    (match &self.store.node(loc).data {
                         tsc_ast::NodeData::ModuleDeclaration(d) => d.attributes,
                         _ => None,
-                    } == Some(l)
+                    }) == Some(l)
                 });
-            let locals = node_data::locals_of(self.store, loc).cloned();
             // Locals of a source file are not in scope (because they get merged into the global symbol table)
-            if locals.is_some() && !ast_shims::is_global_source_file(self.store, loc) {
-                let locals = locals.unwrap();
+            if let Some(locals) = node_data::locals_of(self.store, loc)
+                .cloned()
+                .filter(|_| !ast_shims::is_global_source_file(self.store, loc))
+            {
                 result = self.lookup(&locals, name, meaning);
                 if result.is_some() {
                     let mut use_result = true;
@@ -201,12 +213,11 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                     }
                 }
                 Kind::EnumDeclaration => {
-                    let Some(enum_symbol) = self.get_symbol_of_declaration(loc) else {
-                        // Go: break.
-                    };
-                    if let Some(enum_symbol) = enum_symbol {
+                    // Go: `if enumSymbol == nil { break }` — no enum symbol
+                    // means skip the arm, not the loop.
+                    if let Some(enum_symbol) = self.get_symbol_of_declaration(loc) {
                         let exports = self.symbols[enum_symbol.0 as usize].exports.clone();
-                        result = self.lookup(&exports, name, meaning.intersection(SymbolFlags::ENUM_MEMBER));
+                        result = self.lookup(&exports, name, meaning & SymbolFlags::ENUM_MEMBER);
                         if result.is_some() {
                             if name_not_found_message.is_some()
                                 && self.compiler_options.get_isolated_modules()
@@ -243,7 +254,7 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                         if let Some(ctor) = ast_shims::find_constructor_declaration(self.store, parent) {
                             if let Some(ctor_locals) = node_data::locals_of(self.store, ctor) {
                                 let ctor_locals = ctor_locals.clone();
-                                let value_meaning = meaning.intersection(SymbolFlags::VALUE);
+                                let value_meaning = meaning & SymbolFlags::VALUE;
                                 if self.lookup(&ctor_locals, name, value_meaning).is_some() {
                                     // Remember the property node, it will be used later to report appropriate error
                                     property_with_invalid_initializer = Some(loc);
@@ -256,7 +267,7 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                     let container_symbol =
                         self.get_symbol_of_declaration(loc).expect("class-like symbol");
                     let members = self.symbols[container_symbol.0 as usize].members.clone();
-                    result = self.lookup(&members, name, meaning.intersection(SymbolFlags::TYPE));
+                    result = self.lookup(&members, name, meaning & SymbolFlags::TYPE);
                     if result.is_some() {
                         if !is_type_parameter_symbol_declared_in_container(self, result.unwrap(), loc) {
                             // ignore type parameters not declared in this container
@@ -304,7 +315,7 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                             let container_symbol =
                                 self.get_symbol_of_declaration(container).expect("class-like symbol");
                             let members = self.symbols[container_symbol.0 as usize].members.clone();
-                            result = self.lookup(&members, name, meaning.intersection(SymbolFlags::TYPE));
+                            result = self.lookup(&members, name, meaning & SymbolFlags::TYPE);
                             if result.is_some() {
                                 if name_not_found_message.is_some() {
                                     self.report_error(
@@ -336,7 +347,7 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                         let grandparent_symbol =
                             self.get_symbol_of_declaration(grandparent).expect("class-like symbol");
                         let members = self.symbols[grandparent_symbol.0 as usize].members.clone();
-                        result = self.lookup(&members, name, meaning.intersection(SymbolFlags::TYPE));
+                        result = self.lookup(&members, name, meaning & SymbolFlags::TYPE);
                         if result.is_some() {
                             if name_not_found_message.is_some() {
                                 self.report_error(
@@ -416,15 +427,14 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                         tsc_ast::NodeData::ParameterDeclaration(d) => (d.initializer, d.name),
                         _ => (None, NodeId::NONE),
                     };
-                    if last_location.is_some() {
-                        let last = last_location.unwrap();
+                    if let Some(last) = last_location {
                         let is_initializer = Some(last) == parameter_declaration.0;
                         let is_binding_pattern_name = Some(last) == self.store.node(loc).name()
                             && ast_shims::is_binding_pattern(self.store.node(last));
-                        if is_initializer || is_binding_pattern_name {
-                            if associated_declaration_for_containing_initializer_or_binding_name.is_none() {
-                                associated_declaration_for_containing_initializer_or_binding_name = Some(loc);
-                            }
+                        if (is_initializer || is_binding_pattern_name)
+                            && associated_declaration_for_containing_initializer_or_binding_name.is_none()
+                        {
+                            associated_declaration_for_containing_initializer_or_binding_name = Some(loc);
                         }
                     }
                 }
@@ -433,17 +443,15 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                         tsc_ast::NodeData::BindingElement(d) => (d.initializer, d.name),
                         _ => (None, None),
                     };
-                    if last_location.is_some() {
-                        let last = last_location.unwrap();
+                    if let Some(last) = last_location {
                         let is_initializer = Some(last) == binding_element.0;
                         let is_binding_pattern_name = Some(last) == binding_element.1
                             && ast_shims::is_binding_pattern(self.store.node(last));
-                        if is_initializer || is_binding_pattern_name {
-                            if ast_shims::is_part_of_parameter_declaration(self.store, loc)
-                                && associated_declaration_for_containing_initializer_or_binding_name.is_none()
-                            {
-                                associated_declaration_for_containing_initializer_or_binding_name = Some(loc);
-                            }
+                        if (is_initializer || is_binding_pattern_name)
+                            && ast_shims::is_part_of_parameter_declaration(self.store, loc)
+                            && associated_declaration_for_containing_initializer_or_binding_name.is_none()
+                        {
+                            associated_declaration_for_containing_initializer_or_binding_name = Some(loc);
                         }
                     }
                 }
@@ -482,27 +490,33 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                 }
                 _ => {}
             }
-            if is_self_reference_location(self.store.node(loc), last_location) {
-                last_self_reference_location = Some(loc);
+            // Go: `if isSelfReferenceLocation(location, lastLocation) {...};
+            // lastLocation = location; location = location.Parent` — note
+            // `location` (not `loc`): the Decorator/ExportSpecifier arms may
+            // have reassigned it.
+            let effective = location.expect("loop iterates only while location is Some");
+            if is_self_reference_location(self.store.node(effective), last_location) {
+                last_self_reference_location = Some(effective);
             }
-            last_location = Some(loc);
+            last_location = location;
             // !!! In Strada, JSDocTemplateTag/JSDocParameterTag/JSDocReturnTag locations skip to
             // getEffectiveContainerForJSDocTemplateTag/getHostSignatureFromJSDoc instead of location.parent.
             // This is a no-op currently because JSDoc nodes have no locals and getEffectiveJSDocHost is not
             // fully ported for JS assignment patterns.
-            location = ast_shims::parent_of(self.store, loc);
+            location = ast_shims::parent_of(self.store, effective);
         }
         // We just climbed up parents looking for the name, meaning that we started in a descendant node of `lastLocation`.
         // If `result === lastSelfReferenceLocation.symbol`, that means that we are somewhere inside `lastSelfReferenceLocation` looking up a name, and resolving to `lastLocation` itself.
         // That means that this is a self-reference of `lastLocation`, and shouldn't count this when considering whether `lastLocation` is used.
-        if is_use && result.is_some() {
-            let result_symbol = result.unwrap();
-            let is_self_reference = last_self_reference_location
-                .and_then(|l| node_data::symbol_of(self.store, l))
-                .is_some_and(|s| s == result_symbol);
-            if !is_self_reference {
-                if let Some(symbol_referenced) = &mut self.symbol_referenced {
-                    symbol_referenced(result_symbol, meaning);
+        if is_use {
+            if let Some(result_symbol) = result {
+                let is_self_reference = last_self_reference_location
+                    .and_then(|l| node_data::symbol_of(self.store, l))
+                    .is_some_and(|s| s == result_symbol);
+                if !is_self_reference {
+                    if let Some(symbol_referenced) = &mut self.symbol_referenced {
+                        symbol_referenced(result_symbol, meaning);
+                    }
                 }
             }
         }
@@ -589,7 +603,7 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                 let local_symbol = get_local_symbol_for_export_default(self.store, self.symbols, result_symbol);
                 let flags = self.symbols[result_symbol.0 as usize].flags;
                 let local_name_matches = local_symbol
-                    .map(|ls| &self.symbols[ls.0 as usize].name == name)
+                    .map(|ls| self.symbols[ls.0 as usize].name == name)
                     .unwrap_or(false);
                 if flags.intersects(meaning) && local_name_matches {
                     return; // caller breaks with result set
@@ -631,10 +645,13 @@ impl<'a, 'f> NameResolver<'a, 'f> {
             }
         }
         if name != INTERNAL_SYMBOL_NAME_DEFAULT {
-            let module_meaning = meaning.intersection(SymbolFlags::MODULE_MEMBER);
+            let module_meaning = meaning & SymbolFlags::MODULE_MEMBER;
             *result = self.lookup(&module_exports, name, module_meaning);
             if let Some(result_symbol) = *result {
                 let flags = self.symbols[result_symbol.0 as usize].flags;
+                // Go: on a CommonJS source file, a non-type result falls
+                // back to nil (the caller's break happens on Some(result)
+                // after the return).
                 if is_source_file_loc
                     && self
                         .store
@@ -646,8 +663,6 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                     && !flags.intersects(SymbolFlags::TYPE)
                 {
                     *result = None;
-                } else {
-                    return; // caller breaks with result set
                 }
             }
         }
@@ -732,8 +747,7 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                 if ast_shims::is_nullish_coalesce(self.store, node)
                     || tsc_ast::utilities::is_optional_chain(self.store.node(node))
                 {
-                    return self.compiler_options.get_emit_script_target()
-                        < tsc_core::compileroptions::ScriptTarget::ES2020;
+                    return self.compiler_options.get_emit_script_target() < ScriptTarget::ES2020;
                 }
                 if tsc_ast::is_binding_element(self.store.node(node))
                     && match &self.store.node(node).data {
@@ -743,8 +757,7 @@ impl<'a, 'f> NameResolver<'a, 'f> {
                     && ast_shims::parent_of(self.store, node)
                         .is_some_and(|p| is_object_binding_pattern(self.store.node(p)))
                 {
-                    return self.compiler_options.get_emit_script_target()
-                        < tsc_core::compileroptions::ScriptTarget::ES2017;
+                    return self.compiler_options.get_emit_script_target() < ScriptTarget::ES2017;
                 }
                 if ast_shims::is_type_node(self.store.node(node)) {
                     return false;

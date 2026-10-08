@@ -14,9 +14,8 @@ fn bind(src: &str) -> (SourceFile, Option<tsc_binder::BindResult>) {
     let result = bind_source_file(&mut sf);
     (sf, result)
 }
-
 /// The symbol a name maps to in the file's locals table.
-fn local_symbol(sf: &SourceFile, result: &tsc_binder::BindResult, name: &str) -> Option<SymbolId> {
+fn local_symbol(sf: &SourceFile, _result: &tsc_binder::BindResult, name: &str) -> Option<SymbolId> {
     let locals = tsc_binder::node_data::locals_of(sf, sf.as_node_id())?;
     locals.get(name).copied()
 }
@@ -93,7 +92,7 @@ fn interface_enum_type_alias() {
     assert!(symbol_flags(&result, t).intersects(SymbolFlags::TYPE_ALIAS));
     // Enum members land in the enum symbol's exports.
     let exports = result.symbols[e.0 as usize].exports.clone();
-    assert!(exports.contains_key("A") && exports.contains_key("B"));
+    assert!(exports.has("A") && exports.has("B"));
 }
 
 #[test]
@@ -106,8 +105,8 @@ fn namespace_members_and_exports() {
     let n = local_symbol(&sf, &result, "N").expect("N");
     assert!(symbol_flags(&result, n).intersects(SymbolFlags::NAMESPACE));
     let exports = result.symbols[n.0 as usize].exports.clone();
-    assert!(exports.contains_key("x"));
-    assert!(!exports.contains_key("hidden"), "unexported member leaked into exports");
+    assert!(exports.has("x"));
+    assert!(!exports.has("hidden"), "unexported member leaked into exports");
 }
 
 #[test]
@@ -153,39 +152,58 @@ fn double_bind_returns_none() {
 
 #[test]
 fn flow_graph_is_populated() {
+    // The function's end stays REACHABLE (Go sets bodyData.EndFlowNode only
+    // for reachable ends, and HasExplicitReturn only alongside that) — the
+    // if/while/for/try construct exercises branch, loop, label, and
+    // exception flow nodes.
     let (sf, result) = bind(
         "function g(x: boolean) {\n\
-             if (x) { return 1; }\n\
+             let r = 0;\n\
+             if (x) { return; }\n\
              while (x) { break; }\n\
-             try { throw x; } catch (e) { return 0; }\n\
-             label: for (;;) { continue label; }\n\
-             return 2;\n\
+             label: for (;;) { break label; }\n\
+             try { throw x; } catch (e) { r = 2; }\n\
+             r = 3;\n\
          }\n",
     );
     let result = result.expect("bind produced a result");
     // Branch/loop/return/label/exception flow nodes exist.
     assert!(result.flow_nodes.len() > 10, "flow graph too small: {}", result.flow_nodes.len());
 
-    // The `if` statement's branch label and the return's flow node are
-    // reachable through the walk: find the ReturnStatement and check it
-    // carries a flow node.
-    let mut returns: Vec<tsc_ast::NodeId> = Vec::new();
+    // Identifiers carry flow nodes (Go: bind() case KindIdentifier sets
+    // node.AsIdentifier().FlowNode = b.currentFlow). ReturnStatement itself
+    // does NOT get one (bindReturnStatement only rewires currentFlow).
+    let mut identifiers: Vec<tsc_ast::NodeId> = Vec::new();
+    let mut function: Option<tsc_ast::NodeId> = None;
     let mut stack: Vec<tsc_ast::NodeId> = vec![sf.as_node_id()];
     while let Some(id) = stack.pop() {
         let node = NodeStore::node(&sf, id);
-        if node.kind == Kind::ReturnStatement {
-            returns.push(id);
+        if node.kind == Kind::Identifier {
+            identifiers.push(id);
+        }
+        if node.kind == Kind::FunctionDeclaration {
+            function = Some(id);
         }
         node.for_each_child(&mut |child| {
             stack.push(child);
             false
         });
     }
-    assert!(!returns.is_empty());
-    for r in returns {
-        let flow = tsc_binder::node_data::flow_node_of(&sf, r);
-        assert!(flow.is_some(), "ReturnStatement lacks a flow node");
+    assert!(!identifiers.is_empty());
+    for id in identifiers {
+        let flow = tsc_binder::node_data::flow_node_of(&sf, id);
+        assert!(flow.is_some(), "Identifier lacks a flow node");
     }
+    // The function-like container gets its end flow node (Go:
+    // bindContainer's control-flow-container save/restore), plus the
+    // explicit-return emit flag.
+    let function = function.expect("FunctionDeclaration found");
+    let f = NodeStore::node(&sf, function);
+    assert!(tsc_binder::node_data::end_flow_node_of(&sf, function).is_some());
+    assert!(f.flags.intersects(NodeFlags::HAS_EXPLICIT_RETURN));
+    // ReturnFlowNode is only for IIFEs and constructors (Go:
+    // setReturnFlowNode call sites) — a plain declaration has none.
+    assert!(tsc_binder::node_data::return_flow_node_of(&sf, function).is_none());
 }
 
 #[test]

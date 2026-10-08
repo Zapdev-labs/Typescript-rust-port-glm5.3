@@ -2772,23 +2772,23 @@ pub fn jsx_option_map() -> &'static OrderedMap<String, CompilerOptionsValue> {
     MAP.get_or_init(|| {
         OrderedMap::from_list([
             MapEntry {
-                key: "preserve",
+                key: "preserve".to_string(),
                 value: CompilerOptionsValue::JsxEmit(JsxEmit::Preserve),
             },
             MapEntry {
-                key: "react-native",
+                key: "react-native".to_string(),
                 value: CompilerOptionsValue::JsxEmit(JsxEmit::ReactNative),
             },
             MapEntry {
-                key: "react-jsx",
+                key: "react-jsx".to_string(),
                 value: CompilerOptionsValue::JsxEmit(JsxEmit::ReactJSX),
             },
             MapEntry {
-                key: "react-jsxdev",
+                key: "react-jsxdev".to_string(),
                 value: CompilerOptionsValue::JsxEmit(JsxEmit::ReactJSXDev),
             },
             MapEntry {
-                key: "react",
+                key: "react".to_string(),
                 value: CompilerOptionsValue::JsxEmit(JsxEmit::React),
             },
         ])
@@ -2801,468 +2801,468 @@ pub fn lib_map() -> &'static OrderedMap<String, CompilerOptionsValue> {
     MAP.get_or_init(|| {
         OrderedMap::from_list([
             MapEntry {
-                key: "es5",
-                value: CompilerOptionsValue::Str("lib.es5.d.ts"),
+                key: "es5".to_string(),
+                value: CompilerOptionsValue::Str("lib.es5.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es6",
-                value: CompilerOptionsValue::Str("lib.es2015.d.ts"),
+                key: "es6".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2015.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2015",
-                value: CompilerOptionsValue::Str("lib.es2015.d.ts"),
+                key: "es2015".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2015.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es7",
-                value: CompilerOptionsValue::Str("lib.es2016.d.ts"),
+                key: "es7".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2016.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2016",
-                value: CompilerOptionsValue::Str("lib.es2016.d.ts"),
+                key: "es2016".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2016.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2017",
-                value: CompilerOptionsValue::Str("lib.es2017.d.ts"),
+                key: "es2017".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2017.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2018",
-                value: CompilerOptionsValue::Str("lib.es2018.d.ts"),
+                key: "es2018".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2018.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2019",
-                value: CompilerOptionsValue::Str("lib.es2019.d.ts"),
+                key: "es2019".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2019.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2020",
-                value: CompilerOptionsValue::Str("lib.es2020.d.ts"),
+                key: "es2020".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2020.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2021",
-                value: CompilerOptionsValue::Str("lib.es2021.d.ts"),
+                key: "es2021".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2021.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2022",
-                value: CompilerOptionsValue::Str("lib.es2022.d.ts"),
+                key: "es2022".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2022.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2023",
-                value: CompilerOptionsValue::Str("lib.es2023.d.ts"),
+                key: "es2023".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2023.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2024",
-                value: CompilerOptionsValue::Str("lib.es2024.d.ts"),
+                key: "es2024".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2024.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2025",
-                value: CompilerOptionsValue::Str("lib.es2025.d.ts"),
+                key: "es2025".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2025.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2026",
-                value: CompilerOptionsValue::Str("lib.es2026.d.ts"),
+                key: "es2026".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext",
-                value: CompilerOptionsValue::Str("lib.esnext.d.ts"),
+                key: "esnext".to_string(),
+                value: CompilerOptionsValue::Str("lib.esnext.d.ts".to_owned()),
             },
             MapEntry {
-                key: "dom",
-                value: CompilerOptionsValue::Str("lib.dom.d.ts"),
+                key: "dom".to_string(),
+                value: CompilerOptionsValue::Str("lib.dom.d.ts".to_owned()),
             },
             MapEntry {
-                key: "dom.iterable",
-                value: CompilerOptionsValue::Str("lib.dom.iterable.d.ts"),
+                key: "dom.iterable".to_string(),
+                value: CompilerOptionsValue::Str("lib.dom.iterable.d.ts".to_owned()),
             },
             MapEntry {
-                key: "dom.asynciterable",
-                value: CompilerOptionsValue::Str("lib.dom.asynciterable.d.ts"),
+                key: "dom.asynciterable".to_string(),
+                value: CompilerOptionsValue::Str("lib.dom.asynciterable.d.ts".to_owned()),
             },
             MapEntry {
-                key: "webworker",
-                value: CompilerOptionsValue::Str("lib.webworker.d.ts"),
+                key: "webworker".to_string(),
+                value: CompilerOptionsValue::Str("lib.webworker.d.ts".to_owned()),
             },
             MapEntry {
-                key: "webworker.importscripts",
-                value: CompilerOptionsValue::Str("lib.webworker.importscripts.d.ts"),
+                key: "webworker.importscripts".to_string(),
+                value: CompilerOptionsValue::Str("lib.webworker.importscripts.d.ts".to_owned()),
             },
             MapEntry {
-                key: "webworker.iterable",
-                value: CompilerOptionsValue::Str("lib.webworker.iterable.d.ts"),
+                key: "webworker.iterable".to_string(),
+                value: CompilerOptionsValue::Str("lib.webworker.iterable.d.ts".to_owned()),
             },
             MapEntry {
-                key: "webworker.asynciterable",
-                value: CompilerOptionsValue::Str("lib.webworker.asynciterable.d.ts"),
+                key: "webworker.asynciterable".to_string(),
+                value: CompilerOptionsValue::Str("lib.webworker.asynciterable.d.ts".to_owned()),
             },
             MapEntry {
-                key: "scripthost",
-                value: CompilerOptionsValue::Str("lib.scripthost.d.ts"),
+                key: "scripthost".to_string(),
+                value: CompilerOptionsValue::Str("lib.scripthost.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2015.core",
-                value: CompilerOptionsValue::Str("lib.es2015.core.d.ts"),
+                key: "es2015.core".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2015.core.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2015.collection",
-                value: CompilerOptionsValue::Str("lib.es2015.collection.d.ts"),
+                key: "es2015.collection".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2015.collection.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2015.generator",
-                value: CompilerOptionsValue::Str("lib.es2015.generator.d.ts"),
+                key: "es2015.generator".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2015.generator.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2015.iterable",
-                value: CompilerOptionsValue::Str("lib.es2015.iterable.d.ts"),
+                key: "es2015.iterable".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2015.iterable.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2015.promise",
-                value: CompilerOptionsValue::Str("lib.es2015.promise.d.ts"),
+                key: "es2015.promise".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2015.promise.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2015.proxy",
-                value: CompilerOptionsValue::Str("lib.es2015.proxy.d.ts"),
+                key: "es2015.proxy".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2015.proxy.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2015.reflect",
-                value: CompilerOptionsValue::Str("lib.es2015.reflect.d.ts"),
+                key: "es2015.reflect".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2015.reflect.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2015.symbol",
-                value: CompilerOptionsValue::Str("lib.es2015.symbol.d.ts"),
+                key: "es2015.symbol".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2015.symbol.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2015.symbol.wellknown",
-                value: CompilerOptionsValue::Str("lib.es2015.symbol.wellknown.d.ts"),
+                key: "es2015.symbol.wellknown".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2015.symbol.wellknown.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2016.array.include",
-                value: CompilerOptionsValue::Str("lib.es2016.array.include.d.ts"),
+                key: "es2016.array.include".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2016.array.include.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2016.intl",
-                value: CompilerOptionsValue::Str("lib.es2016.intl.d.ts"),
+                key: "es2016.intl".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2016.intl.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2017.arraybuffer",
-                value: CompilerOptionsValue::Str("lib.es2017.arraybuffer.d.ts"),
+                key: "es2017.arraybuffer".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2017.arraybuffer.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2017.date",
-                value: CompilerOptionsValue::Str("lib.es2017.date.d.ts"),
+                key: "es2017.date".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2017.date.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2017.object",
-                value: CompilerOptionsValue::Str("lib.es2017.object.d.ts"),
+                key: "es2017.object".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2017.object.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2017.sharedmemory",
-                value: CompilerOptionsValue::Str("lib.es2017.sharedmemory.d.ts"),
+                key: "es2017.sharedmemory".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2017.sharedmemory.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2017.string",
-                value: CompilerOptionsValue::Str("lib.es2017.string.d.ts"),
+                key: "es2017.string".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2017.string.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2017.intl",
-                value: CompilerOptionsValue::Str("lib.es2017.intl.d.ts"),
+                key: "es2017.intl".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2017.intl.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2017.typedarrays",
-                value: CompilerOptionsValue::Str("lib.es2017.typedarrays.d.ts"),
+                key: "es2017.typedarrays".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2017.typedarrays.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2018.asyncgenerator",
-                value: CompilerOptionsValue::Str("lib.es2018.asyncgenerator.d.ts"),
+                key: "es2018.asyncgenerator".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2018.asyncgenerator.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2018.asynciterable",
-                value: CompilerOptionsValue::Str("lib.es2018.asynciterable.d.ts"),
+                key: "es2018.asynciterable".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2018.asynciterable.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2018.intl",
-                value: CompilerOptionsValue::Str("lib.es2018.intl.d.ts"),
+                key: "es2018.intl".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2018.intl.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2018.promise",
-                value: CompilerOptionsValue::Str("lib.es2018.promise.d.ts"),
+                key: "es2018.promise".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2018.promise.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2018.regexp",
-                value: CompilerOptionsValue::Str("lib.es2018.regexp.d.ts"),
+                key: "es2018.regexp".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2018.regexp.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2019.array",
-                value: CompilerOptionsValue::Str("lib.es2019.array.d.ts"),
+                key: "es2019.array".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2019.array.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2019.object",
-                value: CompilerOptionsValue::Str("lib.es2019.object.d.ts"),
+                key: "es2019.object".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2019.object.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2019.string",
-                value: CompilerOptionsValue::Str("lib.es2019.string.d.ts"),
+                key: "es2019.string".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2019.string.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2019.symbol",
-                value: CompilerOptionsValue::Str("lib.es2019.symbol.d.ts"),
+                key: "es2019.symbol".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2019.symbol.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2019.intl",
-                value: CompilerOptionsValue::Str("lib.es2019.intl.d.ts"),
+                key: "es2019.intl".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2019.intl.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2020.bigint",
-                value: CompilerOptionsValue::Str("lib.es2020.bigint.d.ts"),
+                key: "es2020.bigint".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2020.bigint.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2020.date",
-                value: CompilerOptionsValue::Str("lib.es2020.date.d.ts"),
+                key: "es2020.date".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2020.date.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2020.promise",
-                value: CompilerOptionsValue::Str("lib.es2020.promise.d.ts"),
+                key: "es2020.promise".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2020.promise.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2020.sharedmemory",
-                value: CompilerOptionsValue::Str("lib.es2020.sharedmemory.d.ts"),
+                key: "es2020.sharedmemory".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2020.sharedmemory.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2020.string",
-                value: CompilerOptionsValue::Str("lib.es2020.string.d.ts"),
+                key: "es2020.string".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2020.string.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2020.symbol.wellknown",
-                value: CompilerOptionsValue::Str("lib.es2020.symbol.wellknown.d.ts"),
+                key: "es2020.symbol.wellknown".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2020.symbol.wellknown.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2020.intl",
-                value: CompilerOptionsValue::Str("lib.es2020.intl.d.ts"),
+                key: "es2020.intl".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2020.intl.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2020.number",
-                value: CompilerOptionsValue::Str("lib.es2020.number.d.ts"),
+                key: "es2020.number".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2020.number.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2021.promise",
-                value: CompilerOptionsValue::Str("lib.es2021.promise.d.ts"),
+                key: "es2021.promise".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2021.promise.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2021.string",
-                value: CompilerOptionsValue::Str("lib.es2021.string.d.ts"),
+                key: "es2021.string".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2021.string.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2021.weakref",
-                value: CompilerOptionsValue::Str("lib.es2021.weakref.d.ts"),
+                key: "es2021.weakref".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2021.weakref.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2021.intl",
-                value: CompilerOptionsValue::Str("lib.es2021.intl.d.ts"),
+                key: "es2021.intl".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2021.intl.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2022.array",
-                value: CompilerOptionsValue::Str("lib.es2022.array.d.ts"),
+                key: "es2022.array".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2022.array.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2022.error",
-                value: CompilerOptionsValue::Str("lib.es2022.error.d.ts"),
+                key: "es2022.error".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2022.error.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2022.intl",
-                value: CompilerOptionsValue::Str("lib.es2022.intl.d.ts"),
+                key: "es2022.intl".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2022.intl.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2022.object",
-                value: CompilerOptionsValue::Str("lib.es2022.object.d.ts"),
+                key: "es2022.object".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2022.object.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2022.string",
-                value: CompilerOptionsValue::Str("lib.es2022.string.d.ts"),
+                key: "es2022.string".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2022.string.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2022.regexp",
-                value: CompilerOptionsValue::Str("lib.es2022.regexp.d.ts"),
+                key: "es2022.regexp".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2022.regexp.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2023.array",
-                value: CompilerOptionsValue::Str("lib.es2023.array.d.ts"),
+                key: "es2023.array".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2023.array.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2023.collection",
-                value: CompilerOptionsValue::Str("lib.es2023.collection.d.ts"),
+                key: "es2023.collection".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2023.collection.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2023.intl",
-                value: CompilerOptionsValue::Str("lib.es2023.intl.d.ts"),
+                key: "es2023.intl".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2023.intl.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2024.arraybuffer",
-                value: CompilerOptionsValue::Str("lib.es2024.arraybuffer.d.ts"),
+                key: "es2024.arraybuffer".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2024.arraybuffer.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2024.collection",
-                value: CompilerOptionsValue::Str("lib.es2024.collection.d.ts"),
+                key: "es2024.collection".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2024.collection.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2024.object",
-                value: CompilerOptionsValue::Str("lib.es2024.object.d.ts"),
+                key: "es2024.object".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2024.object.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2024.promise",
-                value: CompilerOptionsValue::Str("lib.es2024.promise.d.ts"),
+                key: "es2024.promise".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2024.promise.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2024.regexp",
-                value: CompilerOptionsValue::Str("lib.es2024.regexp.d.ts"),
+                key: "es2024.regexp".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2024.regexp.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2024.sharedmemory",
-                value: CompilerOptionsValue::Str("lib.es2024.sharedmemory.d.ts"),
+                key: "es2024.sharedmemory".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2024.sharedmemory.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2024.string",
-                value: CompilerOptionsValue::Str("lib.es2024.string.d.ts"),
+                key: "es2024.string".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2024.string.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2025.collection",
-                value: CompilerOptionsValue::Str("lib.es2025.collection.d.ts"),
+                key: "es2025.collection".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2025.collection.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2025.float16",
-                value: CompilerOptionsValue::Str("lib.es2025.float16.d.ts"),
+                key: "es2025.float16".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2025.float16.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2025.intl",
-                value: CompilerOptionsValue::Str("lib.es2025.intl.d.ts"),
+                key: "es2025.intl".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2025.intl.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2025.iterator",
-                value: CompilerOptionsValue::Str("lib.es2025.iterator.d.ts"),
+                key: "es2025.iterator".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2025.iterator.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2025.promise",
-                value: CompilerOptionsValue::Str("lib.es2025.promise.d.ts"),
+                key: "es2025.promise".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2025.promise.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2025.regexp",
-                value: CompilerOptionsValue::Str("lib.es2025.regexp.d.ts"),
+                key: "es2025.regexp".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2025.regexp.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2026.array",
-                value: CompilerOptionsValue::Str("lib.es2026.array.d.ts"),
+                key: "es2026.array".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.array.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2026.collection",
-                value: CompilerOptionsValue::Str("lib.es2026.collection.d.ts"),
+                key: "es2026.collection".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.collection.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2026.error",
-                value: CompilerOptionsValue::Str("lib.es2026.error.d.ts"),
+                key: "es2026.error".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.error.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2026.iterator",
-                value: CompilerOptionsValue::Str("lib.es2026.iterator.d.ts"),
+                key: "es2026.iterator".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.iterator.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2026.json",
-                value: CompilerOptionsValue::Str("lib.es2026.json.d.ts"),
+                key: "es2026.json".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.json.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2026.math",
-                value: CompilerOptionsValue::Str("lib.es2026.math.d.ts"),
+                key: "es2026.math".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.math.d.ts".to_owned()),
             },
             MapEntry {
-                key: "es2026.typedarrays",
-                value: CompilerOptionsValue::Str("lib.es2026.typedarrays.d.ts"),
+                key: "es2026.typedarrays".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.typedarrays.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.asynciterable",
-                value: CompilerOptionsValue::Str("lib.es2018.asynciterable.d.ts"),
+                key: "esnext.asynciterable".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2018.asynciterable.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.symbol",
-                value: CompilerOptionsValue::Str("lib.es2019.symbol.d.ts"),
+                key: "esnext.symbol".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2019.symbol.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.bigint",
-                value: CompilerOptionsValue::Str("lib.es2020.bigint.d.ts"),
+                key: "esnext.bigint".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2020.bigint.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.weakref",
-                value: CompilerOptionsValue::Str("lib.es2021.weakref.d.ts"),
+                key: "esnext.weakref".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2021.weakref.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.object",
-                value: CompilerOptionsValue::Str("lib.es2024.object.d.ts"),
+                key: "esnext.object".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2024.object.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.regexp",
-                value: CompilerOptionsValue::Str("lib.es2024.regexp.d.ts"),
+                key: "esnext.regexp".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2024.regexp.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.string",
-                value: CompilerOptionsValue::Str("lib.es2024.string.d.ts"),
+                key: "esnext.string".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2024.string.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.float16",
-                value: CompilerOptionsValue::Str("lib.es2025.float16.d.ts"),
+                key: "esnext.float16".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2025.float16.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.array",
-                value: CompilerOptionsValue::Str("lib.es2026.array.d.ts"),
+                key: "esnext.array".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.array.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.collection",
-                value: CompilerOptionsValue::Str("lib.es2026.collection.d.ts"),
+                key: "esnext.collection".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.collection.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.error",
-                value: CompilerOptionsValue::Str("lib.es2026.error.d.ts"),
+                key: "esnext.error".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.error.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.iterator",
-                value: CompilerOptionsValue::Str("lib.es2026.iterator.d.ts"),
+                key: "esnext.iterator".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.iterator.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.typedarrays",
-                value: CompilerOptionsValue::Str("lib.es2026.typedarrays.d.ts"),
+                key: "esnext.typedarrays".to_string(),
+                value: CompilerOptionsValue::Str("lib.es2026.typedarrays.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.promise",
-                value: CompilerOptionsValue::Str("lib.esnext.promise.d.ts"),
+                key: "esnext.promise".to_string(),
+                value: CompilerOptionsValue::Str("lib.esnext.promise.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.date",
-                value: CompilerOptionsValue::Str("lib.esnext.date.d.ts"),
+                key: "esnext.date".to_string(),
+                value: CompilerOptionsValue::Str("lib.esnext.date.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.decorators",
-                value: CompilerOptionsValue::Str("lib.esnext.decorators.d.ts"),
+                key: "esnext.decorators".to_string(),
+                value: CompilerOptionsValue::Str("lib.esnext.decorators.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.disposable",
-                value: CompilerOptionsValue::Str("lib.esnext.disposable.d.ts"),
+                key: "esnext.disposable".to_string(),
+                value: CompilerOptionsValue::Str("lib.esnext.disposable.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.intl",
-                value: CompilerOptionsValue::Str("lib.esnext.intl.d.ts"),
+                key: "esnext.intl".to_string(),
+                value: CompilerOptionsValue::Str("lib.esnext.intl.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.modulesource",
-                value: CompilerOptionsValue::Str("lib.esnext.modulesource.d.ts"),
+                key: "esnext.modulesource".to_string(),
+                value: CompilerOptionsValue::Str("lib.esnext.modulesource.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.sharedmemory",
-                value: CompilerOptionsValue::Str("lib.esnext.sharedmemory.d.ts"),
+                key: "esnext.sharedmemory".to_string(),
+                value: CompilerOptionsValue::Str("lib.esnext.sharedmemory.d.ts".to_owned()),
             },
             MapEntry {
-                key: "esnext.temporal",
-                value: CompilerOptionsValue::Str("lib.esnext.temporal.d.ts"),
+                key: "esnext.temporal".to_string(),
+                value: CompilerOptionsValue::Str("lib.esnext.temporal.d.ts".to_owned()),
             },
             MapEntry {
-                key: "decorators",
-                value: CompilerOptionsValue::Str("lib.decorators.d.ts"),
+                key: "decorators".to_string(),
+                value: CompilerOptionsValue::Str("lib.decorators.d.ts".to_owned()),
             },
             MapEntry {
-                key: "decorators.legacy",
-                value: CompilerOptionsValue::Str("lib.decorators.legacy.d.ts"),
+                key: "decorators.legacy".to_string(),
+                value: CompilerOptionsValue::Str("lib.decorators.legacy.d.ts".to_owned()),
             },
         ])
     })
@@ -3274,59 +3274,59 @@ pub fn module_option_map() -> &'static OrderedMap<String, CompilerOptionsValue> 
     MAP.get_or_init(|| {
         OrderedMap::from_list([
             MapEntry {
-                key: "commonjs",
+                key: "commonjs".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::CommonJS),
             },
             MapEntry {
-                key: "amd",
+                key: "amd".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::AMD),
             },
             MapEntry {
-                key: "system",
+                key: "system".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::System),
             },
             MapEntry {
-                key: "umd",
+                key: "umd".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::UMD),
             },
             MapEntry {
-                key: "es6",
+                key: "es6".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::ES2015),
             },
             MapEntry {
-                key: "es2015",
+                key: "es2015".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::ES2015),
             },
             MapEntry {
-                key: "es2020",
+                key: "es2020".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::ES2020),
             },
             MapEntry {
-                key: "es2022",
+                key: "es2022".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::ES2022),
             },
             MapEntry {
-                key: "esnext",
+                key: "esnext".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::ESNext),
             },
             MapEntry {
-                key: "node16",
+                key: "node16".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::Node16),
             },
             MapEntry {
-                key: "node18",
+                key: "node18".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::Node18),
             },
             MapEntry {
-                key: "node20",
+                key: "node20".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::Node20),
             },
             MapEntry {
-                key: "nodenext",
+                key: "nodenext".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::NodeNext),
             },
             MapEntry {
-                key: "preserve",
+                key: "preserve".to_string(),
                 value: CompilerOptionsValue::ModuleKind(ModuleKind::Preserve),
             },
         ])
@@ -3339,15 +3339,15 @@ pub fn module_detection_option_map() -> &'static OrderedMap<String, CompilerOpti
     MAP.get_or_init(|| {
         OrderedMap::from_list([
             MapEntry {
-                key: "auto",
+                key: "auto".to_string(),
                 value: CompilerOptionsValue::ModuleDetectionKind(ModuleDetectionKind::Auto),
             },
             MapEntry {
-                key: "legacy",
+                key: "legacy".to_string(),
                 value: CompilerOptionsValue::ModuleDetectionKind(ModuleDetectionKind::Legacy),
             },
             MapEntry {
-                key: "force",
+                key: "force".to_string(),
                 value: CompilerOptionsValue::ModuleDetectionKind(ModuleDetectionKind::Force),
             },
         ])
@@ -3360,27 +3360,27 @@ pub fn module_resolution_option_map() -> &'static OrderedMap<String, CompilerOpt
     MAP.get_or_init(|| {
         OrderedMap::from_list([
             MapEntry {
-                key: "node16",
+                key: "node16".to_string(),
                 value: CompilerOptionsValue::ModuleResolutionKind(ModuleResolutionKind::Node16),
             },
             MapEntry {
-                key: "nodenext",
+                key: "nodenext".to_string(),
                 value: CompilerOptionsValue::ModuleResolutionKind(ModuleResolutionKind::NodeNext),
             },
             MapEntry {
-                key: "bundler",
+                key: "bundler".to_string(),
                 value: CompilerOptionsValue::ModuleResolutionKind(ModuleResolutionKind::Bundler),
             },
             MapEntry {
-                key: "classic",
+                key: "classic".to_string(),
                 value: CompilerOptionsValue::ModuleResolutionKind(ModuleResolutionKind::Classic),
             },
             MapEntry {
-                key: "node",
+                key: "node".to_string(),
                 value: CompilerOptionsValue::ModuleResolutionKind(ModuleResolutionKind::Node10),
             },
             MapEntry {
-                key: "node10",
+                key: "node10".to_string(),
                 value: CompilerOptionsValue::ModuleResolutionKind(ModuleResolutionKind::Node10),
             },
         ])
@@ -3393,11 +3393,11 @@ pub fn new_line_option_map() -> &'static OrderedMap<String, CompilerOptionsValue
     MAP.get_or_init(|| {
         OrderedMap::from_list([
             MapEntry {
-                key: "crlf",
+                key: "crlf".to_string(),
                 value: CompilerOptionsValue::NewLineKind(NewLineKind::CRLF),
             },
             MapEntry {
-                key: "lf",
+                key: "lf".to_string(),
                 value: CompilerOptionsValue::NewLineKind(NewLineKind::LF),
             },
         ])
@@ -3410,63 +3410,63 @@ pub fn target_option_map() -> &'static OrderedMap<String, CompilerOptionsValue> 
     MAP.get_or_init(|| {
         OrderedMap::from_list([
             MapEntry {
-                key: "es5",
+                key: "es5".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES5),
             },
             MapEntry {
-                key: "es6",
+                key: "es6".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2015),
             },
             MapEntry {
-                key: "es2015",
+                key: "es2015".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2015),
             },
             MapEntry {
-                key: "es2016",
+                key: "es2016".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2016),
             },
             MapEntry {
-                key: "es2017",
+                key: "es2017".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2017),
             },
             MapEntry {
-                key: "es2018",
+                key: "es2018".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2018),
             },
             MapEntry {
-                key: "es2019",
+                key: "es2019".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2019),
             },
             MapEntry {
-                key: "es2020",
+                key: "es2020".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2020),
             },
             MapEntry {
-                key: "es2021",
+                key: "es2021".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2021),
             },
             MapEntry {
-                key: "es2022",
+                key: "es2022".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2022),
             },
             MapEntry {
-                key: "es2023",
+                key: "es2023".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2023),
             },
             MapEntry {
-                key: "es2024",
+                key: "es2024".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2024),
             },
             MapEntry {
-                key: "es2025",
+                key: "es2025".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2025),
             },
             MapEntry {
-                key: "es2026",
+                key: "es2026".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ES2026),
             },
             MapEntry {
-                key: "esnext",
+                key: "esnext".to_string(),
                 value: CompilerOptionsValue::ScriptTarget(ScriptTarget::ESNext),
             },
         ])

@@ -6,19 +6,17 @@
 //! resolution cache.
 //!
 //! File map (one Go file = one Rust file):
-//!   - types.rs          (Go types.go)  ResolutionHost, Resolver trait,
-//!                                      PackageId, ResolvedModule, ...,
-//!                                      NodeResolutionFeatures, Extensions.
-//!   - util.rs           (Go util.go)   package-name mangling, versioned-types
-//!                                      key, GetResolutionDiagnostic, ...
-//!   - cache.rs          (Go cache.go)  resolution caches, ResolutionData.
-//!   - resolver.rs       (Go resolver.go) DefaultResolver + resolutionState.
-//!   - staticresolver.rs (Go staticresolver.go)
-//!   - vfsmatch.rs       (PORT: tsc/internal/vfs/vfsmatch/vfsmatch.go's
-//!     ReadDirectory, ported in-crate because the resolver's
-//!     GetEntrypointsFromPackageJsonInfo needs it and the vfs crate
-//!     deliberately did not port the vfsmatch subpackage; hoist into tsc-vfs
-//!     when a second consumer appears.)
+//! - types.rs (Go types.go) ResolutionHost, Resolver trait, PackageId,
+//!   ResolvedModule, ..., NodeResolutionFeatures, Extensions.
+//! - util.rs (Go util.go) package-name mangling, versioned-types key,
+//!   GetResolutionDiagnostic, ...
+//! - cache.rs (Go cache.go) resolution caches, ResolutionData.
+//! - resolver.rs (Go resolver.go) DefaultResolver + resolutionState.
+//! - staticresolver.rs (Go staticresolver.go)
+//! - vfsmatch.rs (PORT: tsc/internal/vfs/vfsmatch/vfsmatch.go's ReadDirectory,
+//!   ported in-crate because the resolver's GetEntrypointsFromPackageJsonInfo
+//!   needs it and the vfs crate deliberately did not port the vfsmatch
+//!   subpackage; hoist into tsc-vfs when a second consumer appears.)
 
 pub mod cache;
 pub mod resolver;

@@ -289,6 +289,8 @@ impl Extensions {
     pub const fn intersects(self, other: Self) -> bool {
         (self.0 & other.0) != 0
     }
+    /// Go: `extensions(...)` raw bits — parity accessor; kept for API parity.
+    #[allow(dead_code)]
     #[inline]
     pub const fn bits(self) -> i32 {
         self.0

@@ -53,15 +53,13 @@ pub fn new_static_resolutions(
     case_sensitivity: CaseSensitivity,
 ) -> NewStaticResolutionsResult {
     let entries_count = entries.len();
-    let mut entries: FxHashMap<StaticResolutionKey, Option<Arc<ResolvedModule>>> =
-        FxHashMap::default();
-    entries.reserve(entries_count);
     let mut resolutions = StaticResolutions {
         fallback_to_resolver,
-        entries,
+        entries: FxHashMap::default(),
         current_directory,
         case_sensitivity,
     };
+    resolutions.entries.reserve(entries_count);
     for entry in entries {
         if entry.module_name.is_empty() {
             return Err("module name is empty".to_string());

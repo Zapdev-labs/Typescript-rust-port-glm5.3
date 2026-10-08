@@ -225,6 +225,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tsc-contentmapper"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "tsc-ast",
+ "tsc-collections",
+ "tsc-core",
+ "tsc-diagnostics",
+ "tsc-json",
+ "tsc-tspath",
+]
+
+[[package]]
 name = "tsc-core"
 version = "0.0.0"
 dependencies = [
@@ -359,6 +372,25 @@ name = "tsc-stringutil"
 version = "0.0.0"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "tsc-tsoptions"
+version = "0.0.0"
+dependencies = [
+ "rustc-hash",
+ "serde_json",
+ "tsc-ast",
+ "tsc-collections",
+ "tsc-contentmapper",
+ "tsc-core",
+ "tsc-diagnostics",
+ "tsc-glob",
+ "tsc-json",
+ "tsc-locale",
+ "tsc-scanner",
+ "tsc-tspath",
+ "tsc-vfs",
 ]
 
 [[package]]

@@ -21,7 +21,7 @@ use tsc_tspath::{
     get_normalized_path_components, get_root_length, has_extension,
     is_encoded_dynamic_file_name, is_rooted_disk_path, normalize_path, combine_paths,
     remove_trailing_directory_separator, rooted_directory_path_from_path,
-    to_rooted_directory_path, PathKey,
+    to_rooted_directory_path,
 };
 use tsc_vfs::Fs;
 
@@ -69,7 +69,7 @@ fn get_include_base_path<'a>(absolute: &'a str) -> std::borrow::Cow<'a, str> {
         }
         let directory_path = get_directory_path(absolute);
         return std::borrow::Cow::Owned(
-            remove_trailing_directory_separator(&directory_path).into_owned(),
+            remove_trailing_directory_separator(&directory_path).to_string(),
         );
     };
     let root_length = get_root_length(absolute) as i64;
@@ -304,6 +304,8 @@ fn parse_segments(s: &str) -> Vec<Segment> {
 
 impl GlobPattern {
     // matches returns true if path matches this pattern.
+    // Parity helper; kept for API parity.
+    #[allow(dead_code)]
     fn matches(&self, path: &str) -> bool {
         self.match_path_parts(path, "", 0, 0, false)
     }

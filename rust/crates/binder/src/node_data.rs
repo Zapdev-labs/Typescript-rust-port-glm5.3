@@ -175,7 +175,7 @@ pub fn is_locals_container(node: &Node) -> bool {
 /// Go: `func (node *Node) Locals() SymbolTable` — the RAW accessor (no lazy
 /// create; `GetLocals` in the binder creates). An empty table is Go's
 /// nil map (the field is not lazily allocated in the Rust payload).
-pub fn locals_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> Option<&'a SymbolTable> {
+pub fn locals_of(store: &dyn NodeStore, node: NodeId) -> Option<&SymbolTable> {
     match &store.node(node).data {
         NodeData::SourceFile(d) => Some(&d.locals),
         NodeData::ForStatement(d) => Some(&d.locals),
@@ -244,7 +244,7 @@ fn locals_of_node(node: &Node) -> Option<()> {
 /// Go: `GetSymbolTable(&container.LocalsContainerData().Locals)` — mutable
 /// access with the lazy-create folded away (the Rust field is always
 /// present; empty ≡ Go's nil map).
-pub fn locals_mut<'a>(store: &'a mut dyn NodeStore, node: NodeId) -> Option<&'a mut SymbolTable> {
+pub fn locals_mut(store: &mut dyn NodeStore, node: NodeId) -> Option<&mut SymbolTable> {
     let n = store.node_mut(node);
     match &mut n.data {
         NodeData::SourceFile(d) => Some(&mut d.locals),
@@ -367,10 +367,10 @@ field_dispatch!(
 // ────────────────────────────────────────────────────────────────────────────
 
 field_get!(expression_of, expression, NodeId: opt [
-    ComputedPropertyName, ReturnStatement, YieldExpression, TemplateSpan, SpreadAssignment,
-    TypeParameterDeclaration, JsxSpreadAttribute, JsxExpression,
+    ReturnStatement, YieldExpression, JsxExpression, TypeParameterDeclaration,
 ] direct [
-    Decorator, IfStatement, DoStatement, WhileStatement, ForInOrOfStatement, WithStatement,
+    ComputedPropertyName, TemplateSpan, SpreadAssignment, JsxSpreadAttribute, Decorator,
+    IfStatement, DoStatement, WhileStatement, ForInOrOfStatement, WithStatement, SwitchStatement,
     CaseOrDefaultClause, ThrowStatement, ExpressionStatement, ExternalModuleReference,
     ExportAssignment, AsExpression, SatisfiesExpression, PropertyAccessExpression,
     ElementAccessExpression, CallExpression, NewExpression, NonNullExpression, SpreadElement,
@@ -384,28 +384,31 @@ field_get!(expression_of, expression, NodeId: opt [
 // ────────────────────────────────────────────────────────────────────────────
 
 field_get!(type_of, type_, NodeId: opt [
-    VariableDeclaration, ParameterDeclaration, FunctionDeclaration, TypeAliasDeclaration,
+    VariableDeclaration, ParameterDeclaration, FunctionDeclaration,
     CallSignatureDeclaration, ConstructSignatureDeclaration, ConstructorDeclaration,
     GetAccessorDeclaration, SetAccessorDeclaration, IndexSignatureDeclaration,
-    MethodSignatureDeclaration, MethodDeclaration, ArrowFunction, FunctionExpression,
-    BinaryExpression, AsExpression, SatisfiesExpression, TypeAssertion, TypeOperatorNode,
-    TypePredicateNode, MappedTypeNode, NamedTupleMember, OptionalTypeNode, RestTypeNode,
-    ParenthesizedTypeNode, FunctionTypeNode, ConstructorTypeNode, TemplateLiteralTypeSpan,
-    SyntheticExpression, JSDocTypeExpression, JSDocNonNullableType, JSDocNullableType,
-    JSDocVariadicType, JSDocOptionalType, JSDocSignature,
+    MethodSignatureDeclaration, MethodDeclaration, PropertyDeclaration, ArrowFunction,
+    FunctionExpression, BinaryExpression, TypePredicateNode, MappedTypeNode,
+    FunctionTypeNode, ConstructorTypeNode, JSDocSignature,
 ] direct [
-    ExportAssignment, PropertySignatureDeclaration, PropertyDeclaration, PropertyAssignment,
-    ShorthandPropertyAssignment,
+    TypeAliasDeclaration, ExportAssignment, PropertySignatureDeclaration, PropertyAssignment,
+    ShorthandPropertyAssignment, AsExpression, SatisfiesExpression, TypeAssertion,
+    TypeOperatorNode, NamedTupleMember, OptionalTypeNode, RestTypeNode, ParenthesizedTypeNode,
+    TemplateLiteralTypeSpan, JSDocTypeExpression, JSDocNonNullableType, JSDocNullableType,
+    JSDocVariadicType, JSDocOptionalType,
 ]);
+// PORT: Go's SyntheticExpression carries `Type any` (an opaque checker
+// value), typed `Arc<dyn Any>` in the payload — outside the NodeId
+// dispatcher's surface, hence excluded here.
 
 // ────────────────────────────────────────────────────────────────────────────
 // Field dispatchers — `Initializer()` (Go nodeData.Initializer())
 // ────────────────────────────────────────────────────────────────────────────
 
 field_get!(initializer_of, initializer, NodeId: opt [
-    VariableDeclaration, ParameterDeclaration, BindingElement, EnumMember,
-    PropertySignatureDeclaration, PropertyDeclaration, JsxAttribute,
-] direct [PropertyAssignment]);
+    VariableDeclaration, ParameterDeclaration, BindingElement, EnumMember, PropertyDeclaration,
+    JsxAttribute, ForStatement,
+] direct [PropertyAssignment, PropertySignatureDeclaration, ForInOrOfStatement]);
 
 // ────────────────────────────────────────────────────────────────────────────
 // Field dispatchers — `Statements()` / `StatementList()` (Go ast.go)
@@ -413,7 +416,7 @@ field_get!(initializer_of, initializer, NodeId: opt [
 
 /// Go: `func (node *Node) Statements() *NodeList` — SourceFile, ModuleBlock,
 /// Block, CaseOrDefaultClause (an empty list ≡ Go's nil list).
-pub fn statements_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> Option<&'a tsc_ast::NodeList> {
+pub fn statements_of(store: &dyn NodeStore, node: NodeId) -> Option<&tsc_ast::NodeList> {
     match &store.node(node).data {
         NodeData::SourceFile(d) => d.statements.as_ref(),
         NodeData::ModuleBlock(d) => d.statements.as_ref(),
@@ -428,7 +431,7 @@ pub fn statements_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> Option<&'a t
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Go: `func (node *Node) Parameters() *NodeList` (the function-likes).
-pub fn parameters_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> Option<&'a tsc_ast::NodeList> {
+pub fn parameters_of(store: &dyn NodeStore, node: NodeId) -> Option<&tsc_ast::NodeList> {
     match &store.node(node).data {
         NodeData::FunctionDeclaration(d) => d.parameters.as_ref(),
         NodeData::CallSignatureDeclaration(d) => d.parameters.as_ref(),
@@ -450,7 +453,7 @@ pub fn parameters_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> Option<&'a t
 
 /// Go: `func (node *Node) Arguments() []*Node` — CallExpression (always
 /// present) and NewExpression (optional).
-pub fn arguments_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> &'a [NodeId] {
+pub fn arguments_of(store: &dyn NodeStore, node: NodeId) -> &[NodeId] {
     match &store.node(node).data {
         NodeData::CallExpression(d) => d
             .arguments
@@ -468,7 +471,7 @@ pub fn arguments_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> &'a [NodeId] 
 
 /// Go: `func (node *Node) Elements() []*NodeList.Nodes` — binding patterns,
 /// named imports/exports, array literals, tuple types.
-pub fn elements_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> &'a [NodeId] {
+pub fn elements_of(store: &dyn NodeStore, node: NodeId) -> &[NodeId] {
     match &store.node(node).data {
         NodeData::BindingPattern(d) => d
             .elements
@@ -501,7 +504,7 @@ pub fn elements_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> &'a [NodeId] {
 
 /// Go: `func (node *Node) Properties() []*Node` — object literals and JSX
 /// attribute lists.
-pub fn properties_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> &'a [NodeId] {
+pub fn properties_of(store: &dyn NodeStore, node: NodeId) -> &[NodeId] {
     match &store.node(node).data {
         NodeData::ObjectLiteralExpression(d) => d
             .properties
@@ -579,7 +582,7 @@ pub fn label_of(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
 pub fn module_specifier_of(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
     match &store.node(node).data {
         NodeData::ImportDeclaration(d) => Some(d.module_specifier),
-        NodeData::JSDocImportTag(d) => d.module_specifier,
+        NodeData::JSDocImportTag(d) => Some(d.module_specifier),
         NodeData::ExportDeclaration(d) => d.module_specifier,
         _ => None,
     }
@@ -587,7 +590,7 @@ pub fn module_specifier_of(store: &dyn NodeStore, node: NodeId) -> Option<NodeId
 
 /// Go: `func (node *Node) Members() *NodeList` (class/interface/enum/enum-like
 /// member lists; the class-like subset the binder reads).
-pub fn members_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> &'a [NodeId] {
+pub fn members_of(store: &dyn NodeStore, node: NodeId) -> &[NodeId] {
     match &store.node(node).data {
         NodeData::ClassDeclaration(d) => d
             .members
@@ -617,7 +620,7 @@ pub fn members_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> &'a [NodeId] {
 /// class-like type-parameter lists (the nameresolver reads these through
 /// HasContextSensitiveParameters' caller surface; binder uses the payload
 /// fields directly).
-pub fn type_parameters_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> Option<&'a tsc_ast::NodeList> {
+pub fn type_parameters_of(store: &dyn NodeStore, node: NodeId) -> Option<&tsc_ast::NodeList> {
     match &store.node(node).data {
         NodeData::FunctionDeclaration(d) => d.type_parameters.as_ref(),
         NodeData::ClassDeclaration(d) => d.type_parameters.as_ref(),
@@ -642,7 +645,7 @@ pub fn type_parameters_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> Option<
 }
 
 /// Go: `func (node *Node) HeritageClauses() *NodeList`.
-pub fn heritage_clauses_of<'a>(store: &'a dyn NodeStore, node: NodeId) -> &'a [NodeId] {
+pub fn heritage_clauses_of(store: &dyn NodeStore, node: NodeId) -> &[NodeId] {
     match &store.node(node).data {
         NodeData::ClassDeclaration(d) => d
             .heritage_clauses

@@ -9,9 +9,9 @@
 //
 // Everything else the binder needs from the scanner package already has a
 // ported home and is re-exported below (Go import surface parity):
-//   DeclarationNameToString               → tsc_scanner::declaration_name_to_string
+//   DeclarationNameToString               → tsc_scanner::utilities::declaration_name_to_string
 //   GetIdentifierToken                    → tsc_scanner::get_identifier_token
-//   GetSourceTextOfNodeFromSourceFile     → tsc_scanner::get_source_text_of_node_from_source_file
+//   GetSourceTextOfNodeFromSourceFile     → tsc_scanner::utilities::get_source_text_of_node_from_source_file
 //   GetRangeOfTokenAtPosition             → tsc_scanner::get_range_of_token_at_position
 //   TokenToString                         → tsc_scanner::token_to_text (same
 //                                           tokenToText table)
@@ -20,11 +20,11 @@ use tsc_ast::{
     is_jsx_text, Kind, NodeFlags, NodeId, NodeStore, SourceFile,
 };
 use tsc_core::text::{TextPos, TextRange};
-use tsc_scanner::{
-    get_range_of_token_at_position, get_scanner_for_source_file, skip_trivia, token_to_text,
-};
+use tsc_scanner::{get_scanner_for_source_file, skip_trivia, token_to_text};
 
-pub use tsc_scanner::{declaration_name_to_string, get_identifier_token, token_to_text as token_to_string_fn};
+pub use tsc_scanner::get_range_of_token_at_position;
+pub use tsc_scanner::utilities::declaration_name_to_string;
+pub use tsc_scanner::{get_identifier_token, token_to_text as token_to_string_fn};
 
 /// Go: `func TokenToString(token ast.Kind) string` (scanner.go) —
 /// `tokenToText[token]`.
@@ -43,8 +43,8 @@ fn get_error_range_for_arrow_function(source_file: &SourceFile, node: NodeId) ->
     let body = crate::node_data::body_of(source_file, node);
     if let Some(body) = body {
         if source_file.node(body).kind == Kind::Block {
-            let start_line = tsc_scanner::get_ecma_line_of_position(source_file, body.pos());
-            let end_line = tsc_scanner::get_ecma_line_of_position(source_file, body.end());
+            let start_line = tsc_scanner::get_ecma_line_of_position(source_file, source_file.node(body).pos());
+            let end_line = tsc_scanner::get_ecma_line_of_position(source_file, source_file.node(body).end());
             if start_line < end_line {
                 // The arrow function spans multiple lines, make the error span be the first line, inclusive.
                 return TextRange::new(

@@ -1216,7 +1216,9 @@ pub fn serialize_compiler_options(
     );
     for opt in &serialized {
         let field = snake_case_field(&opt.name, opt.go_name.as_ref());
-        let name = quote(&opt.name);
+        // OrderedMap::set takes owned keys; the JSON name literal becomes a String.
+        let name = format!("{}.to_string()", quote(&opt.name));
+        let _ = &name;
         let decl = opt.declaration.as_ref().unwrap();
         let kind = option_kind(&opt.ty);
         let element = elements
@@ -1332,6 +1334,15 @@ pub fn serialize_compiler_options(
     }}"#,
                         map_fn = super::snake_case(&enum_map.go_name)
                     );
+                } else if opt.ty == "[]PluginImport" {
+                    // Go: `result.Set("plugins", options.Plugins)` — the typed
+                    // slice; the value model carries it as PluginImports.
+                    let _ = writeln!(
+                        out,
+                        r#"    if !options.{field}.is_empty() {{
+        result.set({name}, CompilerOptionsValue::PluginImports(options.{field}.clone()));
+    }}"#
+                    );
                 } else {
                     let _ = writeln!(
                         out,
@@ -1345,8 +1356,8 @@ pub fn serialize_compiler_options(
                 // *int — the default (non-path) branch: raw value.
                 let _ = writeln!(
                     out,
-                    r#"    if options.{field}.is_some() {{
-        result.set({name}, CompilerOptionsValue::Int(options.{field}.unwrap()));
+                    r#"    if let Some(value) = options.{field} {{
+        result.set({name}, CompilerOptionsValue::Int(value));
     }}"#
                 );
             }
@@ -1401,7 +1412,7 @@ pub fn serialize_compiler_option_enum(value: &CompilerOptionsValue) -> String {{
             seen.push(member.to_string());
             let _ = writeln!(
                 out,
-                "            if *value == {enum_name}::{member} {{ return {}; }}",
+                "            if *value == {enum_name}::{member} {{ return {}.to_string(); }}",
                 quote(&entry.name)
             );
         }
@@ -1431,9 +1442,14 @@ pub fn emit_options_generated(model: &TsoptionsModel) -> String {
 //     the Go return shape.
 
 use tsc_collections::{OrderedMap, Set};
-use tsc_core::options_generated::{BuildOptions, CompilerOptions, PluginImport, TypeAcquisition};
+use tsc_core::options_generated::{
+    BuildOptions, CompilerOptions, JsxEmit, ModuleDetectionKind, ModuleKind, ModuleResolutionKind,
+    NewLineKind, PluginImport, ScriptTarget, TypeAcquisition,
+};
 use tsc_core::tristate::Tristate;
-use tsc_tspath::{CaseSensitivity, RootedDirectoryPath, RootedFilePath};
+use tsc_tspath::{
+    CaseSensitivity, RootedDirectoryPath, RootedFilePath, RootedPath, SourceMapLocation,
+};
 
 use crate::commandlineoption::{CommandLineOption, CommandLineOptionKind, CompilerOptionsValue};
 use crate::namemap::{build_name_map, command_line_compiler_options_map};
@@ -1441,7 +1457,7 @@ use crate::parsinghelpers::{
     get_substituted_path_with_config_dir_template, get_substituted_string_array_with_config_dir_template,
     parse_directory_name, parse_directory_names, parse_file_name, parse_file_or_directory_name,
     parse_number, parse_string, parse_string_array, parse_string_map, parse_tristate,
-    starts_with_config_dir_template, to_source_map_location,
+    to_source_map_location,
 };
 use crate::showconfig::{serialize_compiler_option_enum_list, serialize_compiler_option_path};
 use crate::tsconfigparsing::ParsedCompilerOptions;
@@ -1663,7 +1679,7 @@ pub fn build_opts() -> Vec<&'static CommandLineOption> {{
         );
         for entry in &map.values {
             let value_expr = match &entry.value {
-                GoValue::Str(s) => format!("CompilerOptionsValue::Str({})", quote(s)),
+                GoValue::Str(s) => format!("CompilerOptionsValue::Str({}.to_owned())", quote(s)),
                 GoValue::GoRef { go } => {
                     let (enum_name, member) = split_core_ref(go);
                     format!("CompilerOptionsValue::{enum_name}({enum_name}::{member})")
@@ -1675,7 +1691,7 @@ pub fn build_opts() -> Vec<&'static CommandLineOption> {{
             };
             let _ = writeln!(
                 out,
-                "        MapEntry {{ key: {}, value: {value_expr} }},",
+                "        MapEntry {{ key: {}.to_string(), value: {value_expr} }},",
                 quote(&entry.name)
             );
         }
@@ -1816,7 +1832,10 @@ use crate::field_json;
                 "JsxEmit" | "ModuleDetectionKind" | "ModuleKind" | "ModuleResolutionKind"
                 | "NewLineKind" | "ScriptTarget" => {
                     let enum_name = enum_name_of_type(&opt.ty);
-                    format!("field_json::{enum_name}(options.{field})")
+                    format!(
+                        "field_json::{}(options.{field})",
+                        super::snake_case(enum_name)
+                    )
                 }
                 other => panic!("gen-options: unknown field type {other}"),
             }
