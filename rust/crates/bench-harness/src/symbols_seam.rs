@@ -14,26 +14,24 @@
 //!     iteration) and the Rust port's are insertion-ordered `OrderedMap`s,
 //!     so table iteration order is NOT a shared concept; the canonical
 //!     order is defined by the walk instead, and BOTH drivers implement it
-//!     identically:
-//!       1. AST pre-order (ForEachChild — proven identical by the `dump`
-//!          twin), visiting each node's Locals table, then the node's
-//!          Symbol, then its LocalSymbol, then recursing into children;
-//!       2. from each discovered symbol: its Members table, then its
-//!          Exports table (both in canonical-key order, see below);
-//!       3. the file's GlobalExports table after the AST walk
-//!          (PatternAmbientModules symbols are table-declared upstream in
-//!          `bindModuleDeclaration` and therefore already reachable).
-//!     This mirrors Go binder.go's own reachability contract ("symbol
-//!     tables, node .Symbol links, container locals — not all symbols end
-//!     up in tables", binder.go bindWorker header): anonymous symbols
-//!     (module symbol of an external module, type-literal symbols,
-//!     duplicate-identifier scratch symbols, the CJS `exports` property)
-//!     are node-attached only, so a tables-only walk would miss them on
-//!     BOTH sides — the union walk covers everything.
-//!     Canonical ids are assigned in encounter order (0,1,2,...); records
-//!     are emitted in id order; `parent` resolves to the parent's
-//!     canonical id (null when the parent is nil or outside the emitted
-//!     set).
+//!     identically. The walk is an AST pre-order (ForEachChild — proven
+//!     identical by the `dump` twin) visiting each node's Locals table,
+//!     then the node's Symbol, then its LocalSymbol, then recursing into
+//!     children; from each discovered symbol, its Members table, then its
+//!     Exports table (both in canonical-key order, see below); the file's
+//!     GlobalExports table closes the walk (PatternAmbientModules symbols
+//!     are table-declared upstream in `bindModuleDeclaration` and
+//!     therefore already reachable). This mirrors Go binder.go's own
+//!     reachability contract ("symbol tables, node .Symbol links,
+//!     container locals — not all symbols end up in tables",
+//!     binder.go bindWorker header): anonymous symbols (module symbol of
+//!     an external module, type-literal symbols, duplicate-identifier
+//!     scratch symbols, the CJS `exports` property) are node-attached
+//!     only, so a tables-only walk would miss them on BOTH sides — the
+//!     union walk covers everything. Canonical ids are assigned in
+//!     encounter order (0,1,2,...); records are emitted in id order;
+//!     `parent` resolves to the parent's canonical id (null when the
+//!     parent is nil or outside the emitted set).
 //!
 //!   - CANONICAL KEYS. Go's InternalSymbolNamePrefix is the single byte
 //!     0xFE; the Rust port models it as U+00FE ("þ", UTF-8 bytes C3 BE).
@@ -503,8 +501,7 @@ fn records(file: &SourceFile, symbols: &[Symbol], order: &[SymbolId]) -> Vec<Rec
     }
     order
         .iter()
-        .enumerate()
-        .map(|(_id, &sym)| {
+        .map(|&sym| {
             let s = &symbols[sym.0 as usize];
             let kind = s
                 .declarations
@@ -799,15 +796,17 @@ mod tests {
         table.set("aaa".into(), SymbolId(2));
         table.set("__default".into(), SymbolId(3));
         let keys = sort_keys(&table);
+        // "__" (0x5F 0x5F) sorts before "aaa" (0x61): byte order, the same
+        // order the Go driver's (canonical, raw) sort produces.
         assert_eq!(
             keys.iter().map(|k| canonical_name_owned(k)).collect::<Vec<_>>(),
-            vec!["aaa", "__default", "__default", "zzz"]
+            vec!["__default", "__default", "aaa", "zzz"]
         );
         // Tie between the internal "\xFEdefault" and the user "__default":
-        // the RAW forms break the tie identically on both ports (the
-        // internal prefix byte sorts after '_' on both).
-        assert_eq!(keys[2].as_str(), "__default");
-        assert_eq!(keys[3].as_str(), "\u{FE}default");
+        // the RAW forms break the tie identically on both ports ('_'
+        // 0x5F sorts before both the Go "\xFE" byte and the port's C3 BE).
+        assert_eq!(keys[0].as_str(), "__default");
+        assert_eq!(keys[1].as_str(), "\u{FE}default");
     }
 
     // ── (d) end-to-end: bind a fixture and check the emitted line's shape ──

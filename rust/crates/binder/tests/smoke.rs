@@ -268,3 +268,60 @@ fn node_ambient_flag_visible() {
     }
     assert!(found);
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// The `.symbols` twin's binder fixes (M4, SPEC §8 — found by the twin over
+// the conformance corpus; both reproduce Go's observable symbol output).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn multiple_export_default_binds_without_nil_type_panic() {
+    // conformance/externalModules/multipleExportDefault1.ts shape. The
+    // duplicate-default conflict branch reads `ast.NodeIsMissing(node.Type())`
+    // (binder.go declareSymbolEx); Go's node.Type() is NIL for the second
+    // `export default { ... }` (an ExportAssignment), and NodeIsMissing
+    // treats nil as missing. The port's type_of dispatch returns
+    // NodeId::NONE for the nil — the fixed site maps it to "missing"
+    // instead of dereferencing the arena (NodeId::NONE is foreign to it).
+    let (sf, result) = bind(
+        "export default function Foo() {}\n\
+         export default { uhoh: \"another default\" };\n",
+    );
+    let result = result.expect("bind produced a result");
+    // Both defaults declared (module symbol + two "default" symbols).
+    assert!(result.symbol_count >= 3, "symbol_count {}", result.symbol_count);
+    // The conflict is reported on both declarations.
+    assert_eq!(sf.payload().bind_diagnostics.len(), 2);
+    // The second default is the ExportAssignment's symbol ("default" with
+    // PROPERTY|OBJECT_LITERAL-ish flags), still bound despite the error.
+    let default_count = result
+        .symbols
+        .iter()
+        .filter(|s| s.name == "default")
+        .count();
+    assert_eq!(default_count, 2);
+}
+
+#[test]
+fn jsx_namespaced_attribute_gets_namespaced_symbol_name() {
+    // conformance/jsx/tsxNamespacedAttributeName1.tsx shape. A JSX
+    // attribute with a namespaced name (`a:b={1}`) declares a symbol whose
+    // name is Go's `name.Text()` for KindJsxNamespacedName:
+    // `namespace.Text() + ":" + name.Text()` (ast.go Text()'s
+    // KindJsxNamespacedName arm — mirrored by ast_shims::
+    // jsx_namespaced_name_text; the ast crate's node_text panics on the
+    // kind, so the binder shims the arm).
+    let mut sf = parse_source_file(
+        Default::default(),
+        "const a = <svg:path a:b={1}></svg:path>;\n",
+        ScriptKind::TSX,
+    );
+    let result = bind_source_file(&mut sf).expect("bind produced a result");
+    let mut namespaced: Vec<String> = Vec::new();
+    for symbol in &result.symbols {
+        if symbol.name.contains(':') {
+            namespaced.push(symbol.name.clone());
+        }
+    }
+    assert_eq!(namespaced, vec!["a:b".to_string()], "namespaced attribute symbol name");
+}

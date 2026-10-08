@@ -505,8 +505,19 @@ impl<'f> Binder<'f> {
                         } else {
                             self.create_diagnostic_for_node(declaration_name, message, &[])
                         };
-                        let is_missing_type = node_data::type_of(&*self.file, node)
-                            .is_some_and(|t| node_is_missing(self.file.node(t)));
+                        // Go: `ast.NodeIsMissing(node.Type())`. Go's node.Type()
+                        // returns nil for an ExportAssignment (`export default
+                        // <expr>`), and NodeIsMissing treats nil as missing.
+                        // PORT: the port's type_of dispatch returns the
+                        // payload's non-Option `type_` field, which is
+                        // NodeId::NONE for Go's nil — and payloads without a
+                        // type slot read None (Go's nil interface). Both map to
+                        // "missing" here instead of dereferencing the arena
+                        // (NodeId::NONE is foreign to the arena's node()).
+                        let is_missing_type = match node_data::type_of(&*self.file, node) {
+                            Some(t) if !t.is_none() => node_is_missing(self.file.node(t)),
+                            _ => true,
+                        };
                         if is_type_alias_declaration(self.file.node(node))
                             && is_missing_type
                             && has_syntactic_modifier(self.file.node(node), ModifierFlags::EXPORT)
@@ -631,7 +642,9 @@ impl<'f> Binder<'f> {
             if is_property_name_literal(self.file.node(name))
                 || tsc_ast::is_jsx_namespaced_name(self.file.node(name))
             {
-                return node_text(&*self.file, name).to_string();
+                // Go: `return name.Text()` — the KindJsxNamespacedName arm
+                // of Text() is mirrored by the shim (see its PORT note).
+                return crate::ast_shims::jsx_namespaced_name_text(&*self.file, name);
             }
             if self.file.node(name).kind == Kind::ComputedPropertyName {
                 let name_expression =

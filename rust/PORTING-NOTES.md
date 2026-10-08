@@ -862,3 +862,96 @@ TestCustomConditionsNullOverride asserts nil).
   resolver-matrix, resolvereact resolver-matrix + tsconfig-matrix,
   showconfig packages/typescript/tsconfig.json); whole-repo sweep
   `showconfig --corpus .` (28 configs) — ZERO divergences (was 1).
+
+## M4 Wave E — the `.symbols` parity twin (bench-harness symbols_seam, go-driver, two binder fixes)
+
+Closes the M4 gate's last open item (SPEC §8 M4: "`.symbols`-style output
+for conformance corpus matches Go"): a new `symbols` subcommand on BOTH
+drivers — `go-bench symbols --corpus <dir> [--fuzz <dir>]` /
+`tsc-bench symbols --corpus <dir> [--fuzz <dir>]` — parse + bind
+(`binder.BindSourceFile`, the entry the binder tests drive) + walk the
+binder's symbol graph + dump per-file symbol tables as NDJSON. `diff` is
+the verdict.
+
+**Canonical walk (the ordering choice)**: Go's `SymbolTable` maps iterate
+RANDOMLY and the port's `OrderedMap`s iterate in insertion order — neither
+is a shared concept, so the canonical record order is a walk BOTH drivers
+implement identically: AST pre-order (`ForEachChild` — proven identical by
+the `dump` twin) visiting each node's Locals, then the node's Symbol, then
+its LocalSymbol, then children; from each discovered symbol its Members
+table, then its Exports table (canonical-key order); the file's
+GlobalExports close the walk. This union is exactly Go binder.go's own
+reachability contract ("not all symbols end up in tables" —
+`bindAnonymousDeclaration`'s module symbol, type-literal symbols,
+duplicate-identifier scratch symbols, the CJS `exports` property are
+node-attached only). Canonical ids are encounter order; `parent` resolves
+to the parent's canonical id.
+
+**Canonical names/keys (the Go baseline-emitter ordering mirrored)**: Go's
+`InternalSymbolNamePrefix` is the single byte 0xFE; the port models it as
+U+00FE (UTF-8 C3 BE) — raw name BYTES differ between the ports, so the
+twin canonicalizes every name/key through Go's own baseline
+sanitization (`ast.EscapeInternalSymbolName`: leading internal prefix →
+"__"; the same escape the `.symbols`/`.types` baselines rely on — the Go
+port's baselines sanitize internal names precisely because \xFE bytes are
+baseline-hostile) and sorts table keys by (canonical form, raw form).
+Latent port hazard, PORT-noted in the twin: a user identifier literally
+starting with "þ" would collide with the port's U+00FE prefix
+representation (Go's 0xFE byte is invalid UTF-8 and cannot appear in a
+scanned identifier); no corpus file contains "þ".
+
+**Record format** (fields both sides emit identically; Go-only/transient
+fields — CheckFlags, ExportSymbol, lazy symbol/node ids — dropped from
+BOTH sides per the fallback rule):
+`{"file":...,"ok":true,"alloc":<binder SymbolCount>,"symbols":<record
+count>,"sym":[{"id":i,"name":"...","flags":"<%08x u32>","kind":<first
+declaration kind ordinal, -1>,"parent":<canonical id>|null,
+"declarations":["<kind>:<pos>",...],"exports":N,"members":M,
+"valueDeclaration":"<kind>:<pos>"|null},...],"diag":[<bind diagnostics,
+dump-line shape>],"shape_hash":"<FNV-1a 64 over the fold; vectors in
+symbols_seam tests>"}`. Parse/bind panics emit `ok:false` lines instead of
+aborting (the binder gate proves the corpus panic-free; any ok:false IS a
+finding). Corpus walk = the binder gate's rule (every extension with a
+known scriptKind binds — .js/.mjs/.json included — not just dump's bench
+extensions), `--fuzz` indexes `go test fuzz v1` seeds like the gate's
+sweep.
+
+**Two real binder divergences found by the twin (fixed mirroring Go,
+tests added to crates/binder/tests/smoke.rs)**:
+- binder.rs `declare_symbol_ex` (Go binder.go declareSymbolEx's
+  `ast.NodeIsMissing(node.Type())`): Go's `node.Type()` is nil for an
+  ExportAssignment (`export default <expr>`), and `NodeIsMissing` treats
+  nil as missing; the port's `node_data::type_of` returns `NodeId::NONE`
+  for the payload's non-Option field and the old
+  `.is_some_and(|t| node_is_missing(self.file.node(t)))` dereferenced the
+  arena (panic: NodeId::NONE is foreign). Fixed to map nil/NONE/absent →
+  missing. 40 conformance files (all export-default/export-equals
+  conflicts) hit this.
+- ast_shims.rs `jsx_namespaced_name_text` (Go ast.go `Node.Text()`'s
+  KindJsxNamespacedName arm `namespace + ":" + name`): the ast crate's
+  `node_text` does not carry the arm (panics "Unhandled case in
+  Node.Text: KindJsxNamespacedName"), reached through
+  `get_declaration_name`'s `IsPropertyNameLiteral || IsJsxNamespacedName`
+  branch for JSX attributes (`a:b={1}`). Shimmed in the binder crate
+  (ast crate out of wave scope); dedup candidate — fold into
+  `node_text` when the utilities.go wave lands. 3 conformance .tsx files.
+
+One further divergence surfaced on the fixtures corpus
+(`typescript/Herebyfile.mjs`: Go +25 JSDoc-@typedef-derived symbols) that
+is NOT binder-side: the parser's `reparseTags` (reparser.go) was an
+in-flight no-op stub at HEAD — the JSDoc reparser port (parser crate,
+separate wave) landed mid-task and closed it; the final in-tree run is
+byte-identical including that file.
+
+**Validation** (local, CARGO_TARGET_DIR=/tmp/tsrs-sym):
+`tsc-bench symbols` vs `go-bench symbols` byte-identical (diff empty) on
+the binder-gate corpus — `tsc/testdata/fixtures` +
+`tsc/internal/parser/testdata/fuzz/FuzzParser` (176 files: 166 fixtures
+all extensions + 10 fuzz seeds) — and the FULL conformance sweep
+`tsc/testdata/tests/cases/conformance` (5,935 files; 5,723 .ts + 211 .tsx
++ 1 .js; ~19.4 MB output); determinism double-runs byte-identical on both
+drivers/corpora; `cargo test -p bench-harness -p tsc-binder` green (24 +
+15 + gate, incl. hand-verified FNV-1a vectors for the new fold);
+`cargo clippy -p bench-harness -p tsc-binder --all-targets` zero warnings
+in both crates; `go vet ./rust/bench/go-driver` clean; dump/showconfig/
+resolvereact quick regression (fixtures matrix) still byte-identical.

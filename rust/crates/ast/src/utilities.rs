@@ -518,10 +518,7 @@ fn find_clone_in_node(
             }
             false
         });
-        match next {
-            Some(child) => node = child,
-            None => return None,
-        }
+        node = next?;
     }
 }
 

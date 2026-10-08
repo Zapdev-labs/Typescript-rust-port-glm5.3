@@ -98,7 +98,7 @@ fn tag_name_of(store: &dyn NodeStore, tag: NodeId) -> NodeId {
 
 /// Go: `func (n *Node) CommentList() *NodeList` — narrowed to the JSDoc kinds
 /// the reparse paths read.
-fn comment_list_of<'s>(store: &'s dyn NodeStore, tag: NodeId) -> Option<&'s NodeList> {
+fn comment_list_of(store: &dyn NodeStore, tag: NodeId) -> Option<&NodeList> {
     let n = store.node(tag);
     match &n.data {
         NodeData::JSDoc(d) => d.comment.as_ref(),
@@ -147,8 +147,8 @@ fn class_name_of(store: &dyn NodeStore, tag: NodeId) -> NodeId {
 ///
 /// Go: `fun.Parameters()` — the parameter slice (empty when the list is
 /// absent, mirroring Go's nil slice).
-fn parameters_of<'s>(store: &'s dyn NodeStore, fun: NodeId) -> &'s [NodeId] {
-    fn list<'s>(parameters: &'s Option<NodeList>) -> &'s [NodeId] {
+fn parameters_of(store: &dyn NodeStore, fun: NodeId) -> &[NodeId] {
+    fn list(parameters: &Option<NodeList>) -> &[NodeId] {
         parameters.as_ref().map(|l| &l.nodes[..]).unwrap_or(&[])
     }
     match &store.node(fun).data {
@@ -165,7 +165,7 @@ fn parameters_of<'s>(store: &'s dyn NodeStore, fun: NodeId) -> &'s [NodeId] {
 }
 
 /// Go: `fun.ParameterList()` (`.Loc`) — the parameters NodeList itself.
-fn fun_parameter_list<'s>(store: &'s dyn NodeStore, fun: NodeId) -> Option<&'s NodeList> {
+fn fun_parameter_list(store: &dyn NodeStore, fun: NodeId) -> Option<&NodeList> {
     match &store.node(fun).data {
         NodeData::FunctionDeclaration(d) => d.parameters.as_ref(),
         NodeData::MethodDeclaration(d) => d.parameters.as_ref(),
@@ -180,7 +180,7 @@ fn fun_parameter_list<'s>(store: &'s dyn NodeStore, fun: NodeId) -> Option<&'s N
 }
 
 /// Go: `fun.TypeParameterList()` (the FunctionLikeData arm).
-fn fun_type_parameter_list<'s>(store: &'s dyn NodeStore, fun: NodeId) -> Option<&'s NodeList> {
+fn fun_type_parameter_list(store: &dyn NodeStore, fun: NodeId) -> Option<&NodeList> {
     match &store.node(fun).data {
         NodeData::FunctionDeclaration(d) => d.type_parameters.as_ref(),
         NodeData::MethodDeclaration(d) => d.type_parameters.as_ref(),
@@ -384,10 +384,7 @@ fn is_class_like(node: &tsc_ast::Node) -> bool {
 }
 
 /// Go: `class.HeritageClauses` field read (getClassLikeData payload).
-fn class_like_heritage_clauses<'s>(
-    store: &'s dyn NodeStore,
-    parent: NodeId,
-) -> Option<&'s NodeList> {
+fn class_like_heritage_clauses(store: &dyn NodeStore, parent: NodeId) -> Option<&NodeList> {
     match &store.node(parent).data {
         NodeData::ClassDeclaration(d) => d.heritage_clauses.as_ref(),
         NodeData::ClassExpression(d) => d.heritage_clauses.as_ref(),
@@ -903,10 +900,11 @@ impl<'a, 'f> Parser<'a, 'f> {
                 };
                 // Skip sub-property parameters (e.g., @param x.y) - these have QualifiedNames
                 // and describe properties of a parent parameter, not standalone parameters.
-                if {
+                let name_is_qualified = {
                     let s = self.factory.store();
                     is_qualified_name(s.node(name))
-                } {
+                };
+                if name_is_qualified {
                     continue;
                 }
                 let mut dot_dot_dot_token: Option<NodeId> = None;
@@ -1223,8 +1221,7 @@ impl<'a, 'f> Parser<'a, 'f> {
                 .map(|l| l.nodes.to_vec())
                 .unwrap_or_default();
             for &tp in template_type_parameters.iter() {
-                let reparse: NodeId;
-                if constraint != NodeId::NONE && first_type_parameter {
+                let reparse: NodeId = if constraint != NodeId::NONE && first_type_parameter {
                     let (tp_modifiers, tp_name, tp_default_type) = {
                         let s = self.factory.store();
                         let n = s.node(tp);
@@ -1249,12 +1246,11 @@ impl<'a, 'f> Parser<'a, 'f> {
                         cloned_default,
                     );
                     self.finish_reparsed_node(type_parameter, tp);
-                    reparse = type_parameter;
+                    type_parameter
                 } else {
-                    reparse = self
-                        .add_deep_clone_reparse(Some(tp))
-                        .expect("DeepCloneReparse preserves the node");
-                }
+                    self.add_deep_clone_reparse(Some(tp))
+                        .expect("DeepCloneReparse preserves the node")
+                };
                 type_parameters.get_or_insert_with(Vec::new).push(reparse);
                 first_type_parameter = false;
             }
@@ -1344,11 +1340,11 @@ impl<'a, 'f> Parser<'a, 'f> {
                     }
                     Kind::ReturnStatement | Kind::ParenthesizedExpression => {
                         let parent_expression = self.node_expression(parent);
-                        if parent_expression.is_some() && te_type.is_some() {
-                            let cloned = self.add_deep_clone_reparse(te_type);
+                        if let (Some(pe), Some(te)) = (parent_expression, te_type) {
+                            let cloned = self.add_deep_clone_reparse(Some(te));
                             let cast = self.make_new_cast(
                                 cloned.expect("type expression present"),
-                                parent_expression.expect("expression present"),
+                                pe,
                                 /*isAssertion:*/ true,
                             );
                             set_expression(self.factory.store(), parent, cast);
@@ -1426,11 +1422,11 @@ impl<'a, 'f> Parser<'a, 'f> {
                                     .expect("VariableDeclaration data")
                                     .initializer
                             };
-                            if initializer.is_some() && te_type.is_some() {
-                                let cloned = self.add_deep_clone_reparse(te_type);
+                            if let (Some(init), Some(te)) = (initializer, te_type) {
+                                let cloned = self.add_deep_clone_reparse(Some(te));
                                 let cast = self.make_new_cast(
                                     cloned.expect("type expression present"),
-                                    initializer.expect("initializer present"),
+                                    init,
                                     /*isAssertion:*/ false,
                                 );
                                 set_initializer(self.factory.store(), declaration, Some(cast));
@@ -1444,11 +1440,11 @@ impl<'a, 'f> Parser<'a, 'f> {
                     | Kind::PropertyDeclaration
                     | Kind::PropertyAssignment => {
                         let initializer = self.node_initializer(parent);
-                        if initializer.is_some() && te_type.is_some() {
-                            let cloned = self.add_deep_clone_reparse(te_type);
+                        if let (Some(init), Some(te)) = (initializer, te_type) {
+                            let cloned = self.add_deep_clone_reparse(Some(te));
                             let cast = self.make_new_cast(
                                 cloned.expect("type expression present"),
-                                initializer.expect("initializer present"),
+                                init,
                                 /*isAssertion:*/ false,
                             );
                             set_initializer(self.factory.store(), parent, Some(cast));
@@ -1463,11 +1459,11 @@ impl<'a, 'f> Parser<'a, 'f> {
                                 .expect("ShorthandPropertyAssignment data")
                                 .object_assignment_initializer
                         };
-                        if object_assignment_initializer.is_some() && te_type.is_some() {
-                            let cloned = self.add_deep_clone_reparse(te_type);
+                        if let (Some(init), Some(te)) = (object_assignment_initializer, te_type) {
+                            let cloned = self.add_deep_clone_reparse(Some(te));
                             let cast = self.make_new_cast(
                                 cloned.expect("type expression present"),
-                                object_assignment_initializer.expect("initializer present"),
+                                init,
                                 /*isAssertion:*/ false,
                             );
                             {
@@ -1486,11 +1482,11 @@ impl<'a, 'f> Parser<'a, 'f> {
                     | Kind::ParenthesizedExpression
                     | Kind::ExportAssignment => {
                         let parent_expression = self.node_expression(parent);
-                        if parent_expression.is_some() && te_type.is_some() {
-                            let cloned = self.add_deep_clone_reparse(te_type);
+                        if let (Some(pe), Some(te)) = (parent_expression, te_type) {
+                            let cloned = self.add_deep_clone_reparse(Some(te));
                             let cast = self.make_new_cast(
                                 cloned.expect("type expression present"),
-                                parent_expression.expect("expression present"),
+                                pe,
                                 /*isAssertion:*/ false,
                             );
                             set_expression(self.factory.store(), parent, cast);
@@ -1537,6 +1533,16 @@ impl<'a, 'f> Parser<'a, 'f> {
                 }
             }
             Kind::JSDocTemplateTag => {
+                // Go: the else-if chain discriminates on the parent's kind
+                // (function-like host / class declaration / class expression).
+                let parent_is_class_declaration = {
+                    let s = self.factory.store();
+                    s.node(parent).kind == Kind::ClassDeclaration
+                };
+                let parent_is_class_expression = {
+                    let s = self.factory.store();
+                    s.node(parent).kind == Kind::ClassExpression
+                };
                 if let Some(fun) = get_function_like_host(self.factory.store(), parent) {
                     let fun_has_no_type_parameters =
                         fun_type_parameter_list(self.factory.store(), fun).is_none();
@@ -1548,10 +1554,7 @@ impl<'a, 'f> Parser<'a, 'f> {
                         set_fun_type_parameters(self.factory.store(), fun, type_parameters);
                         self.finish_mutated_node(fun);
                     }
-                } else if {
-                    let s = self.factory.store();
-                    s.node(parent).kind == Kind::ClassDeclaration
-                } {
+                } else if parent_is_class_declaration {
                     let has_no_type_parameters = {
                         let s = self.factory.store();
                         s.node(parent)
@@ -1570,10 +1573,7 @@ impl<'a, 'f> Parser<'a, 'f> {
                         );
                         self.finish_mutated_node(parent);
                     }
-                } else if {
-                    let s = self.factory.store();
-                    s.node(parent).kind == Kind::ClassExpression
-                } {
+                } else if parent_is_class_expression {
                     let has_no_type_parameters = {
                         let s = self.factory.store();
                         s.node(parent)
@@ -1709,14 +1709,16 @@ impl<'a, 'f> Parser<'a, 'f> {
                     if fun_full_signature(self.factory.store(), fun).is_none() {
                         let fun_has_no_type = fun_type(self.factory.store(), fun).is_none();
                         let te = type_expression_of(self.factory.store(), tag);
-                        if fun_has_no_type && te.is_some() {
-                            let inner = {
-                                let s = self.factory.store();
-                                jsdoc_type_expression_type(s, te.expect("checked above"))
-                            };
-                            let cloned = self.add_deep_clone_reparse(Some(inner));
-                            set_fun_type(self.factory.store(), fun, cloned);
-                            self.finish_mutated_node(fun);
+                        if fun_has_no_type {
+                            if let Some(te) = te {
+                                let inner = {
+                                    let s = self.factory.store();
+                                    jsdoc_type_expression_type(s, te)
+                                };
+                                let cloned = self.add_deep_clone_reparse(Some(inner));
+                                set_fun_type(self.factory.store(), fun, cloned);
+                                self.finish_mutated_node(fun);
+                            }
                         }
                     }
                 }
@@ -1883,28 +1885,29 @@ impl<'a, 'f> Parser<'a, 'f> {
                                 .type_arguments
                                 .clone()
                         };
-                        if target_type_arguments.is_none() && source_type_arguments.is_some() {
-                            let source_type_arguments = source_type_arguments.expect("checked");
-                            let mut new_arguments: Vec<NodeId> =
-                                Vec::with_capacity(source_type_arguments.nodes.len());
-                            for &arg in source_type_arguments.nodes.iter() {
-                                new_arguments.push(
-                                    self.add_deep_clone_reparse(Some(arg))
-                                        .expect("DeepCloneReparse preserves the node"),
-                                );
-                            }
-                            let list =
-                                self.new_node_list(source_type_arguments.loc, new_arguments);
-                            {
-                                let s = self.factory.store();
-                                match &mut s.node_mut(target).data {
-                                    NodeData::ExpressionWithTypeArguments(d) => {
-                                        d.type_arguments = Some(list)
-                                    }
-                                    _ => panic!("not an ExpressionWithTypeArguments"),
+                        if target_type_arguments.is_none() {
+                            if let Some(source_type_arguments) = source_type_arguments {
+                                let mut new_arguments: Vec<NodeId> =
+                                    Vec::with_capacity(source_type_arguments.nodes.len());
+                                for &arg in source_type_arguments.nodes.iter() {
+                                    new_arguments.push(
+                                        self.add_deep_clone_reparse(Some(arg))
+                                            .expect("DeepCloneReparse preserves the node"),
+                                    );
                                 }
+                                let list =
+                                    self.new_node_list(source_type_arguments.loc, new_arguments);
+                                {
+                                    let s = self.factory.store();
+                                    match &mut s.node_mut(target).data {
+                                        NodeData::ExpressionWithTypeArguments(d) => {
+                                            d.type_arguments = Some(list)
+                                        }
+                                        _ => panic!("not an ExpressionWithTypeArguments"),
+                                    }
+                                }
+                                self.finish_mutated_node(target);
                             }
-                            self.finish_mutated_node(target);
                         }
                     }
                 }
@@ -2040,7 +2043,7 @@ impl<'a, 'f> Parser<'a, 'f> {
     /// declarations corresponding to a JSDoc dotted name. For example, given name
     /// "A.B.C" and a type alias for C, this produces:
     ///
-    ///	namespace A { namespace B { type C = ... } }
+    /// (Go comment, tab-indented there) namespace A { namespace B { type C = ... } }
     ///
     /// If the name is a simple identifier (not a ModuleDeclaration), it returns the
     /// statement as-is.
@@ -2055,10 +2058,11 @@ impl<'a, 'f> Parser<'a, 'f> {
         let Some(full_name) = full_name else {
             return statement;
         };
-        if !{
+        let full_name_is_namespace = {
             let s = self.factory.store();
             is_module_declaration(s.node(full_name))
-        } {
+        };
+        if !full_name_is_namespace {
             return statement;
         }
         // Recursively wrap from outermost to innermost. Inner namespaces always get an export modifier
@@ -2288,8 +2292,17 @@ fn get_function_like_host(store: &dyn NodeStore, host: NodeId) -> Option<NodeId>
                 .expect("PropertyDeclaration data")
                 .initializer;
         }
-        Kind::ExportAssignment | Kind::ReturnStatement => {
+        Kind::ExportAssignment => {
             fun = Some(expression_of_statement(store, host));
+        }
+        // Go: `fun = host.Expression()` — a valueless `return` yields nil,
+        // which the skip/IsFunctionLike chain below treats as no host.
+        Kind::ReturnStatement => {
+            fun = store
+                .node(host)
+                .as_return_statement()
+                .expect("ReturnStatement data")
+                .expression;
         }
         Kind::ExpressionStatement => {
             let expression = expression_of_statement(store, host);
@@ -2304,13 +2317,13 @@ fn get_function_like_host(store: &dyn NodeStore, host: NodeId) -> Option<NodeId>
     None
 }
 
-/// Go: `host.Expression()` for the ExportAssignment/ReturnStatement/
-/// ExpressionStatement arms of getFunctionLikeHost.
+/// Go: `host.Expression()` for the ExportAssignment/ExpressionStatement arms
+/// of getFunctionLikeHost (both carry a non-optional expression; the
+/// ReturnStatement arm reads its optional payload directly).
 fn expression_of_statement(store: &dyn NodeStore, host: NodeId) -> NodeId {
     let n = store.node(host);
     match &n.data {
         NodeData::ExportAssignment(d) => d.expression,
-        NodeData::ReturnStatement(d) => d.expression.expect("ReturnStatement expression"),
         NodeData::ExpressionStatement(d) => d.expression,
         _ => panic!("Unhandled case in Node.Expression: {}", n.kind_string()),
     }

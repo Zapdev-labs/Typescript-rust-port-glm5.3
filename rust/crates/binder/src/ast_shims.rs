@@ -79,6 +79,28 @@ pub fn node_text(store: &dyn NodeStore, node: NodeId) -> &str {
     tsc_ast::node_text(store, node)
 }
 
+/// Go: the `KindJsxNamespacedName` arm of `(*Node).Text()` (ast.go) —
+/// `namespace.Text() + ":" + name.Text()`; every other kind falls through
+/// to the ast crate's `node_text` (the ported Text() arms).
+///
+/// PORT: the ast crate's `node_text` does not yet carry the JSX-namespaced
+/// arm (its `Unhandled case in Node.Text: KindJsxNamespacedName` panic arm
+/// is hit through getDeclarationName's `IsPropertyNameLiteral ||
+/// IsJsxNamespacedName` branch); this shim mirrors the Go arm for the
+/// binder's call site (dedup candidate — fold into the ast crate's
+/// node_text when the utilities.go wave lands).
+pub fn jsx_namespaced_name_text(store: &dyn NodeStore, node: NodeId) -> String {
+    let (namespace, name) = match &store.node(node).data {
+        NodeData::JsxNamespacedName(d) => (d.namespace, d.name),
+        _ => {
+            return tsc_ast::node_text(store, node).to_string();
+        }
+    };
+    let namespace_text = tsc_ast::node_text(store, namespace);
+    let name_text = tsc_ast::node_text(store, name);
+    format!("{namespace_text}:{name_text}")
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Assignment expressions (utilities.go:112-227)
 // ────────────────────────────────────────────────────────────────────────────

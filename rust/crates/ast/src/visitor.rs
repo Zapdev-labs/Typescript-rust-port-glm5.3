@@ -300,8 +300,18 @@ pub trait NodeVisitor {
     /// Go: `func (v *NodeVisitor) VisitNode(node *Node) *Node` — SyntaxList
     /// results with exactly one child are lifted to that child; both Go
     /// panics are preserved.
+    ///
+    /// PORT (reparser wave): Go's nil node passes through untouched
+    /// (`visitNode(nil)` → nil). The generated per-struct `visit_each_child`
+    /// code hands the `NodeId::NONE` sentinel to `visit_node` for Go-nil
+    /// fields (non-`Option` `NodeId` payload fields, e.g.
+    /// `PropertySignatureDeclaration.type_`), so the sentinel is treated as
+    /// nil here instead of being resolved through the arena.
     fn visit_node_core(&mut self, node: Option<NodeId>) -> Option<NodeId> {
         let id = node?;
+        if id == NodeId::NONE {
+            return None;
+        }
         let visited = self.visit(id)?;
         if self.store().node(visited).kind == Kind::SyntaxList {
             let children = {
