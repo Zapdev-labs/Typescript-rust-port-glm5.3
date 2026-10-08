@@ -16,6 +16,7 @@ tsc-debug = { path = "../debug" }
 tsc-diagnostics = { path = "../diagnostics" }
 tsc-jsnum = { path = "../jsnum" }
 tsc-scanner = { path = "../scanner" }
+tsc-stringutil = { path = "../stringutil" } # Go relater.go: CombineSurrogatePairs/DecodeJSStringRune (template-literal inference)
 
 [dev-dependencies]
 tsc-parser = { path = "../parser" }

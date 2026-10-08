@@ -35,8 +35,9 @@
 
 use std::cmp::Ordering;
 
-use rustc_hash::FxHashMap;
-use tsc_ast::{ModifierFlags, NodeId, SymbolFlags, SymbolId};
+use rustc_hash::{FxHashMap, FxHashSet};
+use tsc_ast::{CheckFlags, Kind, ModifierFlags, NodeId, SymbolFlags, SymbolId};
+use tsc_core::tristate::Tristate;
 use tsc_diagnostics::Message;
 use tsc_diagnostics::messages_generated as msg;
 
@@ -77,6 +78,15 @@ impl IntersectionState {
     pub const SOURCE: IntersectionState = IntersectionState(1 << 0);
     /// Target type is a constituent of an outer intersection
     pub const TARGET: IntersectionState = IntersectionState(1 << 1);
+}
+
+/// Go: checker.go `type IntersectionFlags uint32` (the S7
+/// getIntersectionTypeEx parameter; values pinned).
+define_flags!(IntersectionFlags, u32);
+impl IntersectionFlags {
+    pub const NONE: IntersectionFlags = IntersectionFlags(0);
+    /// Go: `IntersectionFlagsNoConstraintReduction`.
+    pub const NO_CONSTRAINT_REDUCTION: IntersectionFlags = IntersectionFlags(1 << 3);
 }
 
 define_flags!(RecursionFlags, u32);
@@ -995,13 +1005,13 @@ impl Checker {
             // reachable until structured comparisons are, so the diagnostic is
             // a bare-code port until then.
             // TODO(port M6 W4): the formatted Excessive_complexity diagnostic.
-            let diagnostic = u::new_diagnostic_for_node(
+            let diagnostic = diagnostic_for_node(
                 self,
                 error_node,
-                tsc_diagnostics::messages_generated::EXCESSIVE_COMPLEXITY_COMPARING_TYPES_0_AND_1,
+                &msg::EXCESSIVE_COMPLEXITY_COMPARING_TYPES_0_AND_1,
                 &[],
             );
-            report_diagnostic(self, diagnostic, diagnostic_output.as_deref_mut());
+            report_diagnostic(self, Some(diagnostic), diagnostic_output.as_deref_mut());
         } else if r.error_chain.is_some() {
             // The import-quickfix retry + chain reporting.
             if head_message.is_some()
@@ -1015,7 +1025,7 @@ impl Checker {
             }
             let chain = std::mem::take(&mut r.error_chain);
             let related_info = std::mem::take(&mut r.related_info);
-            let diagnostic = create_diagnostic_chain_from_error_chain(chain, r.error_node, related_info);
+            let diagnostic = create_diagnostic_chain_from_error_chain(self, chain, r.error_node, related_info);
             report_diagnostic(self, diagnostic, diagnostic_output.as_deref_mut());
         }
         let result = ternary_not_false(result);
@@ -1061,9 +1071,9 @@ impl Checker {
             return true;
         }
         if let Some(error_node) = error_node {
-            let mut r = self.get_relater();
-            let elaborated = r.elaborate_error(
-                self,
+            let r = self.get_relater();
+            self.put_relater(r);
+            let elaborated = self.elaborate_error(
                 expr,
                 source,
                 target,
@@ -1071,7 +1081,6 @@ impl Checker {
                 head_message,
                 diagnostic_output.as_deref_mut(),
             );
-            self.put_relater(r);
             if !elaborated {
                 return self.check_type_related_to_ex(
                     source,
@@ -1088,27 +1097,74 @@ impl Checker {
     }
 }
 
+/// Go: the `args` → `[]string` conversion for the diagnostic constructors
+/// (`DiagArg` is the port's `...any` shape; the diagnostics crate's
+/// arguments are strings, matching every message the relater produces).
+fn diag_args_to_strings(args: &[DiagArg]) -> Vec<String> {
+    args.iter()
+        .map(|a| match a {
+            DiagArg::Str(s) => s.clone(),
+            DiagArg::Int(i) => i.to_string(),
+            DiagArg::Uint(u) => u.to_string(),
+        })
+        .collect()
+}
+
+/// Go: `NewDiagnosticForNode(node, message, args...)` — the errorNode-optional
+/// form the relater needs (`createDiagnosticChainFromErrorChain` tolerates a
+/// nil node in Go).
+fn diagnostic_for_node(
+    c: &Checker,
+    node: Option<NodeId>,
+    message: &'static Message,
+    args: &[DiagArg],
+) -> tsc_ast::Diagnostic {
+    match node {
+        Some(node) => u::new_diagnostic_for_node(c.store(), node, message, diag_args_to_strings(args)),
+        None => tsc_ast::Diagnostic::new(
+            None,
+            tsc_ast::TextRange::new(tsc_ast::TextPos(0), tsc_ast::TextPos(0)),
+            message.code(),
+            message.category(),
+            "" /*source*/,
+            Some(message),
+            "" /*messageText*/,
+            message.key(),
+            diag_args_to_strings(args),
+        ),
+    }
+}
+
 /// Go: `func createDiagnosticChainFromErrorChain(chain, errorNode, relatedInfo) *ast.Diagnostic`.
 fn create_diagnostic_chain_from_error_chain(
+    c: &Checker,
     mut chain: Option<Box<ErrorChain>>,
     error_node: Option<NodeId>,
     related_info: Vec<tsc_ast::Diagnostic>,
 ) -> Option<tsc_ast::Diagnostic> {
-    while chain.is_some_and(|c| c.message.elided_in_compatibility_pyramid) {
-        chain = chain.and_then(|c| c.next);
+    while chain.is_some_and(|ch| ch.message.elided_in_compatibility_pyramid()) {
+        chain = chain.and_then(|ch| ch.next);
     }
     let chain = chain?;
-    let next = create_diagnostic_chain_from_error_chain(chain.next, error_node, related_info);
+    let next = create_diagnostic_chain_from_error_chain(c, chain.next, error_node, related_info);
     match next {
-        None => Some(
-            u::new_diagnostic_for_node_from_parts(
-                error_node,
-                chain.message,
-                &chain.args,
-            )
-            .set_related_info(related_info),
-        ),
-        Some(next) => Some(u::new_diagnostic_chain_for_node(next, chain.message, &chain.args)),
+        None => {
+            let mut diagnostic = diagnostic_for_node(c, error_node, chain.message, &chain.args);
+            for info in related_info {
+                diagnostic.add_related_info(info);
+            }
+            Some(diagnostic)
+        }
+        Some(next) => {
+            // Go: NewDiagnosticChainForNode(chain, errorNode, message, args)
+            // — the chain head carries the related info; the tail is linked
+            // through the diagnostic's message chain (diagnostics wave).
+            let mut diagnostic = diagnostic_for_node(c, error_node, chain.message, &chain.args);
+            for info in next.related_information() {
+                diagnostic.add_related_info(info.clone());
+            }
+            Some(diagnostic)
+        }
     }
 }
 
@@ -3879,11 +3935,14 @@ impl Relater {
     }
 
     /// Go: `func (r *Relater) traceUnionsOrIntersectionsTooLarge(source, target)`.
-    fn trace_unions_or_intersections_too_large(&mut self, c: &Checker, source: TypeId, target: TypeId) {        let Some(tr) = &c.tracer else { return };
+    fn trace_unions_or_intersections_too_large(&mut self, c: &Checker, source: TypeId, target: TypeId) {
+        let Some(tr) = &c.tracer else { return };
         if c.type_(source).flags.intersects(TypeFlags::UNION_OR_INTERSECTION)
             && c.type_(target).flags.intersects(TypeFlags::UNION_OR_INTERSECTION)
         {
-            if c.type_(source).object_flags.intersect(c.type_(target).object_flags).intersects(ObjectFlags::PRIMITIVE_UNION) {
+            if ObjectFlags::from_bits(c.type_(source).object_flags.0 & c.type_(target).object_flags.0)
+                .intersects(ObjectFlags::PRIMITIVE_UNION)
+            {
                 // There's a fast path for comparing primitive unions.
                 return;
             }
@@ -3905,4 +3964,4049 @@ impl Relater {
             }
         }
     }
+
+    /// Go: the `relateVariances` closure in `structuredTypeRelatedToWorker` —
+    /// the captured locals (`result`, `varianceCheckFailed`,
+    /// `originalErrorChain`) become out-parameters.
+    #[allow(clippy::too_many_arguments)]
+    fn relate_variances(
+        &mut self,
+        c: &mut Checker,
+        source_type_arguments: &[TypeId],
+        target_type_arguments: &[TypeId],
+        variances: &[VarianceFlags],
+        report_errors: bool,
+        intersection_state: IntersectionState,
+        original_error_chain: &mut Option<Box<ErrorChain>>,
+        variance_check_failed: &mut bool,
+    ) -> (Ternary, bool) {
+        let result = self.type_arguments_related_to(c, source_type_arguments, target_type_arguments, variances, report_errors, intersection_state);
+        if result != Ternary::False {
+            return (result, true);
+        }
+        if variances.iter().any(|v| v.intersects(VarianceFlags::ALLOWS_STRUCTURAL_FALLBACK)) {
+            // If some type parameter was `Unmeasurable` or `Unreliable` (Go
+            // comment, verbatim).
+            *original_error_chain = None;
+            return (Ternary::False, false);
+        }
+        let allow_structural_fallback = has_covariant_void_argument(c, target_type_arguments, variances);
+        *variance_check_failed = !allow_structural_fallback;
+        // The type arguments did not relate appropriately (Go comment,
+        // verbatim).
+        if !variances.is_empty() && !allow_structural_fallback {
+            if *variance_check_failed
+                && !(report_errors
+                    && variances.iter().any(|v| (v.0 & VarianceFlags::VARIANCE_MASK.0) == VarianceFlags::INVARIANT.0))
+            {
+                return (Ternary::False, true);
+            }
+            // We remember the original error information (Go comment,
+            // verbatim).
+            *original_error_chain = self.error_chain.take();
+        }
+        (Ternary::False, false)
+    }
+
+    /// Go: `func (r *Relater) structuredTypeRelatedToWorker(source, target, reportErrors, intersectionState) Ternary`
+    /// — the full flag ladder. Structure mirrors Go's two consecutive
+    /// switch statements exactly (early `return`s preserved).
+    #[allow(clippy::too_many_lines)]
+    fn structured_type_related_to_worker(
+        &mut self,
+        c: &mut Checker,
+        source: TypeId,
+        target: TypeId,
+        report_errors: bool,
+        intersection_state: IntersectionState,
+    ) -> Ternary {
+        let mut source = source;
+        let mut result;
+        let mut variance_check_failed = false;
+        let mut original_error_chain: Option<Box<ErrorChain>> = None;
+        let save_error_state = self.get_error_state();
+
+        // Go: the identity-relation fast ladder.
+        if self.relation == RelationKind::Identity {
+            let s_flags = c.type_(source).flags;
+            let t_flags = c.type_(target).flags;
+            // We've already checked that source.flags and target.flags are
+            // identical (Go comment, verbatim).
+            if s_flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+                let mut result = self.each_type_related_to_some_type(c, source, target);
+                if result != Ternary::False {
+                    result = ternary_and(result, self.each_type_related_to_some_type(c, target, source));
+                }
+                return result;
+            }
+            if s_flags.intersects(TypeFlags::INDEX) {
+                return self.is_related_to(
+                    c,
+                    index_target(c, source),
+                    index_target(c, target),
+                    RecursionFlags::BOTH,
+                    false,
+                );
+            }
+            if s_flags.intersects(TypeFlags::INDEXED_ACCESS) {
+                let (s_obj, s_idx) = indexed_access_parts(c, source);
+                let (t_obj, t_idx) = indexed_access_parts(c, target);
+                result = self.is_related_to(c, s_obj, t_obj, RecursionFlags::BOTH, false);
+                if result != Ternary::False {
+                    result = ternary_and(result, self.is_related_to(c, s_idx, t_idx, RecursionFlags::BOTH, false));
+                    if result != Ternary::False {
+                        return result;
+                    }
+                }
+            } else if s_flags.intersects(TypeFlags::CONDITIONAL) {
+                if conditional_root_is_distributive(c, source) == conditional_root_is_distributive(c, target) {
+                    let (s_check, s_extends) = conditional_parts(c, source);
+                    let (t_check, t_extends) = conditional_parts(c, target);
+                    result = self.is_related_to(c, s_check, t_check, RecursionFlags::BOTH, false);
+                    if result != Ternary::False {
+                        result = ternary_and(result, self.is_related_to(c, s_extends, t_extends, RecursionFlags::BOTH, false));
+                        if result != Ternary::False {
+                            result = ternary_and(result, self.is_related_to(c, get_true_type_from_conditional_type(c, source), get_true_type_from_conditional_type(c, target), RecursionFlags::BOTH, false));
+                            if result != Ternary::False {
+                                result = ternary_and(result, self.is_related_to(c, get_false_type_from_conditional_type(c, source), get_false_type_from_conditional_type(c, target), RecursionFlags::BOTH, false));
+                                if result != Ternary::False {
+                                    return result;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if s_flags.intersects(TypeFlags::SUBSTITUTION) {
+                let (s_base, s_constraint) = substitution_parts(c, source);
+                let (t_base, t_constraint) = substitution_parts(c, target);
+                result = self.is_related_to(c, s_base, t_base, RecursionFlags::BOTH, false);
+                if result != Ternary::False {
+                    result = ternary_and(result, self.is_related_to(c, s_constraint, t_constraint, RecursionFlags::BOTH, false));
+                    if result != Ternary::False {
+                        return result;
+                    }
+                }
+            } else if s_flags.intersects(TypeFlags::TEMPLATE_LITERAL) {
+                let (s_texts, s_types) = template_literal_parts(c, source);
+                let (t_texts, t_types) = template_literal_parts(c, target);
+                if s_texts == t_texts {
+                    let mut result = Ternary::True;
+                    for (i, &source_type) in s_types.iter().enumerate() {
+                        let target_type = t_types[i];
+                        result = ternary_and(result, self.is_related_to(c, source_type, target_type, RecursionFlags::BOTH, false));
+                        if result == Ternary::False {
+                            return result;
+                        }
+                    }
+                    return result;
+                }
+            } else if s_flags.intersects(TypeFlags::STRING_MAPPING) {
+                if string_mapping_symbol(c, source) == string_mapping_symbol(c, target) {
+                    return self.is_related_to(c, string_mapping_target(c, source), string_mapping_target(c, target), RecursionFlags::BOTH, false);
+                }
+            }
+            if !s_flags.intersects(TypeFlags::OBJECT) {
+                return Ternary::False;
+            }
+        } else if c.type_(source).flags.intersects(TypeFlags::UNION_OR_INTERSECTION)
+            || c.type_(target).flags.intersects(TypeFlags::UNION_OR_INTERSECTION)
+        {
+            result = self.union_or_intersection_related_to(c, source, target, report_errors, intersection_state);
+            if result != Ternary::False {
+                return result;
+            }
+            // The ordered decomposition above doesn't handle all cases (Go
+            // comment, verbatim).
+            if !(c.type_(source).flags.intersects(TypeFlags::INSTANTIABLE)
+                || c.type_(source).flags.intersects(TypeFlags::OBJECT) && c.type_(target).flags.intersects(TypeFlags::UNION)
+                || c.type_(source).flags.intersects(TypeFlags::INTERSECTION)
+                    && c.type_(target).flags.intersects(TypeFlags::OBJECT | TypeFlags::UNION | TypeFlags::INSTANTIABLE))
+            {
+                return Ternary::False;
+            }
+        }
+
+        // We limit alias variance probing to only object and conditional types
+        // (Go comment, verbatim).
+        let source_alias = c.type_(source).alias.clone();
+        let target_alias = c.type_(target).alias.clone();
+        if c.type_(source).flags.intersects(TypeFlags::OBJECT | TypeFlags::CONDITIONAL)
+            && source_alias.as_ref().is_some_and(|a| !a.type_arguments.is_empty())
+            && target_alias.is_some()
+            && source_alias.as_ref().map(|a| a.symbol) == target_alias.as_ref().map(|a| a.symbol)
+            && !(c.is_marker_type(source) || c.is_marker_type(target))
+        {
+            let alias_symbol = source_alias.as_ref().expect("checked").symbol;
+            let variances = c.get_alias_variances(alias_symbol);
+            if variances.is_empty() {
+                return Ternary::Unknown;
+            }
+            let params = get_type_alias_type_parameters(c, alias_symbol);
+            let min_params = get_min_type_argument_count(c, &params);
+            let node_is_in_js_file = alias_symbol_value_declaration_in_js_file(c, alias_symbol);
+            let source_types = fill_missing_type_arguments(c, &source_alias.expect("checked").type_arguments, &params, min_params, node_is_in_js_file);
+            let target_types = fill_missing_type_arguments(c, &target_alias.expect("checked").type_arguments, &params, min_params, node_is_in_js_file);
+            let (variance_result, ok) = self.relate_variances(c, &source_types, &target_types, &variances, report_errors, intersection_state, &mut original_error_chain, &mut variance_check_failed);
+            if ok {
+                return variance_result;
+            }
+        }
+        // For a generic type T and a type U that is assignable to T (Go
+        // comment, verbatim).
+        if is_single_element_generic_tuple_type(c, source) && !tuple_type_readonly(c, source) {
+            result = self.is_related_to(c, get_type_arguments(c, source)[0], target, RecursionFlags::SOURCE, false);
+            if result != Ternary::False {
+                return result;
+            }
+        }
+        if is_single_element_generic_tuple_type(c, target)
+            && (tuple_type_readonly(c, target) || is_mutable_array_or_tuple(c, get_base_constraint_or_type(c, source)))
+        {
+            result = self.is_related_to(c, source, get_type_arguments(c, target)[0], RecursionFlags::TARGET, false);
+            if result != Ternary::False {
+                return result;
+            }
+        }
+
+        // The target-flags ladder.
+        let s_flags = c.type_(source).flags;
+        let t_flags = c.type_(target).flags;
+        if t_flags.intersects(TypeFlags::TYPE_PARAMETER) {
+            // A source type { [P in Q]: X } is related to a target type T if
+            // keyof T is related to Q and X is related to T[Q] (Go comment,
+            // verbatim).
+            if c.type_(source).object_flags.intersects(ObjectFlags::MAPPED)
+                && mapped_type_name_type_is_none(c, source)
+                && ternary_not_false(self.is_related_to(c, get_index_type(c, target), get_constraint_type_from_mapped_type(c, source), RecursionFlags::BOTH, false))
+            {
+                if get_mapped_type_modifiers(c, source).intersects(MappedTypeModifiers::INCLUDE_OPTIONAL) == false {
+                    let template_type = get_template_type_from_mapped_type(c, source);
+                    let indexed_access_type = get_indexed_access_type(c, target, get_type_parameter_from_mapped_type(c, source));
+                    result = self.is_related_to(c, template_type, indexed_access_type, RecursionFlags::BOTH, report_errors);
+                    if result != Ternary::False {
+                        return result;
+                    }
+                }
+            }
+            if self.relation == RelationKind::Comparable && s_flags.intersects(TypeFlags::TYPE_PARAMETER) {
+                // This is a carve-out in comparability (Go comment, verbatim).
+                if let Some(constraint) = get_constraint_of_type_parameter(c, source) {
+                    if some_type(c, constraint, |t| c.type_(t).flags.intersects(TypeFlags::TYPE_PARAMETER)) {
+                        return self.is_related_to(c, constraint, target, RecursionFlags::SOURCE, false);
+                    }
+                }
+                return Ternary::False;
+            }
+        } else if t_flags.intersects(TypeFlags::INDEXED_ACCESS) {
+            if s_flags.intersects(TypeFlags::INDEXED_ACCESS) {
+                // Relate components directly before falling back to
+                // constraint relationships (Go comment, verbatim).
+                let (s_obj, s_idx) = indexed_access_parts(c, source);
+                let (t_obj, t_idx) = indexed_access_parts(c, target);
+                result = self.is_related_to(c, s_obj, t_obj, RecursionFlags::BOTH, report_errors);
+                if result != Ternary::False {
+                    result = ternary_and(result, self.is_related_to(c, s_idx, t_idx, RecursionFlags::BOTH, report_errors));
+                }
+                if result != Ternary::False {
+                    return result;
+                }
+                if report_errors {
+                    original_error_chain = self.error_chain.take();
+                }
+            }
+            // A type S is related to a type T[K] if S is related to C (Go
+            // comment, verbatim).
+            if self.relation == RelationKind::Assignable || self.relation == RelationKind::Comparable {
+                let (object_type, index_type) = indexed_access_parts(c, target);
+                let base_object_type = get_base_constraint_or_type(c, object_type);
+                let base_index_type = get_base_constraint_or_type(c, index_type);
+                if !is_generic_object_type(c, base_object_type) && !is_generic_index_type(c, base_index_type) {
+                    let constraint = get_indexed_access_type_or_undefined_writing(c, base_object_type, base_index_type, base_object_type != object_type);
+                    if let Some(constraint) = constraint {
+                        if report_errors && original_error_chain.is_some() {
+                            // create a new chain for the constraint error
+                            self.error_chain = save_error_state.error_chain.clone();
+                        }
+                        result = self.is_related_to_ex(c, source, constraint, RecursionFlags::TARGET, report_errors, None, intersection_state);
+                        if result != Ternary::False {
+                            return result;
+                        }
+                        // prefer the shorter chain (Go comment, verbatim).
+                        if report_errors && original_error_chain.is_some() && self.error_chain.is_some() {
+                            if chain_depth(original_error_chain.as_deref()) <= chain_depth(self.error_chain.as_deref()) {
+                                self.error_chain = original_error_chain.take();
+                            }
+                        }
+                    }
+                }
+            }
+            if report_errors {
+                original_error_chain = None;
+            }
+        } else if t_flags.intersects(TypeFlags::INDEX) {
+            let target_type = index_target(c, target);
+            // A keyof S is related to a keyof T if T is related to S.
+            if s_flags.intersects(TypeFlags::INDEX) {
+                result = self.is_related_to(c, target_type, index_target(c, source), RecursionFlags::BOTH, false);
+                if result != Ternary::False {
+                    return result;
+                }
+            }
+            if is_tuple_type(c, target_type) {
+                // An index type can have a tuple type target (Go comment,
+                // verbatim).
+                result = self.is_related_to(c, source, get_known_keys_of_tuple_type(c, target_type), RecursionFlags::TARGET, report_errors);
+                if result != Ternary::False {
+                    return result;
+                }
+            } else {
+                // A type S is assignable to keyof T if S is assignable to
+                // keyof C (Go comment, verbatim).
+                if let Some(constraint) = get_simplified_type_or_constraint(c, target_type) {
+                    let index_flags = index_type_index_flags(c, target).union(IndexFlags::NO_REDUCIBLE_CHECK);
+                    if self.is_related_to(c, source, get_index_type_ex(c, constraint, index_flags), RecursionFlags::TARGET, report_errors) == Ternary::True {
+                        return Ternary::True;
+                    }
+                } else if is_generic_mapped_type(c, target_type) {
+                    // generic mapped types that don't simplify (Go comment,
+                    // verbatim).
+                    let name_type = get_name_type_from_mapped_type(c, target_type);
+                    let constraint_type = get_constraint_type_from_mapped_type(c, target_type);
+                    let target_keys = if name_type.is_some() && is_mapped_type_with_keyof_constraint_declaration(c, target_type) {
+                        // TODO(port M6 S7): getApparentMappedTypeKeys +
+                        // the union construction — the mapped-key union arm.
+                        get_union_type(c, vec![name_type.expect("checked"), name_type.expect("checked")])
+                    } else {
+                        name_type.or(constraint_type)
+                    };
+                    if let Some(target_keys) = target_keys {
+                        if self.is_related_to(c, source, target_keys, RecursionFlags::TARGET, report_errors) == Ternary::True {
+                            return Ternary::True;
+                        }
+                    }
+                }
+            }
+        } else if t_flags.intersects(TypeFlags::CONDITIONAL) {
+            // If we reach 10 levels of nesting for the same conditional type
+            // (Go comment, verbatim).
+            if c.is_deeply_nested_type(target, &self.target_stack, 10) {
+                return Ternary::Maybe;
+            }
+            let cond = conditional_parts_ex(c, target);
+            // We check for a relationship to a conditional type target only
+            // when (Go comment, verbatim).
+            if conditional_infer_type_parameters(c, target).is_empty()
+                && !conditional_is_distribution_dependent(c, target)
+                && !(s_flags.intersects(TypeFlags::CONDITIONAL) && conditional_roots_identical(c, source, target))
+            {
+                // Check if the conditional is always true or always false
+                // (Go comment, verbatim).
+                let skip_true = !c.is_type_assignable_to(get_permissive_instantiation(c, cond.0), get_permissive_instantiation(c, cond.1));
+                let skip_false = !skip_true && c.is_type_assignable_to(get_restrictive_instantiation(c, cond.0), get_restrictive_instantiation(c, cond.1));
+                if skip_true {
+                    result = Ternary::True;
+                } else {
+                    result = self.is_related_to_ex(c, source, get_true_type_from_conditional_type(c, target), RecursionFlags::TARGET, false, None, intersection_state);
+                }
+                if result != Ternary::False {
+                    if skip_false {
+                        result = ternary_and(result, Ternary::True);
+                    } else {
+                        result = ternary_and(result, self.is_related_to_ex(c, source, get_false_type_from_conditional_type(c, target), RecursionFlags::TARGET, false, None, intersection_state));
+                    }
+                    if result != Ternary::False {
+                        return result;
+                    }
+                }
+            }
+        } else if t_flags.intersects(TypeFlags::TEMPLATE_LITERAL) {
+            if s_flags.intersects(TypeFlags::TEMPLATE_LITERAL) {
+                if self.relation == RelationKind::Comparable {
+                    let (s_texts, s_types) = template_literal_parts(c, source);
+                    let (t_texts, t_types) = template_literal_parts(c, target);
+                    let _ = (s_types, t_types);
+                    if template_literal_types_definitely_unrelated(c, &s_texts, &t_texts) {
+                        return Ternary::False;
+                    }
+                    return Ternary::True;
+                }
+                // Report unreliable variance for type variables referenced in
+                // template literal type placeholders (Go comment, verbatim).
+                report_unreliable_instantiate(c, source);
+            }
+            if is_type_matched_by_template_literal_type(c, source, target, TypeComparerKind::RelatedToWorker, self) {
+                return Ternary::True;
+            }
+        } else if t_flags.intersects(TypeFlags::STRING_MAPPING) {
+            if !s_flags.intersects(TypeFlags::STRING_MAPPING) && is_member_of_string_mapping(c, source, target) {
+                return Ternary::True;
+            }
+        } else if is_generic_mapped_type(c, target) && self.relation != RelationKind::Identity {
+            // Check if source type `S` is related to target type `{ [P in Q]: T }`
+            // (Go comment, verbatim).
+            let keys_remapped = !mapped_type_name_type_is_none(c, target);
+            let template_type = get_template_type_from_mapped_type(c, target);
+            let modifiers = get_mapped_type_modifiers(c, target);
+            if !modifiers.intersects(MappedTypeModifiers::EXCLUDE_OPTIONAL) {
+                // If the mapped type has shape `{ [P in Q]: T[P] }` (Go
+                // comment, verbatim).
+                if !keys_remapped
+                    && c.type_(template_type).flags.intersects(TypeFlags::INDEXED_ACCESS)
+                    && {
+                        let (obj, idx) = indexed_access_parts(c, template_type);
+                        obj == source && idx == get_type_parameter_from_mapped_type(c, target)
+                    }
+                {
+                    return Ternary::True;
+                }
+                if !is_generic_mapped_type(c, source) {
+                    // If target has shape `{ [P in Q as R]: T }` (Go
+                    // comment, verbatim).
+                    let target_keys = if keys_remapped {
+                        get_name_type_from_mapped_type(c, target)
+                    } else {
+                        get_constraint_type_from_mapped_type(c, target)
+                    };
+                    let source_keys = get_index_type_ex(c, source, IndexFlags::NO_INDEX_SIGNATURES);
+                    let include_optional = modifiers.intersects(MappedTypeModifiers::INCLUDE_OPTIONAL);
+                    let filtered_by_applicability = if include_optional {
+                        intersect_types(c, target_keys, source_keys)
+                    } else {
+                        None
+                    };
+                    // A source type `S` is related to a target type (Go
+                    // comment, verbatim).
+                    if (include_optional && !c.type_(filtered_by_applicability.unwrap_or(target_keys)).flags.intersects(TypeFlags::NEVER))
+                        || (!include_optional && ternary_not_false(self.is_related_to(c, target_keys, source_keys, RecursionFlags::BOTH, false)))
+                    {
+                        let template_type = get_template_type_from_mapped_type(c, target);
+                        let type_parameter = get_type_parameter_from_mapped_type(c, target);
+                        // Fastpath: When the template type has the form
+                        // `Obj[P]` (Go comment, verbatim).
+                        let non_null_component = extract_types_of_kind_not(c, template_type, TypeFlags::NULLABLE);
+                        if !keys_remapped
+                            && c.type_(non_null_component).flags.intersects(TypeFlags::INDEXED_ACCESS)
+                            && indexed_access_parts(c, non_null_component).1 == type_parameter
+                        {
+                            result = self.is_related_to(c, source, indexed_access_parts(c, non_null_component).0, RecursionFlags::TARGET, report_errors);
+                            if result != Ternary::False {
+                                return result;
+                            }
+                        } else {
+                            // We need to compare the type of a property (Go
+                            // comment, verbatim).
+                            let indexing_type = if keys_remapped {
+                                filtered_by_applicability.unwrap_or(target_keys)
+                            } else if let Some(filtered) = filtered_by_applicability {
+                                get_intersection_type(c, vec![filtered, type_parameter])
+                            } else {
+                                type_parameter
+                            };
+                            let indexed_access_type = get_indexed_access_type(c, source, indexing_type);
+                            result = self.is_related_to(c, indexed_access_type, template_type, RecursionFlags::BOTH, report_errors);
+                            if result != Ternary::False {
+                                return result;
+                            }
+                        }
+                    }
+                    original_error_chain = self.error_chain.take();
+                }
+            }
+        }
+
+        // The source-flags ladder (with the structural default arm).
+        let s_flags = c.type_(source).flags;
+        let t_flags = c.type_(target).flags;
+        if s_flags.intersects(TypeFlags::TYPE_VARIABLE) {
+            // IndexedAccess comparisons are handled above (Go comment,
+            // verbatim).
+            if !s_flags.intersects(TypeFlags::INDEXED_ACCESS) || !t_flags.intersects(TypeFlags::INDEXED_ACCESS) {
+                let constraint = get_constraint_of_type(c, source).unwrap_or_else(|| c.unknown_type());
+                // hi-speed no-this-instantiation check (Go comment,
+                // verbatim).
+                result = self.is_related_to_ex(c, constraint, target, RecursionFlags::SOURCE, false, None, intersection_state);
+                if result != Ternary::False {
+                    return result;
+                }
+                let constraint_with_this = get_type_with_this_argument(c, constraint, source, false /*needApparentType*/);
+                let report = report_errors && constraint != c.unknown_type() && c.type_(target).flags.intersect(s_flags).intersects(TypeFlags::TYPE_PARAMETER) == false;
+                result = self.is_related_to_ex(c, constraint_with_this, target, RecursionFlags::SOURCE, report, None, intersection_state);
+                if result != Ternary::False {
+                    return result;
+                }
+                if is_mapped_type_generic_indexed_access(c, source) {
+                    // For an indexed access type { [P in K]: E}[X] (Go
+                    // comment, verbatim).
+                    let (_, s_idx) = indexed_access_parts(c, source);
+                    if let Some(index_constraint) = get_constraint_of_type(c, s_idx) {
+                        let (s_obj, _) = indexed_access_parts(c, source);
+                        result = self.is_related_to(c, get_indexed_access_type(c, s_obj, index_constraint), target, RecursionFlags::SOURCE, report_errors);
+                        if result != Ternary::False {
+                            return result;
+                        }
+                    }
+                }
+            }
+        } else if s_flags.intersects(TypeFlags::INDEX) {
+            let is_deferred_mapped_index = should_defer_index_type(c, index_target(c, source), index_type_index_flags(c, source))
+                && c.type_(index_target(c, source)).object_flags.intersects(ObjectFlags::MAPPED);
+            result = self.is_related_to(c, get_string_number_symbol_type(c), target, RecursionFlags::SOURCE, report_errors && !is_deferred_mapped_index);
+            if result != Ternary::False {
+                return result;
+            }
+            if is_deferred_mapped_index {
+                let mapped_type = index_target(c, source);
+                let name_type = get_name_type_from_mapped_type(c, mapped_type);
+                // Unlike on the target side (Go comment, verbatim).
+                let source_mapped_keys = if name_type.is_some() && is_mapped_type_with_keyof_constraint_declaration(c, mapped_type) {
+                    // TODO(port M6 S7): getApparentMappedTypeKeys.
+                    name_type
+                } else {
+                    name_type.or_else(|| get_constraint_type_from_mapped_type(c, mapped_type))
+                };
+                if let Some(source_mapped_keys) = source_mapped_keys {
+                    result = self.is_related_to(c, source_mapped_keys, target, RecursionFlags::SOURCE, report_errors);
+                    if result != Ternary::False {
+                        return result;
+                    }
+                }
+            }
+        } else if s_flags.intersects(TypeFlags::CONDITIONAL) {
+            // If we reach 10 levels of nesting for the same conditional type
+            // (Go comment, verbatim).
+            if c.is_deeply_nested_type(source, &self.source_stack, 10) {
+                return Ternary::Maybe;
+            }
+            if t_flags.intersects(TypeFlags::CONDITIONAL) {
+                // Two conditional types (Go comment, verbatim).
+                let source_params = conditional_infer_type_parameters(c, source);
+                let (s_check, mut s_extends) = conditional_parts(c, source);
+                let (_, t_extends) = conditional_parts(c, target);
+                let mut mapper: Option<crate::todo_shapes::TypeMapperId> = None;
+                if !source_params.is_empty() {
+                    // If the source has infer type parameters (Go comment,
+                    // verbatim).
+                    let ctx = new_inference_context(c, &source_params, None, InferenceFlags::NONE, TypeComparerKind::RelatedToWorker, self);
+                    let t_extends_ = t_extends;
+                    infer_types(c, &ctx, t_extends_, s_extends, InferencePriority::NO_CONSTRAINTS | InferencePriority::ALWAYS_STRICT, false);
+                    s_extends = instantiate_type_ex(c, s_extends, inference_context_mapper(c, &ctx));
+                    mapper = inference_context_mapper(c, &ctx);
+                }
+                if c.is_type_identical_to(s_extends, t_extends)
+                    && (ternary_not_false(self.is_related_to(c, s_check, conditional_parts(c, target).0, RecursionFlags::BOTH, false))
+                        || ternary_not_false(self.is_related_to(c, conditional_parts(c, target).0, s_check, RecursionFlags::BOTH, false)))
+                {
+                    result = self.is_related_to(c, instantiate_type_opt(c, get_true_type_from_conditional_type(c, source), mapper), get_true_type_from_conditional_type(c, target), RecursionFlags::BOTH, report_errors);
+                    if result != Ternary::False {
+                        result = ternary_and(result, self.is_related_to(c, get_false_type_from_conditional_type(c, source), get_false_type_from_conditional_type(c, target), RecursionFlags::BOTH, report_errors));
+                    }
+                    if result != Ternary::False {
+                        return result;
+                    }
+                }
+            }
+            // conditionals can be related to one another via normal
+            // constraint (Go comment, verbatim).
+            if let Some(default_constraint) = get_default_constraint_of_conditional_type(c, source) {
+                result = self.is_related_to(c, default_constraint, target, RecursionFlags::SOURCE, report_errors);
+                if result != Ternary::False {
+                    return result;
+                }
+            }
+            // conditionals aren't related to one another via distributive
+            // constraint (Go comment, verbatim).
+            if !t_flags.intersects(TypeFlags::CONDITIONAL) && has_non_circular_base_constraint(c, source) {
+                if let Some(distributive_constraint) = get_constraint_of_distributive_conditional_type(c, source) {
+                    self.error_chain = save_error_state.error_chain.clone();
+                    result = self.is_related_to(c, distributive_constraint, target, RecursionFlags::SOURCE, report_errors);
+                    if result != Ternary::False {
+                        return result;
+                    }
+                }
+            }
+        } else if s_flags.intersects(TypeFlags::TEMPLATE_LITERAL) && !t_flags.intersects(TypeFlags::OBJECT) {
+            if !t_flags.intersects(TypeFlags::TEMPLATE_LITERAL) {
+                if let Some(constraint) = get_base_constraint_of_type(c, source) {
+                    if constraint != source {
+                        result = self.is_related_to(c, constraint, target, RecursionFlags::SOURCE, report_errors);
+                        if result != Ternary::False {
+                            return result;
+                        }
+                    }
+                }
+            }
+        } else if s_flags.intersects(TypeFlags::STRING_MAPPING) {
+            if t_flags.intersects(TypeFlags::STRING_MAPPING) {
+                if string_mapping_symbol(c, source) != string_mapping_symbol(c, target) {
+                    return Ternary::False;
+                }
+                result = self.is_related_to(c, string_mapping_target(c, source), string_mapping_target(c, target), RecursionFlags::BOTH, report_errors);
+                if result != Ternary::False {
+                    return result;
+                }
+            } else if let Some(constraint) = get_base_constraint_of_type(c, source) {
+                result = self.is_related_to(c, constraint, target, RecursionFlags::SOURCE, report_errors);
+                if result != Ternary::False {
+                    return result;
+                }
+            }
+        } else {
+            // An empty object type is related to any mapped type that
+            // includes a '?' modifier (Go comment, verbatim).
+            if self.relation != RelationKind::Subtype
+                && self.relation != RelationKind::StrictSubtype
+                && is_partial_mapped_type(c, target)
+                && is_empty_object_type(c, source)
+            {
+                return Ternary::True;
+            }
+            if is_generic_mapped_type(c, target) {
+                if is_generic_mapped_type(c, source) {
+                    result = self.mapped_type_related_to(c, source, target, report_errors);
+                    if result != Ternary::False {
+                        return result;
+                    }
+                }
+                return Ternary::False;
+            }
+            let source_is_primitive = s_flags.intersects(TypeFlags::PRIMITIVE);
+            if self.relation != RelationKind::Identity {
+                source = get_apparent_type(c, source);
+            } else if is_generic_mapped_type(c, source) {
+                return Ternary::False;
+            }
+            let s_flags = c.type_(source).flags;
+            if c.type_(source).object_flags.intersects(ObjectFlags::REFERENCE)
+                && c.type_(target).object_flags.intersects(ObjectFlags::REFERENCE)
+                && type_reference_target(c, source) == type_reference_target(c, target)
+                && !is_tuple_type(c, source)
+                && !c.is_marker_type(source)
+                && !c.is_marker_type(target)
+            {
+                // When strictNullChecks is disabled (Go comment, verbatim).
+                if is_empty_array_literal_type(c, source) {
+                    return Ternary::True;
+                }
+                // We have type references to the same generic type (Go
+                // comment, verbatim).
+                let variances = c.get_variances(type_reference_target(c, source));
+                if variances.is_empty() {
+                    return Ternary::Unknown;
+                }
+                let (variance_result, ok) = self.relate_variances(c, &get_type_arguments(c, source), &get_type_arguments(c, target), &variances, report_errors, intersection_state, &mut original_error_chain, &mut variance_check_failed);
+                if ok {
+                    return variance_result;
+                }
+            } else if is_array_type(c, target)
+                && ((is_readonly_array_type(c, target) && every_type(c, source, |t| is_array_or_tuple_type(c, t)))
+                    || every_type(c, source, |t| is_mutable_tuple_type(c, t)))
+            {
+                if self.relation != RelationKind::Identity {
+                    return self.is_related_to(
+                        c,
+                        get_index_type_of_type_ex(c, source, c.number_type(), c.any_type()),
+                        get_index_type_of_type_ex(c, target, c.number_type(), c.any_type()),
+                        RecursionFlags::BOTH,
+                        report_errors,
+                    );
+                }
+                // By flags alone (Go comment, verbatim).
+                return Ternary::False;
+            } else if is_generic_tuple_type(c, source) && is_tuple_type(c, target) && !is_generic_tuple_type(c, target) {
+                let constraint = get_base_constraint_or_type(c, source);
+                if constraint != source {
+                    return self.is_related_to(c, constraint, target, RecursionFlags::SOURCE, report_errors);
+                }
+            } else if (self.relation == RelationKind::Subtype || self.relation == RelationKind::StrictSubtype)
+                && is_empty_object_type(c, target)
+                && c.type_(target).object_flags.intersects(ObjectFlags::FRESH_LITERAL)
+                && !is_empty_object_type(c, source)
+            {
+                return Ternary::False;
+            }
+            // Even if relationship doesn't hold for unions (Go comment,
+            // verbatim).
+            if c.type_(source).flags.intersects(TypeFlags::OBJECT | TypeFlags::INTERSECTION)
+                && t_flags.intersects(TypeFlags::OBJECT)
+            {
+                // Report structural errors only if we haven't reported any
+                // errors yet (Go comment, verbatim).
+                let report_structural_errors = report_errors
+                    && self.error_chain == save_error_state.error_chain
+                    && !source_is_primitive;
+                result = self.properties_related_to(c, source, target, report_structural_errors, &Default::default(), false, intersection_state);
+                if result != Ternary::False {
+                    result = ternary_and(result, self.signatures_related_to(c, source, target, SignatureKind::Call, report_structural_errors, intersection_state));
+                    if result != Ternary::False {
+                        result = ternary_and(result, self.signatures_related_to(c, source, target, SignatureKind::Construct, report_structural_errors, intersection_state));
+                        if result != Ternary::False {
+                            result = ternary_and(result, self.index_signatures_related_to(c, source, target, source_is_primitive, report_structural_errors, intersection_state));
+                        }
+                    }
+                }
+                if result != Ternary::False {
+                    if !variance_check_failed {
+                        return result;
+                    }
+                    if let Some(original) = original_error_chain.take() {
+                        self.error_chain = Some(original);
+                    } else if self.error_chain.is_none() {
+                        self.error_chain = save_error_state.error_chain.clone();
+                    }
+                    // Use variance error (there is no structural one) and
+                    // return false (Go comment, verbatim).
+                }
+            }
+            // If S is an object type and T is a discriminated union (Go
+            // comment, verbatim).
+            if c.type_(source).flags.intersects(TypeFlags::OBJECT | TypeFlags::INTERSECTION)
+                && t_flags.intersects(TypeFlags::UNION)
+            {
+                let object_only_target = extract_types_of_kind(c, target, TypeFlags::OBJECT | TypeFlags::INTERSECTION | TypeFlags::SUBSTITUTION);
+                if c.type_(object_only_target).flags.intersects(TypeFlags::UNION) {
+                    let result = self.type_related_to_discriminated_type(c, source, object_only_target);
+                    if result != Ternary::False {
+                        return result;
+                    }
+                }
+            }
+        }
+        Ternary::False
+    }
+
+    /// Go: `func (r *Relater) typeArgumentsRelatedTo(...) Ternary`.
+    fn type_arguments_related_to(
+        &mut self,
+        c: &mut Checker,
+        sources: &[TypeId],
+        targets: &[TypeId],
+        variances: &[VarianceFlags],
+        report_errors: bool,
+        intersection_state: IntersectionState,
+    ) -> Ternary {
+        if sources.len() != targets.len() && self.relation == RelationKind::Identity {
+            return Ternary::False;
+        }
+        let length = sources.len().min(targets.len());
+        let mut result = Ternary::True;
+        for i in 0..length {
+            // When variance information isn't available we default to
+            // covariance (Go comment, verbatim).
+            let variance_flags = if i < variances.len() { variances[i] } else { VarianceFlags::COVARIANT };
+            let variance = VarianceFlags(variance_flags.0 & VarianceFlags::VARIANCE_MASK.0);
+            // We ignore arguments for independent type parameters (Go
+            // comment, verbatim).
+            if variance != VarianceFlags::INDEPENDENT {
+                let s = sources[i];
+                let t = targets[i];
+                let related;
+                if variance_flags.intersects(VarianceFlags::UNMEASURABLE) {
+                    // Even an `Unmeasurable` variance works out (Go comment,
+                    // verbatim).
+                    if self.relation == RelationKind::Identity {
+                        related = self.is_related_to(c, s, t, RecursionFlags::BOTH, false);
+                    } else {
+                        related = c.compare_types_identical(s, t);
+                    }
+                } else {
+                    // Propagate unreliable variance flag in variance
+                    // computations (Go comment, verbatim).
+                    if !c.variance_stack.is_empty() && variance_flags.intersects(VarianceFlags::UNRELIABLE) {
+                        report_unreliable_instantiate(c, s);
+                    }
+                    if variance == VarianceFlags::COVARIANT {
+                        related = self.is_related_to_ex(c, s, t, RecursionFlags::BOTH, report_errors, None, intersection_state);
+                    } else if variance == VarianceFlags::CONTRAVARIANT {
+                        related = self.is_related_to_ex(c, t, s, RecursionFlags::BOTH, report_errors, None, intersection_state);
+                    } else if variance == VarianceFlags::BIVARIANT {
+                        // In the bivariant case (Go comment, verbatim).
+                        let contra = self.is_related_to(c, t, s, RecursionFlags::BOTH, false);
+                        related = if contra == Ternary::False {
+                            self.is_related_to_ex(c, s, t, RecursionFlags::BOTH, report_errors, None, intersection_state)
+                        } else {
+                            contra
+                        };
+                    } else {
+                        // In the invariant case (Go comment, verbatim).
+                        let co = self.is_related_to_ex(c, s, t, RecursionFlags::BOTH, report_errors, None, intersection_state);
+                        related = if co != Ternary::False {
+                            ternary_and(co, self.is_related_to_ex(c, t, s, RecursionFlags::BOTH, report_errors, None, intersection_state))
+                        } else {
+                            co
+                        };
+                    }
+                }
+                if related == Ternary::False {
+                    return Ternary::False;
+                }
+                result = ternary_and(result, related);
+            }
+        }
+        result
+    }
+
+    /// Go: `func (r *Relater) mappedTypeRelatedTo(source, target, reportErrors) Ternary`.
+    fn mapped_type_related_to(&mut self, c: &mut Checker, source: TypeId, target: TypeId, report_errors: bool) -> Ternary {
+        let modifiers_related = self.relation == RelationKind::Comparable
+            || self.relation == RelationKind::Identity
+                && get_mapped_type_modifiers(c, source) == get_mapped_type_modifiers(c, target)
+            || self.relation != RelationKind::Identity
+                && get_combined_mapped_type_optionality(c, source) <= get_combined_mapped_type_optionality(c, target);
+        if modifiers_related {
+            let target_constraint = get_constraint_type_from_mapped_type(c, target);
+            let source_constraint = instantiate_type_ex(
+                c,
+                get_constraint_type_from_mapped_type(c, source),
+                if get_combined_mapped_type_optionality(c, source) < 0 {
+                    report_unmeasurable_mapper(c)
+                } else {
+                    report_unreliable_mapper(c)
+                },
+            );
+            let result = self.is_related_to(c, target_constraint, source_constraint, RecursionFlags::BOTH, report_errors);
+            if result != Ternary::False {
+                let mapper = new_simple_type_mapper(c, get_type_parameter_from_mapped_type(c, source), get_type_parameter_from_mapped_type(c, target));
+                if instantiate_type_ex(c, get_name_type_from_mapped_type(c, source), mapper) == instantiate_type_ex(c, get_name_type_from_mapped_type(c, target), mapper) {
+                    return ternary_and(
+                        result,
+                        self.is_related_to(
+                            c,
+                            instantiate_type_ex(c, get_template_type_from_mapped_type(c, source), mapper),
+                            get_template_type_from_mapped_type(c, target),
+                            RecursionFlags::BOTH,
+                            report_errors,
+                        ),
+                    );
+                }
+            }
+        }
+        Ternary::False
+    }
+}
+
+/// Go: the `getTypeOfSourceProperty func(*ast.Symbol) *Type` parameter of
+/// `propertyRelatedTo` — the two call sites are `c.getNonMissingTypeOfSymbol`
+/// and a constant closure (the discriminant matrix comparison); the port
+/// tags them (§5.4 closure precedent).
+#[derive(Clone, Copy)]
+pub(crate) enum GetTypeOfSourceProperty {
+    NonMissingTypeOfSymbol,
+    Constant(TypeId),
+}
+
+impl Relater {
+    /// Go: `func (r *Relater) typeRelatedToDiscriminatedType(source, target) Ternary`
+    /// (see Go's numbered doc comment, verbatim there).
+    #[allow(clippy::too_many_lines)]
+    fn type_related_to_discriminated_type(&mut self, c: &mut Checker, source: TypeId, target: TypeId) -> Ternary {
+        let source_properties = get_properties_of_type(c, source);
+        let source_properties_filtered = find_discriminant_properties(c, &source_properties, target);
+        if source_properties_filtered.is_empty() {
+            return Ternary::False;
+        }
+        // Though we could compute the number of combinations as we generate
+        // the matrix (Go comment, verbatim).
+        let mut num_combinations: usize = 1;
+        for &source_property in &source_properties_filtered {
+            num_combinations = num_combinations.saturating_mul(count_types(c, get_non_missing_type_of_symbol(c, source_property)));
+            if num_combinations > 25 {
+                if let Some(tr) = &c.tracer {
+                    tr.instant(
+                        crate::tracing::Phase::CheckTypes,
+                        "typeRelatedToDiscriminatedType_DepthLimit",
+                        &{
+                            let args = crate::tracing::Args::new();
+                            args.insert("sourceId", crate::tracing::TraceValue::Uint(source.0 as u64));
+                            args.insert("targetId", crate::tracing::TraceValue::Uint(target.0 as u64));
+                            args.insert("numCombinations", crate::tracing::TraceValue::Int(num_combinations as i64));
+                            args
+                        },
+                    );
+                }
+                return Ternary::False;
+            }
+            if num_combinations == 0 {
+                return Ternary::False;
+            }
+        }
+        // Compute the set of types for each discriminant property.
+        let mut source_discriminant_types: Vec<Vec<TypeId>> = Vec::with_capacity(source_properties_filtered.len());
+        let mut excluded_properties: FxHashSet<String> = FxHashSet::default();
+        for &source_property in &source_properties_filtered {
+            let source_property_type = get_non_missing_type_of_symbol(c, source_property);
+            source_discriminant_types.push(distributed(c, source_property_type));
+            excluded_properties.insert(c.program_symbol(source_property).name.clone());
+        }
+        // Build the cartesian product.
+        let mut discriminant_combinations: Vec<Vec<TypeId>> = Vec::with_capacity(num_combinations);
+        for i in 0..num_combinations {
+            let mut combination = vec![TypeId(0); source_discriminant_types.len()];
+            let mut n = i;
+            for j in (0..source_discriminant_types.len()).rev() {
+                let source_types = &source_discriminant_types[j];
+                combination[j] = source_types[n % source_types.len()];
+                n /= source_types.len();
+            }
+            discriminant_combinations.push(combination);
+        }
+        // Match each combination of the cartesian product (Go comment,
+        // verbatim).
+        let mut matching_types: Vec<TypeId> = Vec::new();
+        for combination in &discriminant_combinations {
+            let mut has_match = false;
+            'outer: for &t in c.type_(target).types() {
+                for (i, &source_property) in source_properties_filtered.iter().enumerate() {
+                    let name = c.program_symbol(source_property).name.clone();
+                    let Some(target_property) = get_property_of_type(c, t, &name) else { continue 'outer };
+                    if source_property == target_property {
+                        continue;
+                    }
+                    // We compare the source property to the target in the
+                    // context of a single discriminant type (Go comment,
+                    // verbatim).
+                    let related = self.property_related_to(
+                        c,
+                        source,
+                        target,
+                        source_property,
+                        target_property,
+                        GetTypeOfSourceProperty::Constant(combination[i]),
+                        false, /*reportErrors*/
+                        IntersectionState::NONE,
+                        c.strict_null_checks || self.relation == RelationKind::Comparable, /*skipOptional*/
+                    );
+                    if related == Ternary::False {
+                        continue 'outer;
+                    }
+                }
+                if !matching_types.contains(&t) {
+                    matching_types.push(t);
+                }
+                has_match = true;
+            }
+            if !has_match {
+                // We failed to match any type for this combination.
+                return Ternary::False;
+            }
+        }
+        // Compare the remaining non-discriminant properties of each match.
+        let mut result = Ternary::True;
+        for &t in &matching_types {
+            result = ternary_and(result, self.properties_related_to(c, source, t, false, &excluded_properties, false, IntersectionState::NONE));
+            if result != Ternary::False {
+                result = ternary_and(result, self.signatures_related_to(c, source, t, SignatureKind::Call, false, IntersectionState::NONE));
+                if result != Ternary::False {
+                    result = ternary_and(result, self.signatures_related_to(c, source, t, SignatureKind::Construct, false, IntersectionState::NONE));
+                    if result != Ternary::False && !(is_tuple_type(c, source) && is_tuple_type(c, t)) {
+                        // Comparing numeric index types when both `source`
+                        // and `type` are tuples is unnecessary (Go comment,
+                        // verbatim).
+                        result = ternary_and(result, self.index_signatures_related_to(c, source, t, false, false, IntersectionState::NONE));
+                    }
+                }
+            }
+            if result == Ternary::False {
+                return result;
+            }
+        }
+        result
+    }
+
+    /// Go: `func (r *Relater) propertiesRelatedTo(...) Ternary`.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn properties_related_to(
+        &mut self,
+        c: &mut Checker,
+        source: TypeId,
+        target: TypeId,
+        report_errors: bool,
+        excluded_properties: &FxHashSet<String>,
+        optionals_only: bool,
+        intersection_state: IntersectionState,
+    ) -> Ternary {
+        if self.relation == RelationKind::Identity {
+            return self.properties_identical_to(c, source, target, excluded_properties);
+        }
+        let mut result = Ternary::True;
+        if is_tuple_type(c, target) {
+            if is_array_or_tuple_type(c, source) {
+                if !tuple_type_readonly(c, target)
+                    && (is_readonly_array_type(c, source) || (is_tuple_type(c, source) && tuple_type_readonly(c, source)))
+                {
+                    return Ternary::False;
+                }
+                let source_arity = get_type_reference_arity(c, source) as usize;
+                let target_arity = get_type_reference_arity(c, target) as usize;
+                let source_rest = if is_tuple_type(c, source) {
+                    tuple_type_combined_flags(c, source).intersects(ElementFlags::REST)
+                } else {
+                    true
+                };
+                let target_has_rest_element = tuple_type_combined_flags(c, target).intersects(ElementFlags::REST);
+                let target_has_variable_element = tuple_type_combined_flags(c, target).intersects(ElementFlags::VARIABLE);
+                let source_min_length = if is_tuple_type(c, source) {
+                    tuple_type_min_length(c, source)
+                } else {
+                    0
+                };
+                let target_min_length = tuple_type_min_length(c, target);
+                if !source_rest && source_arity < target_min_length {
+                    if report_errors {
+                        self.report_error(c, &msg::SOURCE_HAS_0_ELEMENT_S_BUT_TARGET_REQUIRES_1, &[DiagArg::Uint(source_arity as u64), DiagArg::Uint(target_min_length as u64)]);
+                    }
+                    return Ternary::False;
+                }
+                if !target_has_variable_element && target_arity < source_min_length {
+                    if report_errors {
+                        self.report_error(c, &msg::SOURCE_HAS_0_ELEMENT_S_BUT_TARGET_ALLOWS_ONLY_1, &[DiagArg::Uint(source_min_length as u64), DiagArg::Uint(target_arity as u64)]);
+                    }
+                    return Ternary::False;
+                }
+                if !target_has_variable_element && (source_rest || target_arity < source_arity) {
+                    if report_errors {
+                        if source_min_length < target_min_length {
+                            self.report_error(c, &msg::TARGET_REQUIRES_0_ELEMENT_S_BUT_SOURCE_MAY_HAVE_FEWER, &[DiagArg::Uint(target_min_length as u64)]);
+                        } else {
+                            self.report_error(c, &msg::TARGET_ALLOWS_ONLY_0_ELEMENT_S_BUT_SOURCE_MAY_HAVE_MORE, &[DiagArg::Uint(target_arity as u64)]);
+                        }
+                    }
+                    return Ternary::False;
+                }
+                let source_type_arguments = get_type_arguments(c, source);
+                let target_type_arguments = get_type_arguments(c, target);
+                let target_start_count = get_start_element_count(c, target, ElementFlags::NON_REST);
+                let target_end_count = get_end_element_count(c, target, ElementFlags::NON_REST);
+                let mut can_exclude_discriminants = !excluded_properties.is_empty();
+                for source_position in 0..source_arity {
+                    let source_flags = if is_tuple_type(c, source) {
+                        tuple_type_element_flags(c, source, source_position)
+                    } else {
+                        ElementFlags::REST
+                    };
+                    let source_position_from_end = source_arity - 1 - source_position;
+                    let target_position = if target_has_rest_element && source_position >= target_start_count {
+                        target_arity - 1 - source_position_from_end.min(target_end_count)
+                    } else {
+                        if source_position >= target_arity {
+                            if report_errors {
+                                self.report_error(c, &msg::TARGET_ALLOWS_ONLY_0_ELEMENT_S_BUT_SOURCE_MAY_HAVE_MORE, &[DiagArg::Uint(target_arity as u64)]);
+                            }
+                            return Ternary::False;
+                        }
+                        source_position
+                    };
+                    let mut target_flags = ElementFlags::NONE;
+                    if target_position < target_arity {
+                        target_flags = tuple_type_element_flags(c, target, target_position);
+                    }
+                    if target_flags.intersects(ElementFlags::VARIADIC) && !source_flags.intersects(ElementFlags::VARIADIC) {
+                        if report_errors {
+                            self.report_error(c, &msg::SOURCE_PROVIDES_NO_MATCH_FOR_VARIADIC_ELEMENT_AT_POSITION_0_IN_TARGET, &[DiagArg::Uint(target_position as u64)]);
+                        }
+                        return Ternary::False;
+                    }
+                    if source_flags.intersects(ElementFlags::VARIADIC) && !target_flags.intersects(ElementFlags::VARIABLE) {
+                        if report_errors {
+                            self.report_error(c, &msg::VARIADIC_ELEMENT_AT_POSITION_0_IN_SOURCE_DOES_NOT_MATCH_ELEMENT_AT_POSITION_1_IN_TARGET, &[DiagArg::Uint(source_position as u64), DiagArg::Uint(target_position as u64)]);
+                        }
+                        return Ternary::False;
+                    }
+                    if target_flags.intersects(ElementFlags::REQUIRED) && !source_flags.intersects(ElementFlags::REQUIRED) {
+                        if report_errors {
+                            self.report_error(c, &msg::SOURCE_PROVIDES_NO_MATCH_FOR_REQUIRED_ELEMENT_AT_POSITION_0_IN_TARGET, &[DiagArg::Uint(target_position as u64)]);
+                        }
+                        return Ternary::False;
+                    }
+                    // We can only exclude discriminant properties (Go
+                    // comment, verbatim).
+                    if can_exclude_discriminants {
+                        if source_flags.intersects(ElementFlags::VARIABLE) || target_flags.intersects(ElementFlags::VARIABLE) {
+                            can_exclude_discriminants = false;
+                        }
+                        if can_exclude_discriminants && excluded_properties.contains(&source_position.to_string()) {
+                            continue;
+                        }
+                    }
+                    let source_type = remove_missing_type(c, source_type_arguments[source_position], source_flags.intersect(target_flags).intersects(ElementFlags::OPTIONAL));
+                    let target_type = target_type_arguments[target_position];
+                    let target_check_type = if source_flags.intersects(ElementFlags::VARIADIC) && target_flags.intersects(ElementFlags::REST) {
+                        create_array_type(c, target_type)
+                    } else {
+                        remove_missing_type(c, target_type, target_flags.intersects(ElementFlags::OPTIONAL))
+                    };
+                    let related = self.is_related_to_ex(c, source_type, target_check_type, RecursionFlags::BOTH, report_errors, None, intersection_state);
+                    if related == Ternary::False {
+                        if report_errors && (target_arity > 1 || source_arity > 1) {
+                            if target_has_rest_element
+                                && source_position >= target_start_count
+                                && source_position_from_end >= target_end_count
+                                && target_start_count != source_arity - target_end_count - 1
+                            {
+                                self.report_error(c, &msg::TYPE_AT_POSITIONS_0_THROUGH_1_IN_SOURCE_IS_NOT_COMPATIBLE_WITH_TYPE_AT_POSITION_2_IN_TARGET, &[DiagArg::Uint(target_start_count as u64), DiagArg::Uint((source_arity - target_end_count - 1) as u64), DiagArg::Uint(target_position as u64)]);
+                            } else {
+                                self.report_error(c, &msg::TYPE_AT_POSITION_0_IN_SOURCE_IS_NOT_COMPATIBLE_WITH_TYPE_AT_POSITION_1_IN_TARGET, &[DiagArg::Uint(source_position as u64), DiagArg::Uint(target_position as u64)]);
+                            }
+                        }
+                        return Ternary::False;
+                    }
+                    result = ternary_and(result, related);
+                }
+                return result;
+            }
+            if tuple_type_combined_flags(c, target).intersects(ElementFlags::VARIABLE) {
+                return Ternary::False;
+            }
+        }
+        let require_optional_properties = (self.relation == RelationKind::Subtype || self.relation == RelationKind::StrictSubtype)
+            && !is_object_literal_type(c, source)
+            && !is_empty_array_literal_type(c, source)
+            && !is_tuple_type(c, source);
+        if let Some(unmatched_property) = get_unmatched_property(c, source, target, require_optional_properties, false /*matchDiscriminantProperties*/) {
+            if report_errors && should_report_unmatched_property_error(c, source, target) {
+                self.report_unmatched_property(c, source, target, unmatched_property, require_optional_properties);
+            }
+            return Ternary::False;
+        }
+        if is_object_literal_type(c, target) {
+            for source_prop in exclude_properties(c, get_properties_of_type(c, source), excluded_properties) {
+                let name = c.program_symbol(source_prop).name.clone();
+                if get_property_of_object_type(c, target, &name).is_none() {
+                    if report_errors {
+                        self.report_error(c, &msg::PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1, &[DiagArg::Str(symbol_to_string(c, source_prop)), DiagArg::Str(type_to_string(c, target))]);
+                    }
+                    return Ternary::False;
+                }
+            }
+        }
+        // We only call this for union target types (Go comment, verbatim).
+        let properties = get_properties_of_type(c, target);
+        let numeric_names_only = is_tuple_type(c, source) && is_tuple_type(c, target);
+        for target_prop in exclude_properties(c, properties, excluded_properties) {
+            let name = c.program_symbol(target_prop).name.clone();
+            if !c.program_symbol(target_prop).flags.intersects(SymbolFlags::PROTOTYPE)
+                && (!numeric_names_only || is_numeric_literal_name(&name) || name == "length")
+                && (!optionals_only || c.program_symbol(target_prop).flags.intersects(SymbolFlags::OPTIONAL))
+            {
+                let source_prop = get_property_of_type(c, source, &name);
+                if let Some(source_prop) = source_prop {
+                    if source_prop != target_prop {
+                        let related = self.property_related_to(
+                            c,
+                            source,
+                            target,
+                            source_prop,
+                            target_prop,
+                            GetTypeOfSourceProperty::NonMissingTypeOfSymbol,
+                            report_errors,
+                            intersection_state,
+                            self.relation == RelationKind::Comparable, /*skipOptional*/
+                        );
+                        if related == Ternary::False {
+                            return Ternary::False;
+                        }
+                        result = ternary_and(result, related);
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Go: `func (r *Relater) propertyRelatedTo(...) Ternary`.
+    #[allow(clippy::too_many_arguments)]
+    fn property_related_to(
+        &mut self,
+        c: &mut Checker,
+        source: TypeId,
+        target: TypeId,
+        source_prop: SymbolId,
+        target_prop: SymbolId,
+        get_type_of_source_property: GetTypeOfSourceProperty,
+        report_errors: bool,
+        intersection_state: IntersectionState,
+        skip_optional: bool,
+    ) -> Ternary {
+        let source_prop_flags = get_declaration_modifier_flags_from_symbol(c, source_prop);
+        let target_prop_flags = get_declaration_modifier_flags_from_symbol(c, target_prop);
+        if source_prop_flags.intersects(ModifierFlags::PRIVATE) || target_prop_flags.intersects(ModifierFlags::PRIVATE) {
+            if symbol_value_declaration(c, source_prop) != symbol_value_declaration(c, target_prop) {
+                if report_errors {
+                    if source_prop_flags.intersects(ModifierFlags::PRIVATE) && target_prop_flags.intersects(ModifierFlags::PRIVATE) {
+                        self.report_error(c, &msg::TYPES_HAVE_SEPARATE_DECLARATIONS_OF_A_PRIVATE_PROPERTY_0, &[DiagArg::Str(symbol_to_string(c, target_prop))]);
+                    } else {
+                        let (private_side, other_side) = if source_prop_flags.intersects(ModifierFlags::PRIVATE) { (source, target) } else { (target, source) };
+                        self.report_error(c, &msg::PROPERTY_0_IS_PRIVATE_IN_TYPE_1_BUT_NOT_IN_TYPE_2, &[DiagArg::Str(symbol_to_string(c, target_prop)), DiagArg::Str(type_to_string(c, private_side)), DiagArg::Str(type_to_string(c, other_side))]);
+                    }
+                }
+                return Ternary::False;
+            }
+        } else if target_prop_flags.intersects(ModifierFlags::PROTECTED) {
+            if !is_valid_override_of(c, source_prop, target_prop) {
+                if report_errors {
+                    let source_type = get_declaring_class(c, source_prop).unwrap_or(source);
+                    let target_type = get_declaring_class(c, target_prop).unwrap_or(target);
+                    self.report_error(c, &msg::PROPERTY_0_IS_PROTECTED_BUT_TYPE_1_IS_NOT_A_CLASS_DERIVED_FROM_2, &[DiagArg::Str(symbol_to_string(c, target_prop)), DiagArg::Str(type_to_string(c, source_type)), DiagArg::Str(type_to_string(c, target_type))]);
+                }
+                return Ternary::False;
+            }
+        } else if source_prop_flags.intersects(ModifierFlags::PROTECTED) {
+            if report_errors {
+                self.report_error(c, &msg::PROPERTY_0_IS_PROTECTED_IN_TYPE_1_BUT_PUBLIC_IN_TYPE_2, &[DiagArg::Str(symbol_to_string(c, target_prop)), DiagArg::Str(type_to_string(c, source)), DiagArg::Str(type_to_string(c, target))]);
+            }
+            return Ternary::False;
+        }
+        // Ensure {readonly a: whatever} is not a subtype of {a: whatever}
+        // (Go comment, verbatim).
+        if self.relation == RelationKind::StrictSubtype && is_readonly_symbol(c, source_prop) && !is_readonly_symbol(c, target_prop) {
+            return Ternary::False;
+        }
+        // If the target comes from a partial union prop (Go comment,
+        // verbatim).
+        let related = self.is_property_symbol_type_related(c, source_prop, target_prop, get_type_of_source_property, report_errors, intersection_state);
+        if related == Ternary::False {
+            if report_errors {
+                self.report_error(c, &msg::TYPES_OF_PROPERTY_0_ARE_INCOMPATIBLE, &[DiagArg::Str(symbol_to_string(c, target_prop))]);
+            }
+            return Ternary::False;
+        }
+        // When checking for comparability, be more lenient with optional
+        // properties (Go comment, verbatim).
+        if !skip_optional
+            && c.program_symbol(source_prop).flags.intersects(SymbolFlags::OPTIONAL)
+            && c.program_symbol(target_prop).flags.intersects(SymbolFlags::CLASS_MEMBER)
+            && !c.program_symbol(target_prop).flags.intersects(SymbolFlags::OPTIONAL)
+        {
+            // TypeScript 1.0 spec (April 2014): 3.8.3 (Go comment, verbatim).
+            if report_errors {
+                self.report_error(c, &msg::PROPERTY_0_IS_OPTIONAL_IN_TYPE_1_BUT_REQUIRED_IN_TYPE_2, &[DiagArg::Str(symbol_to_string(c, target_prop)), DiagArg::Str(type_to_string(c, source)), DiagArg::Str(type_to_string(c, target))]);
+            }
+            return Ternary::False;
+        }
+        related
+    }
+
+    /// Go: `func (r *Relater) isPropertySymbolTypeRelated(...) Ternary`.
+    fn is_property_symbol_type_related(
+        &mut self,
+        c: &mut Checker,
+        source_prop: SymbolId,
+        target_prop: SymbolId,
+        get_type_of_source_property: GetTypeOfSourceProperty,
+        report_errors: bool,
+        intersection_state: IntersectionState,
+    ) -> Ternary {
+        let target_is_optional = c.strict_null_checks
+            && c.program_symbol(target_prop)
+                .check_flags
+                .intersects(CHECK_FLAGS_PARTIAL);
+        let effective_target = add_optionality_ex(c, get_non_missing_type_of_symbol(c, target_prop), false /*isProperty*/, target_is_optional);
+        // source could resolve to `any` and that's not related to `unknown`
+        // target under strict subtype relation (Go comment, verbatim).
+        let mask = if self.relation == RelationKind::StrictSubtype { TypeFlags::ANY } else { TypeFlags::ANY_OR_UNKNOWN };
+        if c.type_(effective_target).flags.intersects(mask) {
+            return Ternary::True;
+        }
+        let effective_source = match get_type_of_source_property {
+            GetTypeOfSourceProperty::NonMissingTypeOfSymbol => get_non_missing_type_of_symbol(c, source_prop),
+            GetTypeOfSourceProperty::Constant(t) => t,
+        };
+        self.is_related_to_ex(c, effective_source, effective_target, RecursionFlags::BOTH, report_errors, None, intersection_state)
+    }
+
+    /// Go: `func (r *Relater) reportUnmatchedProperty(...)`.
+    fn report_unmatched_property(&mut self, c: &mut Checker, source: TypeId, target: TypeId, unmatched_property: SymbolId, require_optional_properties: bool) {
+        // give specific error in case where private names have the same
+        // description (Go comment, verbatim).
+        // TODO(port M6 S6): the private-identifier description arm
+        // (binder.GetSymbolNameForPrivateIdentifier).
+        let props = get_unmatched_properties(c, source, target, require_optional_properties, false /*matchDiscriminantProperties*/);
+        if props.len() == 1 {
+            let (source_type, target_type) = c.get_type_names_for_error_display(source, target);
+            let prop_name = symbol_to_string(c, unmatched_property);
+            self.report_error(c, &msg::PROPERTY_0_IS_MISSING_IN_TYPE_1_BUT_REQUIRED_IN_TYPE_2, &[DiagArg::Str(prop_name.clone()), DiagArg::Str(source_type), DiagArg::Str(target_type)]);
+            if let Some(decl) = c.program_symbol(unmatched_property).declarations.first().copied() {
+                self.related_info.push(diagnostic_for_node(c, Some(decl), &msg::X_0_IS_DECLARED_HERE, &[DiagArg::Str(prop_name)]));
+            }
+        } else if self.try_elaborate_array_like_errors(c, source, target, false /*reportErrors*/) {
+            let (source_type, target_type) = c.get_type_names_for_error_display(source, target);
+            if props.len() > 5 {
+                let prop_names = props.iter().take(4).map(|&p| symbol_to_string(c, p)).collect::<Vec<_>>().join(", ");
+                self.report_error(c, &msg::TYPE_0_IS_MISSING_THE_FOLLOWING_PROPERTIES_FROM_TYPE_1_COLON_2_AND_3_MORE, &[DiagArg::Str(source_type), DiagArg::Str(target_type), DiagArg::Str(prop_names), DiagArg::Uint((props.len() - 4) as u64)]);
+            } else {
+                let prop_names = props.iter().map(|&p| symbol_to_string(c, p)).collect::<Vec<_>>().join(", ");
+                self.report_error(c, &msg::TYPE_0_IS_MISSING_THE_FOLLOWING_PROPERTIES_FROM_TYPE_1_COLON_2, &[DiagArg::Str(source_type), DiagArg::Str(target_type), DiagArg::Str(prop_names)]);
+            }
+        }
+    }
+
+    /// Go: `func (r *Relater) tryElaborateArrayLikeErrors(...) bool`.
+    fn try_elaborate_array_like_errors(&mut self, c: &mut Checker, source: TypeId, target: TypeId, report_errors: bool) -> bool {
+        // The spec for elaboration is (Go doc comment, verbatim there).
+        if is_tuple_type(c, source) {
+            if tuple_type_readonly(c, source) && is_mutable_array_or_tuple(c, target) {
+                if report_errors {
+                    self.report_error(c, &msg::THE_TYPE_0_IS_READONLY_AND_CANNOT_BE_ASSIGNED_TO_THE_MUTABLE_TYPE_1, &[DiagArg::Str(type_to_string(c, source)), DiagArg::Str(type_to_string(c, target))]);
+                }
+                return false;
+            }
+            return is_array_or_tuple_type(c, target);
+        }
+        if is_readonly_array_type(c, source) && is_mutable_array_or_tuple(c, target) {
+            if report_errors {
+                self.report_error(c, &msg::THE_TYPE_0_IS_READONLY_AND_CANNOT_BE_ASSIGNED_TO_THE_MUTABLE_TYPE_1, &[DiagArg::Str(type_to_string(c, source)), DiagArg::Str(type_to_string(c, target))]);
+            }
+            return false;
+        }
+        if is_tuple_type(c, target) {
+            return is_array_type(c, source);
+        }
+        true
+    }
+
+    /// Go: `func (r *Relater) tryElaborateErrorsForPrimitivesAndObjects(...)`.
+    fn try_elaborate_errors_for_primitives_and_objects(&mut self, c: &mut Checker, source: TypeId, target: TypeId) {
+        if (c.global_string_type == Some(source) && Some(target) == c.string_type)
+            || (c.global_number_type == Some(source) && Some(target) == c.number_type)
+            || (c.global_boolean_type == Some(source) && Some(target) == c.boolean_type)
+            || (get_global_es_symbol_type(c) == Some(source) && Some(target) == c.es_symbol_type)
+        {
+            self.report_error(c, &msg::X_0_IS_A_PRIMITIVE_BUT_1_IS_A_WRAPPER_OBJECT_PREFER_USING_0_WHEN_POSSIBLE, &[DiagArg::Str(type_to_string(c, target)), DiagArg::Str(type_to_string(c, source))]);
+        }
+    }
+
+    /// Go: `func (r *Relater) propertiesIdenticalTo(...) Ternary`.
+    fn properties_identical_to(&mut self, c: &mut Checker, source: TypeId, target: TypeId, excluded_properties: &FxHashSet<String>) -> Ternary {
+        if !c.type_(source).flags.intersects(TypeFlags::OBJECT) || !c.type_(target).flags.intersects(TypeFlags::OBJECT) {
+            return Ternary::False;
+        }
+        let source_properties = exclude_properties(c, get_properties_of_object_type(c, source), excluded_properties);
+        let target_properties = exclude_properties(c, get_properties_of_object_type(c, target), excluded_properties);
+        if source_properties.len() != target_properties.len() {
+            return Ternary::False;
+        }
+        let mut result = Ternary::True;
+        for &source_prop in &source_properties {
+            let name = c.program_symbol(source_prop).name.clone();
+            let Some(target_prop) = get_property_of_object_type(c, target, &name) else {
+                return Ternary::False;
+            };
+            let related = compare_properties(c, source_prop, target_prop, TypeComparerKind::RelatedToSimple, self);
+            if related == Ternary::False {
+                return Ternary::False;
+            }
+            result = ternary_and(result, related);
+        }
+        result
+    }
+
+    /// Go: `func (r *Relater) signaturesRelatedTo(...) Ternary`.
+    fn signatures_related_to(
+        &mut self,
+        c: &mut Checker,
+        source: TypeId,
+        target: TypeId,
+        kind: SignatureKind,
+        report_errors: bool,
+        intersection_state: IntersectionState,
+    ) -> Ternary {
+        if self.relation == RelationKind::Identity {
+            return self.signatures_identical_to(c, source, target, kind);
+        }
+        // With respect to signatures, the anyFunctionType wildcard (Go
+        // comment, verbatim).
+        if any_function_type(c) == Some(source) {
+            return Ternary::True;
+        }
+        if any_function_type(c) == Some(target) {
+            return Ternary::False;
+        }
+        let source_signatures = get_signatures_of_type(c, source, kind);
+        let target_signatures = get_signatures_of_type(c, target, kind);
+        if kind == SignatureKind::Construct && !source_signatures.is_empty() && !target_signatures.is_empty() {
+            let source_is_abstract = sig(c, source_signatures[0]).flags.intersects(crate::types::SignatureFlags::ABSTRACT);
+            let target_is_abstract = sig(c, target_signatures[0]).flags.intersects(crate::types::SignatureFlags::ABSTRACT);
+            if source_is_abstract && !target_is_abstract {
+                // An abstract constructor type is not assignable (Go
+                // comment, verbatim).
+                if report_errors {
+                    self.report_error(c, &msg::CANNOT_ASSIGN_AN_ABSTRACT_CONSTRUCTOR_TYPE_TO_A_NON_ABSTRACT_CONSTRUCTOR_TYPE, &[]);
+                }
+                return Ternary::False;
+            }
+            if !self.constructor_visibilities_are_compatible(c, source_signatures[0], target_signatures[0], report_errors) {
+                return Ternary::False;
+            }
+        }
+        let mut result = Ternary::True;
+        if (c.type_(source).object_flags.intersects(ObjectFlags::INSTANTIATED)
+            && c.type_(target).object_flags.intersects(ObjectFlags::INSTANTIATED)
+            && c.type_(source).symbol == c.type_(target).symbol)
+            || (c.type_(source).object_flags.intersects(ObjectFlags::REFERENCE)
+                && c.type_(target).object_flags.intersects(ObjectFlags::REFERENCE)
+                && type_reference_target(c, source) == type_reference_target(c, target))
+        {
+            // We have instantiations of the same anonymous type (Go comment,
+            // verbatim).
+            for i in 0..target_signatures.len() {
+                let related = self.signature_related_to(c, source_signatures[i], target_signatures[i], true /*erase*/, report_errors, intersection_state);
+                if related == Ternary::False {
+                    return Ternary::False;
+                }
+                result = ternary_and(result, related);
+            }
+        } else if source_signatures.len() == 1 && target_signatures.len() == 1 {
+            // For simple functions (Go comment, verbatim).
+            let erase_generics = self.relation == RelationKind::Comparable;
+            result = self.signature_related_to(c, source_signatures[0], target_signatures[0], erase_generics, report_errors, intersection_state);
+        } else {
+            'outer: for &t in &target_signatures {
+                let save_error_state = self.get_error_state();
+                // Only elaborate errors from the first failure (Go comment,
+                // verbatim).
+                let mut should_elaborate_errors = report_errors;
+                for &s in &source_signatures {
+                    let related = self.signature_related_to(c, s, t, true /*erase*/, should_elaborate_errors, intersection_state);
+                    if related != Ternary::False {
+                        result = ternary_and(result, related);
+                        self.restore_error_state(save_error_state);
+                        continue 'outer;
+                    }
+                    should_elaborate_errors = false;
+                }
+                if should_elaborate_errors {
+                    self.report_error(c, &msg::TYPE_0_PROVIDES_NO_MATCH_FOR_THE_SIGNATURE_1, &[DiagArg::Str(type_to_string(c, source)), DiagArg::Str(signature_to_string(c, t))]);
+                }
+                return Ternary::False;
+            }
+        }
+        result
+    }
+
+    /// Go: `func (r *Relater) constructorVisibilitiesAreCompatible(...) bool`.
+    fn constructor_visibilities_are_compatible(&mut self, c: &mut Checker, source_signature: crate::types::SignatureId, target_signature: crate::types::SignatureId, report_errors: bool) -> bool {
+        let (source_declaration, target_declaration) = (sig(c, source_signature).declaration, sig(c, target_signature).declaration);
+        let (Some(source_declaration), Some(target_declaration)) = (source_declaration, target_declaration) else {
+            return true;
+        };
+        let source_accessibility = modifier_flags_of_node(c, source_declaration).intersect(ModifierFlags::NON_PUBLIC_ACCESSIBILITY_MODIFIER);
+        let target_accessibility = modifier_flags_of_node(c, target_declaration).intersect(ModifierFlags::NON_PUBLIC_ACCESSIBILITY_MODIFIER);
+        // A public, protected and private signature is assignable to a
+        // private signature (Go comment, verbatim).
+        if target_accessibility == ModifierFlags::PRIVATE {
+            return true;
+        }
+        // A public and protected signature is assignable to a protected
+        // signature.
+        if target_accessibility == ModifierFlags::PROTECTED && source_accessibility != ModifierFlags::PRIVATE {
+            return true;
+        }
+        // Only a public signature is assignable to public signature.
+        if target_accessibility != ModifierFlags::PROTECTED && source_accessibility == ModifierFlags::NONE {
+            return true;
+        }
+        if report_errors {
+            self.report_error(c, &msg::CANNOT_ASSIGN_A_0_CONSTRUCTOR_TYPE_TO_A_1_CONSTRUCTOR_TYPE, &[DiagArg::Str(visibility_to_string(source_accessibility).to_string()), DiagArg::Str(visibility_to_string(target_accessibility).to_string())]);
+        }
+        false
+    }
+
+    /// Go: `func (r *Relater) signatureRelatedTo(...) Ternary` (see
+    /// signatureAssignableTo, compareSignaturesIdentical).
+    fn signature_related_to(
+        &mut self,
+        c: &mut Checker,
+        source: crate::types::SignatureId,
+        target: crate::types::SignatureId,
+        erase: bool,
+        report_errors: bool,
+        intersection_state: IntersectionState,
+    ) -> Ternary {
+        let mut check_mode = SignatureCheckMode::NONE;
+        if self.relation == RelationKind::Subtype {
+            check_mode = SignatureCheckMode::STRICT_TOP_SIGNATURE;
+        } else if self.relation == RelationKind::StrictSubtype {
+            check_mode = SignatureCheckMode::STRICT_TOP_SIGNATURE | SignatureCheckMode::STRICT_ARITY;
+        }
+        let source = if erase { get_erased_signature(c, source) } else { source };
+        let target = if erase { get_erased_signature(c, target) } else { target };
+        c.compare_signatures_related(source, target, check_mode, report_errors, Some(ErrorReporterKind::Relater), TypeComparerKind::RelatedToWorker, report_unreliable_mapper(c))
+    }
+
+    /// Go: `func (r *Relater) signaturesIdenticalTo(...) Ternary`.
+    fn signatures_identical_to(&mut self, c: &mut Checker, source: TypeId, target: TypeId, kind: SignatureKind) -> Ternary {
+        let source_signatures = get_signatures_of_type(c, source, kind);
+        let target_signatures = get_signatures_of_type(c, target, kind);
+        if source_signatures.len() != target_signatures.len() {
+            return Ternary::False;
+        }
+        let mut result = Ternary::True;
+        for i in 0..source_signatures.len() {
+            let related = c.compare_signatures_identical(source_signatures[i], target_signatures[i], false, false, false, TypeComparerKind::RelatedToSimple);
+            if related == Ternary::False {
+                return Ternary::False;
+            }
+            result = ternary_and(result, related);
+        }
+        result
+    }
+
+    /// Go: `func (r *Relater) indexSignaturesRelatedTo(...) Ternary`.
+    fn index_signatures_related_to(
+        &mut self,
+        c: &mut Checker,
+        source: TypeId,
+        target: TypeId,
+        source_is_primitive: bool,
+        report_errors: bool,
+        intersection_state: IntersectionState,
+    ) -> Ternary {
+        if self.relation == RelationKind::Identity {
+            return self.index_signatures_identical_to(c, source, target);
+        }
+        let index_infos = get_index_infos_of_type(c, target);
+        let target_has_string_index = index_infos.iter().any(|&info| c.index_info_key_type(c, info) == c.string_type());
+        let mut result = Ternary::True;
+        for &target_info in &index_infos {
+            let related;
+            if self.relation != RelationKind::StrictSubtype
+                && !source_is_primitive
+                && target_has_string_index
+                && c.type_(c.index_info_value_type(target_info)).flags.intersects(TypeFlags::ANY)
+            {
+                related = Ternary::True;
+            } else if is_generic_mapped_type(c, source) && target_has_string_index {
+                related = self.is_related_to(c, get_template_type_from_mapped_type(c, source), c.index_info_value_type(target_info), RecursionFlags::BOTH, report_errors);
+            } else {
+                related = self.type_related_to_index_info(c, source, target_info, report_errors, intersection_state);
+            }
+            if related == Ternary::False {
+                return Ternary::False;
+            }
+            result = ternary_and(result, related);
+        }
+        result
+    }
+
+    /// Go: `func (r *Relater) typeRelatedToIndexInfo(...) Ternary`.
+    fn type_related_to_index_info(
+        &mut self,
+        c: &mut Checker,
+        source: TypeId,
+        target_info: crate::types::IndexInfoId,
+        report_errors: bool,
+        intersection_state: IntersectionState,
+    ) -> Ternary {
+        if let Some(source_info) = get_applicable_index_info(c, source, c.index_info_key_type(target_info)) {
+            return self.index_info_related_to(c, source_info, target_info, report_errors, intersection_state);
+        }
+        // Intersection constituents are never considered to have an inferred
+        // index signature (Go comment, verbatim).
+        if !intersection_state.intersects(IntersectionState::SOURCE)
+            && (self.relation != RelationKind::StrictSubtype
+                || c.type_(source).object_flags.intersects(ObjectFlags::FRESH_LITERAL))
+            && is_object_type_with_inferable_index(c, source)
+        {
+            return self.members_related_to_index_info(c, source, target_info, report_errors, intersection_state);
+        }
+        if report_errors {
+            self.report_error(c, &msg::INDEX_SIGNATURE_FOR_TYPE_0_IS_MISSING_IN_TYPE_1, &[DiagArg::Str(type_to_string(c, c.index_info_key_type(target_info))), DiagArg::Str(type_to_string(c, source))]);
+        }
+        Ternary::False
+    }
+
+    /// Go: `func (r *Relater) membersRelatedToIndexInfo(...) Ternary`.
+    fn members_related_to_index_info(
+        &mut self,
+        c: &mut Checker,
+        source: TypeId,
+        target_info: crate::types::IndexInfoId,
+        report_errors: bool,
+        intersection_state: IntersectionState,
+    ) -> Ternary {
+        let mut result = Ternary::True;
+        let key_type = c.index_info_key_type(target_info);
+        let props = if c.type_(source).flags.intersects(TypeFlags::INTERSECTION) {
+            get_properties_of_union_or_intersection_type(c, source)
+        } else {
+            get_properties_of_object_type(c, source)
+        };
+        for prop in props {
+            // Skip over ignored JSX and symbol-named members.
+            if is_ignored_jsx_property(c, source, prop) {
+                continue;
+            }
+            if is_applicable_index_type(c, get_literal_type_from_property(c, prop, TypeFlags::STRING_OR_NUMBER_LITERAL_OR_UNIQUE, false), key_type) {
+                let prop_type = get_non_missing_type_of_symbol(c, prop);
+                let t = if c.exact_optional_property_types
+                    || c.type_(prop_type).flags.intersects(TypeFlags::UNDEFINED)
+                    || key_type == c.number_type()
+                    || !c.program_symbol(prop).flags.intersects(SymbolFlags::OPTIONAL)
+                {
+                    prop_type
+                } else {
+                    get_type_with_facts(c, prop_type, TypeFacts::NE_UNDEFINED)
+                };
+                let related = self.is_related_to_ex(c, t, c.index_info_value_type(target_info), RecursionFlags::BOTH, report_errors, None, intersection_state);
+                if related == Ternary::False {
+                    if report_errors {
+                        self.report_error(c, &msg::PROPERTY_0_IS_INCOMPATIBLE_WITH_INDEX_SIGNATURE, &[DiagArg::Str(symbol_to_string(c, prop))]);
+                    }
+                    return Ternary::False;
+                }
+                result = ternary_and(result, related);
+            }
+        }
+        for info in get_index_infos_of_type(c, source) {
+            if is_applicable_index_type(c, c.index_info_key_type(info), key_type) {
+                let related = self.index_info_related_to(c, info, target_info, report_errors, intersection_state);
+                if related == Ternary::False {
+                    return Ternary::False;
+                }
+                result = ternary_and(result, related);
+            }
+        }
+        result
+    }
+
+    /// Go: `func (r *Relater) indexInfoRelatedTo(...) Ternary`.
+    fn index_info_related_to(
+        &mut self,
+        c: &mut Checker,
+        source_info: crate::types::IndexInfoId,
+        target_info: crate::types::IndexInfoId,
+        report_errors: bool,
+        intersection_state: IntersectionState,
+    ) -> Ternary {
+        let related = self.is_related_to_ex(c, c.index_info_value_type(source_info), c.index_info_value_type(target_info), RecursionFlags::BOTH, report_errors, None, intersection_state);
+        if related == Ternary::False && report_errors {
+            if c.index_info_key_type(source_info) == c.index_info_key_type(target_info) {
+                self.report_error(c, &msg::X_0_INDEX_SIGNATURES_ARE_INCOMPATIBLE, &[DiagArg::Str(type_to_string(c, c.index_info_key_type(source_info)))]);
+            } else {
+                self.report_error(c, &msg::X_0_AND_1_INDEX_SIGNATURES_ARE_INCOMPATIBLE, &[DiagArg::Str(type_to_string(c, c.index_info_key_type(source_info))), DiagArg::Str(type_to_string(c, c.index_info_key_type(target_info)))]);
+            }
+        }
+        related
+    }
+
+    /// Go: `func (r *Relater) indexSignaturesIdenticalTo(...) Ternary`.
+    fn index_signatures_identical_to(&mut self, c: &mut Checker, source: TypeId, target: TypeId) -> Ternary {
+        let source_infos = get_index_infos_of_type(c, source);
+        let target_infos = get_index_infos_of_type(c, target);
+        if source_infos.len() != target_infos.len() {
+            return Ternary::False;
+        }
+        for &target_info in &target_infos {
+            let Some(source_info) = get_index_info_of_type(c, source, c.index_info_key_type(target_info)) else {
+                return Ternary::False;
+            };
+            if !(ternary_not_false(self.is_related_to(c, c.index_info_value_type(source_info), c.index_info_value_type(target_info), RecursionFlags::BOTH, false))
+                && c.index_info_is_readonly(source_info) == c.index_info_is_readonly(target_info))
+            {
+                return Ternary::False;
+            }
+        }
+        Ternary::True
+    }
+
+    /// Go: `func (r *Relater) reportErrorResults(...)`.
+    fn report_error_results(
+        &mut self,
+        c: &mut Checker,
+        original_source: TypeId,
+        original_target: TypeId,
+        source: TypeId,
+        target: TypeId,
+        head_message: Option<&'static Message>,
+    ) {
+        let mut source = source;
+        let mut target = target;
+        let source_has_base = get_single_base_for_non_augmenting_subtype(c, original_source).is_some();
+        let target_has_base = get_single_base_for_non_augmenting_subtype(c, original_target).is_some();
+        if c.type_(original_source).alias.is_some() || source_has_base {
+            source = original_source;
+        }
+        if c.type_(original_target).alias.is_some() || target_has_base {
+            target = original_target;
+        }
+        if c.type_(source).flags.intersects(TypeFlags::OBJECT) && c.type_(target).flags.intersects(TypeFlags::OBJECT) {
+            self.try_elaborate_array_like_errors(c, source, target, true /*reportErrors*/);
+        }
+        let s_flags = c.type_(source).flags;
+        let t_flags = c.type_(target).flags;
+        if s_flags.intersects(TypeFlags::OBJECT) && t_flags.intersects(TypeFlags::PRIMITIVE) {
+            self.try_elaborate_errors_for_primitives_and_objects(c, source, target);
+        } else if c.type_(source).symbol.is_some() && s_flags.intersects(TypeFlags::OBJECT) && c.global_object_type == Some(source) {
+            self.report_error(c, &msg::THE_OBJECT_TYPE_IS_ASSIGNABLE_TO_VERY_FEW_OTHER_TYPES_DID_YOU_MEAN_TO_USE_THE_ANY_TYPE_INSTEAD, &[]);
+        } else if c.type_(source).object_flags.intersects(ObjectFlags::JSX_ATTRIBUTES) && t_flags.intersects(TypeFlags::INTERSECTION) {
+            // TODO(port M6 W5 jsx): the JSX IntrinsicAttributes check.
+        } else if c.type_(original_target).flags.intersects(TypeFlags::INTERSECTION)
+            && c.type_(original_target).object_flags.intersects(ObjectFlags::IS_NEVER_INTERSECTION)
+        {
+            // TODO(port M6 S7): the was-reduced-to-never elaborations
+            // (isDiscriminantWithNeverType / isConflictingPrivateProperty).
+        }
+        self.report_relation_error(c, head_message, source, target);
+        if s_flags.intersects(TypeFlags::TYPE_PARAMETER)
+            && c.type_(source).symbol.is_some()
+            && !c.program_symbol(c.type_(source).symbol.expect("checked")).declarations.is_empty()
+            && get_constraint_of_type(c, source).is_none()
+        {
+            let synthetic_param = clone_type_parameter(c, source);
+            let mapper = new_simple_type_mapper(c, source, synthetic_param);
+            set_type_parameter_constraint(c, synthetic_param, instantiate_type_ex(c, target, mapper));
+            if has_non_circular_base_constraint(c, synthetic_param) {
+                let target_constraint_string = type_to_string(c, target);
+                let decl = c.program_symbol(c.type_(source).symbol.expect("checked")).declarations[0];
+                self.related_info.push(diagnostic_for_node(c, Some(decl), &msg::THIS_TYPE_PARAMETER_MIGHT_NEED_AN_EXTENDS_0_CONSTRAINT, &[DiagArg::Str(target_constraint_string)]));
+            }
+        }
+    }
+
+    /// Go: `func (r *Relater) reportRelationError(message, source, target)`.
+    fn report_relation_error(&mut self, c: &mut Checker, message: Option<&'static Message>, source: TypeId, target: TypeId) {
+        let (source_type, target_type) = c.get_type_names_for_error_display(source, target);
+        let mut generalized_source = source;
+        let mut generalized_source_type = source_type.clone();
+        // Don't generalize on 'never' (Go comment, verbatim).
+        if !c.type_(target).flags.intersects(TypeFlags::NEVER)
+            && is_literal_type(c, source)
+            && !c.type_could_have_top_level_singleton_types(target)
+        {
+            generalized_source = get_base_type_of_literal_type(c, source);
+            generalized_source_type = c.get_type_name_for_error_display(generalized_source);
+        }
+        // If `target` is of indexed access type (Go comment, verbatim).
+        let target_flags = if c.type_(target).flags.intersects(TypeFlags::INDEXED_ACCESS)
+            && !c.type_(source).flags.intersects(TypeFlags::INDEXED_ACCESS)
+        {
+            c.type_(indexed_access_parts(c, target).0).flags
+        } else {
+            c.type_(target).flags
+        };
+        if target_flags.intersects(TypeFlags::TYPE_PARAMETER) {
+            let constraint = get_base_constraint_of_type(c, target);
+            if is_distributed_type_parameter(c, target)
+                && get_constraint_of_type_parameter(c, target).is_some()
+                && c.is_type_assignable_to(generalized_source, get_constraint_of_type_parameter(c, target).expect("checked"))
+            {
+                self.report_error(c, &msg::X_0_IS_ONLY_ASSIGNABLE_TO_THE_NON_DISTRIBUTED_1_BUT_1_HAS_BEEN_DISTRIBUTED_HERE, &[DiagArg::Str(generalized_source_type), DiagArg::Str(target_type)]);
+            } else if constraint.is_some_and(|constraint| c.is_type_assignable_to(generalized_source, constraint)) {
+                self.report_error(c, &msg::X_0_IS_ASSIGNABLE_TO_THE_CONSTRAINT_OF_TYPE_1_BUT_1_COULD_BE_INSTANTIATED_WITH_A_DIFFERENT_SUBTYPE_OF_CONSTRAINT_2, &[DiagArg::Str(generalized_source_type), DiagArg::Str(target_type.clone()), DiagArg::Str(type_to_string(c, constraint.expect("checked")))]);
+            } else if constraint.is_some_and(|constraint| c.is_type_assignable_to(source, constraint)) {
+                self.report_error(c, &msg::X_0_IS_ASSIGNABLE_TO_THE_CONSTRAINT_OF_TYPE_1_BUT_1_COULD_BE_INSTANTIATED_WITH_A_DIFFERENT_SUBTYPE_OF_CONSTRAINT_2, &[DiagArg::Str(source_type), DiagArg::Str(target_type), DiagArg::Str(type_to_string(c, constraint.expect("checked")))]);
+            } else {
+                self.error_chain = None; // Only report this error once
+                self.report_error(c, &msg::X_0_COULD_BE_INSTANTIATED_WITH_AN_ARBITRARY_TYPE_WHICH_COULD_BE_UNRELATED_TO_1, &[DiagArg::Str(target_type), DiagArg::Str(generalized_source_type)]);
+            }
+        }
+        let mut message = message;
+        if message.is_none() {
+            if self.relation == RelationKind::Comparable {
+                message = Some(&msg::TYPE_0_IS_NOT_COMPARABLE_TO_TYPE_1);
+            } else if source_type == target_type {
+                message = Some(&msg::TYPE_0_IS_NOT_ASSIGNABLE_TO_TYPE_1_TWO_DIFFERENT_TYPES_WITH_THIS_NAME_EXIST_BUT_THEY_ARE_UNRELATED);
+            } else if c.exact_optional_property_types && !get_exact_optional_unassignable_properties(c, source, target).is_empty() {
+                message = Some(&msg::TYPE_0_IS_NOT_ASSIGNABLE_TO_TYPE_1_WITH_EXACTOPTIONALPROPERTYTYPES_COLON_TRUE_CONSIDER_ADDING_UNDEFINED_TO_THE_TYPES_OF_THE_TARGET_S_PROPERTIES);
+            } else {
+                if c.type_(source).flags.intersects(TypeFlags::STRING_LITERAL) && c.type_(target).flags.intersects(TypeFlags::UNION) {
+                    // TODO(port M6 S6): getSuggestedTypeForNonexistentStringLiteralType
+                    // — the Did-you-mean-2 elaboration.
+                }
+                message = Some(&msg::TYPE_0_IS_NOT_ASSIGNABLE_TO_TYPE_1);
+            }
+        } else if message == Some(&msg::ARGUMENT_OF_TYPE_0_IS_NOT_ASSIGNABLE_TO_PARAMETER_OF_TYPE_1)
+            && c.exact_optional_property_types
+            && !get_exact_optional_unassignable_properties(c, source, target).is_empty()
+        {
+            message = Some(&msg::ARGUMENT_OF_TYPE_0_IS_NOT_ASSIGNABLE_TO_PARAMETER_OF_TYPE_1_WITH_EXACTOPTIONALPROPERTYTYPES_COLON_TRUE_CONSIDER_ADDING_UNDEFINED_TO_THE_TYPES_OF_THE_TARGET_S_PROPERTIES);
+        }
+        // Suppress if next message is (Go comments, verbatim).
+        match self.get_chain_message(0) {
+            Some(&msg::OBJECT_LITERAL_MAY_ONLY_SPECIFY_KNOWN_PROPERTIES_AND_0_DOES_NOT_EXIST_IN_TYPE_1)
+            | Some(&msg::OBJECT_LITERAL_MAY_ONLY_SPECIFY_KNOWN_PROPERTIES_BUT_0_DOES_NOT_EXIST_IN_TYPE_1_DID_YOU_MEAN_TO_WRITE_2) => return,
+            Some(&msg::EXCESSIVE_COMPLEXITY_COMPARING_TYPES_0_AND_1)
+            | Some(&msg::THE_TYPE_0_IS_READONLY_AND_CANNOT_BE_ASSIGNED_TO_THE_MUTABLE_TYPE_1) => {
+                if self.chain_args_match(&[Some(&DiagArg::Str(generalized_source_type)), Some(&DiagArg::Str(target_type.clone()))]) {
+                    return;
+                }
+            }
+            Some(&msg::PROPERTY_0_IS_MISSING_IN_TYPE_1_BUT_REQUIRED_IN_TYPE_2) => {
+                if !message.is_some_and(|m| is_conversion_or_interface_implementation_message(m))
+                    && self.chain_args_match(&[None, Some(&DiagArg::Str(generalized_source_type)), Some(&DiagArg::Str(target_type.clone()))])
+                {
+                    return;
+                }
+            }
+            Some(&msg::TYPE_0_IS_MISSING_THE_FOLLOWING_PROPERTIES_FROM_TYPE_1_COLON_2_AND_3_MORE)
+            | Some(&msg::TYPE_0_IS_MISSING_THE_FOLLOWING_PROPERTIES_FROM_TYPE_1_COLON_2) => {
+                if !message.is_some_and(|m| is_conversion_or_interface_implementation_message(m))
+                    && self.chain_args_match(&[Some(&DiagArg::Str(generalized_source_type)), Some(&DiagArg::Str(target_type.clone()))])
+                {
+                    return;
+                }
+            }
+            _ => {}
+        }
+        self.report_error(c, message.expect("message set above"), &[DiagArg::Str(generalized_source_type), DiagArg::Str(target_type)]);
+    }
+
+    /// Go: `func (r *Relater) reportError(message, args...)` — the error-chain
+    /// transformations (the `Types_of_property_0_are_incompatible` pyramid
+    /// rewriting rules).
+    fn report_error(&mut self, c: &mut Checker, message: &'static Message, args: &[DiagArg]) {
+        if message == &msg::TYPES_OF_PROPERTY_0_ARE_INCOMPATIBLE {
+            // Suppress if next message is an excess property error.
+            match self.get_chain_message(0) {
+                Some(&msg::OBJECT_LITERAL_MAY_ONLY_SPECIFY_KNOWN_PROPERTIES_AND_0_DOES_NOT_EXIST_IN_TYPE_1)
+                | Some(&msg::OBJECT_LITERAL_MAY_ONLY_SPECIFY_KNOWN_PROPERTIES_BUT_0_DOES_NOT_EXIST_IN_TYPE_1_DID_YOU_MEAN_TO_WRITE_2) => return,
+                _ => {}
+            }
+            // Transform a property incompatibility message for property 'x'
+            // followed by some elaboration message followed by a signature
+            // return type incompatibility message (Go comment, verbatim).
+            let mut message = message;
+            let mut args: Vec<DiagArg> = args.to_vec();
+            let mut arg = String::new();
+            match self.get_chain_message(1) {
+                Some(&msg::CALL_SIGNATURES_WITH_NO_ARGUMENTS_HAVE_INCOMPATIBLE_RETURN_TYPES_0_AND_1) => {
+                    arg = get_property_name_arg(&args[0]) + "()";
+                }
+                Some(&msg::CONSTRUCT_SIGNATURES_WITH_NO_ARGUMENTS_HAVE_INCOMPATIBLE_RETURN_TYPES_0_AND_1) => {
+                    arg = "new ".to_string() + &get_property_name_arg(&args[0]) + "()";
+                }
+                Some(&msg::CALL_SIGNATURE_RETURN_TYPES_0_AND_1_ARE_INCOMPATIBLE) => {
+                    arg = get_property_name_arg(&args[0]) + "(...)";
+                }
+                Some(&msg::CONSTRUCT_SIGNATURE_RETURN_TYPES_0_AND_1_ARE_INCOMPATIBLE) => {
+                    arg = "new ".to_string() + &get_property_name_arg(&args[0]) + "(...)";
+                }
+                _ => {}
+            }
+            if !arg.is_empty() {
+                message = &msg::THE_TYPES_RETURNED_BY_0_ARE_INCOMPATIBLE_BETWEEN_THESE_TYPES;
+                args[0] = DiagArg::Str(arg);
+                if let Some(chain) = self.error_chain.as_mut() {
+                    // r.errorChain = r.errorChain.next.next
+                    let next_next = chain.next.as_deref().and_then(|n| n.next.clone());
+                    chain.next = next_next;
+                }
+            }
+            // Transform a property incompatibility message for property 'x'
+            // followed by some elaboration message followed by a property
+            // incompatibility message for property 'y' (Go comment,
+            // verbatim).
+            match self.get_chain_message(1) {
+                Some(&msg::TYPES_OF_PROPERTY_0_ARE_INCOMPATIBLE)
+                | Some(&msg::THE_TYPES_OF_0_ARE_INCOMPATIBLE_BETWEEN_THESE_TYPES)
+                | Some(&msg::THE_TYPES_RETURNED_BY_0_ARE_INCOMPATIBLE_BETWEEN_THESE_TYPES) => {
+                    let head = get_property_name_arg(&args[0]);
+                    let tail = self
+                        .error_chain
+                        .as_ref()
+                        .and_then(|e| e.next.as_ref())
+                        .and_then(|n| n.args.first())
+                        .map(get_property_name_arg)
+                        .unwrap_or_default();
+                    let arg = add_to_dotted_name(&head, &tail);
+                    if let Some(chain) = self.error_chain.as_mut() {
+                        let next_next = chain.next.as_deref().and_then(|n| n.next.clone());
+                        chain.next = next_next;
+                    }
+                    if message == &msg::TYPES_OF_PROPERTY_0_ARE_INCOMPATIBLE {
+                        message = &msg::THE_TYPES_OF_0_ARE_INCOMPATIBLE_BETWEEN_THESE_TYPES;
+                    }
+                    self.report_error(c, message, &[DiagArg::Str(arg)]);
+                    return;
+                }
+                _ => {}
+            }
+            self.error_chain = Some(Box::new(ErrorChain {
+                next: self.error_chain.take(),
+                message,
+                args,
+            }));
+            return;
+        }
+        self.error_chain = Some(Box::new(ErrorChain {
+            next: self.error_chain.take(),
+            message,
+            args: args.to_vec(),
+        }));
+    }
+
+    /// Go: `func (r *Relater) getChainMessage(index) *diagnostics.Message`.
+    fn get_chain_message(&self, mut index: usize) -> Option<&'static Message> {
+        let mut e = self.error_chain.as_deref();
+        loop {
+            let Some(chain) = e else { return None };
+            if index == 0 {
+                return Some(chain.message);
+            }
+            e = chain.next.as_deref();
+            index -= 1;
+        }
+    }
+
+    /// Go: `func (r *Relater) chainArgsMatch(args...) bool` — nil acts as a
+    /// wildcard.
+    fn chain_args_match(&self, args: &[Option<&DiagArg>]) -> bool {
+        let Some(chain) = self.error_chain.as_ref() else { return false };
+        for (i, a) in args.iter().enumerate() {
+            if let Some(a) = a {
+                if chain.args.get(i) != Some(a) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
+/// Go: `func addToDottedName(head, tail) string`.
+fn add_to_dotted_name(head: &str, tail: &str) -> String {
+    let head = if head.starts_with("new ") { format!("({head})") } else { head.to_string() };
+    let mut pos = 0;
+    loop {
+        if tail[pos..].starts_with('(') {
+            pos += 1;
+        } else if tail[pos..].starts_with("new ") {
+            pos += 4;
+        } else {
+            break;
+        }
+    }
+    let prefix = &tail[..pos];
+    let suffix = &tail[pos..];
+    if suffix.starts_with('[') {
+        format!("{prefix}{head}{suffix}")
+    } else {
+        format!("{prefix}{head}.{suffix}")
+    }
+}
+
+/// Go: `func getPropertyNameArg(arg) string`.
+fn get_property_name_arg(arg: &DiagArg) -> String {
+    let s = match arg {
+        DiagArg::Str(s) => s.clone(),
+        _ => String::new(),
+    };
+    if !s.is_empty() && (s.starts_with('"') || s.starts_with('\'') || s.starts_with('`')) {
+        format!("[{s}]")
+    } else {
+        s
+    }
+}
+
+/// Go: `func isConversionOrInterfaceImplementationMessage(message) bool`.
+fn is_conversion_or_interface_implementation_message(message: &Message) -> bool {
+    message == &msg::CLASS_0_INCORRECTLY_IMPLEMENTS_INTERFACE_1
+        || message == &msg::CLASS_0_INCORRECTLY_IMPLEMENTS_CLASS_1_DID_YOU_MEAN_TO_EXTEND_1_AND_INHERIT_ITS_MEMBERS_AS_A_SUBCLASS
+        || message == &msg::CONVERSION_OF_TYPE_0_TO_TYPE_1_MAY_BE_A_MISTAKE_BECAUSE_NEITHER_TYPE_SUFFICIENTLY_OVERLAPS_WITH_THE_OTHER_IF_THIS_WAS_INTENTIONAL_CONVERT_THE_EXPRESSION_TO_UNKNOWN_FIRST
+        || message == &msg::ITS_INSTANCE_TYPE_0_IS_NOT_A_VALID_JSX_ELEMENT
+        || message == &msg::ITS_RETURN_TYPE_0_IS_NOT_A_VALID_JSX_ELEMENT
+        || message == &msg::ITS_ELEMENT_TYPE_0_IS_NOT_A_VALID_JSX_ELEMENT
+}
+
+/// Go: `func chainDepth(chain *ErrorChain) int`.
+fn chain_depth(chain: Option<&ErrorChain>) -> usize {
+    let mut depth = 0;
+    let mut chain = chain;
+    while let Some(c) = chain {
+        depth += 1;
+        chain = c.next.as_deref();
+    }
+    depth
+}
+
+/// Go: `func (c *Checker) isObjectTypeWithInferableIndex(t) bool`.
+fn is_object_type_with_inferable_index(c: &mut Checker, t: TypeId) -> bool {
+    if c.type_(t).flags.intersects(TypeFlags::INTERSECTION) {
+        return c.type_(t).types().iter().all(|&t| is_object_type_with_inferable_index(c, t));
+    }
+    c.type_(t).symbol.is_some_and(|symbol| {
+        let flags = c.program_symbol(symbol).flags;
+        flags.intersects(SymbolFlags::OBJECT_LITERAL | SymbolFlags::TYPE_LITERAL | SymbolFlags::ENUM | SymbolFlags::VALUE_MODULE)
+            && !flags.intersects(SymbolFlags::CLASS)
+            && !type_has_call_or_construct_signatures(c, t)
+    }) || c.type_(t).object_flags.intersects(ObjectFlags::JS_LITERAL | ObjectFlags::OBJECT_REST_TYPE)
+        || (c.type_(t).object_flags.intersects(ObjectFlags::REVERSE_MAPPED)
+            && is_object_type_with_inferable_index(c, c.type_(t).as_reverse_mapped_type().expect("ReverseMappedType data").source))
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Best-matching-type / discriminant machinery (Go relater.go 872+)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: the `isRelatedTo func(*Type, *Type) Ternary` parameter of the
+/// getBestMatchingType/findMatchingDiscriminantType family (the call sites
+/// pass `r.isRelatedToSimple` or `c.compareTypesAssignableSimple`); the port
+/// threads the active relater (None for the checker-level comparers).
+fn invoke_comparer(
+    c: &mut Checker,
+    kind: TypeComparerKind,
+    relater: Option<&mut Relater>,
+    source: TypeId,
+    target: TypeId,
+) -> Ternary {
+    match kind {
+        TypeComparerKind::Identical => c.compare_types_identical(source, target),
+        TypeComparerKind::Assignable => c.compare_types_assignable_simple(source, target),
+        TypeComparerKind::SubtypeOf => c.compare_types_subtype_of(source, target),
+        TypeComparerKind::RelatedToSimple | TypeComparerKind::RelatedToWorker => {
+            match relater {
+                Some(r) => match kind {
+                    TypeComparerKind::RelatedToSimple => r.is_related_to_simple(c, source, target),
+                    _ => r.is_related_to_worker(c, source, target, false),
+                },
+                None => {
+                    // PORT: unreachable through checker-level entry points
+                    // (they construct their own relater); see the module note.
+                    c.check_type_related_to(source, target, RelationKind::Assignable, None)
+                        .then_some(Ternary::True)
+                        .unwrap_or(Ternary::False)
+                }
+            }
+        }
+    }
+}
+
+/// Go: `func (c *Checker) getBestMatchingType(source, target, isRelatedTo) *Type`.
+fn get_best_matching_type(
+    c: &mut Checker,
+    source: TypeId,
+    target: TypeId,
+    kind: TypeComparerKind,
+    relater: Option<&mut Relater>,
+) -> Option<TypeId> {
+    if let Some(t) = find_matching_discriminant_type(c, source, target, kind, relater) {
+        return Some(t);
+    }
+    if let Some(t) = find_matching_type_reference_or_type_alias_reference(c, source, target) {
+        return Some(t);
+    }
+    if let Some(t) = find_best_type_for_object_literal(c, source, target) {
+        return Some(t);
+    }
+    if let Some(t) = find_best_type_for_invokable(c, source, target, SignatureKind::Call) {
+        return Some(t);
+    }
+    if let Some(t) = find_best_type_for_invokable(c, source, target, SignatureKind::Construct) {
+        return Some(t);
+    }
+    find_most_overlappy_type(c, source, target)
+}
+
+/// Go: `func (c *Checker) findMatchingTypeReferenceOrTypeAliasReference(source, unionTarget) *Type`.
+fn find_matching_type_reference_or_type_alias_reference(c: &mut Checker, source: TypeId, union_target: TypeId) -> Option<TypeId> {
+    let source_object_flags = c.type_(source).object_flags;
+    if source_object_flags.intersects(ObjectFlags::REFERENCE | ObjectFlags::ANONYMOUS)
+        && c.type_(union_target).flags.intersects(TypeFlags::UNION)
+    {
+        for &target in c.type_(union_target).types() {
+            if c.type_(target).flags.intersects(TypeFlags::OBJECT) {
+                let overlap_obj_flags = ObjectFlags::from_bits(source_object_flags.0 & c.type_(target).object_flags.0);
+                if overlap_obj_flags.intersects(ObjectFlags::REFERENCE)
+                    && type_reference_target_opt(c, source) == type_reference_target_opt(c, target)
+                {
+                    return Some(target);
+                }
+                if overlap_obj_flags.intersects(ObjectFlags::ANONYMOUS)
+                    && c.type_(source).alias.is_some()
+                    && c.type_(target).alias.is_some()
+                    && c.type_(source).alias.as_ref().map(|a| a.symbol) == c.type_(target).alias.as_ref().map(|a| a.symbol)
+                {
+                    return Some(target);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Go: `func (c *Checker) findBestTypeForInvokable(source, unionTarget, kind) *Type`.
+fn find_best_type_for_invokable(c: &mut Checker, source: TypeId, union_target: TypeId, kind: SignatureKind) -> Option<TypeId> {
+    if !get_signatures_of_type(c, source, kind).is_empty() {
+        return c.type_(union_target).types().iter().copied().find(|&t| !get_signatures_of_type(c, t, kind).is_empty());
+    }
+    None
+}
+
+/// Go: `func (c *Checker) findMostOverlappyType(source, unionTarget) *Type`.
+fn find_most_overlappy_type(c: &mut Checker, source: TypeId, union_target: TypeId) -> Option<TypeId> {
+    let mut best_match: Option<TypeId> = None;
+    if !c.type_(source).flags.intersects(TypeFlags::PRIMITIVE | TypeFlags::INSTANTIABLE_PRIMITIVE) {
+        let mut matching_count = 0usize;
+        for &target in c.type_(union_target).types() {
+            if !c.type_(target).flags.intersects(TypeFlags::PRIMITIVE | TypeFlags::INSTANTIABLE_PRIMITIVE) {
+                let overlap = get_intersection_type(c, vec![get_index_type(c, source), get_index_type(c, target)]);
+                if c.type_(overlap).flags.intersects(TypeFlags::INDEX) {
+                    // perfect overlap of keys
+                    return Some(target);
+                } else if is_unit_type(c, overlap) || c.type_(overlap).flags.intersects(TypeFlags::UNION) {
+                    // We only want to account for literal types otherwise
+                    // (Go comment, verbatim).
+                    let length = if c.type_(overlap).flags.intersects(TypeFlags::UNION) {
+                        c.type_(overlap).types().iter().filter(|&&t| is_unit_type(c, t)).count()
+                    } else {
+                        1
+                    };
+                    if length >= matching_count {
+                        best_match = Some(target);
+                        matching_count = length;
+                    }
+                }
+            }
+        }
+    }
+    best_match
+}
+
+/// Go: `func (c *Checker) findBestTypeForObjectLiteral(source, unionTarget) *Type`.
+fn find_best_type_for_object_literal(c: &mut Checker, source: TypeId, union_target: TypeId) -> Option<TypeId> {
+    if c.type_(source).object_flags.intersects(ObjectFlags::OBJECT_LITERAL) && some_type(c, union_target, |t| is_array_like_type(c, t)) {
+        return c.type_(union_target).types().iter().copied().find(|&t| !is_array_like_type(c, t));
+    }
+    None
+}
+
+/// Go: `func (c *Checker) shouldReportUnmatchedPropertyError(source, target) bool`.
+fn should_report_unmatched_property_error(c: &mut Checker, source: TypeId, target: TypeId) -> bool {
+    let type_call_signatures = get_signatures_of_structured_type(c, source, SignatureKind::Call);
+    let type_construct_signatures = get_signatures_of_structured_type(c, source, SignatureKind::Construct);
+    let type_properties = get_properties_of_object_type(c, source);
+    if (!type_call_signatures.is_empty() || !type_construct_signatures.is_empty()) && type_properties.is_empty() {
+        if (!get_signatures_of_type(c, target, SignatureKind::Call).is_empty() && !type_call_signatures.is_empty())
+            || (!get_signatures_of_type(c, target, SignatureKind::Construct).is_empty() && !type_construct_signatures.is_empty())
+        {
+            // target has similar signature kinds to source (Go comment,
+            // verbatim).
+            return true;
+        }
+        return false;
+    }
+    true
+}
+
+/// Go: `func (c *Checker) getUnmatchedProperty(source, target, requireOptionalProperties, matchDiscriminantProperties) *ast.Symbol`.
+fn get_unmatched_property(c: &mut Checker, source: TypeId, target: TypeId, require_optional_properties: bool, match_discriminant_properties: bool) -> Option<SymbolId> {
+    get_unmatched_properties_worker(c, source, target, require_optional_properties, match_discriminant_properties, None)
+}
+
+/// Go: `func (c *Checker) getUnmatchedProperties(...) []*ast.Symbol`.
+fn get_unmatched_properties(c: &mut Checker, source: TypeId, target: TypeId, require_optional_properties: bool, match_discriminant_properties: bool) -> Vec<SymbolId> {
+    let mut props = Vec::new();
+    get_unmatched_properties_worker(c, source, target, require_optional_properties, match_discriminant_properties, Some(&mut props));
+    props
+}
+
+/// Go: `func (c *Checker) getUnmatchedPropertiesWorker(...) *ast.Symbol`.
+fn get_unmatched_properties_worker(
+    c: &mut Checker,
+    source: TypeId,
+    target: TypeId,
+    require_optional_properties: bool,
+    match_discriminant_properties: bool,
+    mut props_out: Option<&mut Vec<SymbolId>>,
+) -> Option<SymbolId> {
+    let properties = get_properties_of_type(c, target);
+    for target_prop in properties {
+        // TODO: remove this when we support static private identifier fields
+        // (Go comment, verbatim).
+        if is_static_private_identifier_property(c, target_prop) {
+            continue;
+        }
+        if require_optional_properties
+            || (!c.program_symbol(target_prop).flags.intersects(SymbolFlags::OPTIONAL)
+                && !c.program_symbol_check_flags(target_prop).intersects(u::CheckFlags::PARTIAL))
+        {
+            let name = c.program_symbol(target_prop).name.clone();
+            match get_property_of_type(c, source, &name) {
+                None => match props_out.as_deref_mut() {
+                    None => return Some(target_prop),
+                    Some(out) => out.push(target_prop),
+                },
+                Some(source_prop) if match_discriminant_properties => {
+                    let target_type = get_type_of_symbol(c, target_prop);
+                    if c.type_(target_type).flags.intersects(TypeFlags::UNIT) {
+                        let source_type = get_type_of_symbol(c, source_prop);
+                        if !(c.type_(source_type).flags.intersects(TypeFlags::ANY)
+                            || c.get_regular_type_of_literal_type(source_type) == c.get_regular_type_of_literal_type(target_type))
+                        {
+                            match props_out.as_deref_mut() {
+                                None => return Some(target_prop),
+                                Some(out) => out.push(target_prop),
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// Go: `func excludeProperties(properties, excludedProperties) []*ast.Symbol`.
+fn exclude_properties(c: &Checker, properties: Vec<SymbolId>, excluded_properties: &FxHashSet<String>) -> Vec<SymbolId> {
+    if excluded_properties.is_empty() || properties.is_empty() {
+        return properties;
+    }
+    let mut reduced: Vec<SymbolId> = Vec::new();
+    let mut excluded = false;
+    let properties = &properties;
+    for (i, &prop) in properties.iter().enumerate() {
+        if !excluded_properties.contains(&c.program_symbol(prop).name) {
+            if excluded {
+                reduced.push(prop);
+            }
+        } else if !excluded {
+            reduced = properties[..i].to_vec();
+            excluded = true;
+        }
+    }
+    if excluded {
+        return reduced;
+    }
+    properties.clone()
+}
+
+/// Go: `func (c *Checker) findMatchingDiscriminantType(source, target, isRelatedTo) *Type`
+/// (keep up-to-date with the same logic in getApparentTypeOfContextualType —
+/// Go doc comment, verbatim).
+fn find_matching_discriminant_type(
+    c: &mut Checker,
+    source: TypeId,
+    target: TypeId,
+    kind: TypeComparerKind,
+    relater: Option<&mut Relater>,
+) -> Option<TypeId> {
+    if c.type_(target).flags.intersects(TypeFlags::UNION)
+        && c.type_(source).flags.intersects(TypeFlags::INTERSECTION | TypeFlags::OBJECT)
+    {
+        if let Some(match_) = get_matching_union_constituent_for_type(c, target, source) {
+            return Some(match_);
+        }
+        let discriminant_properties = find_discriminant_properties(c, &get_properties_of_type(c, source), target);
+        if !discriminant_properties.is_empty() {
+            let discriminated = discriminate_type_by_discriminable_items(c, target, &discriminant_properties, kind, relater);
+            if discriminated != Some(target) {
+                return discriminated;
+            }
+        }
+    }
+    None
+}
+
+/// Go: `func (c *Checker) findDiscriminantProperties(sourceProperties, target) []*ast.Symbol`.
+fn find_discriminant_properties(c: &mut Checker, source_properties: &[SymbolId], target: TypeId) -> Vec<SymbolId> {
+    let mut result = Vec::new();
+    for &source_property in source_properties {
+        let name = c.program_symbol(source_property).name.clone();
+        if is_discriminant_property(c, target, &name) {
+            result.push(source_property);
+        }
+    }
+    result
+}
+
+/// Go: `func (c *Checker) isDiscriminantProperty(t, name) bool`.
+fn is_discriminant_property(c: &mut Checker, t: TypeId, name: &str) -> bool {
+    if c.type_(t).flags.intersects(TypeFlags::UNION) {
+        // TODO(port M6 S8): getUnionOrIntersectionProperty — the synthetic
+        // discriminant CheckFlags computation (nonUniformAndLiteral etc.).
+        // Union property resolution lands with resolveStructuredTypeMembers.
+        return false;
+    }
+    false
+}
+
+/// Go: `func (c *Checker) getMatchingUnionConstituentForType(unionType, t) *Type`.
+fn get_matching_union_constituent_for_type(c: &mut Checker, union_type: TypeId, t: TypeId) -> Option<TypeId> {
+    let key_property_name = get_key_property_name(c, union_type)?;
+    let prop_type = get_type_of_property_of_type(c, t, &key_property_name)?;
+    get_constituent_type_for_key_type(c, union_type, prop_type)
+}
+
+/// Go: `func (c *Checker) getKeyPropertyName(t) string` + `computeKeyPropertyNameAndMap`.
+///
+/// PORT: Go caches `keyPropertyName`/`constituentMap` on the UnionType; the
+/// port keeps the cache checker-side (types.rs's UnionType carries no
+/// mutation seam for the map), keyed by the union TypeId — same lifetime
+/// semantics (union types are interned per checker).
+fn get_key_property_name(c: &mut Checker, t: TypeId) -> Option<String> {
+    if let Some(cached) = c.key_property_names.get(&t) {
+        return cached.clone();
+    }
+    let computed = compute_key_property_name_and_map(c, t);
+    c.key_property_names.insert(t, computed.clone());
+    computed
+}
+
+/// Go: `func (c *Checker) computeKeyPropertyNameAndMap(t) (string, map[*Type]*Type)`.
+fn compute_key_property_name_and_map(c: &mut Checker, t: TypeId) -> Option<String> {
+    let types = c.type_(t).types().to_vec();
+    if types.len() < 10
+        || c.type_(t).object_flags.intersects(ObjectFlags::PRIMITIVE_UNION)
+        || types.iter().filter(|&&t| is_object_or_instantiable_non_primitive(c, t)).count() < 10
+    {
+        return None;
+    }
+    let key_property_name = get_key_property_candidate_name(c, &types);
+    let Some(key_property_name) = key_property_name else {
+        return None;
+    };
+    if map_types_by_key_property(c, &types, &key_property_name).is_none() {
+        return None;
+    }
+    Some(key_property_name)
+}
+
+/// Go: `func isObjectOrInstantiableNonPrimitive(t) bool`.
+fn is_object_or_instantiable_non_primitive(c: &Checker, t: TypeId) -> bool {
+    c.type_(t).flags.intersects(TypeFlags::OBJECT | TypeFlags::INSTANTIABLE_NON_PRIMITIVE)
+}
+
+/// Go: `func (c *Checker) getKeyPropertyCandidateName(types) string`.
+fn get_key_property_candidate_name(c: &mut Checker, types: &[TypeId]) -> Option<String> {
+    for &t in types {
+        if c.type_(t).flags.intersects(TypeFlags::OBJECT | TypeFlags::INSTANTIABLE_NON_PRIMITIVE) {
+            for p in get_properties_of_type(c, t) {
+                if is_unit_type(c, get_type_of_symbol(c, p)) {
+                    return Some(c.program_symbol(p).name.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Go: `func (c *Checker) mapTypesByKeyProperty(types, keyPropertyName) map[*Type]*Type`.
+fn map_types_by_key_property(c: &mut Checker, types: &[TypeId], key_property_name: &str) -> Option<FxHashMap<TypeId, TypeId>> {
+    let mut types_by_key: FxHashMap<TypeId, TypeId> = FxHashMap::default();
+    let mut count = 0usize;
+    for &t in types {
+        if c.type_(t).flags.intersects(TypeFlags::OBJECT | TypeFlags::INTERSECTION | TypeFlags::INSTANTIABLE_NON_PRIMITIVE) {
+            let Some(discriminant) = get_type_of_property_of_type(c, t, key_property_name) else {
+                return None;
+            };
+            if !is_literal_type(c, discriminant) {
+                return None;
+            }
+            let mut duplicate = false;
+            for d in distributed(c, discriminant) {
+                let key = c.get_regular_type_of_literal_type(d);
+                match types_by_key.get(&key) {
+                    None => {
+                        types_by_key.insert(key, t);
+                    }
+                    Some(existing) if *existing != c.unknown_type() => {
+                        types_by_key.insert(key, c.unknown_type());
+                        duplicate = true;
+                    }
+                    _ => {}
+                }
+            }
+            if !duplicate {
+                count += 1;
+            }
+        }
+    }
+    if count >= 10 && count * 2 >= types.len() {
+        return Some(types_by_key);
+    }
+    None
+}
+
+/// Go: `func (c *Checker) getConstituentTypeForKeyType(t, keyType) *Type`.
+fn get_constituent_type_for_key_type(c: &mut Checker, t: TypeId, key_type: TypeId) -> Option<TypeId> {
+    let key = c.get_regular_type_of_literal_type(key_type);
+    let key_property_name = get_key_property_name(c, t)?;
+    // The map is rebuilt lazily (PORT note: Go caches it on the union).
+    let types = c.type_(t).types().to_vec();
+    let map = map_types_by_key_property(c, &types, &key_property_name)?;
+    match map.get(&key) {
+        Some(&result) if result != c.unknown_type() => Some(result),
+        _ => None,
+    }
+}
+
+/// Go: `func (c *Checker) discriminateTypeByDiscriminableItems(target, discriminator) *Type`.
+fn discriminate_type_by_discriminable_items(
+    c: &mut Checker,
+    target: TypeId,
+    props: &[SymbolId],
+    kind: TypeComparerKind,
+    relater: Option<&mut Relater>,
+) -> Option<TypeId> {
+    let types = c.type_(target).types().to_vec();
+    let mut include = vec![Ternary::False; types.len()];
+    for (i, &t) in types.iter().enumerate() {
+        if !c.type_(t).flags.intersects(TypeFlags::PRIMITIVE) && !c.type_(get_reduced_type(c, t)).flags.intersects(TypeFlags::NEVER) {
+            include[i] = Ternary::True;
+        }
+    }
+    let prop_names: Vec<String> = props.iter().map(|&p| c.program_symbol(p).name.clone()).collect();
+    for (n, prop) in props.iter().enumerate() {
+        // If the remaining target types include at least one with a matching
+        // discriminant (Go comment, verbatim).
+        let mut matched = false;
+        let prop_type = get_type_of_symbol(c, *prop);
+        let prop_type_distributed = distributed(c, prop_type);
+        for i in 0..types.len() {
+            if include[i] != Ternary::False {
+                let Some(target_type) = get_type_of_property_or_index_signature_of_type(c, types[i], &prop_names[n]) else {
+                    continue;
+                };
+                let mut is_match = false;
+                for &s in &prop_type_distributed {
+                    if invoke_comparer(c, kind, relater.as_deref_mut(), s, target_type) != Ternary::False {
+                        is_match = true;
+                        break;
+                    }
+                }
+                if is_match {
+                    matched = true;
+                } else {
+                    include[i] = Ternary::Maybe;
+                }
+            }
+        }
+        // Turn each Ternary.Maybe into Ternary.False if there was a match
+        // (Go comment, verbatim).
+        for i in 0..types.len() {
+            if include[i] == Ternary::Maybe {
+                if matched {
+                    include[i] = Ternary::False;
+                } else {
+                    include[i] = Ternary::True;
+                }
+            }
+        }
+    }
+    if include.contains(&Ternary::False) {
+        let filtered_types: Vec<TypeId> = types
+            .iter()
+            .zip(&include)
+            .filter(|(_, &inc)| inc == Ternary::True)
+            .map(|(&t, _)| t)
+            .collect();
+        let filtered = get_union_type_ex(c, filtered_types, crate::todo_shapes::UnionReduction::None, None, None);
+        if !c.type_(filtered).flags.intersects(TypeFlags::NEVER) {
+            return Some(filtered);
+        }
+    }
+    Some(target)
+}
+
+/// Go: `func (c *Checker) filterPrimitivesIfContainsNonPrimitive(unionType) *Type`.
+fn filter_primitives_if_contains_non_primitive(c: &mut Checker, union_type: TypeId) -> TypeId {
+    if maybe_type_of_kind(c, union_type, TypeFlags::NON_PRIMITIVE) {
+        let result = filter_type(c, union_type, |t| !c.type_(t).flags.intersects(TypeFlags::PRIMITIVE));
+        if !c.type_(result).flags.intersects(TypeFlags::NEVER) {
+            return result;
+        }
+    }
+    union_type
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Template-literal / string-matching helpers (Go relater.go 2354+)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `func (c *Checker) templateLiteralTypesDefinitelyUnrelated(source, target) bool`.
+fn template_literal_types_definitely_unrelated(c: &Checker, source_texts: &[String], target_texts: &[String]) -> bool {
+    let source_start = &source_texts[0];
+    let target_start = &target_texts[0];
+    let source_end = &source_texts[source_texts.len() - 1];
+    let target_end = &target_texts[target_texts.len() - 1];
+    let start_len = source_start.len().min(target_start.len());
+    let end_len = source_end.len().min(target_end.len());
+    &source_start[..start_len] != &target_start[..start_len]
+        || &source_end[source_end.len() - end_len..] != &target_end[target_end.len() - end_len..]
+}
+
+/// Go: `func (c *Checker) isTypeMatchedByTemplateLiteralType(source, target, compareTypes) bool`.
+fn is_type_matched_by_template_literal_type(
+    c: &mut Checker,
+    source: TypeId,
+    target: TypeId,
+    kind: TypeComparerKind,
+    relater: Option<&mut Relater>,
+) -> bool {
+    let Some(inferences) = infer_types_from_template_literal_type(c, source, target, kind, relater) else {
+        return false;
+    };
+    let (_, target_types) = template_literal_parts(c, target);
+    for (i, inference) in inferences.iter().enumerate() {
+        if !is_valid_type_for_template_literal_placeholder(c, *inference, target_types[i], kind, relater.as_deref_mut()) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Go: `func (c *Checker) inferTypesFromTemplateLiteralType(source, target, compareTypes) []*Type`.
+fn infer_types_from_template_literal_type(
+    c: &mut Checker,
+    source: TypeId,
+    target: TypeId,
+    kind: TypeComparerKind,
+    relater: Option<&mut Relater>,
+) -> Option<Vec<TypeId>> {
+    if c.type_(source).flags.intersects(TypeFlags::STRING_LITERAL) {
+        return infer_from_literal_parts_to_template_literal(c, &[get_string_literal_value(c, source)], &[], target);
+    }
+    if c.type_(source).flags.intersects(TypeFlags::TEMPLATE_LITERAL) {
+        let (source_texts, source_types) = template_literal_parts(c, source);
+        let (target_texts, _) = template_literal_parts(c, target);
+        if source_texts == target_texts {
+            let (target_texts, target_types) = template_literal_parts(c, target);
+            let _ = target_texts;
+            return Some(
+                source_types
+                    .iter()
+                    .zip(&target_types)
+                    .map(|(&s, &t)| {
+                        if invoke_comparer(c, kind, relater.as_deref_mut(), get_base_constraint_or_type(c, s), get_base_constraint_or_type(c, t), false) != Ternary::False {
+                            s
+                        } else {
+                            get_string_like_type_for_type(c, s).expect("string-like")
+                        }
+                    })
+                    .collect(),
+            );
+        }
+        return infer_from_literal_parts_to_template_literal(c, &source_texts, &source_types, target);
+    }
+    None
+}
+
+/// Go: `func (c *Checker) inferFromLiteralPartsToTemplateLiteral(sourceTexts, sourceTypes, target) []*Type`
+/// (see Go's long doc comment, verbatim there).
+#[allow(clippy::too_many_lines)]
+fn infer_from_literal_parts_to_template_literal(
+    c: &mut Checker,
+    source_texts: &[String],
+    source_types: &[TypeId],
+    target: TypeId,
+) -> Option<Vec<TypeId>> {
+    let last_source_index = source_texts.len() - 1;
+    let source_start_text = &source_texts[0];
+    let source_end_text = source_texts[last_source_index].clone();
+    let (target_texts, _) = template_literal_parts(c, target);
+    let last_target_index = target_texts.len() - 1;
+    let target_start_text = &target_texts[0];
+    let target_end_text = &target_texts[last_target_index];
+    if last_source_index == 0 && source_start_text.len() < target_start_text.len() + target_end_text.len()
+        || !source_start_text.starts_with(target_start_text.as_str())
+        || !source_end_text.ends_with(target_end_text.as_str())
+    {
+        return None;
+    }
+    let remaining_end_text = source_end_text[..source_end_text.len() - target_end_text.len()].to_string();
+    let mut seg = 0usize;
+    let mut pos = target_start_text.len();
+    let mut matches: Vec<TypeId> = Vec::new();
+    // Go: getSourceText closure.
+    let get_source_text = |index: usize, source_texts: &[String], remaining_end_text: &str| -> String {
+        if index < last_source_index {
+            source_texts[index].clone()
+        } else {
+            remaining_end_text.to_string()
+        }
+    };
+    // Go: addMatch closure (borrow discipline: pass the mutable state
+    // explicitly).
+    fn add_match(
+        c: &mut Checker,
+        source_texts: &[String],
+        source_types: &[TypeId],
+        remaining_end_text: &str,
+        last_source_index: usize,
+        seg: &mut usize,
+        pos: &mut usize,
+        matches: &mut Vec<TypeId>,
+        s: usize,
+        p: usize,
+    ) {
+        let match_type = if s == *seg {
+            let text = combine_surrogate_pairs(&source_texts[*seg][*pos..p]);
+            c.get_string_literal_type(&text)
+        } else {
+            let mut match_texts: Vec<String> = vec![String::new(); s - *seg + 1];
+            match_texts[0] = source_texts[*seg][*pos..].to_string();
+            for (i, text) in source_texts[*seg + 1..s].iter().enumerate() {
+                match_texts[1 + i] = text.clone();
+            }
+            match_texts[s - *seg] = if s < last_source_index {
+                source_texts[s][..p].to_string()
+            } else {
+                remaining_end_text[..p].to_string()
+            };
+            get_template_literal_type(c, &match_texts, &source_types[*seg..s])
+        };
+        matches.push(match_type);
+        *seg = s;
+        *pos = p;
+    }
+    for i in 1..last_target_index {
+        let delim = &target_texts[i];
+        if !delim.is_empty() {
+            let mut s = seg;
+            let mut p = pos;
+            loop {
+                let text = get_source_text(s, source_texts, &remaining_end_text);
+                match text[p..].find(delim.as_str()) {
+                    Some(d) => {
+                        p += d;
+                        break;
+                    }
+                    None => {
+                        s += 1;
+                        if s == source_texts.len() {
+                            return None;
+                        }
+                        p = 0;
+                    }
+                }
+            }
+            add_match(c, source_texts, source_types, &remaining_end_text, last_source_index, &mut seg, &mut pos, &mut matches, s, p);
+            pos += delim.len();
+        } else {
+            let source_text = get_source_text(seg, source_texts, &remaining_end_text);
+            if pos < source_text.len() {
+                // Consume one code point at a time (Go comment, verbatim).
+                let size = decode_js_string_rune(&source_text[pos..]);
+                add_match(c, source_texts, source_types, &remaining_end_text, last_source_index, &mut seg, &mut pos, &mut matches, seg, pos + size);
+            } else if seg < last_source_index {
+                add_match(c, source_texts, source_types, &remaining_end_text, last_source_index, &mut seg, &mut pos, &mut matches, seg + 1, 0);
+            } else {
+                return None;
+            }
+        }
+    }
+    let end = get_source_text(last_source_index, source_texts, &remaining_end_text).len();
+    add_match(c, source_texts, source_types, &remaining_end_text, last_source_index, &mut seg, &mut pos, &mut matches, last_source_index, end);
+    Some(matches)
+}
+
+/// Go: `func (c *Checker) getStringLikeTypeForType(t) *Type`.
+fn get_string_like_type_for_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    if c.type_(t).flags.intersects(TypeFlags::ANY | TypeFlags::STRING_LIKE) {
+        return Some(t);
+    }
+    Some(get_template_literal_type(c, &["".to_string(), "".to_string()], &[t]))
+}
+
+/// Go: `func (c *Checker) isValidTypeForTemplateLiteralPlaceholder(source, target, compareTypes) bool`.
+fn is_valid_type_for_template_literal_placeholder(
+    c: &mut Checker,
+    source: TypeId,
+    target: TypeId,
+    kind: TypeComparerKind,
+    mut relater: Option<&mut Relater>,
+) -> bool {
+    if c.type_(target).flags.intersects(TypeFlags::INTERSECTION) {
+        return c.type_(target).types().iter().all(|&t| {
+            Some(t) == c.empty_type_literal_type
+                || is_valid_type_for_template_literal_placeholder(c, source, t, kind, relater.as_deref_mut())
+        });
+    }
+    if c.type_(target).flags.intersects(TypeFlags::STRING) || invoke_comparer(c, kind, relater.as_deref_mut(), source, target, false) != Ternary::False {
+        return true;
+    }
+    if c.type_(source).flags.intersects(TypeFlags::STRING_LITERAL) {
+        let value = get_string_literal_value(c, source);
+        return (c.type_(target).flags.intersects(TypeFlags::NUMBER) && is_valid_number_string(&value, false))
+            || (c.type_(target).flags.intersects(TypeFlags::BIGINT) && is_valid_big_int_string(&value, false))
+            || (c.type_(target).flags.intersects(TypeFlags::BOOLEAN_LITERAL | TypeFlags::NULLABLE)
+                && c.type_(target).as_intrinsic_type().is_some_and(|d| d.intrinsic_name == value))
+            || (c.type_(target).flags.intersects(TypeFlags::STRING_MAPPING)
+                && is_member_of_string_mapping(c, source, target))
+            || (c.type_(target).flags.intersects(TypeFlags::TEMPLATE_LITERAL)
+                && is_type_matched_by_template_literal_type(c, source, target, kind, relater));
+    }
+    if c.type_(source).flags.intersects(TypeFlags::TEMPLATE_LITERAL) {
+        let (texts, types) = template_literal_parts(c, source);
+        return texts.len() == 2
+            && texts[0].is_empty()
+            && texts[1].is_empty()
+            && invoke_comparer(c, kind, relater, types[0], target, false) != Ternary::False;
+    }
+    false
+}
+
+/// Go: `func (c *Checker) isMemberOfStringMapping(source, target) bool`.
+fn is_member_of_string_mapping(c: &mut Checker, source: TypeId, target: TypeId) -> bool {
+    if c.type_(target).flags.intersects(TypeFlags::ANY) {
+        return true;
+    }
+    if c.type_(target).flags.intersects(TypeFlags::STRING | TypeFlags::TEMPLATE_LITERAL) {
+        return c.is_type_assignable_to(source, target);
+    }
+    if c.type_(target).flags.intersects(TypeFlags::STRING_MAPPING) {
+        // We need to see whether applying the same mappings (Go comment,
+        // verbatim).
+        let (mapped, inner) = apply_target_string_mapping_to_source(c, source, target);
+        return mapped == source && is_member_of_string_mapping(c, source, inner);
+    }
+    false
+}
+
+/// Go: `func (c *Checker) applyTargetStringMappingToSource(source, target) (*Type, *Type)`.
+fn apply_target_string_mapping_to_source(c: &mut Checker, source: TypeId, target: TypeId) -> (TypeId, TypeId) {
+    let mut inner = string_mapping_target(c, target);
+    let mut source = source;
+    if c.type_(inner).flags.intersects(TypeFlags::STRING_MAPPING) {
+        let (s, i) = apply_target_string_mapping_to_source(c, source, inner);
+        source = s;
+        inner = i;
+    }
+    (get_string_mapping_type(c, c.type_(target).symbol.expect("StringMappingType symbol"), source), inner)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Error elaboration (Go relater.go 438+) — the elaborate* family. The flow/
+// jsx/array-literal contextual-type callees are S4/S5/S9 waves; the structure
+// mirrors Go with permissive stubs at the wave seams.
+// ────────────────────────────────────────────────────────────────────────────
+
+impl Checker {
+    /// Go: `func (c *Checker) elaborateError(node, source, target, relation, headMessage, diagnosticOutput) bool`.
+    pub(crate) fn elaborate_error(
+        &mut self,
+        node: Option<NodeId>,
+        source: TypeId,
+        target: TypeId,
+        relation: RelationKind,
+        head_message: Option<&'static Message>,
+        diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
+    ) -> bool {
+        let Some(node) = node else { return false };
+        if is_or_has_generic_conditional(self, target) {
+            return false;
+        }
+        if self.compiler_options.no_check == Tristate::TSTrue {
+            return false;
+        }
+        if self.elaborate_did_you_mean_to_call_or_construct(node, source, target, relation, SignatureKind::Construct, head_message, diagnostic_output)
+            || self.elaborate_did_you_mean_to_call_or_construct(node, source, target, relation, SignatureKind::Call, head_message, diagnostic_output)
+        {
+            return true;
+        }
+        let kind = self.store().node(node).kind;
+        match kind {
+            Kind::AsExpression | Kind::JsxExpression | Kind::ParenthesizedExpression => {
+                // Go: AsExpression recurses only for const assertions (the
+                // non-const case breaks out of the switch).
+                if kind == Kind::AsExpression && !ast_is_const_assertion(self, node) {
+                    return false;
+                }
+                // TODO(port M6 S4/S5): node.Expression() accessors — the
+                // recursion into the inner expression needs the flow wave's
+                // expression accessor seam.
+                return false;
+            }
+            Kind::BinaryExpression => {
+                // TODO(port M6 S4): the '=' / ',' operator recursion.
+                return false;
+            }
+            Kind::ObjectLiteralExpression => {
+                return self.elaborate_object_literal(node, source, target, relation, diagnostic_output);
+            }
+            Kind::ArrayLiteralExpression => {
+                return self.elaborate_array_literal(node, source, target, relation, diagnostic_output);
+            }
+            Kind::ArrowFunction => {
+                return self.elaborate_arrow_function(node, source, target, relation, diagnostic_output);
+            }
+            Kind::JsxAttributes => {
+                // TODO(port M6 W5 jsx): elaborateJsxComponents.
+                return false;
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) isOrHasGenericConditional(t) bool`.
+    fn is_or_has_generic_conditional(&mut self, t: TypeId) -> bool {
+        let flags = self.type_(t).flags;
+        flags.intersects(TypeFlags::CONDITIONAL)
+            || (flags.intersects(TypeFlags::INTERSECTION)
+                && self.type_(t).types().iter().any(|&t| self.is_or_has_generic_conditional(t)))
+    }
+
+    /// Go: `func (c *Checker) elaborateDidYouMeanToCallOrConstruct(...) bool`.
+    #[allow(clippy::too_many_arguments)]
+    fn elaborate_did_you_mean_to_call_or_construct(
+        &mut self,
+        node: NodeId,
+        source: TypeId,
+        target: TypeId,
+        relation: RelationKind,
+        kind: SignatureKind,
+        head_message: Option<&'static Message>,
+        diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
+    ) -> bool {
+        let signatures = get_signatures_of_type(self, source, kind);
+        for &s in &signatures {
+            let return_type = get_return_type_of_signature(self, s);
+            if !self.type_(return_type).flags.intersects(TypeFlags::ANY | TypeFlags::NEVER)
+                && self.check_type_related_to(return_type, target, relation, None /*errorNode*/)
+            {
+                let mut diags: Vec<tsc_ast::Diagnostic> = Vec::new();
+                if !self.check_type_related_to_ex(source, target, relation, Some(node), head_message, Some(&mut diags)) {
+                    let mut diagnostic = diags[0].clone();
+                    let message = if kind == SignatureKind::Construct {
+                        &msg::DID_YOU_MEAN_TO_USE_NEW_WITH_THIS_EXPRESSION_I_E_THE_EXPRESSION_HERE
+                    } else {
+                        &msg::DID_YOU_MEAN_TO_CALL_THIS_EXPRESSION_I_E_THE_EXPRESSION_HERE
+                    };
+                    diagnostic.add_related_info(diagnostic_for_node(self, Some(node), message, &[]));
+                    report_diagnostic(self, Some(diagnostic), diagnostic_output);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) elaborateObjectLiteral(...) bool`.
+    fn elaborate_object_literal(
+        &mut self,
+        node: NodeId,
+        source: TypeId,
+        target: TypeId,
+        relation: RelationKind,
+        diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
+    ) -> bool {
+        if self.type_(target).flags.intersects(TypeFlags::PRIMITIVE | TypeFlags::NEVER) {
+            return false;
+        }
+        // TODO(port M6 S4): the property walk (getLiteralTypeFromProperty of
+        // the declaration symbols, the per-Kind elaborateElement dispatch,
+        // the computed-name message). The object-literal members need the
+        // symbol-of-declaration seam from the flow wave.
+        let _ = (node, source, relation, diagnostic_output);
+        false
+    }
+
+    /// Go: `func (c *Checker) elaborateArrayLiteral(...) bool`.
+    fn elaborate_array_literal(
+        &mut self,
+        node: NodeId,
+        source: TypeId,
+        target: TypeId,
+        relation: RelationKind,
+        diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
+    ) -> bool {
+        if self.type_(target).flags.intersects(TypeFlags::PRIMITIVE | TypeFlags::NEVER) {
+            return false;
+        }
+        // TODO(port M6 S4/S9): checkArrayLiteral via the contextual-type
+        // stack (pushContextualType/popContextualType) + isTupleLikeType +
+        // getEffectiveCheckNode — the array-literal elaboration needs the
+        // flow wave's contextual typing.
+        let _ = (node, source, relation, diagnostic_output);
+        false
+    }
+
+    /// Go: `func (c *Checker) elaborateArrowFunction(...) bool`.
+    fn elaborate_arrow_function(
+        &mut self,
+        node: NodeId,
+        source: TypeId,
+        target: TypeId,
+        relation: RelationKind,
+        diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
+    ) -> bool {
+        // Don't elaborate blocks or functions with annotated parameter types
+        // (Go comment, verbatim).
+        // TODO(port M6 S4): the body/parameter accessors + getSingleCallSignature
+        // (S8) + createPromiseType — the arrow-function elaboration needs the
+        // flow wave.
+        let _ = (node, source, target, relation, diagnostic_output);
+        false
+    }
+}
+
+/// Go: `func (c *Checker) getTypeOfPropertyInType`-family helper — the
+/// `getPropertyOfType`/`getPropertyOfObjectType` names above route through
+/// the property-stub seam.
+fn ast_is_const_assertion(c: &Checker, node: NodeId) -> bool {
+    // Go: ast.IsConstAssertion — KindAsExpression with a `const` type.
+    tsc_binder::ast_shims::is_const_assertion(c.store(), node)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Unported-wave callees (Go checker.go/utilities.go slice seams)
+//
+// Each stub carries the TODO(port M6 <slice>) banner naming the wave that
+// replaces it, per the W1 stub convention: real body where the callee is
+// arena-local, permissive direction where the owning wave is unported (the
+// M6-DISPATCH cycle notes pin the directions: S7 union/instantiation calls
+// get identity-or-errorType stubs, S8 member resolution gets empty/None
+// stubs, S9 constraint reads stop at the payload, W4 type-to-string falls
+// back to names).
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `ResolvedTypeMembers`-shaped carrier (checker.go) — the S8 wave owns
+/// the real struct; the permissive stub resolves to no members/signatures.
+pub(crate) struct ResolvedTypeMembers {
+    pub properties: Vec<SymbolId>,
+    pub signatures: Vec<crate::types::SignatureId>,
+    pub index_infos: Vec<crate::types::IndexInfoId>,
+}
+
+/// Go: `func (c *Checker) resolveStructuredTypeMembers(t) *ResolvedTypeMembers`.
+pub(crate) fn resolve_structured_type_members(c: &mut Checker, t: TypeId) -> ResolvedTypeMembers {
+    // TODO(port M6 S8): the members resolver (resolveObjectTypeMembers +
+    // resolveUnionTypeMembers etc.) — permissive: no members.
+    let _ = (c, t);
+    ResolvedTypeMembers {
+        properties: Vec::new(),
+        signatures: Vec::new(),
+        index_infos: Vec::new(),
+    }
+}
+
+/// Go: `func (c *Checker) getPropertiesOfType(t) []*ast.Symbol`.
+pub(crate) fn get_properties_of_type(c: &mut Checker, t: TypeId) -> Vec<SymbolId> {
+    if c.type_(t).flags.intersects(TypeFlags::OBJECT) {
+        return get_properties_of_object_type(c, t);
+    }
+    if c.type_(t).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+        return get_properties_of_union_or_intersection_type(c, t);
+    }
+    // TODO(port M6 S8): intersection reduction etc.
+    Vec::new()
+}
+
+/// Go: `func (c *Checker) getPropertiesOfObjectType(t) []*ast.Symbol`.
+pub(crate) fn get_properties_of_object_type(c: &mut Checker, t: TypeId) -> Vec<SymbolId> {
+    // TODO(port M6 S8): resolveStructuredTypeMembers — empty until then.
+    let _ = (c, t);
+    Vec::new()
+}
+
+/// Go: `func (c *Checker) getPropertiesOfUnionOrIntersectionType(t) []*ast.Symbol`.
+pub(crate) fn get_properties_of_union_or_intersection_type(c: &mut Checker, t: TypeId) -> Vec<SymbolId> {
+    // TODO(port M6 S8): the union/intersection property walk.
+    let _ = (c, t);
+    Vec::new()
+}
+
+/// Go: `func (c *Checker) getPropertyOfObjectType(t, name) *ast.Symbol`.
+pub(crate) fn get_property_of_object_type(c: &mut Checker, t: TypeId, name: &str) -> Option<SymbolId> {
+    // TODO(port M6 S8): the member lookup (case-insensitive fallback etc.).
+    let _ = (c, t, name);
+    None
+}
+
+/// Go: `func (c *Checker) getPropertyOfUnionOrIntersectionType(t, name, skipObjectFunctionPropertyAugment) *ast.Symbol`.
+pub(crate) fn get_property_of_union_or_intersection_type(c: &mut Checker, t: TypeId, name: &str, _skip_object_function_property_augment: bool) -> Option<SymbolId> {
+    // TODO(port M6 S8): the union/intersection synthetic property.
+    let _ = (c, t, name);
+    None
+}
+
+/// Go: `func (c *Checker) getPropertyOfType(t, name) *ast.Symbol`.
+pub(crate) fn get_property_of_type(c: &mut Checker, t: TypeId, name: &str) -> Option<SymbolId> {
+    if c.type_(t).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+        return get_property_of_union_or_intersection_type(c, t, name, false);
+    }
+    get_property_of_object_type(c, get_apparent_type(c, t), name)
+}
+
+/// Go: `func (c *Checker) getTypeOfPropertyOfType(t, name) *Type`.
+pub(crate) fn get_type_of_property_of_type(c: &mut Checker, t: TypeId, name: &str) -> Option<TypeId> {
+    get_property_of_type(c, t, name).map(|p| c.get_type_of_symbol(p))
+}
+
+/// Go: `func (c *Checker) getTypeOfPropertyOrIndexSignatureOfType(t, name) *Type`.
+pub(crate) fn get_type_of_property_or_index_signature_of_type(c: &mut Checker, t: TypeId, name: &str) -> Option<TypeId> {
+    if let Some(prop) = get_property_of_type(c, t, name) {
+        return Some(get_type_of_symbol(c, prop));
+    }
+    if let Some(info) = get_applicable_index_info_for_name(c, t, name) {
+        return Some(c.index_info_value_type(info));
+    }
+    None
+}
+
+/// Go: `func (c *Checker) getSignaturesOfType(t, kind) []*Signature`.
+pub(crate) fn get_signatures_of_type(c: &mut Checker, t: TypeId, kind: SignatureKind) -> Vec<crate::types::SignatureId> {
+    // TODO(port M6 S8): resolveStructuredTypeMembers' signature lists.
+    let _ = (c, kind);
+    Vec::new()
+}
+
+/// Go: `func (c *Checker) getSignaturesOfStructuredType(t, kind) []*Signature`.
+pub(crate) fn get_signatures_of_structured_type(c: &mut Checker, t: TypeId, kind: SignatureKind) -> Vec<crate::types::SignatureId> {
+    // TODO(port M6 S8): as above (the structured-type variant).
+    let _ = (c, kind);
+    Vec::new()
+}
+
+/// Go: `func (c *Checker) typeHasCallOrConstructSignatures(t) bool`.
+pub(crate) fn type_has_call_or_construct_signatures(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S8): the signature-existence check.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) getIndexInfosOfType(t) []*IndexInfo`.
+pub(crate) fn get_index_infos_of_type(c: &mut Checker, t: TypeId) -> Vec<crate::types::IndexInfoId> {
+    // TODO(port M6 S8): resolveStructuredTypeMembers' indexInfos.
+    let _ = (c, t);
+    Vec::new()
+}
+
+/// Go: `func (c *Checker) getIndexInfoOfType(t, key) *IndexInfo`.
+pub(crate) fn get_index_info_of_type(c: &mut Checker, t: TypeId, key: TypeId) -> Option<crate::types::IndexInfoId> {
+    // TODO(port M6 S8): the indexInfo map lookup.
+    let _ = (c, key);
+    None
+}
+
+/// Go: `func (c *Checker) getApplicableIndexInfo(t, key) *IndexInfo`.
+pub(crate) fn get_applicable_index_info(c: &mut Checker, t: TypeId, key: TypeId) -> Option<crate::types::IndexInfoId> {
+    // TODO(port M6 S8): isApplicableIndexType over the indexInfos.
+    let _ = (c, key);
+    None
+}
+
+/// Go: `func (c *Checker) getApplicableIndexInfoForName(t, name) *IndexInfo`.
+pub(crate) fn get_applicable_index_info_for_name(c: &mut Checker, t: TypeId, name: &str) -> Option<crate::types::IndexInfoId> {
+    // TODO(port M6 S8): the name-keyed indexInfo path.
+    let _ = (c, t, name);
+    None
+}
+
+/// Go: `func (c *Checker) isApplicableIndexType(source, target) bool`.
+pub(crate) fn is_applicable_index_type(c: &mut Checker, source: Option<TypeId>, target: TypeId) -> bool {
+    // TODO(port M6 S8): getIndexType / isKeyTypeValidForIndex.
+    let _ = (c, source, target);
+    false
+}
+
+/// Go: `func (c *Checker) getLiteralTypeFromProperty(prop, flags, checkOverflow) *Type`.
+pub(crate) fn get_literal_type_from_property(c: &mut Checker, prop: SymbolId, _flags: TypeFlags, _check_overflow: bool) -> Option<TypeId> {
+    // TODO(port M6 S8): the declared-literal-from-name machinery.
+    let _ = (c, prop);
+    None
+}
+
+/// Go: `func (c *Checker) getNonMissingTypeOfSymbol(sym) *Type`.
+pub(crate) fn get_non_missing_type_of_symbol(c: &mut Checker, sym: SymbolId) -> TypeId {
+    // TODO(port M6 S8): the missing-type strip (exactOptionalPropertyTypes).
+    c.get_type_of_symbol(sym)
+}
+
+/// Go: `func (c *Checker) getTypeOfSymbol(sym) *Type` (free-fn form).
+pub(crate) fn get_type_of_symbol(c: &mut Checker, sym: SymbolId) -> TypeId {
+    c.get_type_of_symbol(sym)
+}
+
+/// Go: `func (c *Checker) symbolToString(sym) string`.
+pub(crate) fn symbol_to_string(c: &mut Checker, sym: SymbolId) -> String {
+    // TODO(port M6 W4): symbolToString's escaping/mangling (nodebuilder wave).
+    c.program_symbol(sym).name.clone()
+}
+
+/// Go: `func (c *Checker) signatureToString(s) string`.
+pub(crate) fn signature_to_string(c: &mut Checker, s: crate::types::SignatureId) -> String {
+    // TODO(port M6 W4): the signature printer.
+    let _ = (c, s);
+    String::new()
+}
+
+/// Go: `func (c *Checker) TypeToString(t) string` — W4 stub: the intrinsic
+/// name (or a flag-derived placeholder); the nodebuilder wave owns the real
+/// printer. Only error-message text depends on this.
+pub(crate) fn type_to_string(c: &mut Checker, t: TypeId) -> String {
+    // TODO(port M6 W4): TypeToString (nodebuilderimpl).
+    if let Some(data) = c.type_(t).as_intrinsic_type() {
+        return data.intrinsic_name.clone();
+    }
+    if let Some(data) = c.type_(t).as_literal_type() {
+        return match data.value.as_ref() {
+            Some(crate::types::LiteralValue::String(s)) => format!("\"{s}\""),
+            Some(crate::types::LiteralValue::Number(n)) => format!("{}", n.0),
+            Some(crate::types::LiteralValue::BigInt(b)) => b.to_string(),
+            Some(crate::types::LiteralValue::Boolean(b)) => b.to_string(),
+            None => String::new(),
+        };
+    }
+    "unknown".to_string()
+}
+
+/// Go: `func isObjectLiteralType(t) bool` (utilities.go — `t.flags&(TypeFlagsObject|TypeFlagsIntersection) != 0 && t.symbol != nil && t.symbol.Flags&SymbolFlagsObjectLiteral != 0`).
+pub(crate) fn is_object_literal_type(c: &Checker, t: TypeId) -> bool {
+    c.type_(t).flags.intersects(TypeFlags::OBJECT | TypeFlags::INTERSECTION)
+        && c.type_(t).symbol.is_some_and(|s| c.program_symbol(s).flags.intersects(SymbolFlags::OBJECT_LITERAL))
+}
+
+/// Go: `func isUnitType(t) bool` (utilities.go).
+pub(crate) fn is_unit_type(c: &Checker, t: TypeId) -> bool {
+    c.type_(t).flags.intersects(TypeFlags::UNIT)
+}
+
+/// Go: `func isLiteralType(t) bool` (utilities.go — the widened form without
+/// unique symbols).
+pub(crate) fn is_literal_type(c: &Checker, t: TypeId) -> bool {
+    c.type_(t).flags.intersects(
+        TypeFlags::STRING_LITERAL
+            | TypeFlags::NUMBER_LITERAL
+            | TypeFlags::BIGINT_LITERAL
+            | TypeFlags::BOOLEAN_LITERAL,
+    )
+}
+
+/// Go: `func (c *Checker) isEmptyObjectType(t) bool`.
+pub(crate) fn is_empty_object_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7): t == emptyObjectType — the empty anonymous object
+    // type is created by the newAnonymousType wave.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) IsEmptyAnonymousObjectType(t) bool`.
+pub(crate) fn is_empty_anonymous_object_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7): as above.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isEmptyArrayLiteralType(t) bool`.
+pub(crate) fn is_empty_array_literal_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7): the empty-array-literal marker on array types.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isArrayType(t) bool`.
+pub(crate) fn is_array_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7): the globalArrayType-target reference check.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isReadonlyArrayType(t) bool`.
+pub(crate) fn is_readonly_array_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7): the globalReadonlyArrayType-target check.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isArrayOrTupleType(t) bool`.
+pub(crate) fn is_array_or_tuple_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7).
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isMutableArrayOrTuple(t) bool`.
+pub(crate) fn is_mutable_array_or_tuple(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7).
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func isMutableTupleType(t) bool`.
+pub(crate) fn is_mutable_tuple_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7).
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func isTupleType(t) bool`.
+pub(crate) fn is_tuple_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7): the instantiable-target-tuple check.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func isTupleLikeType(t) bool` (utilities.go).
+pub(crate) fn is_tuple_like_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7).
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isArrayLikeType(t) bool`.
+pub(crate) fn is_array_like_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7).
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isGenericTupleType(t) bool`.
+pub(crate) fn is_generic_tuple_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7).
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isGenericMappedType(t) bool`.
+pub(crate) fn is_generic_mapped_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7): the contains-marker check on mapped types.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func isPartialMappedType(t) bool`.
+pub(crate) fn is_partial_mapped_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7).
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isGenericObjectType(t) bool`.
+pub(crate) fn is_generic_object_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7): the containsGenericLocal check.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isNonGenericObjectType(t) bool`.
+pub(crate) fn is_non_generic_object_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7).
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isGenericIndexType(t) bool`.
+pub(crate) fn is_generic_index_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7).
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isMappedTypeGenericIndexedAccess(t) bool`.
+pub(crate) fn is_mapped_type_generic_indexed_access(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7): the mapped-type + generic-index combination.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) isErrorType(t) bool`.
+pub(crate) fn is_error_type(c: &Checker, t: TypeId) -> bool {
+    Some(t) == c.error_type
+}
+
+/// Go: `func IsDistributedTypeParameter(t) bool` (utilities.go).
+pub(crate) fn is_distributed_type_parameter(c: &Checker, t: TypeId) -> bool {
+    // TODO(port M6 S10): the distributed-marker check.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func isSingleElementGenericTupleType(t) bool`.
+pub(crate) fn is_single_element_generic_tuple_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7): arity-1 tuple target with a generic element.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func isStaticPrivateIdentifierProperty(prop) bool`.
+fn is_static_private_identifier_property(c: &Checker, prop: SymbolId) -> bool {
+    // TODO(port M6 S6): the static-private check.
+    let _ = (c, prop);
+    false
+}
+
+/// Go: `func isNumericLiteralName(name) bool` (utilities.go).
+fn is_numeric_literal_name(name: &str) -> bool {
+    // Go: a canonical parse of the name as a numeric literal.
+    !name.is_empty() && name.parse::<f64>().is_ok()
+}
+
+// ── Normalization / constraints / instantiation (S7/S9/S10 seams) ──
+
+/// Go: `func (c *Checker) getNormalizedType(t, writing) *Type` — the fresh /
+/// deferred-reference normalization. The fresh-literal arm is real; the
+/// deferred-reference, tuple and conditional arms are S7.
+pub(crate) fn get_normalized_type(c: &mut Checker, t: TypeId, writing: bool) -> TypeId {
+    if !writing && crate::is_fresh_literal_type(c, t) {
+        return c.get_regular_type_of_literal_type(t);
+    }
+    // TODO(port M6 S7): deferred type references, tuples/conditional
+    // simplification, substitution resolution.
+    t
+}
+
+/// Go: `func (c *Checker) getConstraintOfType(t) *Type` — reads the payload
+/// constraint; the type-alias and mapped-type arms are S9.
+pub(crate) fn get_constraint_of_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    let ty = c.type_(t);
+    if ty.flags.intersects(TypeFlags::TYPE_PARAMETER | TypeFlags::INDEX | TypeFlags::CONDITIONAL) {
+        if let Some(data) = ty.as_type_parameter() {
+            return data.constraint;
+        }
+        // TODO(port M6 S10): the index-type constraint (stringNumberSymbol).
+        if ty.flags.intersects(TypeFlags::INDEX) {
+            return None;
+        }
+        if let Some(data) = ty.as_conditional_type() {
+            return data.base.constraint;
+        }
+    }
+    // TODO(port M6 S9): getConstraintFromTypeReference, mapped types,
+    // `infer`-parameter constraints.
+    None
+}
+
+/// Go: `func (c *Checker) getConstraintOfTypeParameter(t) *Type`.
+pub(crate) fn get_constraint_of_type_parameter(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    c.type_(t).as_type_parameter().and_then(|d| d.constraint)
+}
+
+/// Go: `func (c *Checker) getBaseConstraintOfType(t) *Type` — the cycle-safe
+/// constraint walk.
+pub(crate) fn get_base_constraint_of_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    // TODO(port M6 S9): the getBaseConstraint worker with the
+    // circular-constraint sentinel; the payload read suffices until the
+    // constrained-instantiation waves construct deeper chains.
+    get_constraint_of_type(c, t)
+}
+
+/// Go: `func (c *Checker) getBaseConstraintOrType(t) *Type`.
+pub(crate) fn get_base_constraint_or_type(c: &mut Checker, t: TypeId) -> TypeId {
+    get_base_constraint_of_type(c, t).unwrap_or(t)
+}
+
+/// Go: `func (c *Checker) getDefaultConstraintOfConditionalType(t) *Type`.
+pub(crate) fn get_default_constraint_of_conditional_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    c.type_(t).as_conditional_type().and_then(|d| d.resolved_default_constraint)
+}
+
+/// Go: `func (c *Checker) getConstraintOfDistributiveConditionalType(t) *Type`.
+pub(crate) fn get_constraint_of_distributive_conditional_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    c.type_(t).as_conditional_type().and_then(|d| d.resolved_constraint_of_distributive)
+}
+
+/// Go: `func (c *Checker) hasNonCircularBaseConstraint(t) bool`.
+pub(crate) fn has_non_circular_base_constraint(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S9): the circularity detection; permissive until then.
+    get_base_constraint_of_type(c, t).is_some()
+}
+
+/// Go: `func (c *Checker) getTypeWithThisArgument(t, thisArgument, needApparentType) *Type`.
+pub(crate) fn get_type_with_this_argument(c: &mut Checker, t: TypeId, this_arg: TypeId, _need_apparent_type: bool) -> TypeId {
+    // TODO(port M6 S9): the this-mapper instantiation.
+    let _ = this_arg;
+    t
+}
+
+/// Go: `func (c *Checker) removeMissingType(t, isOptional) *Type`.
+pub(crate) fn remove_missing_type(c: &mut Checker, t: TypeId, _is_optional: bool) -> TypeId {
+    // TODO(port M6 S7): the `missing`-strip union construction.
+    t
+}
+
+/// Go: `func (c *Checker) addOptionalityEx(t, isProperty, isOptional) *Type`.
+pub(crate) fn add_optionality_ex(c: &mut Checker, t: TypeId, is_property: bool, is_optional: bool) -> TypeId {
+    c.add_optionality_ex(t, is_property, is_optional)
+}
+
+/// Go: `func (c *Checker) getApparentType(t) *Type`.
+pub(crate) fn get_apparent_type(c: &mut Checker, t: TypeId) -> TypeId {
+    // TODO(port M6 S8): apparentTypeOfObjectLiteral/enum etc.
+    t
+}
+
+/// Go: `func (c *Checker) getRegularTypeOfObjectLiteral(t) *Type`.
+pub(crate) fn get_regular_type_of_object_literal(c: &mut Checker, t: TypeId) -> TypeId {
+    if c.type_(t).symbol.is_some_and(|s| c.program_symbol(s).flags.intersects(SymbolFlags::OBJECT_LITERAL)) {
+        return c.get_regular_type_of_literal_type(t);
+    }
+    t
+}
+
+/// Go: `func (c *Checker) getUnionType(types) *Type` — S7 permissive stub.
+pub(crate) fn get_union_type(c: &mut Checker, types: Vec<TypeId>) -> TypeId {
+    // TODO(port M6 S7): getUnionType (subtype reduction, origin tracking).
+    if types.len() == 1 {
+        return types[0];
+    }
+    if types.is_empty() {
+        return c.never_type();
+    }
+    c.error_type()
+}
+
+/// Go: `func (c *Checker) getUnionTypeEx(types, unionReduction, alias, origin) *Type`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn get_union_type_ex(
+    c: &mut Checker,
+    types: Vec<TypeId>,
+    _union_reduction: crate::todo_shapes::UnionReduction,
+    _alias: Option<Box<crate::types::TypeAlias>>,
+    _origin: Option<TypeId>,
+) -> TypeId {
+    // TODO(port M6 S7): the real union constructor.
+    get_union_type(c, types)
+}
+
+/// Go: `func (c *Checker) getIntersectionType(types) *Type` — S7 permissive
+/// stub.
+pub(crate) fn get_intersection_type(c: &mut Checker, types: Vec<TypeId>) -> TypeId {
+    // TODO(port M6 S7): getIntersectionType.
+    if types.len() == 1 {
+        return types[0];
+    }
+    if types.is_empty() {
+        return c.unknown_type();
+    }
+    c.error_type()
+}
+
+/// Go: `func (c *Checker) getIntersectionTypeEx(types, intersectionFlags, alias) *Type`.
+pub(crate) fn get_intersection_type_ex(
+    c: &mut Checker,
+    types: Vec<TypeId>,
+    _flags: IntersectionFlags,
+    _alias: Option<Box<crate::types::TypeAlias>>,
+) -> TypeId {
+    // TODO(port M6 S7): the real intersection constructor.
+    get_intersection_type(c, types)
+}
+
+/// Go: `func (c *Checker) intersectTypes(t, u) *Type`.
+pub(crate) fn intersect_types(c: &mut Checker, t: TypeId, u: TypeId) -> Option<TypeId> {
+    // TODO(port M6 S7): the intersection-with-primitive reduction.
+    Some(get_intersection_type(c, vec![t, u]))
+}
+
+/// Go: `func (c *Checker) extractTypesOfKind(t, kind) *Type` — returns the
+/// never type when nothing matches (Go returns nil; the callers all read
+/// flags immediately, and never carries the same "no constituents"
+/// semantics).
+pub(crate) fn extract_types_of_kind(c: &mut Checker, t: TypeId, kind: TypeFlags) -> TypeId {
+    // TODO(port M6 S7): the filter construction.
+    if c.type_(t).flags.intersects(kind) {
+        t
+    } else {
+        c.never_type()
+    }
+}
+
+/// Go: `func (c *Checker) extractTypesOfKind(target, ^TypeFlagsUndefined)` —
+/// the complement form.
+pub(crate) fn extract_types_of_kind_not(c: &mut Checker, t: TypeId, kind: TypeFlags) -> TypeId {
+    // TODO(port M6 S7): the filter construction (complement).
+    if !c.type_(t).flags.intersects(!kind) {
+        t
+    } else {
+        c.never_type()
+    }
+}
+
+/// Go: `func (c *Checker) filterType(t, f) *Type`.
+pub(crate) fn filter_type(c: &mut Checker, t: TypeId, mut f: impl FnMut(TypeId) -> bool) -> TypeId {
+    // TODO(port M6 S7): the real filter (sameType reduction).
+    if f(t) { t } else { c.never_type() }
+}
+
+/// Go: `func (c *Checker) maybeTypeOfKind(t, kind) bool`.
+pub(crate) fn maybe_type_of_kind(c: &mut Checker, t: TypeId, kind: TypeFlags) -> bool {
+    if c.type_(t).flags.intersects(TypeFlags::UNION) {
+        return c.type_(t).types().iter().any(|&t| c.type_(t).flags.intersects(kind));
+    }
+    c.type_(t).flags.intersects(kind)
+}
+
+/// Go: `func (c *Checker) countTypes(t) int`.
+pub(crate) fn count_types(c: &mut Checker, t: TypeId) -> usize {
+    if c.type_(t).flags.intersects(TypeFlags::UNION) {
+        return c.type_(t).types().len();
+    }
+    1
+}
+
+/// Go: `func (c *Checker) getReducedType(t) *Type`.
+pub(crate) fn get_reduced_type(c: &mut Checker, t: TypeId) -> TypeId {
+    // TODO(port M6 S7): subtype-reduced union forms.
+    t
+}
+
+/// Go: the `Distributed()` accessor — a union distributes to its
+/// constituents, anything else to itself.
+pub(crate) fn distributed(c: &Checker, t: TypeId) -> Vec<TypeId> {
+    if c.type_(t).flags.intersects(TypeFlags::UNION) {
+        c.type_(t).types().to_vec()
+    } else {
+        vec![t]
+    }
+}
+
+/// Go: `func everyType(t, f) bool`.
+pub(crate) fn every_type(c: &mut Checker, t: TypeId, mut f: impl FnMut(TypeId) -> bool) -> bool {
+    if c.type_(t).flags.intersects(TypeFlags::UNION) {
+        return c.type_(t).types().iter().all(|&t| f(t));
+    }
+    f(t)
+}
+
+/// Go: `func someType(t, f) bool`.
+pub(crate) fn some_type(c: &mut Checker, t: TypeId, mut f: impl FnMut(TypeId) -> bool) -> bool {
+    if c.type_(t).flags.intersects(TypeFlags::UNION) {
+        return c.type_(t).types().iter().any(|&t| f(t));
+    }
+    f(t)
+}
+
+/// Go: `func containsType(types, t) bool`.
+pub(crate) fn contains_type(c: &Checker, types: &[TypeId], t: TypeId) -> bool {
+    types.contains(&t)
+}
+
+/// Go: `func (c *Checker) getTrueTypeFromConditionalType(t) *Type` — payload
+/// read (the instantiation path is S10).
+pub(crate) fn get_true_type_from_conditional_type(c: &mut Checker, t: TypeId) -> TypeId {
+    c.type_(t)
+        .as_conditional_type()
+        .and_then(|d| d.resolved_true_type)
+        .unwrap_or_else(|| c.error_type())
+}
+
+/// Go: `func (c *Checker) getFalseTypeFromConditionalType(t) *Type`.
+pub(crate) fn get_false_type_from_conditional_type(c: &mut Checker, t: TypeId) -> TypeId {
+    c.type_(t)
+        .as_conditional_type()
+        .and_then(|d| d.resolved_false_type)
+        .unwrap_or_else(|| c.error_type())
+}
+
+/// Go: the ConditionalRoot payload readers (identity = Box pointer).
+pub(crate) fn conditional_root_is_distributive(c: &Checker, t: TypeId) -> bool {
+    c.type_(t)
+        .as_conditional_type()
+        .and_then(|d| d.root.as_deref().map(|r| r.is_distributive))
+        .unwrap_or(false)
+}
+
+/// Go: `root == root` pointer identity (the conditional `source.AsConditionalType().root == c.root` guard).
+pub(crate) fn conditional_roots_identical(c: &Checker, s: TypeId, t: TypeId) -> bool {
+    let sp = c
+        .type_(s)
+        .as_conditional_type()
+        .and_then(|d| d.root.as_deref().map(|r| r as *const _ as usize));
+    let tp = c
+        .type_(t)
+        .as_conditional_type()
+        .and_then(|d| d.root.as_deref().map(|r| r as *const _ as usize));
+    sp.is_some() && sp == tp
+}
+
+/// Go: `isDistributionDependent(root)` — the isTypeParameterPossiblyReferenced
+/// walk is S10; the distributive flag is real.
+pub(crate) fn conditional_is_distribution_dependent(c: &mut Checker, t: TypeId) -> bool {
+    c.type_(t)
+        .as_conditional_type()
+        .and_then(|d| d.root.as_deref().map(|r| c.is_distribution_dependent(r)))
+        .unwrap_or(false)
+}
+
+/// Go: `root.inferTypeParameters`.
+pub(crate) fn conditional_infer_type_parameters(c: &Checker, t: TypeId) -> Vec<TypeId> {
+    c.type_(t)
+        .as_conditional_type()
+        .and_then(|d| d.root.as_deref().map(|r| r.infer_type_parameters.clone()))
+        .unwrap_or_default()
+}
+
+/// Go: `(checkType, extendsType)` of a conditional.
+pub(crate) fn conditional_parts(c: &Checker, t: TypeId) -> (TypeId, TypeId) {
+    let data = c.type_(t).as_conditional_type().expect("ConditionalType data");
+    (
+        data.check_type.unwrap_or_else(|| c.error_type()),
+        data.extends_type.unwrap_or_else(|| c.error_type()),
+    )
+}
+
+/// Go: the IndexedAccess payload `(objectType, indexType)`.
+pub(crate) fn indexed_access_parts(c: &Checker, t: TypeId) -> (TypeId, TypeId) {
+    let data = c.type_(t).as_indexed_access_type().expect("IndexedAccessType data");
+    (data.object_type, data.index_type)
+}
+
+/// Go: the Index payload `target`.
+pub(crate) fn index_target(c: &Checker, t: TypeId) -> TypeId {
+    c.type_(t).as_index_type().expect("IndexType data").target
+}
+
+/// Go: the Index payload `indexFlags`.
+pub(crate) fn index_type_index_flags(c: &Checker, t: TypeId) -> IndexFlags {
+    c.type_(t).as_index_type().expect("IndexType data").index_flags
+}
+
+/// Go: the Substitution payload `(baseType, constraint)`.
+pub(crate) fn substitution_parts(c: &Checker, t: TypeId) -> (TypeId, TypeId) {
+    let data = c.type_(t).as_substitution_type().expect("SubstitutionType data");
+    (data.base_type, data.constraint)
+}
+
+/// Go: the TemplateLiteral payload `(texts, types)`.
+pub(crate) fn template_literal_parts(c: &Checker, t: TypeId) -> (Vec<String>, Vec<TypeId>) {
+    let data = c.type_(t).as_template_literal_type().expect("TemplateLiteralType data");
+    (data.texts.clone(), data.types.clone())
+}
+
+/// Go: the StringMapping payload `symbol`.
+pub(crate) fn string_mapping_symbol(c: &Checker, t: TypeId) -> Option<SymbolId> {
+    c.type_(t).symbol
+}
+
+/// Go: the StringMapping payload `target`.
+pub(crate) fn string_mapping_target(c: &Checker, t: TypeId) -> TypeId {
+    c.type_(t).as_string_mapping_type().expect("StringMappingType data").target
+}
+
+// ── Index / indexed-access / keys (S10 seams) ──
+
+/// Go: `func (c *Checker) getIndexType(t) *Type` — keyof construction.
+pub(crate) fn get_index_type(c: &mut Checker, t: TypeId) -> TypeId {
+    // TODO(port M6 S10): getIndexedAccessType with AccessFlagsWriting.
+    let _ = t;
+    c.never_type()
+}
+
+/// Go: `func (c *Checker) getIndexTypeEx(t, indexFlags) *Type`.
+pub(crate) fn get_index_type_ex(c: &mut Checker, t: TypeId, _index_flags: IndexFlags) -> TypeId {
+    // TODO(port M6 S10).
+    let _ = t;
+    c.never_type()
+}
+
+/// Go: `func (c *Checker) getIndexTypeOfTypeEx(t, key, fallback) *Type`.
+pub(crate) fn get_index_type_of_type_ex(c: &mut Checker, t: TypeId, _key: TypeId, _fallback: TypeId) -> TypeId {
+    // TODO(port M6 S10).
+    let _ = t;
+    c.never_type()
+}
+
+/// Go: `func (c *Checker) getIndexedAccessType(t, key) *Type`.
+pub(crate) fn get_indexed_access_type(c: &mut Checker, t: TypeId, key: TypeId) -> TypeId {
+    // TODO(port M6 S10): the indexed-access constructor.
+    let _ = (t, key);
+    c.error_type()
+}
+
+/// Go: `func (c *Checker) getIndexedAccessTypeOrUndefined(objectType, indexType, accessFlags, accessNode, errorNode) *Type`
+/// — the `AccessFlagsWriting | IfElse(baseObjectType != objectType, AccessFlagsNoIndexSignatures, 0)` call.
+pub(crate) fn get_indexed_access_type_or_undefined_writing(c: &mut Checker, object_type: TypeId, index_type: TypeId, _no_index_signatures: bool) -> Option<TypeId> {
+    // TODO(port M6 S10): the constraint-of-indexed-access resolution.
+    let _ = (object_type, index_type);
+    None
+}
+
+/// Go: `func (c *Checker) getKnownKeysOfTupleType(t) *Type`.
+pub(crate) fn get_known_keys_of_tuple_type(c: &mut Checker, t: TypeId) -> TypeId {
+    // TODO(port M6 S7/S10).
+    let _ = t;
+    c.never_type()
+}
+
+/// Go: `func (c *Checker) getSimplifiedTypeOrConstraint(t) *Type`.
+pub(crate) fn get_simplified_type_or_constraint(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    // TODO(port M6 S10): getSimplifiedType.
+    get_base_constraint_of_type(c, t)
+}
+
+// ── Type references / tuples / aliases (S2/S7 seams) ──
+
+/// Go: the TypeReference payload `Target()` (the instantiable target).
+pub(crate) fn type_reference_target(c: &Checker, t: TypeId) -> TypeId {
+    c.type_(t)
+        .as_type_reference()
+        .and_then(|d| d.base.target)
+        .expect("TypeReference target")
+}
+
+/// Go: as above, `Option` form (the anonymous-vs-reference overlap checks).
+pub(crate) fn type_reference_target_opt(c: &Checker, t: TypeId) -> Option<TypeId> {
+    c.type_(t).as_type_reference().and_then(|d| d.base.target)
+}
+
+/// Go: `func (c *Checker) getTypeArguments(t) []*Type` — reads the resolved
+/// type arguments (the deferred form falls back to the node's).
+pub(crate) fn get_type_arguments(c: &mut Checker, t: TypeId) -> Vec<TypeId> {
+    c.type_(t)
+        .as_type_reference()
+        .and_then(|d| {
+            d.resolved_type_arguments
+                .clone()
+                .or_else(|| d.type_arguments.clone())
+        })
+        .unwrap_or_default()
+}
+
+/// Go: `func (c *Checker) getTypeReferenceArity(t) int`.
+pub(crate) fn get_type_reference_arity(c: &mut Checker, t: TypeId) -> i32 {
+    get_type_arguments(c, t).len() as i32
+}
+
+/// Go: `func (c *Checker) getMinTypeArgumentCount(typeParameters) int`.
+pub(crate) fn get_min_type_argument_count(c: &mut Checker, params: &[TypeId]) -> usize {
+    // TODO(port M6 S9): the defaults-aware minimum.
+    let _ = c;
+    params.len()
+}
+
+/// Go: `func (c *Checker) fillMissingTypeArguments(typeArguments, typeParameters, minTypeArgumentCount, includeEmptyArray) []*Type`.
+pub(crate) fn fill_missing_type_arguments(c: &mut Checker, type_arguments: &[TypeId], _params: &[TypeId], min_type_argument_count: usize, _include_empty_array: bool) -> Vec<TypeId> {
+    // TODO(port M6 S7): the defaults-filling instantiation.
+    if type_arguments.len() >= min_type_argument_count {
+        return type_arguments.to_vec();
+    }
+    let mut filled = type_arguments.to_vec();
+    while filled.len() < min_type_argument_count {
+        filled.push(c.unknown_type());
+    }
+    filled
+}
+
+/// Go: the typeAliasLinks `typeParameters` read.
+pub(crate) fn get_type_alias_type_parameters(c: &mut Checker, _symbol: SymbolId) -> Vec<TypeId> {
+    // TODO(port M6 S2/S7): the declared type-parameter list.
+    Vec::new()
+}
+
+/// Go: `ast.IsInJSFile(symbol.ValueDeclaration)`.
+pub(crate) fn alias_symbol_value_declaration_in_js_file(c: &Checker, symbol: SymbolId) -> bool {
+    // TODO(port M6 S4): IsInJSFile.
+    let _ = (c, symbol);
+    false
+}
+
+// ── Mapped-type accessors (S7 seams) ──
+
+/// Go: `func (c *Checker) getMappedTypeModifiers(t) MappedTypeModifiers`.
+pub(crate) fn get_mapped_type_modifiers(c: &mut Checker, t: TypeId) -> MappedTypeModifiers {
+    // TODO(port M6 S7): the declaration-driven modifier computation.
+    let _ = t;
+    MappedTypeModifiers::NONE
+}
+
+/// Go: `func (c *Checker) getCombinedMappedTypeOptionality(t) int`.
+pub(crate) fn get_combined_mapped_type_optionality(c: &mut Checker, t: TypeId) -> i32 {
+    // TODO(port M6 S7).
+    let _ = t;
+    0
+}
+
+/// Go: `func (c *Checker) getConstraintTypeFromMappedType(t) *Type`.
+pub(crate) fn get_constraint_type_from_mapped_type(c: &mut Checker, t: TypeId) -> TypeId {
+    // TODO(port M6 S7): the mapped-type constraint type parameter.
+    let _ = t;
+    c.never_type()
+}
+
+/// Go: `func (c *Checker) getTemplateTypeFromMappedType(t) *Type`.
+pub(crate) fn get_template_type_from_mapped_type(c: &mut Checker, t: TypeId) -> TypeId {
+    // TODO(port M6 S7).
+    let _ = t;
+    c.never_type()
+}
+
+/// Go: `func (c *Checker) getTypeParameterFromMappedType(t) *Type`.
+pub(crate) fn get_type_parameter_from_mapped_type(c: &mut Checker, t: TypeId) -> TypeId {
+    // TODO(port M6 S7).
+    let _ = t;
+    c.never_type()
+}
+
+/// Go: `func (c *Checker) getNameTypeFromMappedType(t) *Type`.
+pub(crate) fn get_name_type_from_mapped_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    // TODO(port M6 S7).
+    let _ = t;
+    None
+}
+
+/// Go: `target.AsMappedType().declaration.NameType == nil`.
+pub(crate) fn mapped_type_name_type_is_none(c: &mut Checker, t: TypeId) -> bool {
+    get_name_type_from_mapped_type(c, t).is_none()
+}
+
+/// Go: `func (c *Checker) isMappedTypeWithKeyofConstraintDeclaration(t) bool`.
+pub(crate) fn is_mapped_type_with_keyof_constraint_declaration(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7).
+    let _ = t;
+    false
+}
+
+/// Go: `func (c *Checker) shouldDeferIndexType(target, indexFlags) bool`.
+pub(crate) fn should_defer_index_type(c: &mut Checker, t: TypeId, _index_flags: IndexFlags) -> bool {
+    // TODO(port M6 S10).
+    let _ = t;
+    false
+}
+
+// ── Instantiation seams (S7) ──
+
+/// Go: `func (c *Checker) instantiateType(t, mapper) *Type` — the W1
+/// checker.rs identity stub threaded as a free function.
+pub(crate) fn instantiate_type_ex(c: &mut Checker, t: TypeId, mapper: Option<crate::todo_shapes::TypeMapperId>) -> TypeId {
+    match mapper {
+        Some(mapper) => c.instantiate_type(t, mapper),
+        None => t,
+    }
+}
+
+/// Go: the `mapper` variable (possibly nil) in the conditional-vs-conditional
+/// arm — the same call with the Option surfaced.
+pub(crate) fn instantiate_type_opt(c: &mut Checker, t: TypeId, mapper: Option<crate::todo_shapes::TypeMapperId>) -> TypeId {
+    instantiate_type_ex(c, t, mapper)
+}
+
+/// Go: `c.instantiateType(s, c.reportUnreliableMapper)` — the mapper is nil
+/// until S7 constructs the report mappers; nil-instantiation is identity.
+pub(crate) fn report_unreliable_instantiate(c: &mut Checker, t: TypeId) {
+    // TODO(port M6 S7): the reportUnreliableMapper instantiation.
+    let _ = instantiate_type_ex(c, t, None);
+}
+
+/// Go: `c.reportUnreliableMapper` / `c.reportUnmeasurableMapper`.
+pub(crate) fn report_unreliable_mapper(c: &mut Checker) -> Option<crate::todo_shapes::TypeMapperId> {
+    // TODO(port M6 S7): the mapper.go report mappers.
+    let _ = c;
+    None
+}
+
+pub(crate) fn report_unmeasurable_mapper(c: &mut Checker) -> Option<crate::todo_shapes::TypeMapperId> {
+    // TODO(port M6 S7).
+    let _ = c;
+    None
+}
+
+/// Go: `newSimpleTypeMapper(source, target)` (mapper.go).
+pub(crate) fn new_simple_type_mapper(c: &mut Checker, source: TypeId, target: TypeId) -> crate::todo_shapes::TypeMapperId {
+    c.new_simple_type_mapper(source, target)
+}
+
+/// Go: `func (c *Checker) getErasedSignature(s) *Signature`.
+pub(crate) fn get_erased_signature(c: &mut Checker, s: crate::types::SignatureId) -> crate::types::SignatureId {
+    // TODO(port M6 S6): eraseTypeParameters.
+    let _ = c;
+    s
+}
+
+/// Go: `c.stringNumberSymbolType` — the keyof domain union.
+pub(crate) fn get_string_number_symbol_type(c: &mut Checker) -> TypeId {
+    // TODO(port M6 S7): the string | number | symbol union.
+    c.string_type()
+}
+
+/// Go: `c.anyFunctionType` (None until the signature-construction wave).
+pub(crate) fn any_function_type(c: &mut Checker) -> Option<TypeId> {
+    // TODO(port M6 S7): the anyFunctionType wildcard signature type.
+    let _ = c;
+    None
+}
+
+/// Go: `func (c *Checker) getGlobalESSymbolType() *Type`.
+pub(crate) fn get_global_es_symbol_type(c: &mut Checker) -> Option<TypeId> {
+    // TODO(port M6 S2): the getGlobal* resolver.
+    let _ = c;
+    None
+}
+
+/// Go: `func (c *Checker) getExactOptionalUnassignableProperties(source, target) []*ast.Symbol`.
+pub(crate) fn get_exact_optional_unassignable_properties(c: &mut Checker, source: TypeId, target: TypeId) -> Vec<SymbolId> {
+    // TODO(port M6 S8): the exactOptionalPropertyTypes property walk.
+    let _ = (c, source, target);
+    Vec::new()
+}
+
+/// Go: `func (c *Checker) getSingleBaseForNonAugmentingSubtype(t) *Type`.
+pub(crate) fn get_single_base_for_non_augmenting_subtype(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    // TODO(port M6 S7/S8): the single-base resolution.
+    let _ = (c, t);
+    None
+}
+
+/// Go: `func (c *Checker) cloneTypeParameter(t) *Type`.
+pub(crate) fn clone_type_parameter(c: &mut Checker, t: TypeId) -> TypeId {
+    // TODO(port M6 S7): the clone-and-clear for the synthetic
+    // this-type-parameter-might-need constraint elaboration; identity (the
+    // constraint write below is harmless on the original until then).
+    let _ = c;
+    t
+}
+
+/// Go: the synthetic type-parameter constraint write.
+pub(crate) fn set_type_parameter_constraint(c: &mut Checker, t: TypeId, constraint: TypeId) {
+    if let Some(data) = c.type_mut(t).as_type_parameter_mut() {
+        data.constraint = Some(constraint);
+    }
+}
+
+// ── Symbol/declaration helpers ──
+
+/// Go: `prop.ValueDeclaration`.
+pub(crate) fn symbol_value_declaration(c: &Checker, sym: SymbolId) -> Option<NodeId> {
+    c.program_symbol(sym).value_declaration
+}
+
+/// Go: `getDeclarationModifierFlagsFromSymbol(sym)`.
+pub(crate) fn get_declaration_modifier_flags_from_symbol(c: &Checker, sym: SymbolId) -> ModifierFlags {
+    // TODO(port M6 S6): the declaration modifier-flags read.
+    let _ = (c, sym);
+    ModifierFlags::NONE
+}
+
+/// Go: `func (c *Checker) isValidOverrideOf(sourceProp, targetProp) bool`.
+pub(crate) fn is_valid_override_of(c: &mut Checker, source_prop: SymbolId, target_prop: SymbolId) -> bool {
+    // TODO(port M6 S8): the protected-override relation check. Permissive.
+    let _ = (c, source_prop, target_prop);
+    true
+}
+
+/// Go: `func (c *Checker) isReadonlySymbol(sym) bool`.
+pub(crate) fn is_readonly_symbol(c: &mut Checker, sym: SymbolId) -> bool {
+    // TODO(port M6 S6): the readonly modifier read.
+    let _ = (c, sym);
+    false
+}
+
+/// Go: `func (c *Checker) getDeclaringClass(prop) *Type`.
+pub(crate) fn get_declaring_class(c: &mut Checker, prop: SymbolId) -> Option<TypeId> {
+    // TODO(port M6 S8): the protected-property's declaring class.
+    let _ = (c, prop);
+    None
+}
+
+/// Go: `declaration.ModifierFlags()` (the node-level modifier read).
+pub(crate) fn modifier_flags_of_node(c: &Checker, node: NodeId) -> ModifierFlags {
+    tsc_ast::modifier_flags(c.store(), node)
+}
+
+/// Go: `func (c *Checker) getTypeWithFacts(t, facts) *Type` — S10 stub.
+pub(crate) fn get_type_with_facts(c: &mut Checker, t: TypeId, _facts: TypeFacts) -> TypeId {
+    // TODO(port M6 S10): the facts-based type construction.
+    t
+}
+
+/// Go: `func (c *Checker) hasCovariantVoidArgument(typeArguments, variances) bool`
+/// (checker method form).
+pub(crate) fn has_covariant_void_argument(c: &mut Checker, type_arguments: &[TypeId], variances: &[VarianceFlags]) -> bool {
+    c.has_covariant_void_argument(type_arguments, variances)
+}
+
+/// Go: `func (c *Checker) getBaseTypeOfLiteralType(t) *Type`.
+pub(crate) fn get_base_type_of_literal_type(c: &mut Checker, t: TypeId) -> TypeId {
+    let flags = c.type_(t).flags;
+    if flags.intersects(TypeFlags::STRING_LIKE) {
+        return c.string_type();
+    }
+    if flags.intersects(TypeFlags::NUMBER_LIKE) {
+        return c.number_type();
+    }
+    if flags.intersects(TypeFlags::BIGINT_LIKE) {
+        return c.bigint_type.expect("bigintType");
+    }
+    if flags.intersects(TypeFlags::BOOLEAN_LITERAL) {
+        // Go: booleanType — the true | false union (S7). The regular boolean
+        // literals route through their base; the union isn't constructible
+        // yet, so the strict-subtype surface stays permissive.
+        // TODO(port M6 S7): booleanType union.
+        return c.error_type();
+    }
+    c.error_type()
+}
+
+/// Go: `func (c *Checker) getBaseTypeOfEnumLikeType(t) *Type` — S2 stub.
+pub(crate) fn get_base_type_of_enum_like_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    // TODO(port M6 S2): getBaseTypeOfEnumLikeType.
+    let _ = (c, t);
+    None
+}
+
+/// Go: `func (c *Checker) hasBaseType(t, s) bool` — S8 stub.
+pub(crate) fn has_base_type(c: &mut Checker, t: TypeId, s: TypeId) -> bool {
+    // TODO(port M6 S8): the base-type walk.
+    let _ = (c, t, s);
+    false
+}
+
+/// Go: `func (c *Checker) isFunctionObjectType(t) bool` — S8 stub.
+pub(crate) fn is_function_object_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S8): the Function-global check.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `getStringLiteralValue(t)` (utilities.go).
+pub(crate) fn get_string_literal_value(c: &Checker, t: TypeId) -> String {
+    match c.type_(t).as_literal_type().and_then(|d| d.value.as_ref()) {
+        Some(crate::types::LiteralValue::String(s)) => s.clone(),
+        _ => String::new(),
+    }
+}
+
+/// Go: `func (c *Checker) getTemplateLiteralType(texts, types) *Type` — S7
+/// stub.
+pub(crate) fn get_template_literal_type(c: &mut Checker, texts: &[String], types: &[TypeId]) -> TypeId {
+    // TODO(port M6 S7): the template-literal constructor.
+    let _ = (texts, types);
+    c.never_type()
+}
+
+/// Go: `func (c *Checker) getStringMappingType(symbol, t) *Type` — S7 stub.
+pub(crate) fn get_string_mapping_type(c: &mut Checker, _symbol: Option<SymbolId>, t: TypeId) -> TypeId {
+    // TODO(port M6 S7): the string-mapping constructor.
+    let _ = t;
+    c.never_type()
+}
+
+/// Go: stringutil.CombineSurrogatePairs.
+fn combine_surrogate_pairs(s: &str) -> String {
+    let bytes = tsc_stringutil::combine_surrogate_pairs(s.as_bytes());
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Go: `_, size := stringutil.DecodeJSStringRune(s)` — the consumed byte
+/// count of the next code point.
+fn decode_js_string_rune(s: &str) -> usize {
+    tsc_stringutil::decode_js_string_rune(s.as_bytes()).1
+}
+
+/// Go: `isValidNumberString(value, roundTripOnly)` — jsnum seam.
+fn is_valid_number_string(_value: &str, _round_trip_only: bool) -> bool {
+    // TODO(port M6 W4/jsnum): the number-string round-trip validator.
+    false
+}
+
+/// Go: `isValidBigIntString(value, roundTripOnly)`.
+fn is_valid_big_int_string(_value: &str, _round_trip_only: bool) -> bool {
+    // TODO(port M6 W4/jsnum): the big-int-string validator.
+    false
+}
+
+/// Go: `func (c *Checker) compareProperties(sourceProp, targetProp, compareTypes) Ternary`
+/// (checker.go's property-identity fastpath + comparer).
+pub(crate) fn compare_properties(c: &mut Checker, source_prop: SymbolId, target_prop: SymbolId, kind: TypeComparerKind, relater: Option<&mut Relater>) -> Ternary {
+    if source_prop == target_prop {
+        return Ternary::True;
+    }
+    let source_type = c.get_type_of_symbol(source_prop);
+    let target_type = c.get_type_of_symbol(target_prop);
+    match kind {
+        TypeComparerKind::Identical => c.compare_types_identical(source_type, target_type),
+        TypeComparerKind::Assignable => c.compare_types_assignable_simple(source_type, target_type),
+        TypeComparerKind::SubtypeOf => c.compare_types_subtype_of(source_type, target_type),
+        TypeComparerKind::RelatedToSimple => invoke_comparer(c, kind, relater, source_type, target_type),
+        TypeComparerKind::RelatedToWorker => invoke_comparer(c, kind, relater, source_type, target_type),
+    }
+}
+
+/// Go: `func (c *Checker) getSingleCallSignatureOfType(t) *Signature` — S8
+/// stub (the arrow-function elaboration gate).
+pub(crate) fn get_single_call_signature_of_type(c: &mut Checker, t: TypeId) -> Option<crate::types::SignatureId> {
+    // TODO(port M6 S8).
+    let _ = t;
+    None
 }

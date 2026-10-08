@@ -1149,6 +1149,15 @@ impl Type {
         }
     }
 
+    /// Mutable form of [`Type::as_type_parameter`] (W2: the relater's
+    /// synthetic-constraint write on cloned type parameters).
+    pub fn as_type_parameter_mut(&mut self) -> Option<&mut TypeParameter> {
+        match &mut self.data {
+            TypeData::TypeParameter(d) => Some(d),
+            _ => None,
+        }
+    }
+
     /// Go: `func (t *Type) AsUniqueESSymbolType() *UniqueESSymbolType`.
     pub fn as_unique_essymbol_type(&self) -> Option<&UniqueESSymbolType> {
         match &self.data {

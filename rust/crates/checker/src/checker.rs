@@ -373,6 +373,19 @@ pub struct Checker {
     pub(crate) global_readonly_array_type: Option<TypeId>,
     pub(crate) global_object_type: Option<TypeId>,
     pub(crate) global_function_type: Option<TypeId>,
+    /// Go: `globalStringType`/`globalNumberType`/`globalBooleanType` — the
+    /// wrapper-object globals (S2; the primitive-wrapper elaborations read
+    /// them).
+    pub(crate) global_string_type: Option<TypeId>,
+    pub(crate) global_number_type: Option<TypeId>,
+    pub(crate) global_boolean_type: Option<TypeId>,
+    /// Go: `emptyTypeLiteralType *Type` — `{}` (S7's newAnonymousType).
+    pub(crate) empty_type_literal_type: Option<TypeId>,
+    /// PORT: Go caches `UnionType.keyPropertyName`/`constituentMap` on the
+    /// union itself; the port keeps the cache checker-side (the types.rs
+    /// UnionType has no mutation seam for the map), keyed by the union id —
+    /// same lifetime semantics (unions are interned per checker).
+    pub(crate) key_property_names: FxHashMap<TypeId, Option<String>>,
 }
 
 /// Go: `func createFileIndexMap(files []*ast.SourceFile) map[*ast.SourceFile]int`.
@@ -1548,6 +1561,13 @@ impl Checker {
         // TODO(port M5 compiler): diagnostics collection seam.
     }
 
+    /// Go: `func (c *Checker) addDiagnostic(diagnostic *ast.Diagnostic)` —
+    /// the same M5 compiler collection seam as `error` (permissive no-op).
+    #[allow(dead_code)] // wired by the M5 compiler wave's diagnostics collection
+    pub(crate) fn add_diagnostic(&mut self, _diagnostic: tsc_ast::Diagnostic) {
+        // TODO(port M5 compiler): diagnostics collection seam.
+    }
+
     // ────────────────────────────────────────────────────────────────────────
     // W1 callee stubs + early landings (Go checker.go functions the W1
     // periphery files — mapper.go / jsdoc.go / exports.go — need; the S-waves
@@ -1848,6 +1868,29 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         active_mappers: Vec::new(),
         active_type_mappers_caches: Vec::new(),
         inference_contexts: Vec::new(),
+        identity_relation: Default::default(),
+        assignable_relation: Default::default(),
+        subtype_relation: Default::default(),
+        strict_subtype_relation: Default::default(),
+        comparable_relation: Default::default(),
+        enum_relation: FxHashMap::default(),
+        reliability_flags: Default::default(),
+        marker_types: FxHashSet::default(),
+        marker_super_type: None,
+        marker_sub_type: None,
+        marker_other_type: None,
+        variance_stack: Vec::new(),
+        free_relater: Vec::new(),
+        any_array_type: TypeId(0), // set below (needs anyType)
+        global_array_type: None,
+        global_readonly_array_type: None,
+        global_object_type: None,
+        global_function_type: None,
+        global_string_type: None,
+        global_number_type: None,
+        global_boolean_type: None,
+        empty_type_literal_type: None,
+        key_property_names: FxHashMap::default(),
     };
 
     // Go: countGlobalSymbols sizes the globals table — a capacity hint; the
@@ -1979,6 +2022,38 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     c.empty_string_type = Some(c.get_string_literal_type(""));
     c.zero_type = Some(c.get_number_literal_type(Number(0.0)));
     c.zero_bigint_type = Some(c.get_big_int_literal_type(PseudoBigInt::default()));
+    // Go (checker.go 1045): the marker type parameters — newTypeParameter(nil)
+    // twice for the super/sub pair (sub's constraint = super), once for other.
+    let marker_super_type = c.new_type(
+        TypeFlags::TYPE_PARAMETER,
+        ObjectFlags::NONE,
+        TypeData::TypeParameter(Box::new(crate::types::TypeParameter::default())),
+    );
+    let marker_sub_type = c.new_type(
+        TypeFlags::TYPE_PARAMETER,
+        ObjectFlags::NONE,
+        TypeData::TypeParameter(Box::new(crate::types::TypeParameter::default())),
+    );
+    c.type_mut(marker_sub_type)
+        .as_type_parameter_mut()
+        .expect("TypeParameter data")
+        .constraint = Some(marker_super_type);
+    let marker_other_type = c.new_type(
+        TypeFlags::TYPE_PARAMETER,
+        ObjectFlags::NONE,
+        TypeData::TypeParameter(Box::new(crate::types::TypeParameter::default())),
+    );
+    c.marker_super_type = Some(marker_super_type);
+    c.marker_sub_type = Some(marker_sub_type);
+    c.marker_other_type = Some(marker_other_type);
+    // Go: createMarkerType adds the created markers to markerTypes.
+    c.marker_types.insert(marker_super_type);
+    c.marker_types.insert(marker_sub_type);
+    c.marker_types.insert(marker_other_type);
+    // Go (checker.go 1372): `c.anyArrayType = c.createArrayType(c.anyType)`.
+    // TODO(port M6 S7): createArrayType constructs the type reference; until
+    // that wave the field holds anyType (see the field PORT note).
+    c.any_array_type = c.any_type.expect("just created");
     // TODO(port M6): typeofType = getUnionType(...typeofNEFacts), the flow
     // caches, the Relations, the getGlobal* resolvers,
     // initializeClosures/initializeIterationResolvers/initializeChecker.
