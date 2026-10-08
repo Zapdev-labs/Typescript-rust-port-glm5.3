@@ -1,0 +1,25 @@
+[package]
+name = "tsc-scanner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# scanner.go imports tsc/internal/{ast,core,debug,diagnostics,jsnum,stringutil}.
+tsc-ast = { path = "../ast" }
+tsc-core = { path = "../core" }
+tsc-debug = { path = "../debug" }
+tsc-diagnostics = { path = "../diagnostics" }
+tsc-jsnum = { path = "../jsnum" }
+tsc-stringutil = { path = "../stringutil" }
+# unicodeproperties.go imports tsc/internal/collections (Set).
+tsc-collections = { path = "../collections" }
+# Approved workspace deps (SPEC §5.11), no new external dependencies:
+# memchr mirrors Go's SIMD strings.IndexByte on the string-literal fast path;
+# rustc-hash mirrors Go's map hashing cost for the numberCache memo.
+memchr = { workspace = true }
+rustc-hash = { workspace = true }

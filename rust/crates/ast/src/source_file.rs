@@ -23,10 +23,12 @@
 // DEFERRED (separate M2 tasks, noted in PORTING-NOTES):
 //   - content-mapper surface (ContentMapperSourceFileInfo, SpanMap,
 //     OriginalText, MappedDiagnosticDirective) — needs the spanmap package.
-//   - GetOrCreateToken/createToken + tokenCache — needs NodeFactory.
 //   - GetNameTable / GetDeclarationMap — deep utilities.go dependency chains.
 //   - resolveJSDoc — parser-owned registration hook (parseJSDocForNode).
 //   - ReparsedClones, Hash, language-service caches.
+//
+// GetOrCreateToken/createToken + the token cache live in factory.rs (the
+// NodeFactory port); the cache itself is a SourceFile field here, as in Go.
 
 use std::any::Any;
 use std::cell::Cell;
@@ -42,6 +44,7 @@ use tsc_core::tristate::Tristate;
 use tsc_tspath::{PathKey, RootedDirectoryPath, RootedFilePath};
 
 use crate::diagnostic::Diagnostic;
+use crate::factory::TokenCacheKey;
 use crate::parseoptions::SourceFileParseOptions;
 use crate::positionmap::{compute_position_map, PositionMap};
 use crate::{Kind, Node, NodeData, NodeId, NodeList, SymbolId, SymbolTable};
@@ -351,11 +354,16 @@ pub struct SourceFile {
     /// The node arena (SPEC §5.1). Public for the parser factory.
     pub nodes: Vec<Node>,
     parse_options: SourceFileParseOptions,
-    text: String,
+    /// pub(crate): the token cache (factory.rs GetOrCreateToken) slices
+    /// token text out of it.
+    pub(crate) text: String,
     // Lazy caches (Go sync.Once fields)
     ecma_line_map: OnceLock<Vec<TextPos>>,
     position_map: OnceLock<PositionMap>,
     identifiers: OnceLock<HashSet<String>>,
+    // Go: `tokenCache map[TokenCacheKey]*Node` (language-service section) —
+    // served by get_or_create_token (factory.rs, Go GetOrCreateToken).
+    pub(crate) token_cache: HashMap<TokenCacheKey, NodeId>,
     // Go: `data map[sourceFileDataKey]any` — cross-package lazy cells.
     data: HashMap<u64, OnceLock<Box<dyn Any + Send + Sync>>>,
 }
@@ -394,6 +402,7 @@ impl SourceFile {
             ecma_line_map: OnceLock::new(),
             position_map: OnceLock::new(),
             identifiers: OnceLock::new(),
+            token_cache: HashMap::new(),
             data: HashMap::new(),
         }
     }
@@ -601,6 +610,10 @@ impl NodeStore for SourceFile {
     fn file(&self, file_id: u32) -> &SourceFile {
         assert_eq!(file_id, self.file_id, "file {} is foreign to this arena", file_id);
         self
+    }
+
+    fn file_id(&self) -> u32 {
+        self.file_id
     }
 
     fn alloc(&mut self, node: Node) -> NodeId {

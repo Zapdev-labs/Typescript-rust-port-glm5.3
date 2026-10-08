@@ -10,6 +10,10 @@
 //   - rust/crates/ast/src/ast_generated.rs  (node structs with flattened
 //     base-struct composition, NodeData enum, as_/is_ accessors,
 //     for_each_child)
+//   - rust/crates/ast/src/factory_generated.rs (NodeFactory New*/Update*
+//     constructors — mirror of ast_generated.go's factory methods, incl. the
+//     kind-alias constructors — over the hand-written NodeFactory core in
+//     factory.rs)
 //
 // Deterministic and idempotent; `--check` verifies the checked-in output is
 // current (exit 1 with a diff summary if stale).
@@ -96,6 +100,11 @@ struct FieldDef {
     no_ts: bool,
     #[serde(rename = "noFactory", default)]
     no_factory: bool,
+    /// Value mask applied by the factory when assigning this member (go:
+    /// generate-go-ast's `bitmask` attribute, e.g. `TokenFlagsStringLiteralFlags`;
+    /// resolved to a flags const at emission).
+    #[serde(default)]
+    bitmask: Option<String>,
     /// Routing hint for the generated VisitEachChild (go: generate-go-ast's
     /// `visit` attribute; "modifiers" | "parameters" | "functionBody" |
     /// "embeddedStatement" | "iterationBody" | "topLevelStatements").
@@ -160,6 +169,8 @@ struct MemberDef {
     no_ts: bool,
     #[serde(rename = "noFactory", default)]
     no_factory: bool,
+    #[serde(default)]
+    bitmask: Option<String>,
     /// Routing hint for the generated VisitEachChild (see FieldDef::visit).
     #[serde(default)]
     visit: Option<String>,
@@ -708,6 +719,10 @@ impl Schema {
             no_go,
             no_ts,
             no_factory,
+            bitmask: m
+                .bitmask
+                .clone()
+                .or_else(|| field.and_then(|(_, _, f)| f.bitmask.clone())),
             kind_param,
             declared,
             ty,
@@ -730,6 +745,7 @@ impl Schema {
             no_go: f.no_go,
             no_ts: f.no_ts,
             no_factory: f.no_factory,
+            bitmask: f.bitmask.clone(),
             kind_param: false,
             declared,
             ty,
@@ -1036,6 +1052,10 @@ struct ResolvedMember {
     no_go: bool,
     no_ts: bool,
     no_factory: bool,
+    /// ast.json `bitmask` — the member's own value or the inherited base
+    /// field's (used by the factory to mask flag members, mirroring
+    /// generate-go-ast's `m.bitmask`).
+    bitmask: Option<String>,
     kind_param: bool,
     declared: Type,
     ty: Type,
@@ -2173,6 +2193,434 @@ fn generate_ast(s: &Schema) -> String {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// factory_generated.rs (NodeFactory New*/Update* — mirror of generate-go-ast.ts's
+// emitNewFactory/generateUpdateFactory, over the NodeStore arena seam)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// A resolved factory member (mirror of generate-go-ast.ts's `schemaMembers`).
+struct FactoryMember {
+    r: ResolvedMember,
+    /// Rust param name (Go's `goParamName` snake-cased via the field naming,
+    /// so inherited members and struct fields stay in sync).
+    param: String,
+    kind_param: bool,
+    /// Go `isNodeFlagsMember` — the member sets `Node.Flags`, not a data field.
+    node_flags: bool,
+    /// Go `isTextContentType` — the constructor bumps `f.textCount`.
+    text_content: bool,
+}
+
+fn factory_members(s: &Schema, key: &str) -> Vec<FactoryMember> {
+    s.node_def(key)
+        .members
+        .iter()
+        .filter(|m| !m.no_factory)
+        .map(|m| {
+            let r = s.resolve_member(key, m);
+            FactoryMember {
+                param: rust_field_name(&r.name),
+                kind_param: r.kind_param,
+                node_flags: matches!(&r.declared, Type::Primitive(p) if p == "NodeFlags"),
+                text_content: matches!(&r.ty, Type::Primitive(p) if p == "string")
+                    || matches!(
+                        &r.ty,
+                        Type::List { element, list_kind }
+                            if list_kind == "raw"
+                                && matches!(element.as_ref(), Type::Primitive(p) if p == "string")
+                    ),
+                r,
+            }
+        })
+        .collect()
+}
+
+/// The struct-storage optionality of a member (the base field's for inherited
+/// members — the same formula the generated struct fields and VisitEachChild
+/// use, so factory params always have the field's exact type).
+fn storage_optional_of(r: &ResolvedMember) -> bool {
+    if r.inherited {
+        r.storage_optional
+    } else {
+        r.optional
+    }
+}
+
+fn factory_param_type(s: &Schema, m: &FactoryMember) -> String {
+    if m.kind_param {
+        return "Kind".to_string();
+    }
+    let storage = storage_type(s, &m.r.ty, storage_optional_of(&m.r));
+    match storage.as_str() {
+        // Go string params become &str (the payload owns the copy, PORT).
+        "Box<str>" => "&str".to_string(),
+        "Option<Box<str>>" => "Option<&str>".to_string(),
+        _ => storage,
+    }
+}
+
+/// ast.json `bitmask` → the Rust flags const (e.g. "TokenFlagsStringLiteralFlags"
+/// → "TokenFlags::STRING_LITERAL_FLAGS"; the same bit values as Go, per the
+/// hand-written flags modules).
+fn bitmask_const(bitmask: &str) -> String {
+    if let Some(rest) = bitmask.strip_prefix("NodeFlags") {
+        format!("NodeFlags::{}", to_snake(rest).to_uppercase())
+    } else if let Some(rest) = bitmask.strip_prefix("TokenFlags") {
+        format!("TokenFlags::{}", to_snake(rest).to_uppercase())
+    } else {
+        panic!("unmapped factory bitmask: {bitmask}")
+    }
+}
+
+/// The zero value for a struct field no factory member covers (Go: the New*
+/// constructors leave unassigned fields zero — binder/flow/symbol links,
+/// facts, and the noFactory modifierFlags).
+fn zero_value(key: &str, field: &str, ty: &str) -> String {
+    match ty {
+        t if t.starts_with("Option<") => "None".to_string(),
+        "bool" => "false".to_string(),
+        "i32" | "u32" => "0".to_string(),
+        "Vec<NodeId>" | "Vec<Box<str>>" => "Vec::new()".to_string(),
+        "SymbolTable" => "SymbolTable::default()".to_string(),
+        "ModifierFlags" => "ModifierFlags::NONE".to_string(),
+        "TokenFlags" => "TokenFlags::NONE".to_string(),
+        "Box<str>" => "\"\".into()".to_string(),
+        "std::sync::Arc<dyn std::any::Any + Send + Sync>" => "std::sync::Arc::new(())".to_string(),
+        other => panic!("no zero value for uncovered factory field {key}.{field}: {other}"),
+    }
+}
+
+/// The struct-literal value expression for a covered factory field.
+fn field_value_expr(s: &Schema, m: &FactoryMember) -> String {
+    let storage = storage_type(s, &m.r.ty, storage_optional_of(&m.r));
+    match storage.as_str() {
+        "Box<str>" => format!("{}.into()", m.param),
+        "Option<Box<str>>" => format!("{}.map(Into::into)", m.param),
+        _ => match &m.r.bitmask {
+            Some(b) => format!("{} & {}", m.param, bitmask_const(b)),
+            None => m.param.clone(),
+        },
+    }
+}
+
+/// The `param != node.Field` comparison for the generated Update* changed-check
+/// (Go compares every update member; raw slices use core.Same → `!=` here).
+fn update_compare_expr(s: &Schema, m: &FactoryMember) -> String {
+    if m.node_flags {
+        return format!("{} != n.flags", m.param);
+    }
+    let field = rust_field_name(&m.r.name);
+    let storage = storage_type(s, &m.r.ty, storage_optional_of(&m.r));
+    match storage.as_str() {
+        // Go compares the `any` interface value; pointer identity is the only
+        // sound Arc comparison (PORT — transformer-era revisit for deep-equal
+        // dynamic types, which Go would panic on anyway if non-comparable).
+        t if t.starts_with("std::sync::Arc<") => {
+            format!("!std::sync::Arc::ptr_eq(&{}, &d.{field})", m.param)
+        }
+        "Box<str>" => format!("{} != &*d.{field}", m.param),
+        "Option<Box<str>>" => format!("{} != d.{field}.as_deref()", m.param),
+        _ => format!("{} != d.{field}", m.param),
+    }
+}
+
+/// Mirror of generate-go-ast.ts's `emitNewFactory` — one New* method for
+/// `ctor_name` (the node's primary name or a kind alias), with members in
+/// ast.json order (Go's exact argument order).
+fn emit_new_factory(o: &mut Out, s: &Schema, key: &str, ctor_name: &str, kind_expr: &str) {
+    const I: &str = "    "; // impl-block indent
+    let members = factory_members(s, key);
+    let params = members
+        .iter()
+        .map(|m| format!("{}: {}", m.param, factory_param_type(s, m)))
+        .collect::<Vec<_>>();
+    o.line(format!(
+        "{I}/// Go: `func (f *NodeFactory) {ctor_name}({}) *Node` (ast_generated.go).",
+        members
+            .iter()
+            .map(|m| m.r.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    o.line(format!(
+        "{I}pub fn {}(&mut self{}) -> NodeId {{",
+        to_snake(ctor_name),
+        if params.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", params.join(", "))
+        }
+    ));
+    if members.iter().any(|m| m.text_content) {
+        o.line(format!("{I}    self.text_count += 1;"));
+    }
+    let flags_members: Vec<&FactoryMember> = members.iter().filter(|m| m.node_flags).collect();
+    if flags_members.len() == 1 {
+        // Single flags member (the only shape ast.json has): one binding,
+        // mirroring Go's `node.Flags = param` / `|= param & bitmask` from a
+        // zero Flags.
+        let m = flags_members[0];
+        let expr = match &m.r.bitmask {
+            // Go: `node.Flags |= param & m.bitmask`.
+            Some(b) => format!("{} & {}", m.param, bitmask_const(b)),
+            // Go: `node.Flags = param`.
+            None => m.param.clone(),
+        };
+        o.line(format!("{I}    let node_flags = {expr};"));
+    } else if !flags_members.is_empty() {
+        // Multiple flags members (no current node has these): Go's sequential
+        // assignment/merge, starting from the zero Flags.
+        o.line(format!("{I}    let mut node_flags = NodeFlags::NONE;"));
+        for m in &flags_members {
+            match &m.r.bitmask {
+                Some(b) => o.line(format!(
+                    "{I}    node_flags |= {} & {};",
+                    m.param,
+                    bitmask_const(b)
+                )),
+                None => o.line(format!("{I}    node_flags = {};", m.param)),
+            }
+        }
+    }
+    o.line(format!("{I}    let data = {key} {{"));
+    for line in node_struct_lines(s, key) {
+        if let FieldLine::Field { name, ty, .. } = line {
+            let value = match members
+                .iter()
+                .find(|m| !m.kind_param && !m.node_flags && rust_field_name(&m.r.name) == name)
+            {
+                Some(m) => field_value_expr(s, m),
+                None => zero_value(key, &name, &ty),
+            };
+            // Field-init shorthand when the value is the plain param
+            // (`name: name` → `name`), mirroring idiomatic Rust.
+            if value == name {
+                o.line(format!("{I}        {name},"));
+            } else {
+                o.line(format!("{I}        {name}: {value},"));
+            }
+        }
+    }
+    o.line(format!("{I}    }};"));
+    let flags_arg = if flags_members.is_empty() {
+        "NodeFlags::NONE"
+    } else {
+        "node_flags"
+    };
+    o.line(format!(
+        "{I}    self.new_node({kind_expr}, {flags_arg}, NodeData::{key}(Box::new(data)))"
+    ));
+    o.line(format!("{I}}}"));
+    o.line("");
+}
+
+/// Mirror of generate-go-ast.ts's `generateUpdateFactory` — Update{Node} with
+/// every non-Kind member, returning the original handle when nothing changed
+/// (Go returns the same `*Node`), else a fresh node with Flags/Loc copied
+/// from the original (Go `updateNode`). Returns whether a method was emitted.
+fn emit_update_factory(o: &mut Out, s: &Schema, key: &str) -> bool {
+    let members = factory_members(s, key);
+    let update_members: Vec<&FactoryMember> = members.iter().filter(|m| !m.kind_param).collect();
+    // Go: no Update when there are no non-Kind members, or none of them is a
+    // child (leaf/token nodes never rebuild).
+    if update_members.is_empty() || !update_members.iter().any(|m| m.r.is_child()) {
+        return false;
+    }
+    let has_kind_member = members.iter().any(|m| m.kind_param);
+    let aliases = s.kind_aliases_of_node(key);
+    // `kind` is consumed by the rebuild (New's kind param, or the alias-kind
+    // dispatch); name it `_kind` when unused to keep the build warning-free.
+    let kind_used = has_kind_member || !aliases.is_empty();
+    let ctor_name = format!("Update{key}");
+    let mut params = vec!["node: NodeId".to_string()];
+    for m in &update_members {
+        params.push(format!("{}: {}", m.param, factory_param_type(s, m)));
+    }
+    const I: &str = "    "; // impl-block indent
+    o.line(format!(
+        "{I}/// Go: `func (f *NodeFactory) Update{key}(node *{key}, ...) *Node` (ast_generated.go) —",
+    ));
+    o.line(format!("{I}/// returns `node` unchanged when every member matches (Go returns the"));
+    o.line(format!("{I}/// original `*Node`), else a fresh node with Flags/Loc copied from the"));
+    o.line(format!("{I}/// original (Go `updateNode`)."));
+    o.line(format!(
+        "{I}pub fn {}(&mut self, {}) -> NodeId {{",
+        to_snake(&ctor_name),
+        params.join(", ")
+    ));
+    o.line(format!(
+        "{I}    let (flags, loc, {}, changed) = {{",
+        if kind_used { "kind" } else { "_kind" }
+    ));
+    o.line(format!("{I}        let n = self.store.node(node);"));
+    o.line(format!(
+        "{I}        let d = n.as_{}().unwrap_or_else(|| panic!(\"{ctor_name}: node {{node}} does not carry {key} data\"));",
+        to_snake(key)
+    ));
+    o.line(format!("{I}        ("));
+    o.line(format!("{I}            n.flags,"));
+    o.line(format!("{I}            n.loc,"));
+    o.line(format!("{I}            n.kind,"));
+    let comparisons = update_members
+        .iter()
+        .map(|m| update_compare_expr(s, m))
+        .collect::<Vec<_>>();
+    o.line(format!("{I}            {},", comparisons.join("\n                || ")));
+    o.line(format!("{I}        )"));
+    o.line(format!("{I}    }};"));
+    o.line(format!("{I}    if !changed {{"));
+    o.line(format!("{I}        return node;"));
+    o.line(format!("{I}    }}"));
+    // Rebuild through New* with the Kind from the original node (Go: `node.Kind`).
+    let new_args = members
+        .iter()
+        .map(|m| {
+            if m.kind_param {
+                "kind".to_string()
+            } else {
+                m.param.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    if has_kind_member {
+        o.line(format!(
+            "{I}    let updated = self.{}({new_args});",
+            to_snake(&format!("New{key}"))
+        ));
+    } else if !aliases.is_empty() {
+        // Go: switch on node.Kind to call New{alias} per kind, panic otherwise.
+        o.line(format!("{I}    let updated = match kind {{"));
+        o.line(format!(
+            "{I}        Kind::{} => self.{}({new_args}),",
+            s.syntax_kind_name(key),
+            to_snake(&format!("New{}", s.syntax_kind_name(key)))
+        ));
+        for alias in &aliases {
+            o.line(format!(
+                "{I}        Kind::{alias} => self.{}({new_args}),",
+                to_snake(&format!("New{alias}"))
+            ));
+        }
+        o.line(format!(
+            "{I}        _ => panic!(\"unexpected kind in {ctor_name}: {{}}\", kind.name()),"
+        ));
+        o.line(format!("{I}    }};"));
+    } else {
+        o.line(format!(
+            "{I}    let updated = self.{}({new_args});",
+            to_snake(&format!("New{key}"))
+        ));
+    }
+    o.line(format!("{I}    let u = self.store.node_mut(updated);"));
+    o.line(format!("{I}    u.flags = flags;"));
+    o.line(format!("{I}    u.loc = loc;"));
+    o.line(format!("{I}    updated"));
+    o.line(format!("{I}}}"));
+    o.line("");
+    true
+}
+
+fn generate_factory(s: &Schema) -> String {
+    let mut o = Out::new();
+    o.line("// Code generated by rust/tools/gen-ast from tools/scripts/tsc/ast.json. DO NOT EDIT.");
+    o.line("// Rust mirror of tsc/internal/ast/ast_generated.go's NodeFactory surface — the");
+    o.line("// per-kind New*() constructors (incl. the kind-alias constructors Go emits for");
+    o.line("// nodes with multi-kind defs: NewJSTypeAliasDeclaration, NewJSImportDeclaration)");
+    o.line("// and Update*() methods, in ast.json definition order (identical to Go's file");
+    o.line("// order). The NodeFactory core (newNode/NewNodeList/NewModifierList/NewModifier/");
+    o.line("// NewSourceFile/UpdateSourceFile + the token cache) is hand-written in");
+    o.line("// factory.rs; Go ast.go's NewCommentRange lives in source_file.rs.");
+    o.line("//");
+    o.line("// Mapping (SPEC §5.1): Go `*Node` children → `NodeId` handles (mandatory");
+    o.line("// slots; Go nil becomes `NodeId::NONE`), Go `*NodeList`/`*ModifierList` params →");
+    o.line("// `Option<NodeList>`/`Option<ModifierList>`, Go string params → `&str` (the node");
+    o.line("// payload owns the copy — Go slices share source text; PORT, see factory.rs),");
+    o.line("// Go `[]string` (raw) → `Vec<Box<str>>`. `Kind`-typed members named Kind/kind are");
+    o.line("// the constructor's `kind: Kind` argument (Go `isKindParam`); NodeFlags members");
+    o.line("// set `Node.Flags` (Go `isNodeFlagsMember`, masked by ast.json `bitmask`); other");
+    o.line("// bitmask members are masked into the data field exactly as in Go. Uncovered");
+    o.line("// struct fields (binder/flow links, facts, noFactory fields) take zero values,");
+    o.line("// matching Go's fresh-struct semantics. Nodes count into the factory's");
+    o.line("// textCount when any member is string-typed (Go `hasTextContent`).");
+    o.line("");
+    o.line("#![allow(clippy::too_many_arguments)]");
+    o.line("");
+    o.line("use super::*;");
+    o.line("");
+    o.line("impl NodeFactory<'_> {");
+    let mut new_inventory: Vec<String> = Vec::new();
+    let mut update_inventory: Vec<String> = Vec::new();
+    for (key, def) in s.nodes() {
+        if def.hand_written {
+            continue; // SourceFile: NewSourceFile/UpdateSourceFile are hand-written (factory.rs)
+        }
+        let members = factory_members(s, key);
+        let kind_expr = if members.iter().any(|m| m.kind_param) {
+            "kind".to_string()
+        } else {
+            format!("Kind::{}", s.syntax_kind_name(key))
+        };
+        let ctor = format!("New{key}");
+        emit_new_factory(&mut o, s, key, &ctor, &kind_expr);
+        new_inventory.push(ctor);
+        for alias in s.kind_aliases_of_node(key) {
+            // Go: emitNewFactory re-emits per kind alias with Kind{alias}.
+            let alias_ctor = format!("New{alias}");
+            let alias_kind_expr = if members.iter().any(|m| m.kind_param) {
+                "kind".to_string()
+            } else {
+                format!("Kind::{alias}")
+            };
+            emit_new_factory(&mut o, s, key, &alias_ctor, &alias_kind_expr);
+            new_inventory.push(alias_ctor);
+        }
+        if emit_update_factory(&mut o, s, key) {
+            update_inventory.push(format!("Update{key}"));
+        }
+    }
+    o.line("}");
+    o.line("");
+
+    // The mechanical parity anchor: the full constructor inventory in Go's
+    // file order. The ast-crate tests assert this equals the hand-extracted
+    // Go inventory (same pattern as the kind-ordinal mirror test).
+    o.line("/// Every generated New* constructor, in Go ast_generated.go's file order");
+    o.line("/// (= ast.json definition order). Parity anchor for the test suite.");
+    o.line("pub const FACTORY_NEW_INVENTORY: &[&str] = &[");
+    for name in &new_inventory {
+        o.line(format!("    \"{name}\","));
+    }
+    o.line("];");
+    o.line("");
+    o.line("/// Every generated Update* method, in Go ast_generated.go's file order.");
+    o.line("/// Parity anchor for the test suite.");
+    o.line("pub const FACTORY_UPDATE_INVENTORY: &[&str] = &[");
+    for name in &update_inventory {
+        o.line(format!("    \"{name}\","));
+    }
+    o.line("];");
+    o.line("");
+
+    // Compile-time existence probe: every inventory entry is addressable as an
+    // inherent method (a skipped emission would fail the build here, keeping
+    // the inventory and the emitted surface in lockstep).
+    o.line("#[cfg(test)]");
+    o.line("mod surface_probe {");
+    o.line("    use super::*;");
+    o.line("");
+    o.line("    /// Every generated factory method is addressable (fn-item references;");
+    o.line("    /// the behavioral tests live in factory.rs).");
+    o.line("    #[test]");
+    o.line("    fn generated_factory_methods_are_addressable() {");
+    for name in new_inventory.iter().chain(update_inventory.iter()) {
+        o.line(format!("        let _ = NodeFactory::{};", to_snake(name)));
+    }
+    o.line("    }");
+    o.line("}");
+    o.finish()
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // main
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -2199,6 +2647,7 @@ fn main() -> ExitCode {
 
     let kind_src = generate_kind(&s);
     let ast_src = generate_ast(&s);
+    let factory_src = generate_factory(&s);
 
     let n_kinds = s.kind_elements.iter().filter(|(n, _)| n.is_some()).count();
     let n_structs = s.json.nodes.definitions.len()
@@ -2219,10 +2668,25 @@ fn main() -> ExitCode {
         kind_src.lines().count(),
         ast_src.lines().count()
     );
+    let n_new = factory_src
+        .lines()
+        .filter(|l| l.starts_with("    \"New"))
+        .count();
+    let n_update = factory_src
+        .lines()
+        .filter(|l| l.starts_with("    \"Update"))
+        .count();
+    eprintln!(
+        "gen-ast: factory_generated.rs {} lines, {} New* constructors, {} Update* methods (Go: 193 New + 166 Update)",
+        factory_src.lines().count(),
+        n_new,
+        n_update,
+    );
 
     let files = [
         ("kind_generated.rs", kind_src),
         ("ast_generated.rs", ast_src),
+        ("factory_generated.rs", factory_src),
     ];
     let mut stale = 0;
     for (name, src) in &files {

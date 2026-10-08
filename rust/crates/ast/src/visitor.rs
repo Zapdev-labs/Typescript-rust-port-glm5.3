@@ -78,7 +78,8 @@ pub fn visit_modifiers(v: &mut Visitor, modifiers: Option<&ModifierList>) -> boo
 /// implements the cross-file case.
 ///
 /// The transformer-era factory hooks (Go `NodeFactoryHooks` OnCreate/OnUpdate/
-/// OnClone) are NOT part of this seam — they land with the NodeFactory port.
+/// OnClone) are NOT part of this seam — they are deferred (see factory.rs: the
+/// parser constructs the factory with no hooks).
 pub trait NodeStore {
     /// Resolves a node handle. Panics on a foreign file id (per-file arena).
     fn node(&self, id: NodeId) -> &Node;
@@ -89,6 +90,11 @@ pub trait NodeStore {
     /// The file owning `file_id` (Go: `GetSourceFileOfNode` resolved through
     /// the pointer graph; here the packed NodeId carries the file id).
     fn file(&self, file_id: u32) -> &crate::SourceFile;
+
+    /// The arena owner's file id — the NodeId file component this store mints
+    /// (no Go counterpart: the pointer graph needs none; the factory's
+    /// NewSourceFile uses it to address the pre-allocated slot-0 file node).
+    fn file_id(&self) -> u32;
 
     /// Appends a node to the arena (Go: the factory's `newNode`).
     fn alloc(&mut self, node: Node) -> NodeId;
@@ -496,6 +502,9 @@ mod tests {
         }
         fn file(&self, file_id: u32) -> &crate::SourceFile {
             panic!("test store has no files (file_id {file_id})")
+        }
+        fn file_id(&self) -> u32 {
+            0
         }
         fn alloc(&mut self, node: Node) -> NodeId {
             self.add(node)

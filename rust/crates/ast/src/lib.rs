@@ -6,6 +6,8 @@
 //   - ast_generated.rs    (node structs with flattened base composition,
 //                          boxed NodeData, as_/is_ accessors, for_each_child,
 //                          visit_each_child, Modifiers()/Name() dispatch)
+//   - factory_generated.rs (NodeFactory New*/Update* constructors, 1:1 with
+//                          Go ast_generated.go's factory surface)
 //
 // Hand-written surface (one module per Go file — PORT banners inside):
 //   - ids.rs         (Go ids.go + the SPEC §5.1 packed NodeId)
@@ -13,14 +15,15 @@
 //                     checkflags/functionflags.go — exact bit values)
 //   - symbol.rs      (Go symbol.go)
 //   - source_file.rs (Go ast.go SourceFile + parseoptions.rs/positionmap.rs)
+//   - factory.rs     (Go ast.go NodeFactory core + the token cache; the
+//                     per-kind constructors are factory_generated.rs)
 //   - visitor.rs     (Go ast.go Visitor + visitor.go NodeVisitor)
 //   - deepclone.rs   (Go deepclone.go)
 //   - precedence.rs  (Go precedence.go)
 //   - utilities.rs   (minimal subset of Go utilities.go — dedup on its port)
 //   - diagnostic.rs  (minimal subset of Go diagnostic.go — full port pending)
 //
-// NodeFactory (the ~190 New*/Update* factory methods of ast.go/ast_generated.go),
-// utilities.go wholesale, and subtreefacts.go remain separate M2 tasks.
+// utilities.go wholesale and subtreefacts.go remain separate M2 tasks.
 
 /// Hand-rolled bitflag pattern shared by the flags modules (the `bitflags`
 /// crate is not on the SPEC §5.11 dependency list).
@@ -108,6 +111,8 @@ pub mod ast_generated;
 pub mod checkflags;
 pub mod deepclone;
 pub mod diagnostic;
+pub mod factory;
+pub mod factory_generated;
 pub mod functionflags;
 pub mod kind_generated;
 pub mod modifierflags;
@@ -126,6 +131,8 @@ pub use ast_generated::*;
 pub use checkflags::*;
 pub use deepclone::*;
 pub use diagnostic::*;
+pub use factory::*;
+pub use factory_generated::*;
 pub use functionflags::*;
 pub use kind_generated::*;
 pub use modifierflags::*;
