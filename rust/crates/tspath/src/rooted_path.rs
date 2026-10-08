@@ -550,9 +550,9 @@ impl RootedFilePath {
         }
         let mut offset = root_length - 1;
         loop {
-            let index = match path[offset..].find(&needle) {
-                None => return None,
-                Some(i) => i + offset,
+            let index = {
+                let i = path[offset..].find(&needle)?;
+                i + offset
             };
             let end = index + needle.len();
             if end == path.len() || path.as_bytes()[end] == DIRECTORY_SEPARATOR as u8 {
@@ -585,10 +585,7 @@ impl RootedFilePath {
         let path = self.as_string();
         let mut end = path.len();
         while end > 0 {
-            let index = match path[..end].rfind(&needle) {
-                None => return None,
-                Some(i) => i,
-            };
+            let index = path[..end].rfind(&needle)?;
             let component_end = index + needle.len();
             // PORT: `index + 1 >= root_length` is Go's `index >= f.RootLength()-1`
             // without the usize underflow when root_length == 0.

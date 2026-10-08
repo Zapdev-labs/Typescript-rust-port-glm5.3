@@ -288,7 +288,7 @@ pub fn decode_dynamic_uri_path(path: &str) -> Cow<'_, str> {
     }
     let segments: Vec<String> = path
         .split('/')
-        .map(|segment| decode_dynamic_uri_path_segment(segment))
+        .map(decode_dynamic_uri_path_segment)
         .collect();
     Cow::Owned(segments.join("/"))
 }
@@ -296,9 +296,9 @@ pub fn decode_dynamic_uri_path(path: &str) -> Cow<'_, str> {
 pub fn try_decode_dynamic_uri_path(path: &str) -> Option<String> {
     let mut segments: Vec<String> = Vec::new();
     for segment in path.split('/') {
-        match try_decode_dynamic_uri_path_segment(segment) {
-            None => return None,
-            Some(decoded) => segments.push(decoded),
+        {
+            let decoded = try_decode_dynamic_uri_path_segment(segment)?;
+            segments.push(decoded)
         }
     }
     Some(segments.join("/"))

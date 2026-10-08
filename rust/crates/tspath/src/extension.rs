@@ -119,11 +119,11 @@ static EXTENSIONS_TO_REMOVE: &[&str] = &[
     EXTENSION_JSON,
 ];
 
-pub fn remove_file_extension<'a>(path: &'a str) -> &'a str {
+pub fn remove_file_extension(path: &str) -> &str {
     // Remove any known extension even if it has more than one dot
     for &ext in EXTENSIONS_TO_REMOVE {
-        if path.ends_with(ext) {
-            return &path[..path.len() - ext.len()];
+        if let Some(stripped) = path.strip_suffix(ext) {
+            return stripped;
         }
     }
 

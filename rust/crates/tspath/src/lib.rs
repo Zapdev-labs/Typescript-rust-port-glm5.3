@@ -5,13 +5,13 @@
 //! Package tspath defines rooted path types and canonical path keys:
 //!
 //! ```text
-//! 	                       RootedFilePath
-//! 	                      /
-//! 	string --> RootedPath
-//! 	                      \
-//! 	                       RootedDirectoryPath
+//!                             RootedFilePath
+//!                            /
+//!     string --> RootedPath
+//!                            \
+//!                             RootedDirectoryPath
 //!
-//! 	RootedPath + CaseSensitivity --> PathKey
+//!     RootedPath + CaseSensitivity --> PathKey
 //! ```
 //!
 //! Rooted paths preserve their normalized path text and casing. RootedFilePath

@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use crate::dynamic::DYNAMIC_URI_FILE_NAME_PREFIX;
 use crate::rooted_path::{RootedDirectoryPath, append_path_to_directory};
@@ -17,7 +17,7 @@ use crate::stringutil_shim as stringutil;
 pub const DIRECTORY_SEPARATOR: char = '/';
 pub(crate) const URL_SCHEME_SEPARATOR: &str = "://";
 
-//// Path Tests
+// Path Tests
 
 // Determines whether a byte corresponds to `/` or `\`.
 pub(crate) fn is_any_directory_separator(char: u8) -> bool {
@@ -196,9 +196,8 @@ pub fn get_encoded_root_length(path: &str) -> i32 {
 
     // Untitled paths (e.g., "^/untitled/ts-nul-authority/Untitled-1")
     if ch0 == b'^' && ln > 1 && bytes[1] == b'/' {
-        if path.starts_with(DYNAMIC_URI_FILE_NAME_PREFIX) {
-            let scheme_end = path[DYNAMIC_URI_FILE_NAME_PREFIX.len()..].find('/');
-            if let Some(scheme_end) = scheme_end {
+        if let Some(after_prefix) = path.strip_prefix(DYNAMIC_URI_FILE_NAME_PREFIX) {
+            if let Some(scheme_end) = after_prefix.find('/') {
                 let authority_start = DYNAMIC_URI_FILE_NAME_PREFIX.len() + scheme_end + 1;
                 match path[authority_start..].find('/') {
                     Some(authority_end) => return (authority_start + authority_end + 1) as i32,
@@ -272,7 +271,7 @@ pub(crate) fn get_directory_path_from_normalized(path: &str) -> &str {
     // return the leading portion of the path up to the last (non-terminal) directory separator
     // but not including any trailing directory separator.
     let path = remove_trailing_directory_separator(path);
-    &path[..root_length.max(path.rfind('/').map_or(0, |i| i as usize))]
+    &path[..root_length.max(path.rfind('/').unwrap_or(0))]
 }
 
 pub fn get_path_from_path_components(path_components: &[String]) -> String {
@@ -792,7 +791,7 @@ pub fn ensure_trailing_directory_separator(path: &str) -> Cow<'_, str> {
     Cow::Borrowed(path)
 }
 
-//// Relative Paths
+// Relative Paths
 
 pub fn get_path_components_relative_to(
     from: &str,
@@ -956,12 +955,12 @@ fn get_relative_path_to_directory_or_url_worker(
 ) -> String {
     let first_component = &path_components[0];
     if is_absolute_path_an_url && is_rooted_disk_path(first_component) {
-        let prefix;
-        if first_component.as_bytes()[0] == DIRECTORY_SEPARATOR as u8 {
-            prefix = "file://";
+        
+        let prefix = if first_component.as_bytes()[0] == DIRECTORY_SEPARATOR as u8 {
+            "file://"
         } else {
-            prefix = "file:///";
-        }
+            "file:///"
+        };
         path_components[0] = format!("{prefix}{first_component}");
     }
 
@@ -1363,6 +1362,9 @@ pub fn split_volume_path(path: &str) -> (String, &str, bool) {
 //	c:/a/b/c/d, d:/a/b/c/d =>	c:/a/b/c/d, d:/a/b/c/d
 // PORT: in Go this helper is only exercised by package tests; gate it on
 // cfg(test) so the library build stays warning-free.
+#[cfg(test)]
+use rustc_hash::FxHashSet;
+
 #[cfg(test)]
 pub(crate) fn get_common_parents(
     paths: &[&str],
