@@ -1,0 +1,29 @@
+[package]
+name = "tsc-compiler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tsc-ast = { path = "../ast" }
+tsc-binder = { path = "../binder" }
+tsc-collections = { path = "../collections" }
+tsc-contentmapper = { path = "../contentmapper" }
+tsc-core = { path = "../core" }
+tsc-diagnostics = { path = "../diagnostics" }
+tsc-json = { path = "../json" }
+tsc-module = { path = "../module" }
+tsc-outputpaths = { path = "../outputpaths" }
+tsc-parser = { path = "../parser" }
+tsc-scanner = { path = "../scanner" }
+tsc-tsoptions = { path = "../tsoptions" }
+tsc-tspath = { path = "../tspath" }
+tsc-vfs = { path = "../vfs" }
+
+[dev-dependencies]
+tsc-bundled = { path = "../bundled" }
+tsc-packagejson = { path = "../packagejson" }
+
+[lints]
+workspace = true

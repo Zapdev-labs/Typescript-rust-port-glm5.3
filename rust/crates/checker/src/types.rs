@@ -1133,6 +1133,23 @@ impl Type {
         }
     }
 
+    /// Mutable form of [`Type::as_literal_type`] — Go's pointer write sites
+    /// (`t.AsLiteralType().freshType = f`) become `&mut` through the arena.
+    pub fn as_literal_type_mut(&mut self) -> Option<&mut LiteralType> {
+        match &mut self.data {
+            TypeData::Literal(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// Mutable form of [`Type::as_intrinsic_type`].
+    pub fn as_intrinsic_type_mut(&mut self) -> Option<&mut IntrinsicType> {
+        match &mut self.data {
+            TypeData::Intrinsic(d) => Some(d),
+            _ => None,
+        }
+    }
+
     /// Go: `func (t *Type) AsUniqueESSymbolType() *UniqueESSymbolType`.
     pub fn as_unique_essymbol_type(&self) -> Option<&UniqueESSymbolType> {
         match &self.data {
