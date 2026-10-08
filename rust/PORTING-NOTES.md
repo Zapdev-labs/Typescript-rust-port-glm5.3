@@ -1098,3 +1098,184 @@ see the gate-semantics note below).
   being written concurrently by the sibling M5-compiler worker — its
   untracked src files were changing seconds-by-second during this wave);
   `cargo test -p tsc-ast -p tsc-binder` green (60 + 15, no regressions).
+
+## 2026-10-08 rust/crates/{outputpaths,bundled,compiler} — M5 program layer (internal/outputpaths, internal/bundled, internal/compiler @ ec47d33c23e464a17cdf2475632cba629bee8763)
+Three crates, one Go-package-per-crate: `tsc-outputpaths`,
+`tsc-bundled`, `tsc-compiler` (all registered in the workspace; the
+compiler crate depends on the other two plus outputpaths' host trait).
+
+### tsc-outputpaths (outputpaths.go + commonsourcedirectory.go)
+- **Files**: `src/outputpaths.rs` (OutputPathsHost trait — Go's interface
+  made object-safe, `Arc<dyn Fs>` precedent), `src/commonsourcedirectory.rs`
+  (`get_common_source_directory` with Go's lazy `files` thunk called eagerly
+  at each use site + the nil-able `checkSourceFilesBelongToPath` as
+  `Option<&mut dyn FnMut>`), `tests/outputpaths_test.rs` (5 tests: root-dir
+  canonicalization, build-info name, source-in-new-dir). Go's
+  `GetCommonSourceDirectory(options, files, ...)` callback shape keeps
+  `#[allow(clippy::type_complexity)]` (inherent to Go's nil-able func value).
+
+### tsc-bundled (bundled.go + embed + libs generated)
+- **Files**: `src/lib.rs` + `src/embed.rs` (the always-embedded variant —
+  Go's `noembed.go` build-tag counterpart is not ported; the port always
+  embeds, `EMBEDDED` is a `true` const), `src/embed_generated.rs` +
+  `src/libs_generated.rs` (generate.sh output — `include_str!`-driven where
+  Go is `//go:embed`-driven; `sh generate.sh` reproducible), `tests/
+  bundled_test.rs` (2 tests incl. the Go lib-list parity).
+- `WrapFS` wraps unconditionally (the second Go sentence is dead without
+  noembed).
+
+### tsc-compiler (program.go, filesparser.go, fileloader.go, checkerpool.go, fileInclude.go, includeprocessor.go, processingDiagnostic.go, host.go, emitHost.go, projectreferencefilemapper.go, projectreferenceparser.go, projectreferencedtsfakinghost.go, emitter.go program-level bits)
+- **File map** (one Go file = one Rust file, plus two crate-local helpers):
+  lib.rs (pkg.go + the seam inventory), program.rs, files_parser.rs,
+  file_loader.rs, checkerpool.rs, file_include.rs, include_processor.rs,
+  processing_diagnostic.rs, host.rs, emit_host.rs,
+  project_reference_file_mapper.rs, project_reference_parser.rs,
+  project_reference_dts_faking_host.rs, emitter.rs (program-level bits:
+  EmitOnly, SourceFileMayBeEmittedHost, sourceFileMayBeEmitted,
+  getSourceFilesToEmit, isSourceFileNotJson), ast_shims.rs (crate-local —
+  Go ast/utilities.go, ast/parseoptions.go, core/core.go, ast/ast.go helpers
+  the loader needs; dedup candidates against tsc-ast), diagnostics_
+  collection.rs (Go ast/diagnostic.go's DiagnosticsCollection; the struct
+  itself already lives in tsc-ast).
+- **Bannered seams (each PORT-noted at its site)**:
+  - tracing not ported (no tracing crate): the loader drops the tracing
+    hooks; CompilerHost keeps the Trace callback; ProgramHosts drops
+    `Tracing`.
+  - checker wave: `Checker = ()` alias; CheckerPool is a TODO-shaped trait
+    (GetChecker without the release closure); the checkerPool struct
+    (per-checker mutexes, NewChecker calls, fileAssociations) deferred with
+    it. The pure FENNEL functions it is built from are fully ported
+    (checkerpool.rs — the checkerpool_test.go surface).
+  - M7 emitter boundary: emitHost.rs holds the program-level surface only
+    (the printer/declarations halves are the M7 boundary); emitter.rs is the
+    program-level bits only; Program.Emit is a TODO shape.
+  - content-mapper: the host machinery (contentmapper.Project, transform
+    pipeline) is not ported; content-mapper paths degrade to non-mapped
+    loads exactly as Go's zero-config case; `ContentMapperExtensions`
+    carried, unused (dead-code-allowed seam field).
+  - tsoptions' AST-config surface (ConfigFile syntax walks,
+    GetMatchedFileSpec, ParseInputOutputNames/SourceToProjectReference/
+    OutputDtsToProjectReference) is not ported: config-positioned
+    diagnostics degrade to compiler diagnostics (Go's nil-ConfigFile arm),
+    and the mapper's source/output maps stay empty until that wave.
+  - cachedvfs + symlinks not ported: the project-reference dts-faking host
+    is the identity host; `resolveSymlink` degrades to the not-a-symlink
+    caching (Store(path, nil)).
+  - UpdateProgram/ReuseProgram not ported (owned `files` + content-mapper):
+    the affected Go tests are skipped (see the test notes below).
+  - verifyCompilerOptions/collectContentMapperOptionDiagnostics degrade to
+    no-op seams (the AST-config wave owns them).
+- **Judgment calls**:
+  - **TaskArena**: Go's `*parseTask` graph (subTasks/redirectedParseTask/
+    loadedTask pointers) becomes `TaskArena` (`Mutex<Vec<ParseTask>>`) +
+    stable indices; every access happens under the path group's mutex,
+    `with_task`/`with_task_read` check a task out and put it back inside the
+    critical section (no unsafe aliasing — the workspace forbids unsafe
+    code; Go's shared-pointer reads serialize identically through the
+    checkout).
+  - **ScopedWorkGroup** (files_parser.rs): Go's `w.wg.Queue(func(){...})`
+    closures capture `&FilesParser`/`&FileLoader`/the group; `core.WorkFn`
+    is `Box<dyn FnOnce() + Send>` whose trait-object default is `'static`,
+    so the group is a crate-local `ScopedWorkGroup<'env>` with Go's
+    queue/runAndWait surface running the closures on `std::thread::scope`
+    (LIFO drain in the single-threaded variant, exactly like core's group;
+    queue-during-run works; the group is shared as an `Arc` so the queued
+    closures can clone it for the recursive `start` — Go's closures capture
+    the group pointer the same way).
+  - **pending sub-tasks deferred push**: Go pushes resolved imports while
+    walking the file's module names; the port collects `pending_sub_tasks`
+    and pushes after the walk (borrowck: the file is `&mut`-borrowed out of
+    the task while `push_sub_task` needs the task) — same order.
+  - **pointer-identity maps**: Go's `map[*FileIncludeReason]T` keys become
+    `Arc::as_ptr as usize` keys (`reason_diagnostics`,
+    `reason_to_reference_location`, `include_reason_to_related_info`).
+  - **FileDiagnostic pairing**: Go's diagnostics are pointers into the
+    owning source file; the port pairs each with its `file_name: Option<
+    RootedFilePath>` (the resolver's diagnostics carry a NodeId file that
+    cannot resolve to a path — parser file_id gap — so they're paired with
+    the containing file's name at collection).
+  - **ResolvedProjectReference newtype**: the orphan rule blocks
+    implementing `module::ResolvedProjectReference` for tsoptions'
+    ParsedCommandLine from this crate, so resolved configs travel as
+    `Arc<ResolvedProjectReference>` (a newtype; the vfs-crate wrapper
+    precedent). `Option<Arc<_>> → Option<Arc<dyn _>>` is not a coercion
+    site, so `redirect_as_dyn` unsizes per-entry at a binding. The newtype
+    carries a manual `Debug` (ParsedCommandLine derives none).
+  - **PackageId map keys**: `module.PackageId` derives no `Hash` (the
+    module crate is outside this wave's touch scope), so
+    `package_id_to_source_file` is keyed by a composite string of every
+    field (`package_id_key`) — same identity semantics as Go's map key.
+  - **ModuleKind/ModuleResolutionKind are plain enums** in
+    `tsc_core::options_generated` (compileroptions.rs re-exports only the
+    `ResolutionMode` alias + consts); comparisons (`Node16 <= kind <=
+    NodeNext`) rely on the derived Ord matching Go's numeric ordering.
+  - **ModuleDetectionKind::None**: the Rust enum carries a `None` sentinel
+    for the absent option; it maps to Go's zero value (Legacy behavior) in
+    `get_external_module_indicator_options`.
+  - **ScriptTarget Stringer**: Go's `GetEmitScriptTarget().String()` — the
+    core crate has no ScriptTarget stringer module; the derived `Debug`
+    spelling matches the Go stringer's names exactly
+    (`_ScriptTarget_name_0/1`: "None", "ES5", "ES2015".."ESNext"), verified
+    against scripttarget_stringer_generated.go.
+  - **tsoptions surface deltas**: `get_supported_extensions`/
+    `get_supported_extensions_with_json_if_resolve_json_module` +
+    `ExtendedConfigCache` live in `tsc_tsoptions::tsconfigparsing` (not
+    re-exported at the tsoptions crate root); the extension groups are
+    `Vec<Vec<String>>` so `extension_is_one_of(&[&str])` call sites map
+    each group to borrowed slices first.
+  - **extractUnresolvedImportsFromSourceFile**: Go checks
+    `resolution.Extension` (not the cache-key name) against the supported
+    extensions — ported faithfully after a compile-pass misreading.
+  - **new_compiler_host**: `contentMapperProject` dropped; nil trace →
+    no-op; the nil extended-config cache is an always-miss closure in
+    tests.
+- **Tests** (`tests/checkerpool_test.rs` 7, `tests/program_test.rs` 4):
+  - checkerpool: all pure-FENNEL tests ported verbatim
+    (getCheckerAssociationBaseWeight/Policy/Order/Weights/Associations,
+    shouldPrioritizeSourceFiles) +
+    TestGetSourceFileForResolvedModuleUsesResolvedPath (Go's `Program`
+    literal → `Program::default()` + pub `files`/`files_by_path`
+    assignment; pointer-identity assert → `ptr::eq`).
+  - program: **TestProgram** fully ported — the three ordering corpora
+    (BasicFileOrdering/FileOrderingImports/FileOrderingCycles) assert the
+    EXACT program order against the 96-entry esnext lib list + the load
+    order, over `bundled::wrap_fs(vfstest::from_map(...))`; the port
+    constructs the config by parsing a written tsconfig.json because the
+    Rust tsoptions has no `NewParsedCommandLine(&opts, files, ...)` and
+    `file_names` is not pub (`files` entries are included verbatim with no
+    existence check, exactly as Go's literal list — same dataflow through
+    the M4 config-parsing surface; target "esnext" replaces the raw
+    `core.ScriptTargetESNext`).
+    TestImportSourceProgram: the initial construction round ported
+    (source-phase imports skip resolution; resolved-modules empty;
+    unresolved imports empty); the UpdateProgram rounds + the
+    collectPackageNames assertion are skipped with the not-ported seam.
+    TestIncludeProcessorDiagnosticsWithMissingFileCasing ported (the
+    casing diagnostic must not panic through GetProgramDiagnostics; a Rust
+    test panic fails the test, which is Go's recover-based assertion).
+    TestIncludeReasonDiagnosticsAreProgramLocal adapted: Go asserts
+    *ast.Diagnostic pointer identity; the port's to_diagnostic returns
+    values from a per-program cache, so the identity assertion becomes the
+    cache-locality check (each program's cache holds exactly its own
+    entries) + value-determinism by diagnostic signature
+    (code/category/file name).
+  - Skipped Go tests (PORT-noted at the file header): TestProgramSharedData
+    (reflection — Rust's ownership rules encode the data-only discipline),
+    TestProgramHostsAndFactories + TestClonedProgramProjectReferenceResolution
+    (ReuseProgram/UpdateProgram + tracing + symlinks seams),
+    BenchmarkNewProgram (the benchmark harness is the separate
+    bench-harness crate, outside this wave's touch scope; the ported
+    TestProgram covers the same constructions).
+  - `str::trim_prefix` is unstable on this toolchain (nightly
+    trim_prefix_suffix rework); the test uses `strip_prefix` + fallback.
+- **Validation** (local, `CARGO_TARGET_DIR="$HOME/.cargo-target/m5a"`,
+  `CARGO_INCREMENTAL=0 RUSTFLAGS="-C debuginfo=0"` — iteration aid per the
+  §9.2 note above): `cargo test -p tsc-compiler -p tsc-outputpaths -p
+  tsc-bundled` green (4+7 compiler + 5 outputpaths + 2 bundled);
+  `cargo check --workspace` green; `cargo clippy --workspace --all-targets`
+  zero warnings (includes a pre-existing type-complexity fix in
+  outputpaths' callback parameter and an unused-import fix in the bundled
+  test); `cargo test -p bench-harness -p tsc-binder` green (no
+  regressions). The workspace enforces no-unsafe-code — the crate contains
+  none (`with_task_read` was rewritten checkout/put-back instead of the
+  unsafe alias Go's shared pointer admits).

@@ -83,9 +83,10 @@ pub use emitter::{
 pub use file_loader::{
     process_all_program_files, DuplicateSourceFile, LibFile, LibResolution, ProcessedFiles,
 };
+pub use host::new_compiler_host;
 pub use program::{
     combine_emit_results, get_diagnostics_of_any_program, handle_no_emit_options, new_program,
     EmitOptions, EmitResult, Program, ProgramConfig, ProgramFactories, ProgramHosts, ProgramLike,
-    SourceMapEmitResult, WriteFile, WriteFileData,
+    ProgramOptions, SourceMapEmitResult, WriteFile, WriteFileData,
 };
 pub use project_reference_file_mapper::SourceOutputAndProjectReference;
