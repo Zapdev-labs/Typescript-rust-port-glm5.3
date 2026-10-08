@@ -60,7 +60,7 @@ use tsc_module::{
 use tsc_tspath::{CaseSensitivity, PathKey, RootedDirectoryPath, RootedFilePath, RootedPath};
 
 use crate::diagnostics_collection::{
-    FileDiagnostic, sort_and_deduplicate_diagnostics, DiagnosticsCollection,
+    FileDiagnostic, sort_and_deduplicate_diagnostics,
 };
 use crate::file_include::FileIncludeReason;
 use crate::file_loader::{
@@ -154,22 +154,21 @@ pub struct ProgramHosts {
 }
 
 /// Go: `type ProgramFactories struct`.
+#[derive(Default)]
 pub struct ProgramFactories {
     /// Go: `CreateCheckerPool func(*Program) CheckerPool` — the checker wave
     /// seam (see checkerpool.rs); the field keeps the factory shape.
-    pub create_checker_pool: Option<Arc<dyn Fn(&Program) -> Arc<dyn crate::checkerpool::CheckerPool>>>,
+    /// (Go's function fields become `Option<Arc<dyn Fn>>` — the crate
+    /// convention for Go's nil-able func fields; type-complexity is inherent
+    /// to the Go shape.)
+    #[allow(clippy::type_complexity)]
+    pub create_checker_pool: Option<
+        Arc<dyn Fn(&Program) -> Arc<dyn crate::checkerpool::CheckerPool>>,
+    >,
     /// Go: `CreateModuleResolver func(module.ResolverOptions) module.Resolver`.
+    #[allow(clippy::type_complexity)]
     pub create_module_resolver:
         Option<Arc<dyn Fn(ResolverOptions) -> Arc<dyn tsc_module::Resolver> + Send + Sync>>,
-}
-
-impl Default for ProgramFactories {
-    fn default() -> Self {
-        ProgramFactories {
-            create_checker_pool: None,
-            create_module_resolver: None,
-        }
-    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -860,7 +859,7 @@ impl Program {
     ) -> Option<Arc<crate::project_reference_file_mapper::ResolvedProjectReference>> {
         self.project_reference_file_mapper
             .as_ref()
-            .map(|mapper| {
+            .and_then(|mapper| {
                 mapper
                     .get_redirect_for_resolution(&HasFileName::new(
                         file_name.clone(),
@@ -868,7 +867,6 @@ impl Program {
                     ))
                     .0
             })
-            .flatten()
     }
 
     /// Go: `func (p *Program) GetResolvedProjectReferences()`.
@@ -884,12 +882,7 @@ impl Program {
     /// Go: `func (p *Program) RangeResolvedProjectReference(f)`.
     pub fn range_resolved_project_reference(
         &self,
-        f: &mut dyn FnMut(
-            &PathKey,
-            Option<&Arc<crate::project_reference_file_mapper::ResolvedProjectReference>>,
-            Option<&Arc<crate::project_reference_file_mapper::ResolvedProjectReference>>,
-            usize,
-        ) -> bool,
+        f: crate::project_reference_file_mapper::RangeResolvedProjectReferenceCallback<'_>,
     ) -> bool {
         self.project_reference_file_mapper
             .as_ref()
@@ -901,12 +894,7 @@ impl Program {
     pub fn range_resolved_project_reference_in_child_config(
         &self,
         child_config: &Arc<tsc_tsoptions::ParsedCommandLine>,
-        f: &mut dyn FnMut(
-            &PathKey,
-            Option<&Arc<crate::project_reference_file_mapper::ResolvedProjectReference>>,
-            Option<&Arc<crate::project_reference_file_mapper::ResolvedProjectReference>>,
-            usize,
-        ) -> bool,
+        f: crate::project_reference_file_mapper::RangeResolvedProjectReferenceCallback<'_>,
     ) -> bool {
         self.project_reference_file_mapper
             .as_ref()
@@ -1100,8 +1088,7 @@ impl Program {
     ) -> Vec<FileDiagnostic> {
         let options = self.options();
         self.collect_diagnostics(source_file, false, |file| {
-            let mut diags: Vec<Diagnostic> =
-                file.diagnostics().iter().cloned().collect();
+            let mut diags: Vec<Diagnostic> = file.diagnostics().to_vec();
             diags.extend(file.js_diagnostics().iter().cloned());
             // Go: for JS files that won't be checked by the checker (no
             // checkJs/ts-check), program-level syntactic checks that require

@@ -22,7 +22,7 @@
 //     are allocated in the parsed file's arena (same parent/loc semantics;
 //     the cross-file factory pool is a Go GC optimization).
 
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
 use tsc_ast::{
@@ -34,7 +34,6 @@ use tsc_core::compileroptions::{
 };
 use tsc_core::options_generated::{CompilerOptions, ModuleKind, ModuleResolutionKind};
 use tsc_core::scriptkind::ScriptKind;
-use tsc_core::tristate::Tristate;
 use tsc_module::{
     DiagAndArgs, ModeAwareCache, ModeAwareCacheKey, PackageId, ResolutionHost, ResolvedModule,
     ResolvedTypeReferenceDirective, Resolver, ResolverOptions,
@@ -44,7 +43,6 @@ use tsc_tspath::{
     EXTENSION_CJS, EXTENSION_CTS, EXTENSION_MJS, EXTENSION_MTS,
     SUPPORTED_TS_EXTENSIONS_WITH_JSON_FLAT,
 };
-use tsc_vfs::Fs;
 
 use crate::ast_shims::{
     get_emit_module_format_of_file_worker, get_external_module_indicator_options,
@@ -229,6 +227,10 @@ pub(crate) struct FileLoader<'a> {
     pub case_sensitivity: CaseSensitivity,
     pub supported_extensions: Vec<Vec<String>>,
     pub supported_extensions_with_json_if_resolve_json_module: Vec<Vec<String>>,
+    /// Go: `contentMapperExtensions []string` — the content-mapper seam; the
+    /// list is carried (the parse-time extension check degrades — see
+    /// parseSourceFile's PORT note) until that wave lands.
+    #[allow(dead_code)]
     pub content_mapper_extensions: Vec<String>,
 
     pub files_parser: crate::files_parser::FilesParser,
@@ -262,6 +264,11 @@ impl<'a> FileLoader<'a> {
     }
 
     /// Go: `func (p *fileLoader) toPath(file tspath.RootedPath) tspath.PathKey`.
+    ///
+    /// Kept for Go surface parity (the project-reference parser threads the
+    /// loader's case sensitivity directly instead — see
+    /// project_reference_parser.rs); used by the project-reference seam.
+    #[allow(dead_code)]
     pub(crate) fn to_path(&self, file: &RootedPath) -> PathKey {
         self.case_sensitivity.path_key(file)
     }
@@ -975,17 +982,15 @@ impl<'a> FileLoader<'a> {
             file.imports().len() + file.payload().module_augmentations.len() + 2,
         );
 
-        if is_javascript_file
+        if (is_javascript_file
             || (!file.payload().is_declaration_file
-                && (options_for_file.get_isolated_modules() || is_external_module_file))
+                && (options_for_file.get_isolated_modules() || is_external_module_file)))
+            && options_for_file.import_helpers.is_true()
         {
-            if options_for_file.import_helpers.is_true() {
-                let specifier =
-                    create_synthetic_import(file, EXTERNAL_HELPERS_MODULE_NAME_TEXT);
-                module_names.push(specifier);
-                task.import_helpers_import_specifier =
-                    Some(EXTERNAL_HELPERS_MODULE_NAME_TEXT.to_string());
-            }
+            let specifier = create_synthetic_import(file, EXTERNAL_HELPERS_MODULE_NAME_TEXT);
+            module_names.push(specifier);
+            task.import_helpers_import_specifier =
+                Some(EXTERNAL_HELPERS_MODULE_NAME_TEXT.to_string());
         }
 
         if is_javascript_file || file.payload().script_kind == ScriptKind::TSX {
@@ -1372,16 +1377,17 @@ fn get_emit_syntax_for_usage_location_worker(
     }
     let file_emit_mode = get_emit_module_format_of_file_worker(file_name, options, meta);
     let call = walk_up_parenthesized_expressions(store, parent);
-    if call != NodeId::NONE && file.node(call).kind == Kind::CallExpression {
-        if is_import_call(store, call) {
-            if is_source_phase_import_call(store, call) {
-                return ResolutionModeESM;
-            }
-            if should_transform_import_call(file_name, options, file_emit_mode) {
-                return ResolutionModeCommonJS;
-            }
+    if call != NodeId::NONE
+        && file.node(call).kind == Kind::CallExpression
+        && is_import_call(store, call)
+    {
+        if is_source_phase_import_call(store, call) {
             return ResolutionModeESM;
         }
+        if should_transform_import_call(file_name, options, file_emit_mode) {
+            return ResolutionModeCommonJS;
+        }
+        return ResolutionModeESM;
     }
     // If we're in --module preserve on an input file, we know that an import
     // is an import. But if this is a declaration file, we'd prefer to use the

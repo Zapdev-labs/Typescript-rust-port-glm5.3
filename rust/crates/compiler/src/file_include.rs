@@ -324,7 +324,7 @@ impl FileIncludeReason {
                     } else {
                         FileDiagnostic::compiler_diagnostic(
                             &tsc_diagnostics::ENTRY_POINT_OF_TYPE_LIBRARY_0_SPECIFIED_IN_COMPILEROPTIONS,
-                            &[data.type_reference.clone()],
+                            std::slice::from_ref(&data.type_reference),
                         )
                     }
                 } else if !data.package_id.name.is_empty() {
@@ -335,7 +335,7 @@ impl FileIncludeReason {
                 } else {
                     FileDiagnostic::compiler_diagnostic(
                         &tsc_diagnostics::ENTRY_POINT_FOR_IMPLICIT_TYPE_LIBRARY_0,
-                        &[data.type_reference.clone()],
+                        std::slice::from_ref(&data.type_reference),
                     )
                 }
             }

@@ -4,7 +4,6 @@ use std::path::Path;
 
 use tsc_bundled::{wrap_fs, LibNames, EMBEDDED};
 use tsc_vfs::osvfs;
-use tsc_vfs::Fs;
 
 #[test]
 fn testing_lib_path() {

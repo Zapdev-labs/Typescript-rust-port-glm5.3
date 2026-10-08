@@ -66,7 +66,10 @@ pub(crate) struct ParseTask {
     pub resolutions_trace: Vec<DiagAndArgs>,
     pub type_resolutions_in_file: ModeAwareCache<Option<Arc<ResolvedTypeReferenceDirective>>>,
     pub type_resolutions_trace: Vec<DiagAndArgs>,
-    /// Go: `resolutionDiagnostics []*ast.Diagnostic`.
+    /// Go: `resolutionDiagnostics []*ast.Diagnostic` — carried for the
+    /// checker wave (the program surface reads it via the resolutions map
+    /// until then; PORTING-NOTES).
+    #[allow(dead_code)]
     pub resolution_diagnostics: Vec<Arc<tsc_ast::Diagnostic>>,
     pub processing_diagnostics: Vec<ProcessingDiagnostic>,
     /// Go: `importHelpersImportSpecifier *ast.StringLiteralNode` — the
@@ -81,7 +84,10 @@ pub(crate) struct ParseTask {
 
     /// Go: `loadedTask *parseTask` — arena index.
     pub loaded_task: Option<usize>,
-    /// Go: `allIncludeReasons []*FileIncludeReason`.
+    /// Go: `allIncludeReasons []*FileIncludeReason` — carried for the
+    /// include-reason explain surface (`getIncludeReasons` reads the
+    /// program-level reason map; PORTING-NOTES).
+    #[allow(dead_code)]
     pub all_include_reasons: Vec<Arc<FileIncludeReason>>,
 }
 
@@ -170,26 +176,26 @@ impl FilesParser {
     /// Go: `func (w *filesParser) parse(loader, tasks)`.
     pub(crate) fn parse(&self, loader: &FileLoader, tasks: &[usize]) {
         // Go: core.NewWorkGroup(loader.singleThreaded) — the scoped group
-        // (see ScopedWorkGroup's PORT note).
-        let mut wg = ScopedWorkGroup::new(loader.single_threaded);
+        // (see ScopedWorkGroup's PORT note; the Arc is the shared handle the
+        // queued closures clone for the recursive `start`).
+        let wg = Arc::new(ScopedWorkGroup::new(loader.single_threaded));
         self.start(loader, &wg, tasks, 0);
         wg.run_and_wait();
     }
 
     /// Go: `func (w *filesParser) start(loader, tasks, depth)`.
     ///
-    /// `'s`/`'l`/`'w` are the capture lifetimes of the queued closure (the
-    /// group runs it within `parse`'s scope, so they cover `'env`).
-    pub(crate) fn start<'s, 'l, 'w, 'env>(
+    /// `'s`/`'l` are the capture lifetimes of the queued closure (the group
+    /// runs it within `parse`'s scope, so they cover `'env`).
+    pub(crate) fn start<'s, 'l, 'env>(
         &'s self,
         loader: &'l FileLoader,
-        wg: &'w ScopedWorkGroup<'env>,
+        wg: &Arc<ScopedWorkGroup<'env>>,
         tasks: &[usize],
         depth: i64,
     ) where
         's: 'env,
         'l: 'env,
-        'w: 'env,
     {
         for &task_index in tasks {
             let (path, normalized_file_path, increase_depth, elide_on_depth, package_id) =
@@ -221,6 +227,8 @@ impl FilesParser {
 
             let max_depth = self.max_depth;
             let files_parser = self;
+            // The closure clones the Arc handle (see the group's PORT note).
+            let wg_handle = Arc::clone(wg);
             wg.queue(Box::new(move || {
                 run_task_group(
                     files_parser,
@@ -234,7 +242,7 @@ impl FilesParser {
                     package_id,
                     depth,
                     max_depth,
-                    wg,
+                    &wg_handle,
                 );
             }));
         }
@@ -290,7 +298,7 @@ impl ParseTaskData {
 
 /// Go: the queued closure body: `data.mu.Lock(); ... task loads ...; start(subTasks)`.
 #[allow(clippy::too_many_arguments)]
-fn run_task_group<'s, 'l, 'w, 'env>(
+fn run_task_group<'s, 'l, 'env>(
     files_parser: &'s FilesParser,
     loader: &'l FileLoader,
     data: Arc<Mutex<ParseTaskData>>,
@@ -302,11 +310,10 @@ fn run_task_group<'s, 'l, 'w, 'env>(
     package_id: PackageId,
     depth: i64,
     max_depth: i64,
-    wg: &'w ScopedWorkGroup<'env>,
+    wg: &Arc<ScopedWorkGroup<'env>>,
 ) where
     's: 'env,
     'l: 'env,
-    'w: 'env,
 {
     let mut data = data.lock().expect("parseTaskData poisoned");
 
@@ -637,32 +644,26 @@ fn package_id_key(id: &PackageId) -> String {
 ///
 /// PORT: `core.WorkFn` is `Box<dyn FnOnce() + Send>`, whose trait-object
 /// default carries a `'static` bound — the parse-task closures capture
-/// `&FilesParser`/`&FileLoader`/the group itself (matching Go's closure
-/// captures; `processAllProgramFiles` borrows `opts`, so no `'static` data
-/// exists to capture), so a crate-local scoped group with the same
-/// queue/run_and_wait surface runs them on `std::thread::scope`. Same
-/// semantics as the core group (queue-during-run works; run_and_wait is
-/// the only barrier); no unsafe code.
+/// `&FilesParser`/`&FileLoader`/the group (matching Go's closure captures;
+/// `processAllProgramFiles` borrows `opts`, so no `'static` data exists to
+/// capture), so a crate-local scoped group with the same queue/run_and_wait
+/// surface runs them on `std::thread::scope`. The group is shared as an
+/// `Arc` (the queued closures clone it for the recursive `start` — Go's
+/// closures capture the group pointer the same way); queue-during-run works,
+/// `run_and_wait` is the only barrier, and the executed closures drop their
+/// `Arc` clones as they run, so the group is freed when `parse` returns. No
+/// unsafe code.
 pub(crate) struct ScopedWorkGroup<'env> {
     single_threaded: bool,
     state: Mutex<ScopedState<'env>>,
     cv: Condvar,
 }
 
+#[derive(Default)]
 struct ScopedState<'env> {
     fns: Vec<Box<dyn FnOnce() + Send + 'env>>,
     active: usize,
     done: bool,
-}
-
-impl Default for ScopedState<'_> {
-    fn default() -> Self {
-        ScopedState {
-            fns: Vec::new(),
-            active: 0,
-            done: false,
-        }
-    }
 }
 
 impl<'env> ScopedWorkGroup<'env> {
@@ -686,7 +687,7 @@ impl<'env> ScopedWorkGroup<'env> {
     }
 
     /// Go: `RunAndWait()`.
-    pub(crate) fn run_and_wait(&mut self) {
+    pub(crate) fn run_and_wait(&self) {
         if self.single_threaded {
             loop {
                 let f = self.state.lock().expect("work group poisoned").fns.pop();
@@ -695,10 +696,12 @@ impl<'env> ScopedWorkGroup<'env> {
                     None => break,
                 }
             }
-            self.state.lock().expect("work group poisoned").done = true;
+            let mut state = self.state.lock().expect("work group poisoned");
+            state.fns.clear();
+            state.done = true;
             return;
         }
-        let this = &*self;
+        let this = self;
         std::thread::scope(|scope| {
             let mut state = this.state.lock().expect("work group poisoned");
             loop {
@@ -721,7 +724,9 @@ impl<'env> ScopedWorkGroup<'env> {
                 state = this.cv.wait(state).expect("work group poisoned");
             }
         });
-        self.state.lock().expect("work group poisoned").done = true;
+        let mut state = self.state.lock().expect("work group poisoned");
+        state.fns.clear();
+        state.done = true;
     }
 }
 
@@ -1102,18 +1107,16 @@ impl<'a> CollectState<'a> {
 
             // Exclude automatic type directive tasks from include reason
             // processing (see above).
-            if redirected.is_some() {
+            if let Some(redirected) = redirected {
                 if let Some(output_map) = self.output_file_to_project_reference_source.as_mut() {
-                    let redirected_path = self.files_parser.arena.with_task_read(
-                        redirected.expect("redirected task"),
-                        |task| task.path.clone(),
-                    );
+                    let redirected_path = self
+                        .files_parser
+                        .arena
+                        .with_task_read(redirected, |task| task.path.clone());
                     let file_name = self
                         .files_parser
                         .arena
-                        .with_task_read(task_index, |task| {
-                            task.normalized_file_path.clone()
-                        });
+                        .with_task_read(task_index, |task| task.normalized_file_path.clone());
                     output_map.insert(redirected_path, file_name);
                 }
                 continue;

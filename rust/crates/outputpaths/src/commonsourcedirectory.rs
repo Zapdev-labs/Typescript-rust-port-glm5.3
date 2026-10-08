@@ -30,13 +30,18 @@ pub fn get_computed_common_source_directory(
 /// PORT: Go passes `files func() []tspath.RootedFilePath` (a lazy thunk) and a
 /// nil-able `checkSourceFilesBelongToPath` callback; the port takes
 /// `Option<&mut dyn FnMut(...)>` for the nil-ness and calls the files closure
-/// eagerly at each use site exactly where Go invokes it.
+/// eagerly at each use site exactly where Go invokes it. The callback's
+/// `&mut dyn FnMut` shape is Go's nil-able func value (type-complexity is
+/// inherent to it).
+#[allow(clippy::type_complexity)]
 pub fn get_common_source_directory(
     options: &CompilerOptions,
     files: &dyn Fn() -> Vec<RootedFilePath>,
     current_directory: &RootedDirectoryPath,
     case_sensitivity: CaseSensitivity,
-    check_source_files_belong_to_path: Option<&mut dyn FnMut(&[RootedFilePath], &RootedDirectoryPath) -> bool>,
+    check_source_files_belong_to_path: Option<
+        &mut dyn FnMut(&[RootedFilePath], &RootedDirectoryPath) -> bool,
+    >,
 ) -> RootedDirectoryPath {
     let common_source_directory;
     if !options.root_dir.is_empty() {

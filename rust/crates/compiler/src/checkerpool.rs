@@ -295,7 +295,7 @@ pub fn checker_association_base_weight(node_count: i64, text_length: i64) -> i64
 /// Reports whether all declaration-file base work is at most half of one
 /// average checker load:
 ///
-///	declarationWeight <= totalWeight / (2 * checkerCount)
+/// `declarationWeight <= totalWeight / (2 * checkerCount)`
 ///
 /// This threshold separated source-dominated projects such as VS Code from
 /// projects where declaration locality remained important, such as MUI docs,

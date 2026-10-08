@@ -19,7 +19,6 @@
 use std::sync::Arc;
 
 use tsc_ast::{SourceFile, SourceFileParseOptions};
-use tsc_core::scriptkind::ScriptKind;
 use tsc_diagnostics::Message;
 use tsc_tsoptions::ParsedCommandLine;
 use tsc_tspath::{RootedDirectoryPath, RootedFilePath, RootedPath};

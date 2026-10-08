@@ -20,6 +20,18 @@ use tsc_tspath::{PathKey, RootedFilePath};
 
 use crate::host::HasFileName;
 
+/// Go: the `rangeResolvedProjectReference(f func(tspath.PathKey,
+/// *tsoptions.ParsedCommandLine, *tsoptions.ParsedCommandLine, int) bool)`
+/// callback shape, shared by the mapper's and Program's range surfaces
+/// (alias mostly for clippy::type_complexity, the packagejson `TraceFn`
+/// precedent; the lifetime carries the callback's captures).
+pub type RangeResolvedProjectReferenceCallback<'a> = &'a mut dyn FnMut(
+    &PathKey,
+    Option<&Arc<ResolvedProjectReference>>,
+    Option<&Arc<ResolvedProjectReference>>,
+    usize,
+) -> bool;
+
 /// Go: `type SourceOutputAndProjectReference struct` (tsoptions) —
 /// crate-local until the tsoptions wave lands it (see the file header).
 #[derive(Clone, Debug, Default)]
@@ -256,7 +268,7 @@ impl ProjectReferenceFileMapper {
     /// Go: `func (mapper *projectReferenceFileMapper) rangeResolvedProjectReference(f)`.
     pub fn range_resolved_project_reference(
         &self,
-        f: &mut dyn FnMut(&PathKey, Option<&Arc<ResolvedProjectReference>>, Option<&Arc<ResolvedProjectReference>>, usize) -> bool,
+        f: crate::project_reference_file_mapper::RangeResolvedProjectReferenceCallback<'_>,
     ) -> bool {
         if self.config.project_references().is_empty() {
             return false;
@@ -285,7 +297,7 @@ impl ProjectReferenceFileMapper {
     fn range_resolved_reference_worker(
         &self,
         references: &[PathKey],
-        f: &mut dyn FnMut(&PathKey, Option<&Arc<ResolvedProjectReference>>, Option<&Arc<ResolvedProjectReference>>, usize) -> bool,
+        f: crate::project_reference_file_mapper::RangeResolvedProjectReferenceCallback<'_>,
         parent: Option<&Arc<ResolvedProjectReference>>,
         seen_ref: &mut rustc_hash::FxHashSet<PathKey>,
     ) -> bool {
@@ -330,7 +342,7 @@ impl ProjectReferenceFileMapper {
     pub fn range_resolved_project_reference_in_child_config(
         &self,
         child_config: &Arc<ParsedCommandLine>,
-        f: &mut dyn FnMut(&PathKey, Option<&Arc<ResolvedProjectReference>>, Option<&Arc<ResolvedProjectReference>>, usize) -> bool,
+        f: crate::project_reference_file_mapper::RangeResolvedProjectReferenceCallback<'_>,
     ) -> bool {
         if child_config.config_file_name.as_string().is_empty() {
             return false;
@@ -445,7 +457,7 @@ impl ProjectReferenceFileMapperBuilder {
     /// empty in this wave anyway (ParseInputOutputNames is not ported).
     pub fn resolve_symlink(&self, file: &HasFileName) {
         let path = &file.path;
-        let mut cache = self
+        let cache = self
             .mapper
             .realpath_dts_to_source
             .lock()

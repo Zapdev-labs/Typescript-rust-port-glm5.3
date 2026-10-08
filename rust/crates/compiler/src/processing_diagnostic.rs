@@ -90,7 +90,6 @@ impl ProcessingDiagnostic {
 
     /// Go: `func (d *processingDiagnostic) createDiagnosticExplainingFile(program *Program)`.
     fn create_diagnostic_explaining_file(&self, program: &Program) -> FileDiagnostic {
-        use std::collections::HashMap;
 
         let diag = self.as_include_explaining_diagnostic().expect("explanation");
         let mut include_details: Vec<Diagnostic> = Vec::new();

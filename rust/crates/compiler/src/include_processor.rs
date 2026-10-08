@@ -16,7 +16,7 @@ use tsc_ast::Diagnostic;
 use tsc_tspath::PathKey;
 
 use crate::diagnostics_collection::{DiagnosticsCollection, FileDiagnostic};
-use crate::file_include::{FileIncludeKind, FileIncludeReason, IncludeReasonDiagnosticKey, ReferenceFileLocation};
+use crate::file_include::{FileIncludeReason, IncludeReasonDiagnosticKey, ReferenceFileLocation};
 use crate::processing_diagnostic::{IncludeExplainingDiagnostic, ProcessingDiagnostic, ProcessingDiagnosticKind};
 use crate::program::Program;
 
@@ -100,36 +100,32 @@ impl IncludeProcessor {
                 collection.add(diagnostic.to_diagnostic(program));
             }
             for (path, resolutions) in &program.resolved_modules {
-                for resolution in resolutions.values() {
-                    if let Some(resolution) = resolution {
-                        for diagnostic in &resolution.resolution_diagnostics {
-                            // PORT (file ids): the resolver's diagnostics carry
-                            // a NodeId file that cannot resolve to a path
-                            // (parser file_id gap); pair them with the
-                            // containing file's name here.
-                            let file_name = program
-                                .get_source_file_by_path(path)
-                                .map(|file| file.file_name().clone());
-                            collection.add(FileDiagnostic {
-                                file_name,
-                                diagnostic: (**diagnostic).clone(),
-                            });
-                        }
+                for resolution in resolutions.values().flatten() {
+                    for diagnostic in &resolution.resolution_diagnostics {
+                        // PORT (file ids): the resolver's diagnostics carry
+                        // a NodeId file that cannot resolve to a path
+                        // (parser file_id gap); pair them with the
+                        // containing file's name here.
+                        let file_name = program
+                            .get_source_file_by_path(path)
+                            .map(|file| file.file_name().clone());
+                        collection.add(FileDiagnostic {
+                            file_name,
+                            diagnostic: (**diagnostic).clone(),
+                        });
                     }
                 }
             }
             for (path, type_resolutions) in &program.type_resolutions_in_file {
-                for resolution in type_resolutions.values() {
-                    if let Some(resolution) = resolution {
-                        for diagnostic in &resolution.resolution_diagnostics {
-                            let file_name = program
-                                .get_source_file_by_path(path)
-                                .map(|file| file.file_name().clone());
-                            collection.add(FileDiagnostic {
-                                file_name,
-                                diagnostic: (**diagnostic).clone(),
-                            });
-                        }
+                for resolution in type_resolutions.values().flatten() {
+                    for diagnostic in &resolution.resolution_diagnostics {
+                        let file_name = program
+                            .get_source_file_by_path(path)
+                            .map(|file| file.file_name().clone());
+                        collection.add(FileDiagnostic {
+                            file_name,
+                            diagnostic: (**diagnostic).clone(),
+                        });
                     }
                 }
             }
@@ -257,6 +253,9 @@ impl IncludeProcessor {
                 let package_json =
                     package_json_directory.resolve_file("package.json");
                 use tsc_core::compileroptions::{ResolutionModeCommonJS, ResolutionModeESM};
+                // PORT: the consts keep the Go spelling (`ResolutionModeESM`
+                // etc.) — the upstream crate's names, used as match patterns.
+                #[allow(non_upper_case_globals)]
                 match program.get_implied_node_format_for_emit_by_path(file.path_key()) {
                     ResolutionModeESM => {
                         if meta_data.package_json_type == "module" {

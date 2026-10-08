@@ -39,6 +39,11 @@ impl FileDiagnostic {
     }
 
     /// Go: `ast.NewDiagnostic(file, loc, message, args...)`.
+    ///
+    /// PORT: the constructor keeps the Go-derived `file_diagnostic` name
+    /// (mirroring `ast.NewDiagnostic`'s per-file form); the type/constructor
+    /// name match is intentional — Go has no constructor-name collision.
+    #[allow(clippy::self_named_constructors)]
     pub fn file_diagnostic(
         file: &tsc_ast::SourceFile,
         loc: tsc_core::text::TextRange,
@@ -186,7 +191,7 @@ fn cmp_slice(a: &[String], b: &[String]) -> i32 {
 
 /// Go: `func compareRelatedInfo(r1, r2 []*Diagnostic) int`.
 fn compare_related_info(r1: &[Diagnostic], r2: &[Diagnostic]) -> i32 {
-    let mut c = r2.len() as i32 - r1.len() as i32;
+    let c = r2.len() as i32 - r1.len() as i32;
     if c != 0 {
         return c;
     }
