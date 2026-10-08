@@ -97,10 +97,8 @@ pub fn write_comparison(actual_content: &str, local: &Path, reference: &Path) ->
     }
     // Go removes a stale local file first (an empty MkdirAll-only tree is
     // not a valid baseline); the port matches.
-    if local.exists() {
-        if std::fs::remove_file(local).is_err() {
-            panic!("failed to remove the local baseline file {}", local.display());
-        }
+    if local.exists() && std::fs::remove_file(local).is_err() {
+        panic!("failed to remove the local baseline file {}", local.display());
     }
 
     // Go reads the reference raw (any bytes become the string); the port

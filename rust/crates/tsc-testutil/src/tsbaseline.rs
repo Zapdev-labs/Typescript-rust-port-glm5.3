@@ -55,14 +55,13 @@ fn replace_non_whitespace(line: &str) -> String {
 }
 
 /// Go: `tsExtension = regexp.MustCompile("\\.tsx?$")` — the baseline-name
-/// mapping. `extension` is the replacement (".errors.txt" / ".types" /
-/// ".symbols").
+/// mapping (no match leaves the name unchanged, like ReplaceAllString).
+/// `extension` is the replacement (".errors.txt" / ".types" / ".symbols").
 pub fn replace_ts_extension(name: &str, extension: &str) -> String {
-    let stripped = name
-        .strip_suffix(".tsx")
-        .or_else(|| name.strip_suffix(".ts"))
-        .unwrap_or(name);
-    format!("{stripped}{extension}")
+    match name.strip_suffix(".tsx").or_else(|| name.strip_suffix(".ts")) {
+        Some(stripped) => format!("{stripped}{extension}"),
+        None => name.to_string(),
+    }
 }
 
 /// Go: `testPathCharacters = regexp.MustCompile("[\\^<>:\"|?*%]")`.
@@ -165,11 +164,11 @@ pub fn sanitize_test_file_path(name: &str) -> String {
     let path = replace_test_path_characters(name);
     let path = path.replace('\\', "/");
     let path = replace_test_path_dot_dot(&path);
-    // Go: CaseInsensitive.Canonicalize(NormalizePath(path)) then TrimPrefix "/"
-    let path = tsc_tspath::CaseSensitivity::CaseInsensitive
+    // Go: CaseInsensitive.Canonicalize(NormalizePath(path))
+    let path = tsc_tspath::normalize_path(&path).to_string();
+    tsc_tspath::CaseSensitivity::CaseInsensitive
         .canonicalize(path.as_str())
-        .to_string();
-    path.strip_prefix('/').unwrap_or(&path).to_string()
+        .to_string()
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -339,7 +338,10 @@ fn replace_diagnostics_location_prefix(line: &str) -> String {
     if j == 0 || j >= bytes.len() || bytes[j] != b')' {
         return line.to_string();
     }
-    format!("{}(--,--)", &line[..open + ".d.ts(".len()])
+    // The match spans `lib...d.ts(digits,digits)`; the tail after the
+    // closing paren survives (Go's ReplaceAllString replaces only the match).
+    let match_end = open + ".d.ts(".len() + i + 1 + j + 1;
+    format!("{}(--,--){}", &line[..open + ".d.ts".len()], &line[match_end..])
 }
 
 /// Go: `iterateErrorBaseline` (pretty=false).
@@ -347,7 +349,7 @@ fn iterate_error_baseline(input_files: &[(&str, &str)], diagnostics: &[&ErrorBas
     // Go sorts a clone via CompareASTDiagnostics (path, pos, end, code,
     // category, source, message identity, args). The emitter's own
     // diagnostics arrive unsorted.
-    let mut sorted: Vec<&ErrorBaselineDiagnostic<'_>> = diagnostics.iter().copied().collect();
+    let mut sorted: Vec<&ErrorBaselineDiagnostic<'_>> = diagnostics.to_vec();
     sorted.sort_by(|a, b| compare_error_baseline_diagnostics(a, b));
 
     let mut result: Vec<String> = Vec::new();
@@ -570,8 +572,10 @@ mod tests {
 
     #[test]
     fn sanitizes_test_paths() {
-        assert_eq!(sanitize_test_file_path("/.src/A|B.ts"), "a_b.ts");
-        assert_eq!(sanitize_test_file_path("/.src/../up.ts"), "__dotdot/up.ts");
+        // Go: testPathCharacters replaces `|` (not `/`), then CaseInsensitive
+        // canonicalization lowercases — the /.src prefix stays.
+        assert_eq!(sanitize_test_file_path("/.src/A|B.ts"), "/.src/a_b.ts");
+        assert_eq!(sanitize_test_file_path("/.src/../up.ts"), "/.src/__dotdot/up.ts");
     }
 
     #[test]

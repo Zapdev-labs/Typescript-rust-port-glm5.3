@@ -101,16 +101,10 @@ fn split_compiler_test_filter(pattern: &str) -> Option<Vec<String>> {
             '[' => in_class = true,
             '(' => depth += 1,
             ')' => depth -= 1,
-            '|' => {
-                if depth == 0 {
-                    return None;
-                }
-            }
-            '/' => {
-                if depth == 0 {
-                    parts.push(pattern[start..index].to_string());
-                    start = index + 1;
-                }
+            '|' if depth == 0 => return None,
+            '/' if depth == 0 => {
+                parts.push(pattern[start..index].to_string());
+                start = index + 1;
             }
             _ => {}
         }

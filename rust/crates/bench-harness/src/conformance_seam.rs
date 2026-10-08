@@ -33,6 +33,7 @@
 //!   - `shape_hash`: FNV-1a 64 (lowercase 16-hex) over the case, baseline,
 //!     errors count and one fold line per diagnostic in the render sort
 //!     order (the recipe in tsc-testrunner's compiler_runner.rs).
+//!
 //! Summary lines go to STDERR (stdout stays pure NDJSON for the diff).
 
 use std::path::PathBuf;

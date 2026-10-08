@@ -308,8 +308,11 @@ mod tests {
         let vary_by = |name: &str| name == "target";
         let configs = get_file_based_test_configurations(&settings(&[("target", "esnext, es2015")]), &vary_by);
         assert_eq!(configs.len(), 2);
-        assert_eq!(configs[0].name, "target=es2015");
-        assert_eq!(configs[1].name, "target=esnext");
+        // Go preserves the value order ("esnext, es2015" → esnext first);
+        // only the option-ENTRY iteration is sorted (Go's map order is
+        // random — the port's sorted-key determinism rule).
+        assert_eq!(configs[0].name, "target=esnext");
+        assert_eq!(configs[1].name, "target=es2015");
         // the non-varying options merge into every configuration
         let configs = get_file_based_test_configurations(
             &settings(&[("target", "esnext, es2015"), ("nolib", "true")]),
