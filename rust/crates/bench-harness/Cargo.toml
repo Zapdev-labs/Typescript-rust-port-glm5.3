@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[[bin]]
+name = "tsc-bench"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 

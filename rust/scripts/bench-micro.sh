@@ -46,7 +46,7 @@ echo "== Go side: go test -bench (-count=$SAMPLES) — this also compiles the pa
 for fam in "${FAMILIES[@]}"; do
   read -r pkg goname rustop <<<"$fam"
   echo "  go: $pkg.$goname"
-  (cd "$TSC_DIR" && "$GO" test "./internal/$pkg" -run '^$' -bench "^${goname}\$" \
+  (cd "$TSC_DIR" && "$GO" test "./internal/$pkg" -run '^$' -bench "^Benchmark${goname}\$" \
      -count="$SAMPLES" -benchmem) > "$OUT/go_${pkg}_${goname}.txt" 2>&1 &
 done
 wait
@@ -71,7 +71,7 @@ FAMILIES = [
     ("jsnum", "Exponentiate"),
 ]
 
-go_line = re.compile(r"^(Benchmark\S+?)(?:-\d+)?\s+([\d.]+) ns/op")
+go_line = re.compile(r"^(Benchmark\S+?)(?:-\d+)?\s+\d+\s+([\d.]+) ns/op")
 rows = []
 for pkg, goname in FAMILIES:
     go_path = os.path.join(out_dir, f"go_{pkg}_{goname}.txt")
