@@ -13,10 +13,10 @@
 //     its text/loc through the pointer. The port's synthetic nodes DO live in
 //     the owning file's arena (create_synthetic_import), but the reason only
 //     ever reads the text, so the string carries it.
-//   - `toRelatedInfo`'s config-file syntax arms need the tsoptions
-//     AST-config surface (GetTsConfigPropArrayElementValue,
-//     GetOptionsSyntaxByArrayElementValue, ConfigFile), which is not ported;
-//     those arms degrade to Go's nil-ConfigFile behavior (see PORTING-NOTES).
+//   - `toRelatedInfo`'s config-file syntax arms read the tsoptions
+//     config-node surface (GetTsConfigPropArrayElementValue,
+//     GetOptionsSyntaxByArrayElementValue, ConfigFile — the M6 config-node
+//     wave); the nil-ConfigFile programs keep Go's nil return.
 
 use std::sync::{Arc, Mutex};
 
@@ -305,13 +305,52 @@ impl FileIncludeReason {
         let options = program.options();
         match self.kind {
             FileIncludeKind::RootFile => {
-                // Go: program.opts.Config.ConfigFile != nil → the matched-spec
-                // diagnostics; the AST-config surface (GetMatchedFileSpec /
-                // GetMatchedIncludeSpec) is not ported — the nil-ConfigFile arm.
-                FileDiagnostic::compiler_diagnostic(
-                    &tsc_diagnostics::ROOT_FILE_SPECIFIED_FOR_COMPILATION,
-                    &[],
-                )
+                // Go: `program.opts.Config.ConfigFile != nil` → the
+                // matched-spec diagnostics (the M6 config-node wave);
+                // nil-ConfigFile keeps the Root-file arm.
+                let config = &program.opts.config;
+                if config.config_file.is_some() {
+                    let file_name = config.file_names()[self.as_index()].clone();
+                    let matched_file_spec = config.get_matched_file_spec(&file_name);
+                    if !matched_file_spec.is_empty() {
+                        FileDiagnostic::compiler_diagnostic(
+                            &tsc_diagnostics::PART_OF_FILES_LIST_IN_TSCONFIG_JSON,
+                            &[
+                                matched_file_spec.as_string().to_string(),
+                                to_file_name(&file_name),
+                            ],
+                        )
+                    } else {
+                        let (matched_include_spec, is_default_include_spec) =
+                            config.get_matched_include_spec(&file_name);
+                        if !matched_include_spec.is_empty() {
+                            if is_default_include_spec {
+                                FileDiagnostic::compiler_diagnostic(
+                                    &tsc_diagnostics::MATCHED_BY_DEFAULT_INCLUDE_PATTERN_ASTERISK_ASTERISK_SLASH_ASTERISK,
+                                    &[],
+                                )
+                            } else {
+                                FileDiagnostic::compiler_diagnostic(
+                                    &tsc_diagnostics::MATCHED_BY_INCLUDE_PATTERN_0_IN_1,
+                                    &[
+                                        matched_include_spec.as_string().to_string(),
+                                        to_file_name(&config.config_name()),
+                                    ],
+                                )
+                            }
+                        } else {
+                            FileDiagnostic::compiler_diagnostic(
+                                &tsc_diagnostics::ROOT_FILE_SPECIFIED_FOR_COMPILATION,
+                                &[],
+                            )
+                        }
+                    }
+                } else {
+                    FileDiagnostic::compiler_diagnostic(
+                        &tsc_diagnostics::ROOT_FILE_SPECIFIED_FOR_COMPILATION,
+                        &[],
+                    )
+                }
             }
             FileIncludeKind::AutomaticTypeDirectiveFile => {
                 let data = self.as_automatic_type_directive_file_data().expect("data");
@@ -473,15 +512,150 @@ impl FileIncludeReason {
     }
 
     /// Go: `func (r *FileIncludeReason) toRelatedInfo(program)`.
+    ///
+    /// The config-file syntax arms (M6 config-node wave): the related-info
+    /// anchors read the config source file's AST — the `files`/`include`
+    /// element nodes for RootFile, the `types`/`lib`/`target` value nodes
+    /// for the compiler-options arms.
     pub fn to_related_info(self: &Arc<Self>, program: &Program) -> Option<Diagnostic> {
         if self.is_referenced_file() {
             return self.compute_reference_file_related_info(program);
         }
-        // Go: the config-file syntax arms (GetTsConfigPropArrayElementValue,
-        // GetOptionsSyntaxByArrayElementValue, ForEachPropertyAssignment) need
-        // the AST-config surface; without it the arms degrade to Go's
-        // nil-ConfigFile behavior (PORTING-NOTES).
-        None
+        // Go: `if program.opts.Config.ConfigFile == nil { return nil }`.
+        let config = &program.opts.config;
+        let config_file = config.config_file.as_ref()?;
+        // Go: the config-file syntax arms walk the config AST. PORT
+        // (deadlock rule): the include processor's
+        // `getCompilerOptionsObjectLiteralSyntax` locks the same config
+        // mutex — its memo is computed BEFORE the guard below is taken
+        // (the two arms that need it are the types/lib ones; the value is
+        // Go's memo — a pure walk, identical whenever computed).
+        let compiler_options_object_literal =
+            program
+                .include_processor
+                .get_compiler_options_object_literal_syntax(program);
+        let source_file = config_file.lock_source_file();
+        let source_file: &SourceFile = &source_file;
+        match self.kind {
+            FileIncludeKind::RootFile => {
+                let file_name = config.file_names()[self.as_index()].clone();
+                let matched_file_spec = config.get_matched_file_spec(&file_name);
+                if !matched_file_spec.is_empty() {
+                    tsc_tsoptions::get_ts_config_prop_array_element_value(
+                        Some(source_file),
+                        "files",
+                        matched_file_spec.as_string(),
+                    )
+                    .map(|node| {
+                        tsc_tsoptions::create_diagnostic_for_node_in_source_file(
+                            source_file,
+                            node,
+                            &tsc_diagnostics::FILE_IS_MATCHED_BY_FILES_LIST_SPECIFIED_HERE,
+                            &[],
+                        )
+                    })
+                } else {
+                    let (matched_include_spec, is_default_include_spec) =
+                        config.get_matched_include_spec(&file_name);
+                    if !matched_include_spec.is_empty() && !is_default_include_spec {
+                        tsc_tsoptions::get_ts_config_prop_array_element_value(
+                            Some(source_file),
+                            "include",
+                            matched_include_spec.as_string(),
+                        )
+                        .map(|node| {
+                            tsc_tsoptions::create_diagnostic_for_node_in_source_file(
+                                source_file,
+                                node,
+                                &tsc_diagnostics::FILE_IS_MATCHED_BY_INCLUDE_PATTERN_SPECIFIED_HERE,
+                                &[],
+                            )
+                        })
+                    } else {
+                        None
+                    }
+                }
+            }
+            FileIncludeKind::AutomaticTypeDirectiveFile => {
+                if !program.options().uses_wildcard_types() {
+                    let data = self.as_automatic_type_directive_file_data().expect("data");
+                    tsc_tsoptions::get_options_syntax_by_array_element_value(
+                        source_file,
+                        compiler_options_object_literal,
+                        "types",
+                        &data.type_reference,
+                    )
+                    .map(|node| {
+                        tsc_tsoptions::create_diagnostic_for_node_in_source_file(
+                            source_file,
+                            node,
+                            &tsc_diagnostics::FILE_IS_ENTRY_POINT_OF_TYPE_LIBRARY_SPECIFIED_HERE,
+                            &[],
+                        )
+                    })
+                } else {
+                    None
+                }
+            }
+            FileIncludeKind::LibFile => {
+                let (index, ok) = self.as_lib_file_index();
+                if ok {
+                    let lib = program
+                        .options()
+                        .lib
+                        .as_ref()
+                        .and_then(|libs| libs.get(index))
+                        .cloned()
+                        .unwrap_or_default();
+                    tsc_tsoptions::get_options_syntax_by_array_element_value(
+                        source_file,
+                        compiler_options_object_literal,
+                        "lib",
+                        &lib,
+                    )
+                    .map(|node| {
+                        tsc_tsoptions::create_diagnostic_for_node_in_source_file(
+                            source_file,
+                            node,
+                            &tsc_diagnostics::FILE_IS_LIBRARY_SPECIFIED_HERE,
+                            &[],
+                        )
+                    })
+                } else {
+                    // PORT: Go calls the ScriptTarget Stringer; the port has
+                    // no stringer module, and the Go stringer's names match
+                    // the derived Debug spelling exactly (the LibFile
+                    // compute_diagnostic precedent).
+                    let target = format!("{:?}", program.options().get_emit_script_target());
+                    if !target.is_empty() {
+                        tsc_tsoptions::for_each_property_assignment(
+                            source_file,
+                            compiler_options_object_literal,
+                            "target",
+                            "",
+                            |store, property| {
+                                (tsc_tsoptions::tsconfigparsing::
+                                     get_callback_for_finding_property_assignment_by_value(
+                                    store, &target,
+                                ))(property)
+                            },
+                        )
+                        .map(|node| {
+                            tsc_tsoptions::create_diagnostic_for_node_in_source_file(
+                                source_file,
+                                node,
+                                &tsc_diagnostics::FILE_IS_DEFAULT_LIBRARY_FOR_TARGET_SPECIFIED_HERE,
+                                &[],
+                            )
+                        })
+                    } else {
+                        None
+                    }
+                }
+            }
+            FileIncludeKind::ContentMapperSupplemental => None,
+            kind => panic!("unknown reason: {kind:?}"),
+        }
     }
 
     /// Go: `func (r *FileIncludeReason) computeReferenceFileRelatedInfo(program)`.

@@ -16,13 +16,15 @@
 //   - `UpdateProgram`/`ReuseProgram` (the incremental watch surface) are not
 //     ported: they need the content-mapper/cachedvfs machinery and Go's
 //     shared `*ast.SourceFile` pointer graph (the port's files are owned).
-//   - `verifyCompilerOptions`/`verifyProjectReferences` are degraded to the
-//     option-syntax-free surface: Go positions every option diagnostic on the
-//     tsconfig `compilerOptions` object literal (the AST-config wave, see
-//     lib.rs); without it the checks would report unpositioned duplicates of
-//     diagnostics the M6/M7 config waves will position. The
-//     `hasEmitBlockingDiagnostics`/`blockEmittingOfFile` surface they feed is
-//     ported so the waves plug in here (PORTING-NOTES).
+//   - `verifyCompilerOptions` ports its REMOVED-OPTION arm through the M6
+//     config-node surface (TS5102/TS5108 positioned on the config file's
+//     AST nodes — the OptionDiagnosticContext machinery); the remaining
+//     Go arms (the strict/composite/paths/jsx/moduleKind checks,
+//     verifyProjectReferences, the emit-path uniqueness loop) stay deferred
+//     to the full AST-config wave — see verify_compiler_options' PORT note
+//     for the plug points. `verifyProjectReferences` is deferred with them.
+//     The `hasEmitBlockingDiagnostics`/`blockEmittingOfFile` surface they
+//     feed is ported so the waves plug in here (PORTING-NOTES).
 //   - `collectContentMapperOptionDiagnostics` is the content-mapper seam
 //     (always empty in this wave — see file_loader.rs).
 //   - `tracing` is not ported (no tracing crate yet).
@@ -50,7 +52,7 @@ use tsc_ast::{
 use tsc_core::compileroptions::{
     ResolutionMode, ResolutionModeCommonJS, ResolutionModeESM, ResolutionModeNone,
 };
-use tsc_core::options_generated::{CompilerOptions, ModuleKind};
+use tsc_core::options_generated::{CompilerOptions, ModuleKind, ModuleResolutionKind, ScriptTarget};
 use tsc_core::scriptkind::ScriptKind;
 use tsc_core::tristate::Tristate;
 use tsc_module::{
@@ -1382,9 +1384,102 @@ impl Program {
 
     // ── deferred seams ──────────────────────────────────────────────────────
 
-    /// Go: `func (p *Program) verifyCompilerOptions()` + `verifyProjectReferences`
-    /// — the degraded option-syntax-free surface (see the file header).
-    fn verify_compiler_options(&mut self) {}
+    /// Go: `func (p *Program) verifyCompilerOptions()` — the removed-option
+    /// arm (TS5102/TS5108) through the M6 config-node surface: the same
+    /// diagnostics, messages/args, config-node positions and Go order.
+    ///
+    /// PORT: the REMAINDER of Go's verifyCompilerOptions stays deferred to
+    /// the full AST-config wave. The deferred arms, in Go order, are:
+    /// strictPropertyInitialization/exactOptionalPropertyTypes without
+    /// strictNullChecks; isolatedDeclarations; inlineSourceMap; composite;
+    /// the tsBuildInfoFile/incremental check; verifyProjectReferences plus
+    /// the composite root-files walk; the `paths` validation; the
+    /// sourcemap/declarationDir/lib/jsx/moduleKind arms; and the
+    /// emit-path-uniqueness loop. Their plug point is the
+    /// [`OptionDiagnosticContext`] helpers below — Go's
+    /// `createDiagnosticForOptionName`/`createOptionValueDiagnostic` fold
+    /// onto `create_diagnostic_for_option` (+2/0 leading args); each arm
+    /// is a straight transcription once its non-option dependencies land
+    /// (project references, outputpaths' ForEachEmittedFile, the paths
+    /// object walk).
+    fn verify_compiler_options(&mut self) {
+        let case_sensitivity = self.case_sensitivity;
+        let diagnostics = {
+            let options = self.options();
+            let config = &self.opts.config;
+            let mut ctx = OptionDiagnosticContext::new(config);
+
+            // Removed in TS7
+
+            if !options.base_url.is_empty() {
+                // BaseUrl will have been turned absolute by this point.
+                let mut use_instead = String::new();
+                let config_file_path = ctx.config_file_path();
+                if !config_file_path.is_empty() {
+                    let mut relative = tsc_tspath::get_relative_path_from_file(
+                        config_file_path.as_string(),
+                        options.base_url.as_string(),
+                        case_sensitivity,
+                    );
+                    if !(relative.starts_with("./") || relative.starts_with("../")) {
+                        relative = format!("./{relative}");
+                    }
+                    let suggestion = tsc_tspath::combine_paths(&relative, &["*"]);
+                    use_instead =
+                        format!("\"paths\": {{\"*\": [{}]}}", json_marshal_string(&suggestion));
+                }
+                ctx.create_removed_option_diagnostic("baseUrl", "", &use_instead);
+            }
+
+            if !options.out_file.is_empty() {
+                ctx.create_removed_option_diagnostic("outFile", "", "");
+            }
+
+            if options.target == ScriptTarget::ES5 {
+                ctx.create_removed_option_diagnostic("target", "ES5", "");
+            }
+
+            if options.module == ModuleKind::AMD {
+                ctx.create_removed_option_diagnostic("module", "AMD", "");
+            }
+            if options.module == ModuleKind::System {
+                ctx.create_removed_option_diagnostic("module", "System", "");
+            }
+            if options.module == ModuleKind::UMD {
+                ctx.create_removed_option_diagnostic("module", "UMD", "");
+            }
+
+            if options.module_resolution == ModuleResolutionKind::Classic {
+                ctx.create_removed_option_diagnostic("moduleResolution", "Classic", "");
+            }
+
+            if options.always_strict.is_false() {
+                ctx.create_removed_option_diagnostic("alwaysStrict", "false", "");
+            }
+
+            if options.es_module_interop.is_false() {
+                ctx.create_removed_option_diagnostic("esModuleInterop", "false", "");
+            }
+
+            if options.allow_synthetic_default_imports.is_false() {
+                ctx.create_removed_option_diagnostic("allowSyntheticDefaultImports", "false", "");
+            }
+
+            if options.module_resolution == ModuleResolutionKind::Node10 {
+                ctx.create_removed_option_diagnostic("moduleResolution", "node10", "");
+            }
+
+            if !options.downlevel_iteration.is_unknown() {
+                ctx.create_removed_option_diagnostic("downlevelIteration", "", "");
+            }
+
+            ctx.diagnostics
+        };
+        self.program_diagnostics
+            .lock()
+            .expect("programDiagnostics poisoned")
+            .extend(diagnostics);
+    }
 
     /// Go: `func (p *Program) collectContentMapperOptionDiagnostics()` — the
     /// content-mapper seam (see file_loader.rs).
@@ -1395,6 +1490,282 @@ impl Program {
     pub fn get_checker_pool(&self) -> Option<Arc<dyn crate::checkerpool::CheckerPool>> {
         self.checker_pool.clone()
     }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// verifyCompilerOptions' option-diagnostic machinery (Go: program.go's
+// verifyCompilerOptions closure bundle — the M6 config-node wave)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: the memoized closure bundle `verifyCompilerOptions` builds — the
+/// option-diagnostic creators that position removed-option diagnostics on
+/// the config file's AST nodes.
+///
+/// PORT: Go's closures capture `p` and append into `programDiagnostics`
+/// inside `createOptionDiagnosticInObjectLiteralSyntax` /
+/// `createCompilerOptionsDiagnostic`; the port collects into `diagnostics`
+/// and `create_diagnostic_for_option` pushes exactly once per Go append
+/// (each Go create* call appends at most one diagnostic, in call order —
+/// same sequence, same dedup input).
+struct OptionDiagnosticContext<'a> {
+    /// Go: `p.opts.Config` (the memoizes read `Config.ConfigFile`).
+    config: &'a tsc_tsoptions::ParsedCommandLine,
+    /// Go: the `sourceFile` memoize (`ConfigFile.SourceFile`, nil-safe).
+    /// PORT: the config AST rides behind tsoptions' `Mutex` (Send/Sync —
+    /// see TsConfigSourceFile); the memo holds the guard for the whole
+    /// verify pass (single-threaded, no nested lock).
+    source_file: OnceLock<Option<std::sync::MutexGuard<'a, SourceFile>>>,
+    /// Go: the `configFilePath` memoize.
+    config_file_path: OnceLock<RootedFilePath>,
+    /// Go: the `getCompilerOptionsPropertySyntax` memoize — the
+    /// `compilerOptions` PropertyAssignment node.
+    compiler_options_property_syntax: OnceLock<Option<NodeId>>,
+    /// Go: the `getCompilerOptionsObjectLiteralSyntax` memoize — the
+    /// `compilerOptions` value's ObjectLiteralExpression node.
+    compiler_options_object_literal_syntax: OnceLock<Option<NodeId>>,
+    /// The collected program diagnostics (appended by the creators; the
+    /// caller extends `program_diagnostics` with them).
+    diagnostics: Vec<FileDiagnostic>,
+}
+
+impl<'a> OptionDiagnosticContext<'a> {
+    fn new(config: &'a tsc_tsoptions::ParsedCommandLine) -> Self {
+        OptionDiagnosticContext {
+            config,
+            source_file: OnceLock::new(),
+            config_file_path: OnceLock::new(),
+            compiler_options_property_syntax: OnceLock::new(),
+            compiler_options_object_literal_syntax: OnceLock::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// Go: `sourceFile := core.Memoize(func() *ast.SourceFile { configFile
+    /// := p.opts.Config.ConfigFile; if configFile == nil { return nil };
+    /// return configFile.SourceFile })`.
+    fn source_file(&self) -> Option<&SourceFile> {
+        self.source_file
+            .get_or_init(|| {
+                self.config
+                    .config_file
+                    .as_ref()
+                    .map(|config_file| config_file.lock_source_file())
+            })
+            .as_deref()
+    }
+
+    /// Go: `configFilePath := core.Memoize(...)` — the config source file's
+    /// name, "" without one.
+    fn config_file_path(&self) -> RootedFilePath {
+        self.config_file_path
+            .get_or_init(|| {
+                self.source_file()
+                    .map_or_else(RootedFilePath::default, |file| file.file_name().clone())
+            })
+            .clone()
+    }
+
+    /// Go: `getCompilerOptionsPropertySyntax := core.Memoize(func() *ast.PropertyAssignment {
+    /// return tsoptions.ForEachTsConfigPropArray(sourceFile(), "compilerOptions", core.Identity) })`.
+    fn get_compiler_options_property_syntax(&self) -> Option<NodeId> {
+        *self.compiler_options_property_syntax.get_or_init(|| {
+            tsc_tsoptions::for_each_ts_config_prop_array(
+                self.source_file(),
+                "compilerOptions",
+                |_store, property| Some(property),
+            )
+        })
+    }
+
+    /// Go: `getCompilerOptionsObjectLiteralSyntax := core.Memoize(...)`.
+    fn get_compiler_options_object_literal_syntax(&self) -> Option<NodeId> {
+        *self
+            .compiler_options_object_literal_syntax
+            .get_or_init(|| {
+                let property = self.get_compiler_options_property_syntax()?;
+                let source_file = self
+                    .source_file()
+                    .expect("compilerOptions property syntax implies a source file");
+                let initializer = source_file
+                    .node(property)
+                    .as_property_assignment()
+                    .expect("IsPropertyAssignment guaranteed by ForEachPropertyAssignment")
+                    .initializer;
+                if initializer.is_none() {
+                    // Go: `compilerOptionsProperty.Initializer != nil`.
+                    return None;
+                }
+                if tsc_ast::is_object_literal_expression(source_file.node(initializer)) {
+                    return Some(initializer);
+                }
+                None
+            })
+    }
+
+    /// Go: `ast.NewDiagnostic(file, loc, message, args...)` paired with the
+    /// config file's name (the port's FileDiagnostic pairing —
+    /// diagnostics_collection.rs).
+    fn diagnostic_for_node(
+        &self,
+        source_file: &SourceFile,
+        node: NodeId,
+        message: &'static tsc_diagnostics::Message,
+        args: &[String],
+    ) -> FileDiagnostic {
+        FileDiagnostic {
+            file_name: Some(source_file.file_name().clone()),
+            diagnostic: tsc_tsoptions::create_diagnostic_for_node_in_source_file(
+                source_file, node, message, args,
+            ),
+        }
+    }
+
+    /// Go: `createOptionDiagnosticInObjectLiteralSyntax := func(objectLiteral, onKey, key1, key2, message, args...) *ast.Diagnostic`.
+    ///
+    /// PORT: returns the diagnostic WITHOUT appending (the port appends in
+    /// `create_diagnostic_for_option`, once per Go append — see the struct
+    /// header note).
+    fn create_option_diagnostic_in_object_literal_syntax(
+        &self,
+        object_literal: Option<NodeId>,
+        on_key: bool,
+        key1: &str,
+        key2: &str,
+        message: &'static tsc_diagnostics::Message,
+        args: &[String],
+    ) -> Option<FileDiagnostic> {
+        let source_file = self.source_file()?;
+        tsc_tsoptions::for_each_property_assignment(
+            source_file,
+            object_literal,
+            key1,
+            key2,
+            |store, property| {
+                let data = store
+                    .node(property)
+                    .as_property_assignment()
+                    .expect("IsPropertyAssignment guaranteed by ForEachPropertyAssignment")
+                    .clone();
+                // Go: `core.IfElse(onKey, property.Name(), property.Initializer)`.
+                let node = if on_key { data.name } else { data.initializer };
+                if node.is_none() {
+                    // Go would nil-deref here; the JSON parser never mints a
+                    // PropertyAssignment without a name/initializer.
+                    return None;
+                }
+                Some(self.diagnostic_for_node(source_file, node, message, args))
+            },
+        )
+    }
+
+    /// Go: `createCompilerOptionsDiagnostic := func(message, args...) *ast.Diagnostic` —
+    /// positioned on the `compilerOptions` property's NAME when the config
+    /// has one, else the fileless compiler diagnostic.
+    fn create_compiler_options_diagnostic(
+        &self,
+        message: &'static tsc_diagnostics::Message,
+        args: &[String],
+    ) -> FileDiagnostic {
+        match (self.source_file(), self.get_compiler_options_property_syntax()) {
+            (Some(source_file), Some(property)) => {
+                let name = source_file
+                    .node(property)
+                    .as_property_assignment()
+                    .expect("IsPropertyAssignment guaranteed by the walk")
+                    .name;
+                self.diagnostic_for_node(source_file, name, message, args)
+            }
+            _ => FileDiagnostic::compiler_diagnostic(message, args),
+        }
+    }
+
+    /// Go: `createDiagnosticForOption := func(onKey, option1, option2, message, args...) *ast.Diagnostic`.
+    fn create_diagnostic_for_option(
+        &mut self,
+        on_key: bool,
+        option1: &str,
+        option2: &str,
+        message: &'static tsc_diagnostics::Message,
+        args: &[String],
+    ) -> FileDiagnostic {
+        let diag = self.create_option_diagnostic_in_object_literal_syntax(
+            self.get_compiler_options_object_literal_syntax(),
+            on_key,
+            option1,
+            option2,
+            message,
+            args,
+        );
+        let diag = diag
+            .unwrap_or_else(|| self.create_compiler_options_diagnostic(message, args));
+        self.diagnostics.push(diag.clone());
+        diag
+    }
+
+    /// Go: `createRemovedOptionDiagnostic := func(name, value, useInstead)` —
+    /// TS5102 (no value) / TS5108 (with value), plus the `Use_0_instead`
+    /// message chain for baseUrl's paths suggestion.
+    fn create_removed_option_diagnostic(&mut self, name: &str, value: &str, use_instead: &str) {
+        let (message, args): (&'static tsc_diagnostics::Message, Vec<String>) =
+            if value.is_empty() {
+                (
+                    &tsc_diagnostics::OPTION_0_HAS_BEEN_REMOVED_PLEASE_REMOVE_IT_FROM_YOUR_CONFIGURATION,
+                    vec![name.to_string()],
+                )
+            } else {
+                (
+                    &tsc_diagnostics::OPTION_0_1_HAS_BEEN_REMOVED_PLEASE_REMOVE_IT_FROM_YOUR_CONFIGURATION,
+                    vec![name.to_string(), value.to_string()],
+                )
+            };
+        let mut diag = self.create_diagnostic_for_option(
+            value.is_empty(), /*onKey*/
+            name,
+            "",
+            message,
+            &args,
+        );
+        if !use_instead.is_empty() {
+            // Go: `diag.AddMessageChain(ast.NewCompilerDiagnostic(diagnostics.Use_0_instead, useInstead))`.
+            diag.diagnostic
+                .add_message_chain(tsc_tsoptions::new_compiler_diagnostic(
+                    &tsc_diagnostics::USE_0_INSTEAD,
+                    &[use_instead.to_string()],
+                ));
+            // The pushed copy (Go mutates the shared diagnostic in place).
+            if let Some(last) = self.diagnostics.last_mut() {
+                *last = diag;
+            }
+        }
+    }
+}
+
+/// Go: `core.Must(json.Marshal(suggestion))` — encoding/json's string
+/// marshal with HTML escaping ON (the default): `"`, `\`, control
+/// characters, `<`, `>`, `&`, U+2028/U+2029 escape exactly as Go's encoder
+/// does (lowercase hex). PORT: hand-rolled — the compiler crate has no
+/// serde_json dependency, and the escape table is encoding/json's.
+fn json_marshal_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '&' => out.push_str("\\u0026"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 impl crate::emitter::SourceFileMayBeEmittedHost for Program {

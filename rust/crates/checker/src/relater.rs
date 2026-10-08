@@ -1742,7 +1742,7 @@ fn instantiate_types(c: &mut Checker, types: Vec<TypeId>, mapper: crate::todo_sh
 
 /// The signature-arena accessor the signature family uses (Go: `*Signature`
 /// derefs; the port's `SignatureId` indexes `Checker::signatures`).
-fn sig(c: &Checker, id: crate::types::SignatureId) -> &crate::types::Signature {
+pub(crate) fn sig(c: &Checker, id: crate::types::SignatureId) -> &crate::types::Signature {
     &c.signatures[id.0 as usize]
 }
 
@@ -6312,7 +6312,7 @@ fn should_report_unmatched_property_error(c: &mut Checker, source: TypeId, targe
 }
 
 /// Go: `func (c *Checker) getUnmatchedProperty(source, target, requireOptionalProperties, matchDiscriminantProperties) *ast.Symbol`.
-fn get_unmatched_property(c: &mut Checker, source: TypeId, target: TypeId, require_optional_properties: bool, match_discriminant_properties: bool) -> Option<SymbolId> {
+pub(crate) fn get_unmatched_property(c: &mut Checker, source: TypeId, target: TypeId, require_optional_properties: bool, match_discriminant_properties: bool) -> Option<SymbolId> {
     get_unmatched_properties_worker(c, source, target, require_optional_properties, match_discriminant_properties, None)
 }
 
@@ -6671,7 +6671,7 @@ fn is_type_matched_by_template_literal_type(
 }
 
 /// Go: `func (c *Checker) inferTypesFromTemplateLiteralType(source, target, compareTypes) []*Type`.
-fn infer_types_from_template_literal_type(
+pub(crate) fn infer_types_from_template_literal_type(
     c: &mut Checker,
     source: TypeId,
     target: TypeId,

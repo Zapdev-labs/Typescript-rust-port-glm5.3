@@ -7,7 +7,10 @@
 // PORT notes list the M4-scope deltas (see PORTING-NOTES.md for the roll-up).
 //
 // Not yet ported from the Go package (tracked in PORTING-NOTES.md):
-//   - tsconfigparsing.go's AST-based JSON conversion (spans in diagnostics)
+//   - tsconfigparsing.go's AST→value JSON conversion
+//     (convertConfigFileToObject; the M6 config-node wave lands the
+//     SourceFile position surface — TsConfigSourceFile + the config-syntax
+//     walks — but the value tree still comes from the text parser)
 //   - contentmapper's host.go/hostimpl.go (out of M4 scope)
 //
 // getFileNamesFromConfigSpecs (glob-driven file enumeration) and the
@@ -17,6 +20,7 @@
 
 pub mod commandlineoption;
 pub mod commandlineparser;
+pub mod ast_shims;
 pub mod declarations_generated;
 pub mod diagnostics;
 pub mod enummaps;
@@ -40,7 +44,7 @@ pub use commandlineoption::{
 pub use enummaps::{
     get_default_lib_file_name, get_lib_file_name, lib_files_set, libs, target_to_lib_map,
 };
-pub use errors::new_compiler_diagnostic;
+pub use errors::{create_diagnostic_for_node_in_source_file, create_diagnostic_for_node_in_source_file_or_compiler_diagnostic, new_compiler_diagnostic};
 pub use namemap::{
     build_name_map, command_line_compiler_options_map, command_line_options_to_map,
     compiler_name_map, get_name_map_from_list, NameMap,
@@ -65,7 +69,11 @@ pub use parsinghelpers::{
 pub use rawcompileroptions::RawCompilerOptions;
 pub use showconfig::{convert_to_tsconfig, TSConfig};
 pub use tsconfigparsing::{
-    get_parsed_command_line_of_config_file_path, parse_config_file_text_to_json,
-    parse_json_config_file_content, ParsedCompilerOptions, ProjectReference, ResolveConfigHost,
+    for_each_property_assignment, for_each_ts_config_prop_array,
+    get_options_syntax_by_array_element_value, get_parsed_command_line_of_config_file_path,
+    get_ts_config_object_literal_expression, get_ts_config_prop_array_element_value,
+    new_tsconfig_source_file_from_file_path, parse_config_file_text_to_json,
+    parse_json_config_file_content, tsconfig_to_source_file, ParsedCompilerOptions,
+    ProjectReference, ResolveConfigHost, TsConfigSourceFile,
 };
 pub use wildcarddirectories::{get_wildcard_directories, is_implicit_glob, WildcardDirectoryWatcher};

@@ -611,3 +611,117 @@ fn diagnostic_signature(
         diagnostic.diagnostic.category(),
     )
 }
+
+/// Go: `verifyCompilerOptions`'s removed-option arm (TS5102/TS5108) — the
+/// M6 config-node wave: the same diagnostics, messages/args, config-node
+/// positions and Go order, emitted as program diagnostics.
+///
+/// Go's own coverage for the arm is the conformance corpus (there is no
+/// program_test.go subtest for verifyCompilerOptions); this pins the arm's
+/// observable contract against Go's verifyCompilerOptions: TS5108 for
+/// `target: "ES5"` positioned on the initializer, TS5102 for
+/// `downlevelIteration` positioned on the property name, TS5102 + the
+/// `Use_0_instead` chain for `baseUrl`, and the no-removed-option silence.
+#[test]
+fn test_verify_compiler_options_removed_option_diagnostics() {
+    let build = |config_text: &'static str| -> Program {
+        let files: Vec<(String, String)> = vec![
+            ("/src/tsconfig.json".to_string(), config_text.to_string()),
+            ("/src/index.ts".to_string(), "export const x = 1;".to_string()),
+        ];
+        let fs = tsc_bundled::wrap_fs(vfstest::from_map(files, CaseSensitivity::CaseSensitive));
+        let config = get_parsed_command_line_of_config_file_path(
+            &RootedFilePath::from("/src/tsconfig.json"),
+            fs.as_ref(),
+            None,
+        );
+        assert!(
+            config.errors.is_empty(),
+            "config parse errors: {}",
+            config.errors.len()
+        );
+        let host = new_compiler_host(
+            Arc::clone(&fs),
+            rooted_directory_path_from_normalized("/"),
+            nil_extended_config_cache(),
+            None,
+        );
+        new_program(ProgramOptions {
+            config: ProgramConfig {
+                config: Arc::new(config),
+                ..Default::default()
+            },
+            hosts: ProgramHosts { host: Some(host) },
+            factories: ProgramFactories::default(),
+        })
+    };
+
+    // TS5108: `target: "ES5"` — positioned on the "ES5" initializer
+    // (onKey = false), message args [target, ES5], file = the config file.
+    let config_text = r#"{"compilerOptions":{"target":"ES5","noLib":true},"files":["index.ts"]}"#;
+    let program = build(config_text);
+    let diagnostics = program.get_program_diagnostics();
+    let target = diagnostics
+        .iter()
+        .find(|d| d.diagnostic.code() == 5108)
+        .expect("TS5108 for target=ES5");
+    assert_eq!(
+        target.diagnostic.message_text(),
+        "Option 'target=ES5' has been removed. Please remove it from your configuration."
+    );
+    assert_eq!(target.diagnostic.message_args(), ["target", "ES5"]);
+    assert_eq!(
+        target.file_name.as_ref().map(|name| name.as_string().to_string()),
+        Some("/src/tsconfig.json".to_string())
+    );
+    assert_eq!(
+        &config_text[target.diagnostic.pos() as usize..target.diagnostic.end() as usize],
+        "\"ES5\""
+    );
+
+    // TS5102: `downlevelIteration` — positioned on the property NAME
+    // (onKey = true), message args [downlevelIteration].
+    let config_text = r#"{"compilerOptions":{"downlevelIteration":true,"noLib":true},"files":["index.ts"]}"#;
+    let program = build(config_text);
+    let diagnostics = program.get_program_diagnostics();
+    let downlevel = diagnostics
+        .iter()
+        .find(|d| d.diagnostic.code() == 5102)
+        .expect("TS5102 for downlevelIteration");
+    assert_eq!(
+        downlevel.diagnostic.message_args(),
+        ["downlevelIteration"]
+    );
+    assert_eq!(
+        &config_text[downlevel.diagnostic.pos() as usize..downlevel.diagnostic.end() as usize],
+        "\"downlevelIteration\""
+    );
+
+    // TS5102 + the `Use_0_instead` message chain: `baseUrl` carries the
+    // paths suggestion (the config file's directory is the base, so the
+    // relative path is "./"-prefixed and JSON-marshaled).
+    let config_text = r#"{"compilerOptions":{"baseUrl":"./x","noLib":true},"files":["index.ts"]}"#;
+    let program = build(config_text);
+    let diagnostics = program.get_program_diagnostics();
+    let base_url = diagnostics
+        .iter()
+        .find(|d| d.diagnostic.code() == 5102)
+        .expect("TS5102 for baseUrl");
+    assert_eq!(base_url.diagnostic.message_args(), ["baseUrl"]);
+    let chain = base_url.diagnostic.message_chain();
+    assert_eq!(chain.len(), 1, "Use_0_instead chain: {chain:?}");
+    assert_eq!(chain[0].code(), 5106);
+    assert_eq!(chain[0].message_args(), ["\"paths\": {\"*\": [\"./x/*\"]}"]);
+
+    // Silence: no removed options → no program diagnostics from the arm.
+    let program = build(
+        r#"{"compilerOptions":{"noLib":true},"files":["index.ts"]}"#,
+    );
+    assert!(
+        program
+            .get_program_diagnostics()
+            .iter()
+            .all(|d| d.diagnostic.code() != 5102 && d.diagnostic.code() != 5108),
+        "no removed-option diagnostics without removed options"
+    );
+}

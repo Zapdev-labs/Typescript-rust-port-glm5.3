@@ -5,14 +5,15 @@
 //     `includeReasonDiagnosticKey` become `Mutex<HashMap<..>>` keyed by
 //     `Arc::as_ptr() as usize` (pointer identity, Go's map keying).
 //   - `compilerOptionsSyntax` (the tsconfig `compilerOptions` object-literal
-//     node, via `tsoptions.ForEachTsConfigPropArray` + ConfigFile) needs the
-//     AST-config surface, which is not ported; the syntax cache is dropped
-//     (Go's nil-ConfigFile behavior — see PORTING-NOTES).
+//     node, via `tsoptions.ForEachTsConfigPropArray` + ConfigFile) landed
+//     with the M6 config-node wave (the related-info arms in
+//     file_include.rs read it); `getCompilerOptionsObjectLiteralSyntax`
+//     keeps Go's once-memo.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tsc_ast::Diagnostic;
+use tsc_ast::{Diagnostic, NodeStore};
 use tsc_tspath::PathKey;
 
 use crate::diagnostics_collection::{DiagnosticsCollection, FileDiagnostic};
@@ -86,9 +87,10 @@ pub struct IncludeProcessor {
     redirect_and_file_format: Mutex<HashMap<PathKey, Vec<Diagnostic>>>,
     /// Go: `computedDiagnostics *ast.DiagnosticsCollection` + `computedDiagnosticsOnce sync.Once`.
     computed_diagnostics: OnceLock<DiagnosticsCollection>,
-    // Go: `compilerOptionsSyntax *ast.ObjectLiteralExpression` +
-    // `compilerOptionsSyntaxOnce` — dropped (AST-config surface not ported;
-    // see the file header).
+    /// Go: `compilerOptionsSyntax *ast.ObjectLiteralExpression` +
+    /// `compilerOptionsSyntaxOnce` — the config file's `compilerOptions`
+    /// value node (the M6 config-node wave).
+    compiler_options_syntax: OnceLock<Option<tsc_ast::NodeId>>,
 }
 
 impl IncludeProcessor {
@@ -150,6 +152,35 @@ impl IncludeProcessor {
         let location = reason.get_referenced_location(program);
         cache.insert(key, location.clone());
         location
+    }
+
+    /// Go: `func (i *includeProcessor) getCompilerOptionsObjectLiteralSyntax(program) *ast.ObjectLiteralExpression`.
+    pub fn get_compiler_options_object_literal_syntax(
+        &self,
+        program: &Program,
+    ) -> Option<tsc_ast::NodeId> {
+        *self.compiler_options_syntax.get_or_init(|| {
+            let config_file = program.opts.config.config_file.as_ref()?;
+            let source_file = config_file.lock_source_file();
+            let property = tsc_tsoptions::for_each_ts_config_prop_array(
+                Some(&source_file),
+                "compilerOptions",
+                |_store, property| Some(property),
+            )?;
+            let initializer = source_file
+                .node(property)
+                .as_property_assignment()
+                .expect("IsPropertyAssignment guaranteed by ForEachPropertyAssignment")
+                .initializer;
+            if initializer.is_none() {
+                // Go: `compilerOptionsProperty.Initializer != nil`.
+                return None;
+            }
+            if tsc_ast::is_object_literal_expression(source_file.node(initializer)) {
+                return Some(initializer);
+            }
+            None
+        })
     }
 
     /// Go: `func (i *includeProcessor) getRelatedInfo(r, program) *ast.Diagnostic`.

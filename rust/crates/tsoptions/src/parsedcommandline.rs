@@ -116,7 +116,7 @@ impl ParsedCommandLine {
     /// the config source file's name ("" without a config file).
     pub fn config_name(&self) -> RootedFilePath {
         match &self.config_file {
-            Some(config_file) => config_file.source_file.file_name().clone(),
+            Some(config_file) => config_file.lock_source_file().file_name().clone(),
             None => RootedFilePath::default(),
         }
     }
@@ -138,16 +138,19 @@ impl ParsedCommandLine {
     /// (pre-${configDir}) form, exactly Go's
     /// `validatedIncludeSpecsBeforeSubstitution[index]`.
     pub fn get_matched_include_spec(&self, file_name: &RootedFilePath) -> (PathPattern, bool) {
-        if self.validated_include_specs.is_empty() {
+        // Go reads the materialized `configFileSpecs` (plain slices; the
+        // `None` carrier mirrors Go's nil include list).
+        let validated_include_specs = self.validated_include_specs.as_deref().unwrap_or_default();
+        if validated_include_specs.is_empty() {
             return (PathPattern::default(), false);
         }
         if self.is_default_include_spec {
-            return (self.validated_include_specs[0].clone(), true);
+            return (validated_include_specs[0].clone(), true);
         }
         // Go: `specs.getMatchedIncludeSpec(fileName, p.baseDirectory, p.caseSensitivity)` —
         // per-spec SpecMatcher; the matched index reads the
         // before-substitution list.
-        for (index, spec) in self.validated_include_specs.iter().enumerate() {
+        for (index, spec) in validated_include_specs.iter().enumerate() {
             let include_matcher = tsc_module::new_spec_matcher(
                 &[spec.as_string().to_owned()],
                 self.base_directory(),
@@ -156,7 +159,10 @@ impl ParsedCommandLine {
             );
             // Go: `includeMatcher != nil && includeMatcher.MatchFileName(fileName)`.
             if include_matcher.is_some_and(|matcher| matcher.match_file_name(file_name)) {
-                return (self.validated_include_specs_before_substitution[index].clone(), false);
+                return (
+                    self.validated_include_specs_before_substitution[index].clone(),
+                    false,
+                );
             }
         }
         (PathPattern::default(), false)

@@ -5,8 +5,14 @@
 //     → convertObjectLiteralExpressionToJson) so diagnostics can carry
 //     node positions. The port parses the JSON text directly into the
 //     `CompilerOptionsValue` tree (a small recursive-descent parser below)
-//     — same values, same key order; diagnostics degrade to
-//     compiler-diagnostics without spans until the AST-config path lands.
+//     — same values, same key order. The M6 config-node wave lands the
+//     AST half for the `GetParsedCommandLineOfConfigFilePath` route: the
+//     text parses as a JSON SourceFile too (`TsConfigSourceFile`, the
+//     node-position surface for option diagnostics + include-reason
+//     related info — see the config-syntax section below). The AST→value
+//     conversion (`convertConfigFileToObject`) and its span-carrying parse
+//     diagnostics stay deferred to the full AST-config wave; on that route
+//     the values/errors still come from the text parser.
 //   - Go's `extendedConfigCache`/`resolutionStack` cycle machinery is
 //     carried; the `getExtendedConfig` node-module-resolution arm (module
 //     specifiers like "extends": "@tsconfig/...") is seam'd to the module
@@ -20,7 +26,7 @@
 //     crate yet (M6); it is defined here with a PORT note.
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tsc_collections::OrderedMap;
 use tsc_core::options_generated::CompilerOptions;
@@ -172,7 +178,6 @@ pub trait ResolveConfigHost: Send + Sync {
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Go: `type TsConfigSourceFile struct`.
-#[derive(Clone, Debug)]
 pub struct TsConfigSourceFile {
     /// Go: `ExtendedSourceFiles []tspath.RootedFilePath` — populated by the
     /// extends-chain walk (getExtendedConfig). PORT: the port's extends path
@@ -181,14 +186,47 @@ pub struct TsConfigSourceFile {
     pub extended_source_files: Vec<RootedFilePath>,
     /// Go: `SourceFile *ast.SourceFile` — the config text parsed as a JSON
     /// SourceFile (the node-position surface).
-    pub source_file: Arc<tsc_ast::SourceFile>,
+    ///
+    /// PORT (Send/Sync): the workspace forbids `unsafe` and
+    /// `tsc_ast::SourceFile` (parser-era `Cell` fields) is neither `Sync`
+    /// nor `Arc`-shareable, while `ParsedCommandLine` must stay `Send +
+    /// Sync` (the loader's worker groups share it) — the config AST rides
+    /// behind a `Mutex`, read through a `MutexGuard`. Go shares the frozen
+    /// pointer freely; the config file is immutable after parse, so the
+    /// lock is pure ceremony around read-only walks. Deadlock rule (both
+    /// lock sites documented): never call the include processor's
+    /// `getCompilerOptionsObjectLiteralSyntax` (which locks) while holding
+    /// a guard — `to_related_info` computes the memo BEFORE locking.
+    source_file: Mutex<tsc_ast::SourceFile>,
 }
 
-/// Go: `func tsconfigToSourceFile(tsconfigSourceFile *TsConfigSourceFile) *ast.SourceFile`.
+/// PORT: `tsc_ast::SourceFile` carries no `Debug` (the arena is huge); the
+/// derived-equal manual impl prints the config file's name instead.
+impl std::fmt::Debug for TsConfigSourceFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TsConfigSourceFile")
+            .field("extended_source_files", &self.extended_source_files)
+            .field("source_file", &self.lock_source_file().file_name().as_string())
+            .finish()
+    }
+}
+
+impl TsConfigSourceFile {
+    /// Go: the `SourceFile` field — the parsed config AST, read through the
+    /// guard (the file is frozen at parse; see the struct PORT note).
+    pub fn lock_source_file(&self) -> std::sync::MutexGuard<'_, tsc_ast::SourceFile> {
+        self.source_file
+            .lock()
+            .expect("config source file poisoned")
+    }
+}
+
+/// Go: `func tsconfigToSourceFile(tsconfigSourceFile *TsConfigSourceFile) *ast.SourceFile` —
+/// the locked-read form (see TsConfigSourceFile's Send/Sync PORT note).
 pub fn tsconfig_to_source_file(
     tsconfig_source_file: Option<&TsConfigSourceFile>,
-) -> Option<&tsc_ast::SourceFile> {
-    tsconfig_source_file.map(|config| config.source_file.as_ref())
+) -> Option<std::sync::MutexGuard<'_, tsc_ast::SourceFile>> {
+    tsconfig_source_file.map(|config| config.lock_source_file())
 }
 
 /// Go: `func NewTsconfigSourceFileFromFilePath(configFileName, configPath, configSourceText) *TsConfigSourceFile`.
@@ -213,7 +251,7 @@ pub fn new_tsconfig_source_file_from_file_path(
     );
     TsConfigSourceFile {
         extended_source_files: Vec::new(),
-        source_file: Arc::new(source_file),
+        source_file: Mutex::new(source_file),
     }
 }
 
@@ -244,17 +282,13 @@ pub fn for_each_property_assignment<T>(
     key2: &str,
     callback: impl FnOnce(&dyn tsc_ast::NodeStore, NodeId) -> Option<T>,
 ) -> Option<T> {
-    let Some(object_literal) = object_literal else {
-        return None;
-    };
+    let object_literal = object_literal?;
     let data = store
         .node(object_literal)
         .as_object_literal_expression()
         .expect("IsObjectLiteralExpression guaranteed by the walk producers")
         .clone();
-    let Some(properties) = data.properties else {
-        return None;
-    };
+    let properties = data.properties?;
     for property in properties.nodes.iter() {
         let node = store.node(*property);
         if !tsc_ast::is_property_assignment(node) {
@@ -290,8 +324,17 @@ pub fn for_each_ts_config_prop_array<T>(
 }
 
 /// Go: `func GetCallbackForFindingPropertyAssignmentByValue(value string) func(property *ast.PropertyAssignment) *ast.Node` —
-/// inlined as the shared element-search helper (the Go closure factory's
-/// only two instantiations are the callers below).
+/// the element-search helper as a callable (Go's closure factory is public;
+/// the port exposes the equivalent per-property step for the `target`-value
+/// related-info arm in file_include.rs).
+pub fn get_callback_for_finding_property_assignment_by_value<'a>(
+    store: &'a dyn tsc_ast::NodeStore,
+    value: &'a str,
+) -> impl Fn(NodeId) -> Option<NodeId> + 'a {
+    move |property: NodeId| find_property_assignment_by_value(store, property, value)
+}
+
+/// The shared body of Go's callback factory (see above).
 fn find_property_assignment_by_value(
     store: &dyn tsc_ast::NodeStore,
     property: NodeId,
@@ -315,9 +358,7 @@ fn find_property_assignment_by_value(
         .expect("IsArrayLiteralExpression checked")
         .elements
         .clone();
-    let Some(elements) = elements else {
-        return None;
-    };
+    let elements = elements?;
     elements.nodes.iter().find_map(|element| {
         let node = store.node(*element);
         (tsc_ast::is_string_literal(node)
@@ -761,6 +802,7 @@ pub fn parse_json_config_file_content(
 
     // validateSpecs + ${configDir} substitution (include/exclude).
     let mut validated_include_specs: Option<Vec<tsc_tspath::PathPattern>> = None;
+    let mut validated_include_specs_before_substitution: Vec<tsc_tspath::PathPattern> = Vec::new();
     if let Some(include) = &include_prop {
         let (specs, mut spec_errors) = validate_specs(
             &CompilerOptionsValue::StrArray(include.clone()),
@@ -768,6 +810,7 @@ pub fn parse_json_config_file_content(
             "include",
         );
         errors.append(&mut spec_errors);
+        validated_include_specs_before_substitution = specs.clone();
         let substituted = get_substituted_string_array_with_config_dir_template(
             &include.iter().map(|s| s.as_str().to_string()).collect::<Vec<_>>(),
             &base_path_for_file_names,
@@ -831,6 +874,21 @@ pub fn parse_json_config_file_content(
             }
         })
         .collect();
+    // Go: `fileSpecByPath` — the files-list path → the AS-WRITTEN spec
+    // (first occurrence wins). The matched-file-spec include reasons read
+    // it (M6 config-node wave).
+    let case_sensitivity = fs.case_sensitivity();
+    let mut file_spec_by_path: rustc_hash::FxHashMap<PathKey, tsc_tspath::FileSpec> =
+        rustc_hash::FxHashMap::default();
+    for (index, _spec) in validated_files_specs.iter().enumerate() {
+        let path = case_sensitivity.path_key(&validated_file_names[index].as_path());
+        file_spec_by_path.entry(path).or_insert_with(|| {
+            validated_files_specs_before_substitution
+                .get(index)
+                .cloned()
+                .unwrap_or_default()
+        });
+    }
 
     // ── File enumeration (Go: getFileNamesFromConfigSpecs) + the
     // No-inputs diagnostic — ported with the showconfig parity twin; see
@@ -841,6 +899,11 @@ pub fn parse_json_config_file_content(
             validated_exclude_specs: validated_exclude_specs.clone().unwrap_or_default(),
             validated_files_specs: validated_files_specs.clone(),
             validated_file_names: validated_file_names.clone(),
+            validated_files_specs_before_substitution: validated_files_specs_before_substitution
+                .clone(),
+            validated_include_specs_before_substitution: validated_include_specs_before_substitution
+                .clone(),
+            file_spec_by_path: file_spec_by_path.clone(),
             is_default_include_spec,
         },
         &base_path_for_file_names,
@@ -866,6 +929,10 @@ pub fn parse_json_config_file_content(
     result.validated_exclude_specs = validated_exclude_specs;
     result.validated_files_specs = validated_files_specs;
     result.validated_file_names = validated_file_names;
+    result.validated_files_specs_before_substitution = validated_files_specs_before_substitution;
+    result.validated_include_specs_before_substitution =
+        validated_include_specs_before_substitution;
+    result.file_spec_by_path = file_spec_by_path;
     result.raw_include_spec_values = include_prop.clone().unwrap_or_default();
     result.raw_exclude_spec_values = exclude_prop.clone().unwrap_or_default();
     result.is_default_include_spec = is_default_include_spec;
@@ -1760,6 +1827,14 @@ fn invalid_dot_dot_after_recursive_wildcard(s: &str) -> bool {
 
 /// Go: `func GetParsedCommandLineOfConfigFilePath(...)` — the --showConfig
 /// runner's entry: read + parse + resolve one config file.
+///
+/// PORT (M6 config-node wave): like Go's `readJsonConfigFile`, the config
+/// text parses as a JSON SourceFile and rides the result as `config_file`
+/// (`ParsedCommandLine.ConfigFile`) — the node-position surface
+/// `verifyCompilerOptions`'s option diagnostics and the include-reason
+/// related info read. The VALUES still come from the text parser below
+/// (Go's `convertConfigFileToObject` AST→value conversion is the deferred
+/// full AST-config wave; this surface consumes the AST for positions only).
 pub fn get_parsed_command_line_of_config_file_path(
     config_file_name: &RootedFilePath,
     fs: &dyn tsc_vfs::Fs,
@@ -1781,6 +1856,11 @@ pub fn get_parsed_command_line_of_config_file_path(
             return result;
         }
     };
+    let config_file = new_tsconfig_source_file_from_file_path(
+        config_file_name,
+        fs.case_sensitivity(),
+        &text,
+    );
     let (json, parse_errors) = parse_config_file_text_to_json(&text);
     let mut result = parse_json_config_file_content(
         &json.unwrap_or(CompilerOptionsValue::Null),
@@ -1793,6 +1873,7 @@ pub fn get_parsed_command_line_of_config_file_path(
         resolve_config_host,
     );
     result.errors.extend(parse_errors);
+    result.config_file = Some(Arc::new(config_file));
     result
 }
 

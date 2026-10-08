@@ -40,9 +40,12 @@
 //   - The content-mapper host machinery (contentmapper.Project, transform
 //     pipeline, failure-budget error types) is not ported; content-mapper
 //     paths degrade to non-mapped loads exactly as Go's zero-config case.
-//   - tsoptions' AST-config surface (ConfigFile syntax walks) is not ported;
-//     config-positioned diagnostics degrade to compiler diagnostics (the
-//     nil-ConfigFile arm Go already has).
+//   - tsoptions' config-node surface (TsConfigSourceFile + the config
+//     syntax walks) landed with the M6 removed-option wave;
+//     verifyCompilerOptions' non-removed option arms still degrade (the
+//     full AST-config wave — see program.rs PORT notes for the plug
+//     points), and direct ParseJsonConfigFileContent callers still see
+//     Go's nil-ConfigFile arm (no config source file).
 //   - cachedvfs + symlinks are not ported; the project-reference dts-faking
 //     host is the identity host (see project_reference_dts_faking_host.rs).
 //   - emitter.go's emit pipeline, printer/sourcemap/transformer dependencies,
