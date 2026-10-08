@@ -544,7 +544,7 @@ fn declaration_literal(
         format!("kind: CommandLineOptionKind::{kind}"),
         format!(
             "short_name: {}",
-            short_name.map_or("\"\"".to_string(), |sn| quote(sn))
+            short_name.map_or("\"\"".to_string(), quote)
         ),
     ];
     // Rust struct literals in `static`s cannot omit fields (no FRU in const

@@ -556,3 +556,126 @@ subpackage; hoist into tsc-vfs when a second consumer appears).
   `PackageJson::new` addition; `cargo clippy -p tsc-module --all-targets`
   zero warnings; `cargo check -p bench-harness` green. Gate: `CARGO_TARGET_DIR=/tmp/tsrs-module cargo test -p tsc-module`.
 
+
+## M4 Wave C — tsoptions + contentmapper (internal/tsoptions, internal/contentmapper)
+
+- **Crates**: `tsc-tsoptions` (rust/crates/tsoptions), `tsc-contentmapper`
+  (rust/crates/contentmapper). Per-file port table:
+  commandlineoption.go→commandlineoption.rs, namemap.go→namemap.rs,
+  enummaps.go→enummaps.rs, errors.go→errors.rs, diagnostics.go→diagnostics.rs,
+  parsinghelpers.go→parsinghelpers.rs, tsconfigparsing.go→tsconfigparsing.rs
+  (M4 subset), parsedcommandline.go→parsedcommandline.rs (watch machinery
+  deferred), commandlineparser.go→commandlineparser.rs,
+  parsedbuildcommandline.go→parsedbuildcommandline.rs, parsedoptions.go→
+  parsedoptions.rs, rawcompileroptions.go→rawcompileroptions.rs,
+  showconfig.go→showconfig.rs, wildcarddirectories.go→wildcarddirectories.rs,
+  options_generated.go/declarations_generated.go→options_generated.rs/
+  declarations_generated.rs (gen-options output),
+  contentmapper.go→contentmapper/src/lib.rs+field_json.rs,
+  compiler_option_fields (Go reflection walk)→compiler_option_fields_generated.rs.
+  **Not ported**: contentmapper host.go/hostimpl.go (JSON-RPC process host —
+  needs ipc/process spawning; M6 territory), `ParseResult` transform path,
+  parsedcommandline.go's `ParsedCommandLineWatcher`/changed-files machinery.
+- **`any` → `CompilerOptionsValue`**: Go's `any` option values become a
+  closed enum (Null/Bool/Int/Float/Str/StrArray/Array/Object/PathsMap/
+  PluginImports/Tristate + the 6 core option enums). List results (`[]any`
+  of validated strings) surface as `StrArray`. `PartialEq` is structural
+  (Go `==` over `any`); `Int`==`Float` cross-compares as f64 like Go's
+  float64 JSON numbers. Go's `floatOrInt32ToFlag` panics on a string —
+  the port's `as_<T>_flag()` panics identically (raw JSON strings must be
+  converted through the enum maps first, exactly as in Go).
+- **Two map shapes collapse into `NameMap`**: Go's `*NameMap`
+  (ordered, short-name aware) and `CommandLineOptionNameMap`
+  (map[string]*CommandLineOption) are one type; keys are lowercase names.
+  Go's exact-then-lowercase `Get` reads the same because declaration names
+  are checked case-sensitively at the use sites (`opt.Name != key`
+  case-mismatch detection, RawCompilerOptions::finalize's skip rule).
+- **Tables are `static`s**: `CommandLineOption` is const-constructible and
+  the generated declaration literals are fully explicit (a const literal
+  cannot omit fields the way Go's composite literals can). Go's
+  package-init maps become `OnceLock` accessors. Go's `ElementOptions`
+  map field becomes `ElementOptionsKind` + lazy `element_options(kind)`.
+- **${configDir} semantics**: `startsWithConfigDirTemplate` is
+  case-insensitive but `getSubstitutedPathWithConfigDirTemplate` replaces
+  the exact `${configDir}` spelling with `./` (Go's own TODO asymmetry);
+  `parsedCompilerOptions.ParseOption` captures template-bearing values in
+  `unresolved_paths` and the generated
+  `handle_option_config_dir_template_substitution` resolves them against
+  the config dir — exact port. `parse_option` skips Null values (Go's
+  exported `ParseCompilerOptions` guard).
+- **Enum values convert before parsing**: `convertOptionsFromJson` is
+  ported exactly (unknown-key → unknown-option error via the spelling
+  suggestion; case-mismatch → did-you-mean; `convertJsonOption` runs the
+  type check (`isCompilerOptionsValue`), enum mapping, locale validation,
+  list-element mapping + falsy filter, and `normalizeNonListOptionValue`
+  path rooting BEFORE `parse_option`). Without it, raw JSON strings
+  ("target": "es2020") would panic in `floatOrInt32ToFlag` — in Go too.
+- **tsconfigparsing M4 substitutions** (PORT notes at file top):
+  (1) Go parses tsconfig as a JSON SourceFile for node-positioned
+  diagnostics; the port parses JSON text directly into
+  `CompilerOptionsValue` (order-preserving recursive-descent) and
+  diagnostics degrade to compiler diagnostics (zero spans) until the
+  AST-config path lands. (2) `extends` module-specifier resolution is a
+  seam: `ResolveConfigHost::resolve` (wire to tsc-module on the M6
+  integration; unresolvable = Go's cannot-read diagnostic). (3)
+  `getFileNamesFromConfigSpecs` (glob file enumeration) deferred — the
+  parsed result carries validated specs and empty `file_names`.
+  (4) `ProjectReference` lives in tsoptions, not core (M6 core gap).
+  (5) `parse_json_config_file_content` seeds the resolution stack with the
+  config file's own path when the caller passes an empty stack (Go's
+  callers seed it), so extends cycles are detected self-contained.
+  (6) The extended-config cache seam stores the raw map (Go caches the
+  parsed command line) and rebuilds the parsed form on hit.
+- **wildcarddirectories**: `vfsmatch.IsImplicitGlob` is a local PORT
+  (belongs to the tsc-vfs wave); the exclude arm takes an `is_excluded`
+  predicate instead of running the vfsmatch SpecMatcher (724 Go LOC, also
+  future tsc-vfs work). The directory-derivation logic is the full port.
+- **contentmapper `TransformIdentity`**: xxh3 is not in the approved dep
+  set (no network), so the port hashes the identical byte layout with
+  128-bit FNV-1a — deterministic in-process, but NOT the same fingerprint
+  as Go. Callers must not compare fingerprints across implementations.
+  `MarshalDeclaredOptions` walks the 132 json-tag fields via the generated
+  match instead of reflection (same per-field marshal, zero values
+  skipped, manifest order preserved).
+- **parsedoptions `Equals`**: core's CompilerOptions/TypeAcquisition have
+  no Rust equality yet (Go has generated `Equals`); the port compares
+  compiler options through their serialized (deterministic) option maps —
+  same values in, same equality out. Swap to a generated `PartialEq` when
+  core grows one.
+- **Tests ported** (41 green): commandlineparser_test.rs (10 — parse
+  scenarios, removed watch options, response files incl. nested + quoting,
+  typeRoots rooting, null override, build flag validation, resolved
+  project paths), showconfig_test.rs (6 — the deterministic showconfig
+  runner incl. extends merge, first-alias enum serialization, default
+  include filtering, key-order marshal), decls_test.rs (2 — the Go
+  path-kind table + group counts), parsinghelpers_test.rs (6 —
+  TestMergeCompilerOptionsRawNulls, tri-state/string-array/project-reference
+  parsers, configDir template trio), rawcompileroptions_test.rs (2 — Go's
+  TestRawCompilerOptionsFinalizePaths verbatim + round trip),
+  tsconfigparsing_test.rs (6 — spec validation errors, extends cycle,
+  module-specifier seam, parseContentMapper, the config-file entry point,
+  JSON key order), wildcarddirectories_test.rs (4 — dot-prefixed include,
+  drive root, non-ASCII paths, isImplicitGlob), contentmapper
+  marshal_test.rs (5 — virtual extensions, identity, equality,
+  transform-identity determinism, declared-options marshal). Reflection-
+  based Go tests (TestCompilerOptionsDeclaration, TestMergeCompilerOptions
+  field walk, TestShowConfigSerialization's reflected serializer,
+  TestParseCompilerOptionNoMissingFields) are covered instead by the
+  generator's field-for-field Go-parity checker
+  (tools/gen-options/data/parity-check-declarations.mjs — PARITY OK for
+  all 4 declaration groups: 29 common / 97 compiler / 4 typeAcquisition /
+  7 build).
+- **Two port bugs the tests caught**: (1) `getSubstitutedPathWithConfigDir
+  Template` strip-prefixed the template (leaving "/src" absolute) instead
+  of Go's `strings.Replace(value, "${configDir}", "./", 1)` + normalize
+  ("./src" → "/project/src"); (2) `convert_options_from_json_worker`
+  passed raw JSON values straight into the generated parse, which panics
+  on enum options ("target": "es2020") exactly like Go's
+  `floatOrInt32ToFlag` — the full `convertOptionsFromJson` conversion loop
+  (above) is required before parsing.
+- Validation: `cargo test -p tsc-tsoptions -p tsc-contentmapper` 41/41;
+  `cargo clippy -p tsc-tsoptions -p tsc-contentmapper --all-targets` zero
+  warnings; `gen-options --check` green for all 4 outputs (core output
+  byte-identical); Go-parity checker PARITY OK;
+  `cargo check -p bench-harness` green. Gate:
+  `CARGO_TARGET_DIR=/tmp/tsrs-tsoptions cargo test -p tsc-tsoptions -p tsc-contentmapper`.

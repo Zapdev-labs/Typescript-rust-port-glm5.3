@@ -86,13 +86,18 @@ fn test_equals() {
 #[test]
 fn test_transform_identity_is_deterministic() {
     let m = mapper("name", "1.0.0", &["target", "module"]);
-    let mut options = tsc_core::options_generated::CompilerOptions::default();
-    options.target = tsc_core::options_generated::ScriptTarget::ES2020;
+    let options = tsc_core::options_generated::CompilerOptions {
+        target: tsc_core::options_generated::ScriptTarget::ES2020,
+        ..tsc_core::options_generated::CompilerOptions::default()
+    };
     let first = m.transform_identity(Some(&options));
     let second = m.transform_identity(Some(&options));
     assert_eq!(first, second);
 
-    options.target = tsc_core::options_generated::ScriptTarget::ES2015;
+    let options = tsc_core::options_generated::CompilerOptions {
+        target: tsc_core::options_generated::ScriptTarget::ES2015,
+        ..tsc_core::options_generated::CompilerOptions::default()
+    };
     let changed = m.transform_identity(Some(&options));
     assert_ne!(first, changed);
 
@@ -108,11 +113,11 @@ fn test_transform_identity_is_deterministic() {
 #[test]
 fn test_marshal_declared_options() {
     let m = mapper("name", "1.0.0", &["outDir", "target", "module", "noSuchOption"]);
-    let mut options = tsc_core::options_generated::CompilerOptions::default();
-    options.target = tsc_core::options_generated::ScriptTarget::ES2020;
-    options
-        .module
-        = tsc_core::options_generated::ModuleKind::CommonJS;
+    let options = tsc_core::options_generated::CompilerOptions {
+        target: tsc_core::options_generated::ScriptTarget::ES2020,
+        module: tsc_core::options_generated::ModuleKind::CommonJS,
+        ..tsc_core::options_generated::CompilerOptions::default()
+    };
     let (declared, err) = m.marshal_declared_options(Some(&options));
     assert!(err.is_none());
     let keys: Vec<&String> = declared.keys().collect();

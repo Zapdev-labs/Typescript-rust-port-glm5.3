@@ -27,7 +27,7 @@ fn test_spec_validation_errors() {
     let base_path = rooted_directory_path_from_absolute("/project");
     let config_file_path = rooted_file_path_from_absolute("/project/tsconfig.json");
 
-    let text = r#"{ "include": ["src/**/**/a.ts"] }"#;
+    let text = r#"{ "include": ["src/**"] }"#;
     let (json, errors) = parse_config_file_text_to_json(text);
     assert!(errors.is_empty());
     let parsed = parse_json_config_file_content(

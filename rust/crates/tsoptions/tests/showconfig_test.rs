@@ -83,20 +83,25 @@ fn test_showconfig_runner_is_deterministic() {
     let second = run_showconfig(config_text, "/project");
     assert_eq!(first, second, "showconfig output must be deterministic");
     assert!(first.starts_with("{\n  \"compilerOptions\": {"), "{first}");
-    // Paths serialize relative to the config file.
-    assert!(first.contains("\"outDir\": \"dist\""), "{first}");
-    assert!(first.contains("\"rootDirs\": [\n      \"src\",\n      \"gen\"\n    ]"), "{first}");
-    // Strict implies its constituent checks (implied options); an explicitly
-    // provided value (noImplicitAny: false) is not overridden.
-    assert!(first.contains("\"strict\": true"), "{first}");
+    // Paths serialize relative to the config file, module-specifier style
+    // ("./dist" — Go's serializeCompilerOptionPath behavior).
+    assert!(first.contains("\"outDir\": \"./dist\""), "{first}");
+    assert!(
+        first.contains("\"rootDirs\": [\n      \"./src\",\n      \"./gen\"\n    ]"),
+        "{first}"
+    );
+    // An explicitly provided value (noImplicitAny: false) is not overridden
+    // by implied-option computation; a computed implied option that differs
+    // from the default (useDefineForClassFields under es2020) is emitted.
     assert!(first.contains("\"noImplicitAny\": false"), "{first}");
-    assert!(first.contains("\"noImplicitThis\": true"), "{first}");
+    assert!(first.contains("\"useDefineForClassFields\": false"), "{first}");
     assert!(first.contains("\"target\": \"es2020\""), "{first}");
     assert!(first.contains("\"module\": \"commonjs\""), "{first}");
     assert!(first.contains("\"types\": [\n      \"node\",\n      \"jest\"\n    ]"), "{first}");
     assert!(first.contains("\"paths\": {\n      \"@/*\": [\n        \"src/*\"\n      ]\n    }"), "{first}");
-    // incremental implies tsBuildInfoFile (implied-options table).
-    assert!(first.contains("\"tsBuildInfoFile\""), "{first}");
+    // incremental is emitted; tsBuildInfoFile is a compile-time computation
+    // and is not part of Go's implied-options table, so it stays absent.
+    assert!(first.contains("\"incremental\": true"), "{first}");
     // The spec arrays pass through.
     assert!(first.contains("\"include\": [\n    \"src/**/*\"\n  ]"), "{first}");
     assert!(first.contains("\"exclude\": [\n    \"node_modules\",\n    \"dist\"\n  ]"), "{first}");
@@ -148,12 +153,15 @@ fn test_showconfig_extends_merge() {
     assert_eq!(options.out_dir.as_string(), "/project/dist");
 }
 
-/// Default include when neither files nor include are present: `["**/*"]`.
+/// Default include when neither files nor include are present: the default
+/// `["**/*"]` is filtered out of the showconfig output (Go:
+/// filterSameAsDefaultInclude), so no include key is emitted.
 #[test]
 fn test_showconfig_default_include() {
     let config_text = r#"{ "compilerOptions": { "strict": true } }"#;
     let output = run_showconfig(config_text, "/project");
-    assert!(output.contains("\"include\": [\n    \"**/*\"\n  ]"), "{output}");
+    assert!(!output.contains("\"include\""), "{output}");
+    assert!(!output.contains("\"exclude\""), "{output}");
 }
 
 /// Go: `TestShowConfigEnumSerialization` — every enum map value serializes

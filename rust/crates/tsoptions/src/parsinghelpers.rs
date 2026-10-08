@@ -333,6 +333,10 @@ impl OptionParser for CompilerOptionsParser<'_> {
                 return;
             }
         }
+        // Go: ParseCompilerOptions returns early on nil values.
+        if value.is_null() {
+            return;
+        }
         parse_compiler_options(key, value, self.compiler_options);
     }
 

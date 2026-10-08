@@ -31,7 +31,7 @@ use tsc_tspath::{
     RootedFilePath,
 };
 
-use crate::commandlineoption::CompilerOptionsValue;
+use crate::commandlineoption::{CommandLineOption, CompilerOptionsValue};
 use crate::errors::new_compiler_diagnostic;
 use crate::namemap::command_line_compiler_options_map;
 use crate::options_generated::{get_default_compiler_options, parse_compiler_options};
@@ -85,6 +85,10 @@ impl OptionParser for ParsedCompilerOptions {
     fn parse_option(&mut self, key: &str, value: &CompilerOptionsValue) {
         if crate::parsinghelpers::compiler_option_contains_config_dir_template(key, value) {
             self.unresolved_paths.set(key.to_string(), value.clone());
+            return;
+        }
+        // Go: ParseCompilerOptions returns early on nil values.
+        if value.is_null() {
             return;
         }
         parse_compiler_options(key, value, &mut self.options);
@@ -353,6 +357,14 @@ pub fn parse_json_config_file_content(
 ) -> ParsedCommandLine {
     let mut errors = Vec::new();
     let mut resolution_stack: Vec<PathKey> = resolution_stack.to_vec();
+    // PORT: Go's callers seed the stack with the config file's own path
+    // (GetParsedCommandLineOfConfigFilePath); the port seeds it here when
+    // empty so extends cycles are detected self-contained.
+    if resolution_stack.is_empty() && !config_file_name.is_empty() {
+        resolution_stack.push(tsc_tspath::path_key_from_canonical(
+            config_file_name.as_string(),
+        ));
+    }
 
     let mut result = ParsedCommandLine::new(
         config_file_name.clone(),
@@ -374,20 +386,8 @@ pub fn parse_json_config_file_content(
 
     // extends — resolve and merge first (Go: parseConfig's extends arm).
     if let Some(extends_value) = raw_config.get("extends") {
-        let extends_paths = match extends_value {
-            CompilerOptionsValue::Str(s) => vec![s.clone()],
-            CompilerOptionsValue::StrArray(arr) => arr.clone(),
-            CompilerOptionsValue::Array(arr) => arr
-                .iter()
-                .filter_map(|v| match v {
-                    CompilerOptionsValue::Str(s) => Some(s.clone()),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        for extends_path in extends_paths {
-            let extended = read_extended_config(
+        for extends_path in extends_value_list(extends_value) {
+            if let Some((extended, extended_parsed)) = read_extended_config(
                 &extends_path,
                 fs,
                 base_path,
@@ -396,14 +396,7 @@ pub fn parse_json_config_file_content(
                 extended_config_cache,
                 resolve_config_host,
                 &mut errors,
-            );
-            if let Some(extended) = extended {
-                let compiler_options_value = extended
-                    .get("compilerOptions")
-                    .cloned()
-                    .unwrap_or(CompilerOptionsValue::Null);
-                let extended_parsed =
-                    convert_options_from_json_worker(compiler_options_value, base_path);
+            ) {
                 merge_parsed_compiler_options(
                     &mut result.compiler_options,
                     Some(&extended_parsed),
@@ -416,7 +409,9 @@ pub fn parse_json_config_file_content(
 
     // compilerOptions
     if let Some(compiler_options_value) = raw_config.get("compilerOptions") {
-        let parsed = convert_options_from_json_worker(compiler_options_value.clone(), base_path);
+        let (parsed, conversion_errors) =
+            convert_options_from_json_worker(compiler_options_value.clone(), base_path);
+        errors.extend(conversion_errors);
         merge_parsed_compiler_options(
             &mut result.compiler_options,
             Some(&parsed),
@@ -499,30 +494,236 @@ fn merge_spec_and_references(result: &mut ParsedCommandLine, extended_map: &Orde
 
 /// Go: convertCompilerOptionsFromJsonWorker — parse the raw compilerOptions
 /// object through the generated table with ${configDir} capture.
+/// Go: `func isCompilerOptionsValue(option *CommandLineOption, value any) bool`.
+fn is_compiler_options_value(option: &'static CommandLineOption, value: &CompilerOptionsValue) -> bool {
+    if value.is_null() {
+        return !option.disallow_null_or_undefined();
+    }
+    match option.kind {
+        crate::commandlineoption::CommandLineOptionKind::List => {
+            matches!(value, CompilerOptionsValue::Array(_) | CompilerOptionsValue::StrArray(_))
+        }
+        crate::commandlineoption::CommandLineOptionKind::ListOrElement => {
+            matches!(value, CompilerOptionsValue::Array(_) | CompilerOptionsValue::StrArray(_))
+                || is_compiler_options_value(
+                    option.elements().expect("listOrElement option without element"),
+                    value,
+                )
+        }
+        crate::commandlineoption::CommandLineOptionKind::String => {
+            matches!(value, CompilerOptionsValue::Str(_))
+        }
+        crate::commandlineoption::CommandLineOptionKind::Boolean => {
+            matches!(value, CompilerOptionsValue::Bool(_))
+        }
+        crate::commandlineoption::CommandLineOptionKind::Number => {
+            matches!(value, CompilerOptionsValue::Int(_) | CompilerOptionsValue::Float(_))
+        }
+        crate::commandlineoption::CommandLineOptionKind::Object => {
+            matches!(value, CompilerOptionsValue::Object(_) | CompilerOptionsValue::PathsMap(_))
+        }
+        crate::commandlineoption::CommandLineOptionKind::Enum => {
+            matches!(value, CompilerOptionsValue::Str(_))
+        }
+    }
+}
+
+/// Go: `func normalizeNonListOptionValue(option, basePath, value) any`.
+fn normalize_non_list_option_value(
+    option: &'static CommandLineOption,
+    base_path: &RootedDirectoryPath,
+    value: CompilerOptionsValue,
+) -> CompilerOptionsValue {
+    if option.path_kind.is_rooted() {
+        if let CompilerOptionsValue::Str(path) = &value {
+            let mut path = tsc_tspath::normalize_slashes(path).into_owned();
+            if !starts_with_config_dir_template(&path) {
+                path = get_normalized_absolute_path(&path, base_path).into_owned();
+            }
+            if path.is_empty() {
+                path = ".".to_string();
+            }
+            return CompilerOptionsValue::Str(path);
+        }
+    }
+    value
+}
+
+/// Go: `func convertJsonOptionOfListType(option, values, basePath, ...) ([]any, []*ast.Diagnostic)`.
+fn convert_json_option_of_list_type(
+    option: &'static CommandLineOption,
+    values: &CompilerOptionsValue,
+    base_path: &RootedDirectoryPath,
+) -> (CompilerOptionsValue, Vec<tsc_ast::Diagnostic>) {
+    let mut errors: Vec<tsc_ast::Diagnostic> = Vec::new();
+    let element = option.elements().expect("list option without element");
+    let list = match values {
+        CompilerOptionsValue::Array(list) => list.clone(),
+        // A JSON array of strings parses as StrArray — same slice shape.
+        CompilerOptionsValue::StrArray(list) => list
+            .iter()
+            .map(|s| CompilerOptionsValue::Str(s.clone()))
+            .collect(),
+        _ => return (CompilerOptionsValue::Null, errors),
+    };
+    let converted = convert_json_option_of_list_values(
+        element,
+        &list,
+        base_path,
+        option.list_preserve_falsy_values,
+        &mut errors,
+    );
+    (converted, errors)
+}
+
+/// The element-mapping + falsy-filter half of `convertJsonOptionOfListType`
+/// (Go's `core.MapIndex` + `core.Filter`); the per-element diagnostics append
+/// to `errors` exactly as Go's shared slice does.
+fn convert_json_option_of_list_values(
+    element: &'static CommandLineOption,
+    list: &[CompilerOptionsValue],
+    base_path: &RootedDirectoryPath,
+    list_preserve_falsy_values: bool,
+    errors: &mut Vec<tsc_ast::Diagnostic>,
+) -> CompilerOptionsValue {
+    let mut mapped_values: Vec<CompilerOptionsValue> = Vec::with_capacity(list.len());
+    for value in list {
+        let (result, element_errors) = convert_json_option(element, value, base_path);
+        mapped_values.push(result);
+        errors.extend(element_errors);
+    }
+    if !list_preserve_falsy_values {
+        mapped_values.retain(|value| !is_falsy_value(value));
+    }
+    CompilerOptionsValue::Array(mapped_values)
+}
+
+/// Go: `v != nil && v != false && v != 0 && v != ""`.
+fn is_falsy_value(value: &CompilerOptionsValue) -> bool {
+    match value {
+        CompilerOptionsValue::Null => true,
+        CompilerOptionsValue::Bool(b) => !*b,
+        CompilerOptionsValue::Int(i) => *i == 0,
+        CompilerOptionsValue::Float(f) => *f == 0.0,
+        CompilerOptionsValue::Str(s) => s.is_empty(),
+        _ => false,
+    }
+}
+
+/// Go: `func convertJsonOption(opt, value, basePath, propertyAssignment, valueExpression, sourceFile) (any, []*ast.Diagnostic)` —
+/// the M4 subset (no AST nodes; see module PORT notes).
+fn convert_json_option(
+    opt: &'static CommandLineOption,
+    value: &CompilerOptionsValue,
+    base_path: &RootedDirectoryPath,
+) -> (CompilerOptionsValue, Vec<tsc_ast::Diagnostic>) {
+    if opt.is_command_line_only {
+        return (
+            CompilerOptionsValue::Null,
+            vec![new_compiler_diagnostic(
+                &tsc_diagnostics::OPTION_0_CAN_ONLY_BE_SPECIFIED_ON_COMMAND_LINE,
+                &[opt.name.to_string()],
+            )],
+        );
+    }
+    if !is_compiler_options_value(opt, value) {
+        return (
+            CompilerOptionsValue::Null,
+            vec![new_compiler_diagnostic(
+                &tsc_diagnostics::COMPILER_OPTION_0_REQUIRES_A_VALUE_OF_TYPE_1,
+                &[
+                    opt.name.to_string(),
+                    crate::errors::get_compiler_option_value_type_string(opt),
+                ],
+            )],
+        );
+    }
+    match opt.kind {
+        crate::commandlineoption::CommandLineOptionKind::List => {
+            convert_json_option_of_list_type(opt, value, base_path)
+        }
+        crate::commandlineoption::CommandLineOptionKind::ListOrElement => {
+            if matches!(value, CompilerOptionsValue::Array(_) | CompilerOptionsValue::StrArray(_)) {
+                convert_json_option_of_list_type(opt, value, base_path)
+            } else {
+                convert_json_option(opt.elements().expect("element"), value, base_path)
+            }
+        }
+        crate::commandlineoption::CommandLineOptionKind::Enum => {
+            if value.is_null() {
+                return (CompilerOptionsValue::Null, Vec::new());
+            }
+            let CompilerOptionsValue::Str(s) = value else {
+                return (CompilerOptionsValue::Null, Vec::new());
+            };
+            crate::commandlineparser::convert_json_option_of_enum_type(opt, s)
+        }
+        _ => {
+            let (validated, errors) =
+                crate::commandlineparser::validate_json_option_value(opt, value.clone());
+            if !errors.is_empty() {
+                return (CompilerOptionsValue::Null, errors);
+            }
+            match validated {
+                Some(value) => (normalize_non_list_option_value(opt, base_path, value), Vec::new()),
+                None => (CompilerOptionsValue::Null, Vec::new()),
+            }
+        }
+    }
+}
+
+/// Go: `func convertOptionsFromJson[O optionParser](optionsNameMap, jsonOptions, basePath, result) (O, []*ast.Diagnostic)` —
+/// the parsedCompilerOptions instantiation the parse worker uses.
 fn convert_options_from_json_worker(
     json_options: CompilerOptionsValue,
     base_path: &RootedDirectoryPath,
-) -> ParsedCompilerOptions {
+) -> (ParsedCompilerOptions, Vec<tsc_ast::Diagnostic>) {
     let mut parsed = ParsedCompilerOptions::new(CompilerOptions::default());
-    if let CompilerOptionsValue::Object(map) = &json_options {
-        for (key, value) in map.entries() {
-            // Go: normalize alias keys through the option map first.
-            let key = command_line_compiler_options_map()
-                .get(key)
-                .map(|option| option.name)
-                .unwrap_or(key.as_str());
-            parsed.parse_option(key, value);
+    let mut errors = Vec::new();
+    let CompilerOptionsValue::Object(map) = &json_options else {
+        return (parsed, errors);
+    };
+    let options_name_map = command_line_compiler_options_map();
+    for (key, value) in map.entries() {
+        let Some(option) = options_name_map.get(key) else {
+            errors.push(crate::errors::create_unknown_option_error(
+                key,
+                ParsedCompilerOptions::unknown_option_diagnostic()
+                    .expect("compiler options parser diagnostic"),
+                "",
+                None,
+                None,
+                None,
+                ParsedCompilerOptions::unknown_did_you_mean_diagnostic(),
+                Some(options_name_map),
+            ));
+            continue;
+        };
+        if option.name != key.as_str() {
+            // Case-insensitive match found but exact case doesn't match —
+            // provide the "did you mean" suggestion (Go: skips the option).
+            errors.push(new_compiler_diagnostic(
+                ParsedCompilerOptions::unknown_did_you_mean_diagnostic()
+                    .expect("compiler options did-you-mean diagnostic"),
+                &[key.clone(), option.name.to_string()],
+            ));
+            continue;
         }
-        // ${configDir} templates substitute against the config's directory.
-        crate::options_generated::handle_option_config_dir_template_substitution(
-            &mut parsed,
-            base_path,
-        );
+        let (converted, conversion_errors) = convert_json_option(option, value, base_path);
+        errors.extend(conversion_errors);
+        parsed.parse_option(key, &converted);
     }
-    parsed
+    // ${configDir} templates substitute against the config's directory.
+    crate::options_generated::handle_option_config_dir_template_substitution(&mut parsed, base_path);
+    (parsed, errors)
 }
 
 /// Go: readJsonConfigFile + getExtendedConfig — resolve one `extends` value.
+///
+/// PORT: Go's getExtendedConfig fully parses the extended config (recursively
+/// resolving its own extends first, then merging its own compilerOptions on
+/// top); this returns the same two views — the extended raw map (for
+/// files/include/exclude/references) and its fully-merged parsed options.
 #[allow(clippy::too_many_arguments)]
 fn read_extended_config(
     extends_path: &str,
@@ -533,7 +734,10 @@ fn read_extended_config(
     extended_config_cache: Option<&ExtendedConfigCache>,
     resolve_config_host: Option<&dyn ResolveConfigHost>,
     errors: &mut Vec<tsc_ast::Diagnostic>,
-) -> Option<OrderedMap<String, CompilerOptionsValue>> {
+) -> Option<(
+    OrderedMap<String, CompilerOptionsValue>,
+    ParsedCompilerOptions,
+)> {
     // Module specifier arm (seam'd to the module crate; see ResolveConfigHost).
     let resolved = if !extends_path.is_empty()
         && !extends_path.starts_with('/')
@@ -567,7 +771,12 @@ fn read_extended_config(
     if let Some(cache) = extended_config_cache
         && let Some(CompilerOptionsValue::Object(map)) = cache(extends_path)
     {
-        return Some(map);
+        // PORT: the cache seam stores the raw map (Go caches the parsed
+        // command line); the parsed form is rebuilt from it.
+        let (parsed, cache_errors) =
+            convert_options_from_json_worker(map.get("compilerOptions").cloned().unwrap_or(CompilerOptionsValue::Null), &resolved.directory());
+        errors.extend(cache_errors);
+        return Some((map.clone(), parsed));
     }
     resolution_stack.push(path_key);
 
@@ -580,9 +789,67 @@ fn read_extended_config(
     })?;
     let (json, mut parse_errors) = parse_config_file_text_to_json(&text);
     errors.append(&mut parse_errors);
-    match json {
-        Some(CompilerOptionsValue::Object(map)) => Some(map),
-        _ => None,
+    let Some(CompilerOptionsValue::Object(map)) = json else {
+        return None;
+    };
+
+    let extended_base = resolved.directory();
+
+    // Nested extends first (Go: the extended config's own parse resolves its
+    // extends before its own compilerOptions merge on top).
+    let mut parsed = if let Some(extends_value) = map.get("extends") {
+        let mut nested = ParsedCompilerOptions::new(CompilerOptions::default());
+        for nested_extends_path in extends_value_list(extends_value) {
+            if let Some((_, nested_parsed)) = read_extended_config(
+                &nested_extends_path,
+                fs,
+                &extended_base,
+                &resolved,
+                resolution_stack,
+                extended_config_cache,
+                resolve_config_host,
+                errors,
+            ) {
+                merge_parsed_compiler_options(
+                    &mut nested,
+                    Some(&nested_parsed),
+                    Some(&CompilerOptionsValue::Object(map.clone())),
+                );
+            }
+        }
+        nested
+    } else {
+        ParsedCompilerOptions::new(CompilerOptions::default())
+    };
+
+    // Then the extended config's own compilerOptions on top.
+    if let Some(compiler_options_value) = map.get("compilerOptions") {
+        let (own, conversion_errors) =
+            convert_options_from_json_worker(compiler_options_value.clone(), &extended_base);
+        errors.extend(conversion_errors);
+        merge_parsed_compiler_options(
+            &mut parsed,
+            Some(&own),
+            Some(&CompilerOptionsValue::Object(map.clone())),
+        );
+    }
+
+    Some((map, parsed))
+}
+
+/// Go: `getExtendsConfigPathOrArray`'s value-shape flattening.
+fn extends_value_list(extends_value: &CompilerOptionsValue) -> Vec<String> {
+    match extends_value {
+        CompilerOptionsValue::Str(s) => vec![s.clone()],
+        CompilerOptionsValue::StrArray(arr) => arr.clone(),
+        CompilerOptionsValue::Array(arr) => arr
+            .iter()
+            .filter_map(|v| match v {
+                CompilerOptionsValue::Str(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
     }
 }
 

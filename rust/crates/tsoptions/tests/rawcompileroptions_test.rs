@@ -1,6 +1,5 @@
 // Port of tsc/internal/tsoptions/rawcompileroptions_test.go @ ec47d33c23e464a17cdf2475632cba629bee8763
 
-use tsc_core::options_generated::ScriptTarget;
 use tsc_core::tristate::Tristate;
 use tsc_tspath::{
     rooted_directory_path_from_absolute, to_source_map_location, RootedDirectoryPath,

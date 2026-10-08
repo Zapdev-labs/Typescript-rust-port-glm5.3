@@ -155,7 +155,7 @@ fn test_removed_watch_options() {
         "excludeDirectories",
         "excludeFiles",
     ] {
-        let args = [format!("--watch"), format!("--{option}")];
+        let args = ["--watch".to_string(), format!("--{option}")];
         let fs = from_map(Vec::<(String, String)>::new(), CaseSensitivity::CaseSensitive);
         let parsed = tsc_tsoptions::parse_command_line(&args, fs.as_ref(), &cwd());
         assert!(parsed.compiler_options().watch.is_true(), "{option}");
