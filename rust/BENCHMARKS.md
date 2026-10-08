@@ -138,6 +138,40 @@ file mix, not a general parser deficit.
 Corpus bind bench (mirrors `BenchmarkBind`), program build (mirrors
 `BenchmarkNewProgram`), `--showConfig` byte-parity vs `tsgo-go`.
 
+### M4 parity gates — showconfig + resolvereact twins (2026-10-08 06:30)
+
+Both drivers grew two twin subcommands (`rust/bench/gates/` fixture
+matrices, commit 10254560d3): `showconfig` (tsconfig → ParseConfigFileTextToJson
+→ ParseJsonConfigFileContent with extends → ConvertToTSConfig →
+MarshalIndentWrite, one NDJSON line per config) and `resolvereact`
+(project dirs × fixed 21-specifier list → NewResolver + ResolveModuleName
+ESM, per-record lines + FNV-1a shape-hash summary). Verdict = plain diff.
+
+| run | verdict |
+|---|---|
+| showconfig × tsconfig-matrix (18 cases: extends 2/3-deep + cycle + array, configDir templates, JSONC, unknown options) | IDENTICAL (local + rig) |
+| showconfig × resolver-matrix | IDENTICAL (local + rig) |
+| resolvereact × resolver-matrix (exports/imports self-reference, scoped, index, node16) | IDENTICAL, 43 lines (local + rig) |
+| resolvereact × tsconfig-matrix | IDENTICAL, 379 lines (local + rig) |
+| showconfig × packages/typescript (real-world extends+nodenext) | IDENTICAL |
+| showconfig × excalidraw tsconfig (real-world) | IDENTICAL (rig) |
+| determinism double-runs | byte-identical |
+
+One real divergence found and deferred to the core crate (fix in flight):
+`tsc/testdata/fixtures/compiler/tsconfig.json`'s `"types": []` — Go emits the
+explicitly-empty list; the port dropped it (core's CompilerOptions collapses
+Go's nil-vs-empty slices into `Vec`, serializer tests `!is_empty()`).
+
+Rig environment note: the rig's btrfs is fully allocated (metadata chunks
+exhaust under the concurrent syzkaller campaign — rsync renames and cargo
+target-dir creates fail ENOSPC while data writes fit). Workarounds in use:
+`TS_RSYNC_INPLACE=1` (rename-free sync) and a tmpfs `CARGO_TARGET_DIR`
+for rig builds. A root `btrfs balance` would fix it properly.
+
+| date | bench | rust median | go median | rust/go | parity |
+|---|---|---|---|---|---|
+| — | — | — | — | — | — |
+
 | date | bench | rust median | go median | rust/go | parity |
 |---|---|---|---|---|---|
 | — | — | — | — | — | — |
