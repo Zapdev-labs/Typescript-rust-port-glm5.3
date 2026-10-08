@@ -202,7 +202,7 @@ fn compare_related_info(r1: &[Diagnostic], r2: &[Diagnostic]) -> i32 {
 /// Go: `func CompareDiagnostics(d1, d2 *Diagnostic) int` over the raw
 /// (unpaired) form — used for the related-info chains, which carry no file
 /// pairing of their own beyond loc/code.
-fn compare_diagnostics(d1: &Diagnostic, d2: &Diagnostic) -> i32 {
+pub fn compare_diagnostics(d1: &Diagnostic, d2: &Diagnostic) -> i32 {
     let c = (d1.pos() - d2.pos()).signum();
     if c != 0 {
         return c;

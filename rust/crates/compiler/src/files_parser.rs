@@ -125,10 +125,20 @@ impl TaskArena {
         result
     }
 
+    /// The read-only variant of [`TaskArena::with_task`] (the same
+    /// checkout/put-back; the closure takes `&ParseTask`). PORT: Go reads
+    /// the shared task through the group mutex; the checkout is the port's
+    /// equivalent — no unsafe aliasing (the task is owned here).
     pub fn with_task_read<R>(&self, index: usize, f: impl FnOnce(&ParseTask) -> R) -> R {
-        self.with_task(index, |task| {
-            f(unsafe { &*(task as *const ParseTask) })
-        })
+        let task = {
+            let mut tasks = self.tasks.lock().expect("task arena poisoned");
+            std::mem::take(&mut tasks[index])
+        };
+        let result = f(&task);
+        self.tasks
+            .lock()
+            .expect("task arena poisoned")[index] = task;
+        result
     }
 }
 
@@ -158,7 +168,7 @@ impl FilesParser {
 
     /// Go: `func (w *filesParser) parse(loader, tasks)`.
     pub(crate) fn parse(&self, loader: &FileLoader, tasks: &[usize]) {
-        let wg = tsc_core::new_work_group(loader.single_threaded);
+        let wg = tsc_core::workgroup::new_work_group(loader.single_threaded);
         self.start(loader, wg.as_ref(), tasks, 0);
         let mut wg = wg;
         wg.run_and_wait();
@@ -168,7 +178,7 @@ impl FilesParser {
     pub(crate) fn start(
         &self,
         loader: &FileLoader,
-        wg: &dyn tsc_core::WorkGroup,
+        wg: &dyn tsc_core::workgroup::WorkGroup,
         tasks: &[usize],
         depth: i64,
     ) {
@@ -283,7 +293,7 @@ fn run_task_group(
     package_id: PackageId,
     depth: i64,
     max_depth: i64,
-    wg: &dyn tsc_core::WorkGroup,
+    wg: &dyn tsc_core::workgroup::WorkGroup,
 ) {
     let mut data = data.lock().expect("parseTaskData poisoned");
 
@@ -427,7 +437,7 @@ pub(crate) fn load(loader: &FileLoader, files_parser: &FilesParser, task: &mut P
         // their package.json to avoid adding spurious lookups to file watcher
         // tracking.
         task.metadata = SourceFileMetaData {
-            implied_node_format: tsc_core::compileroptions::ModuleKindCommonJS,
+            implied_node_format: tsc_core::options_generated::ModuleKind::CommonJS,
             ..Default::default()
         };
     } else {
@@ -471,7 +481,7 @@ pub(crate) fn load(loader: &FileLoader, files_parser: &FilesParser, task: &mut P
             }
         }
 
-        loader.resolve_type_reference_directives(task);
+        loader.resolve_type_reference_directives(files_parser, task);
     }
 
     let no_lib = loader.compiler_options().no_lib == tsc_core::tristate::Tristate::TSTrue;
@@ -599,7 +609,7 @@ enum FileSlot {
 /// The collection-walk state (Go: the closure locals of `collectFiles`).
 pub(crate) struct CollectState<'a> {
     files_parser: &'a FilesParser,
-    loader: &'a FileLoader,
+    loader: &'a FileLoader<'a>,
     /// The walked program files (Go: `files`).
     files: Vec<SourceFile>,
     /// The walked lib files (Go: `libFiles`).
@@ -717,7 +727,7 @@ impl<'a> CollectState<'a> {
                 self.resolved_modules.entry(key).or_default().insert(
                     tsc_module::ModeAwareCacheKey {
                         name: value.library_name.clone(),
-                        mode: tsc_core::compileroptions::ModuleKindCommonJS,
+                        mode: tsc_core::options_generated::ModuleKind::CommonJS,
                     },
                     value.resolution.clone(),
                 );

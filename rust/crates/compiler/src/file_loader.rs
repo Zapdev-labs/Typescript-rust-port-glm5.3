@@ -30,11 +30,9 @@ use tsc_ast::{
     SourceFileParseOptions, node_text,
 };
 use tsc_core::compileroptions::{
-    ModuleKind, ModuleKindCommonJS, ModuleKindES2015, ModuleKindESNext, ModuleKindNode16,
-    ModuleKindNodeNext, ModuleKindNone, ModuleKindPreserve, ResolutionMode, ResolutionModeCommonJS,
-    ResolutionModeESM, ResolutionModeNone,
+    ResolutionMode, ResolutionModeCommonJS, ResolutionModeESM, ResolutionModeNone,
 };
-use tsc_core::options_generated::CompilerOptions;
+use tsc_core::options_generated::{CompilerOptions, ModuleKind, ModuleResolutionKind};
 use tsc_core::scriptkind::ScriptKind;
 use tsc_core::tristate::Tristate;
 use tsc_module::{
@@ -63,7 +61,7 @@ use crate::host::CompilerResolutionHost;
 use crate::processing_diagnostic::{
     IncludeExplainingDiagnostic, ProcessingDiagnostic, ProcessingDiagnosticKind,
 };
-use crate::program::{ProgramConfig, ProgramFactories, ProgramOptions};
+use crate::program::{ProgramConfig, ProgramOptions};
 use crate::project_reference_file_mapper::{
     ProjectReferenceFileMapper, ProjectReferenceFileMapperBuilder,
 };
@@ -221,6 +219,11 @@ pub struct JsxRuntimeImportSpecifier {
 pub(crate) struct FileLoader<'a> {
     pub opts: &'a ProgramConfig,
     pub host: Arc<dyn crate::host::CompilerHost>,
+    /// Go: the loader has no singleThreaded field — the WorkGroups are built
+    /// with the bool `processAllProgramFiles` receives; the port's
+    /// `filesParser.parse` builds its WorkGroup from the loader, so the bool
+    /// lives here (PORTING-NOTES).
+    pub single_threaded: bool,
     pub resolver: Option<Arc<dyn Resolver>>,
     pub default_library_path: RootedDirectoryPath,
     pub case_sensitivity: CaseSensitivity,
@@ -243,10 +246,6 @@ pub(crate) struct FileLoader<'a> {
 impl<'a> FileLoader<'a> {
     pub(crate) fn compiler_options(&self) -> &CompilerOptions {
         self.opts.compiler_options()
-    }
-
-    pub(crate) fn single_threaded(&self) -> bool {
-        self.opts.single_threaded()
     }
 
     pub(crate) fn skip_module_resolution(&self) -> bool {
@@ -451,6 +450,7 @@ impl<'a> FileLoader<'a> {
                     &|file_name: &RootedFilePath, path: &PathKey| {
                         host.get_resolved_project_reference(file_name, path)
                     },
+                    self.case_sensitivity,
                 );
                 let parsed = parser.parse(&root_task_indices, &mut tasks);
                 (parsed, tasks)
@@ -540,8 +540,8 @@ impl<'a> FileLoader<'a> {
                 {
                     if !file_name.extension_is_one_of(&[
                         EXTENSION_MTS, EXTENSION_CTS, EXTENSION_MJS, EXTENSION_CJS,
-                    ]) && (ModuleKindNode16 <= ModuleKind(module_resolution_kind)
-                        && ModuleKind(module_resolution_kind) <= ModuleKindNodeNext
+                    ]) && (ModuleResolutionKind::Node16 <= module_resolution_kind
+                        && module_resolution_kind <= ModuleResolutionKind::NodeNext
                         || file_name.contains_lowercase_directory_sequence("/node_modules/"))
                     {
                         package_json_type = value;
@@ -554,7 +554,7 @@ impl<'a> FileLoader<'a> {
         SourceFileMetaData {
             package_json_type,
             package_json_directory,
-            implied_node_format: ModuleKind(implied_node_format),
+            implied_node_format,
         }
     }
 
@@ -581,14 +581,9 @@ impl<'a> FileLoader<'a> {
                 &task.metadata,
             ),
         };
-        if !task
-            .normalized_file_path
-            .extension_is_one_of_strs(&self.content_mapper_extensions)
-        {
-            // Go: the content-mapper extension check (empty in this wave —
-            // see the file header).
-            return self.host.get_source_file(&parse_options);
-        }
+        // Go: the content-mapper extension check routes content-mapper files
+        // through `parseContentMappedFile` — the seam is empty in this wave
+        // (see the file header), so every parse is a plain load.
         self.host.get_source_file(&parse_options)
     }
 
@@ -846,7 +841,11 @@ impl<'a> FileLoader<'a> {
     }
 
     /// Go: `func (p *fileLoader) resolveTypeReferenceDirectives(t *parseTask)`.
-    pub(crate) fn resolve_type_reference_directives(&self, task: &mut ParseTask) {
+    pub(crate) fn resolve_type_reference_directives(
+        &self,
+        files_parser: &crate::files_parser::FilesParser,
+        task: &mut ParseTask,
+    ) {
         let Some(file) = &task.file else {
             return;
         };
@@ -882,15 +881,13 @@ impl<'a> FileLoader<'a> {
                 &meta,
                 &options_for_file,
             );
+            let redirect_dyn: Option<Arc<dyn tsc_module::ResolvedProjectReference>> = redirect;
             let (resolved, trace) = resolver.resolve_type_reference_directive(
                 &r#ref.file_name,
                 &redirect_file_name,
                 resolution_mode,
-                redirect.as_ref().map(|r| r as &Arc<dyn tsc_module::ResolvedProjectReference> as &Arc<dyn tsc_module::ResolvedProjectReference>).map(|_| unreachable!()),
+                redirect_dyn.as_ref(),
             );
-            let _ = &options_for_file;
-            let resolved = resolved;
-            let (resolved, trace) = (resolved, trace);
             type_resolutions_in_file.insert(
                 ModeAwareCacheKey {
                     name: r#ref.file_name.clone(),
@@ -914,14 +911,19 @@ impl<'a> FileLoader<'a> {
 
             if tsc_module::ResolvedTypeReferenceDirective::is_resolved(resolved.as_deref()) {
                 let resolved = resolved.expect("resolved");
-                task.sub_tasks_pending.push(ResolvedRef {
-                    file_name: resolved.resolved_file_name.clone(),
-                    path: resolved.resolved_path.clone(),
-                    increase_depth: resolved.is_external_library_import,
-                    elide_on_depth: false,
-                    include_reason: Some(include_reason),
-                    package_id: resolved.package_id.clone(),
-                });
+                crate::files_parser::push_sub_task(
+                    files_parser,
+                    task,
+                    ResolvedRef {
+                        file_name: resolved.resolved_file_name.clone(),
+                        path: resolved.resolved_path.clone(),
+                        increase_depth: resolved.is_external_library_import,
+                        elide_on_depth: false,
+                        include_reason: Some(include_reason),
+                        package_id: resolved.package_id.clone(),
+                    },
+                    None,
+                );
             } else {
                 task.processing_diagnostics.push(ProcessingDiagnostic {
                     kind: ProcessingDiagnosticKind::UnknownReference,
@@ -938,9 +940,12 @@ impl<'a> FileLoader<'a> {
     /// Go: `func (p *fileLoader) resolveImportsAndModuleAugmentations(t *parseTask)`.
     pub(crate) fn resolve_imports_and_module_augmentations(
         &self,
-        file: &mut SourceFile,
+        files_parser: &crate::files_parser::FilesParser,
         task: &mut ParseTask,
     ) {
+        let Some(file) = task.file.as_mut() else {
+            return;
+        };
         let meta = task.metadata.clone();
 
         let is_javascript_file = crate::ast_shims::is_source_file_js_by_file(file);
@@ -1007,6 +1012,11 @@ impl<'a> FileLoader<'a> {
             let mut resolutions_in_file: ModeAwareCache<Option<Arc<ResolvedModule>>> =
                 ModeAwareCache::default();
             let mut resolutions_trace: Vec<DiagAndArgs> = Vec::new();
+            // PORT: Go pushes sub-tasks onto `t.subTasks` as it walks; the
+            // port's `push_sub_task` needs `&mut ParseTask` (the whole task)
+            // while the file is borrowed out of `task.file`, so the refs are
+            // collected here and pushed after the walk (same order).
+            let mut pending_sub_tasks: Vec<ResolvedRef> = Vec::new();
 
             for (index, entry) in module_names.iter().enumerate() {
                 let module_name = node_text(file as &dyn tsc_ast::NodeStore, *entry).to_string();
@@ -1023,13 +1033,13 @@ impl<'a> FileLoader<'a> {
                     *entry,
                     &options_for_file,
                 );
+                let redirect_dyn: Option<Arc<dyn tsc_module::ResolvedProjectReference>> =
+                    redirect.clone();
                 let (resolved_module, trace) = resolver.resolve_module_name(
                     &module_name,
                     &redirect_file_name,
                     mode,
-                    redirect
-                        .clone()
-                        .map(|r| Arc::new(r) as Arc<dyn tsc_module::ResolvedProjectReference>),
+                    redirect_dyn.as_ref(),
                 );
                 let resolved_module = resolved_module.or_else(|| {
                     // Go: `if resolvedModule == nil { resolvedModule = &module.ResolvedModule{} }`.
@@ -1062,7 +1072,7 @@ impl<'a> FileLoader<'a> {
                     );
                 let is_js_file = !resolved_module.resolved_using_extra_extensions
                     && !resolved_file_name
-                        .extension_is_one_of_strs(SUPPORTED_TS_EXTENSIONS_WITH_JSON_FLAT)
+                        .extension_is_one_of(&SUPPORTED_TS_EXTENSIONS_WITH_JSON_FLAT)
                     && redirect_parsed_command_line.is_none();
                 let is_js_file_from_node_modules = is_from_node_modules_search
                     && is_js_file
@@ -1094,7 +1104,7 @@ impl<'a> FileLoader<'a> {
 
                 if should_add_file {
                     let synthetic = (import_index < 0).then(|| module_name.clone());
-                    task.sub_tasks_pending.push(ResolvedRef {
+                    pending_sub_tasks.push(ResolvedRef {
                         file_name: resolved_file_name.clone(),
                         path: resolved_module.resolved_path.clone(),
                         increase_depth: resolved_module.is_external_library_import,
@@ -1118,6 +1128,10 @@ impl<'a> FileLoader<'a> {
 
             task.resolutions_in_file = resolutions_in_file;
             task.resolutions_trace = resolutions_trace;
+
+            for resolved_ref in pending_sub_tasks {
+                crate::files_parser::push_sub_task(files_parser, task, resolved_ref, None);
+            }
         }
     }
 
@@ -1244,7 +1258,7 @@ fn get_mode_for_type_reference_directive_in_file(
 }
 
 /// Go: `func getDefaultResolutionModeForFile(fileName, meta, options)`.
-fn get_default_resolution_mode_for_file(
+pub(crate) fn get_default_resolution_mode_for_file(
     file_name: &RootedFilePath,
     meta: &SourceFileMetaData,
     options: &CompilerOptions,
@@ -1261,7 +1275,7 @@ fn get_default_resolution_mode_for_file(
 }
 
 /// Go: `func getModeForUsageLocation(fileName, meta, usage, options)`.
-fn get_mode_for_usage_location(
+pub(crate) fn get_mode_for_usage_location(
     file: &SourceFile,
     file_name: &RootedFilePath,
     meta: &SourceFileMetaData,
@@ -1290,10 +1304,10 @@ fn get_mode_for_usage_location(
                 _ => None,
             };
             if let Some(attributes) = attributes {
-                let (override, ok) =
+                let (mode_override, ok) =
                     crate::ast_shims::get_resolution_mode_override(store, attributes);
                 if ok {
-                    return override;
+                    return mode_override;
                 }
             }
         }
@@ -1304,10 +1318,10 @@ fn get_mode_for_usage_location(
         let grandparent = file.node(parent).parent.get();
         if let NodeData::ImportTypeNode(import_type) = &file.node(grandparent).data {
             if let Some(attributes) = import_type.attributes {
-                let (override, ok) =
+                let (mode_override, ok) =
                     crate::ast_shims::get_resolution_mode_override(store, attributes);
                 if ok {
-                    return override;
+                    return mode_override;
                 }
             }
         }
@@ -1321,10 +1335,10 @@ fn get_mode_for_usage_location(
 }
 
 /// Go: `func importSyntaxAffectsModuleResolution(options) bool`.
-fn import_syntax_affects_module_resolution(options: &CompilerOptions) -> bool {
+pub(crate) fn import_syntax_affects_module_resolution(options: &CompilerOptions) -> bool {
     let module_resolution = options.get_module_resolution_kind();
-    (tsc_core::compileroptions::ModuleResolutionKindNode16 <= module_resolution
-        && module_resolution <= tsc_core::compileroptions::ModuleResolutionKindNodeNext)
+    (ModuleResolutionKind::Node16 <= module_resolution
+        && module_resolution <= ModuleResolutionKind::NodeNext)
         || options.get_resolve_package_json_exports()
         || options.get_resolve_package_json_imports()
 }
@@ -1347,10 +1361,6 @@ fn get_emit_syntax_for_usage_location_worker(
     }
     let file_emit_mode = get_emit_module_format_of_file_worker(file_name, options, meta);
     let call = walk_up_parenthesized_expressions(store, parent);
-    if file.node(call).kind == Kind::CallExpression && is_source_phase_import_call(store, call) {
-        // Go: IsImportCall(call) — a CallExpression whose IsImportCall...
-        // (the walk lands on the call's parent for import calls).
-    }
     if call != NodeId::NONE && file.node(call).kind == Kind::CallExpression {
         if is_import_call(store, call) {
             if is_source_phase_import_call(store, call) {
@@ -1369,13 +1379,13 @@ fn get_emit_syntax_for_usage_location_worker(
     // definitely-CJS file, until/unless declaration emit can indicate a true
     // ESM import. On the other hand, writing CJS syntax in a definitely-ESM
     // file is fine, since declaration emit preserves the CJS syntax.
-    if file_emit_mode == ModuleKindCommonJS {
+    if file_emit_mode == ModuleKind::CommonJS {
         return ResolutionModeCommonJS;
     }
-    if file_emit_mode.is_non_node_esm() || file_emit_mode == ModuleKindPreserve {
+    if file_emit_mode.is_non_node_esm() || file_emit_mode == ModuleKind::Preserve {
         return ResolutionModeESM;
     }
-    ModuleKindNone
+    ResolutionModeNone
 }
 
 /// Go: `func IsImportCall(node *Node) bool` (ast) —
@@ -1416,14 +1426,6 @@ fn create_synthetic_import(file: &mut SourceFile, text: &str) -> NodeId {
     external_helpers_module_reference
 }
 
-/// The `ProgramConfig`-side helper the loader needs: `CompilerOptions()` as
-/// the shared `Arc` (Go: the parsed command line's `*core.CompilerOptions`).
-impl ProgramConfig {
-    pub(crate) fn compiler_options_arc(&self) -> Arc<CompilerOptions> {
-        Arc::new(self.compiler_options().clone())
-    }
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // processAllProgramFiles
 // ────────────────────────────────────────────────────────────────────────────
@@ -1433,31 +1435,41 @@ impl ProgramConfig {
 ///
 /// PORT: the module-resolution error channel is dropped (the Rust module
 /// crate dropped the vestigial error — see its `ResolveModuleNameResult`).
-pub(crate) fn process_all_program_files(
+pub fn process_all_program_files(
     opts: &ProgramOptions,
     single_threaded: bool,
 ) -> (ProcessedFiles, Arc<tsc_module::ResolutionData>) {
     let compiler_options = opts.config.compiler_options_arc();
     let root_files = opts.config.config.file_names().to_vec();
-    let supported_extensions = tsc_tsoptions::get_supported_extensions(
+    let supported_extensions = tsc_tsoptions::tsconfigparsing::get_supported_extensions(
         &compiler_options,
         // Go: opts.Config.ContentMapperExtensions() — the seam is empty.
         &[],
     );
     let supported_extensions_with_json_if_resolve_json_module =
-        tsc_tsoptions::get_supported_extensions_with_json_if_resolve_json_module(
+        tsc_tsoptions::tsconfigparsing::get_supported_extensions_with_json_if_resolve_json_module(
             &compiler_options,
             supported_extensions.clone(),
         );
     let max_node_module_js_depth = compiler_options
         .max_node_module_js_depth
         .unwrap_or(0);
+    let host = opts
+        .hosts
+        .host
+        .clone()
+        .expect("processAllProgramFiles: ProgramOptions.Hosts.Host must be set");
+    let default_library_path = host.default_library_path();
+    let case_sensitivity = host.fs().case_sensitivity();
     let mut loader = FileLoader {
         opts: &opts.config,
-        host: Arc::clone(&opts.hosts.host),
+        host,
+        // Go: the WorkGroups are built with the bool processAllProgramFiles
+        // receives — see the struct field.
+        single_threaded,
         resolver: None,
-        default_library_path: opts.hosts.host.default_library_path(),
-        case_sensitivity: opts.hosts.host.fs().case_sensitivity(),
+        default_library_path,
+        case_sensitivity,
         supported_extensions,
         supported_extensions_with_json_if_resolve_json_module,
         // Go: opts.Config.ContentMapperExtensions() — the content-mapper
@@ -1570,7 +1582,3 @@ pub(crate) fn process_all_program_files(
 /// state from a file set + CompilerOptions, load all files, collect
 /// parse-level diagnostics — see program.rs `new_program`).
 pub use crate::program::new_program as build_program;
-
-const _: () = {
-    let _ = std::any::TypeId::of::<ProgramFactories>();
-};

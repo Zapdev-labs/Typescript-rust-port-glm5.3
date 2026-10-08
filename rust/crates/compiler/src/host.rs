@@ -51,7 +51,7 @@ pub trait CompilerHost: Send + Sync {
 pub struct CompilerHostImpl {
     fs: Arc<dyn Fs>,
     default_library_path: RootedDirectoryPath,
-    extended_config_cache: tsc_tsoptions::ExtendedConfigCache,
+    extended_config_cache: tsc_tsoptions::tsconfigparsing::ExtendedConfigCache,
     trace: TraceFn,
 }
 
@@ -65,7 +65,7 @@ pub type TraceFn = Arc<dyn Fn(&Message, &[String]) + Send + Sync>;
 pub fn new_compiler_host(
     fs: Arc<dyn Fs>,
     default_library_path: RootedDirectoryPath,
-    extended_config_cache: tsc_tsoptions::ExtendedConfigCache,
+    extended_config_cache: tsc_tsoptions::tsconfigparsing::ExtendedConfigCache,
     trace: Option<TraceFn>,
 ) -> Arc<dyn CompilerHost> {
     Arc::new(CompilerHostImpl {

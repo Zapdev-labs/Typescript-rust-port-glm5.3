@@ -15,15 +15,16 @@ tsc-diagnostics = { path = "../diagnostics" }
 tsc-json = { path = "../json" }
 tsc-module = { path = "../module" }
 tsc-outputpaths = { path = "../outputpaths" }
+tsc-packagejson = { path = "../packagejson" }
 tsc-parser = { path = "../parser" }
 tsc-scanner = { path = "../scanner" }
 tsc-tsoptions = { path = "../tsoptions" }
 tsc-tspath = { path = "../tspath" }
 tsc-vfs = { path = "../vfs" }
+rustc-hash = { workspace = true }
 
 [dev-dependencies]
 tsc-bundled = { path = "../bundled" }
-tsc-packagejson = { path = "../packagejson" }
 
 [lints]
 workspace = true

@@ -256,10 +256,9 @@ impl IncludeProcessor {
                 let package_json_directory = &meta_data.package_json_directory;
                 let package_json =
                     package_json_directory.resolve_file("package.json");
-                use tsc_core::compileroptions::ModuleKindCommonJS;
-                use tsc_core::options_generated::ModuleKindESNext;
+                use tsc_core::compileroptions::{ResolutionModeCommonJS, ResolutionModeESM};
                 match program.get_implied_node_format_for_emit_by_path(file.path_key()) {
-                    ModuleKindESNext => {
+                    ResolutionModeESM => {
                         if meta_data.package_json_type == "module" {
                             result.push(
                                 FileDiagnostic::compiler_diagnostic(
@@ -270,7 +269,7 @@ impl IncludeProcessor {
                             );
                         }
                     }
-                    ModuleKindCommonJS => {
+                    ResolutionModeCommonJS => {
                         if !meta_data.package_json_type.is_empty() {
                             result.push(
                                 FileDiagnostic::compiler_diagnostic(

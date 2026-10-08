@@ -256,6 +256,7 @@ dependencies = [
 name = "tsc-compiler"
 version = "0.0.0"
 dependencies = [
+ "rustc-hash",
  "tsc-ast",
  "tsc-binder",
  "tsc-bundled",

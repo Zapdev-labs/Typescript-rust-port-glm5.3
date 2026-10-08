@@ -52,7 +52,7 @@ pub trait EmitHost {
     /// Go: `GetDefaultResolutionModeForFile(file) core.ResolutionMode`.
     fn get_default_resolution_mode_for_file(&self, file: &SourceFile) -> ResolutionMode;
     /// Go: `GetEmitModuleFormatOfFile(file) core.ModuleKind`.
-    fn get_emit_module_format_of_file(&self, file: &SourceFile) -> tsc_core::compileroptions::ModuleKind;
+    fn get_emit_module_format_of_file(&self, file: &SourceFile) -> tsc_core::options_generated::ModuleKind;
     /// Go: `FileExists(path tspath.RootedFilePath) bool`.
     fn file_exists(&self, path: &RootedFilePath) -> bool;
     /// Go: `GetGlobalTypingsCacheLocation() tspath.RootedDirectoryPath`.
@@ -164,7 +164,7 @@ impl EmitHost for EmitHostImpl<'_> {
     fn get_emit_module_format_of_file(
         &self,
         file: &SourceFile,
-    ) -> tsc_core::compileroptions::ModuleKind {
+    ) -> tsc_core::options_generated::ModuleKind {
         self.program.get_emit_module_format_of_file(file)
     }
 

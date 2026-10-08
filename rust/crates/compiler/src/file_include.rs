@@ -198,13 +198,17 @@ impl FileIncludeReason {
                 let package_id = if is_synthetic {
                     let mode = program.get_mode_for_synthetic_import(file_index);
                     program
-                        .get_resolved_module(file_index, synthetic_text.as_deref().expect("text"), mode)
+                        .get_resolved_module(
+                            file,
+                            synthetic_text.as_deref().expect("text"),
+                            mode,
+                        )
                         .map(|resolution| resolution.package_id.clone())
                         .unwrap_or_default()
                 } else {
                     match specifier {
                         Some(specifier) => program
-                            .get_resolved_module_from_module_specifier(file_index, specifier)
+                            .get_resolved_module_from_module_specifier(file, specifier)
                             .map(|resolution| resolution.package_id.clone())
                             .unwrap_or_default(),
                         None => PackageId::default(),

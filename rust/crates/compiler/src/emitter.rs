@@ -11,6 +11,8 @@
 // result shapes live in program.rs (Go: program.go) so the boundary types
 // exist for the orchestrator surface.
 
+use std::sync::Arc;
+
 use tsc_ast::SourceFile;
 use tsc_core::options_generated::CompilerOptions;
 use tsc_tspath::{CaseSensitivity, PathKey, RootedDirectoryPath};
@@ -37,10 +39,14 @@ pub trait SourceFileMayBeEmittedHost {
     /// Go: `Options() *core.CompilerOptions`.
     fn options(&self) -> &CompilerOptions;
     /// Go: `GetProjectReferenceFromSource(path tspath.PathKey) *tsoptions.SourceOutputAndProjectReference`.
+    ///
+    /// PORT: Go's nil-able struct pointer becomes the crate's
+    /// `Arc<SourceOutputAndProjectReference>` (the tsoptions shape is
+    /// crate-local — see project_reference_file_mapper.rs).
     fn get_project_reference_from_source(
         &self,
         path: &PathKey,
-    ) -> Option<&SourceOutputAndProjectReference>;
+    ) -> Option<Arc<SourceOutputAndProjectReference>>;
     /// Go: `IsSourceFileFromExternalLibrary(file *ast.SourceFile) bool`.
     fn is_source_file_from_external_library(&self, file: &SourceFile) -> bool;
     /// Go: `BaseDirectory() tspath.RootedDirectoryPath`.
@@ -143,12 +149,12 @@ pub fn source_file_may_be_emitted(
 ///
 /// PORT: Go's `targetSourceFiles == nil` (all files) vs a non-nil empty list
 /// (no files) collapses to `None` (all files) vs `Some(&[])` here.
-pub fn get_source_files_to_emit(
-    host: &dyn SourceFileMayBeEmittedHost,
-    target_source_files: Option<&[&SourceFile]>,
+pub fn get_source_files_to_emit<'a>(
+    host: &'a dyn SourceFileMayBeEmittedHost,
+    target_source_files: Option<&'a [&'a SourceFile]>,
     force_dts_emit: bool,
     force_js_emit: bool,
-) -> Vec<&SourceFile> {
+) -> Vec<&'a SourceFile> {
     let all: Vec<&SourceFile> = match target_source_files {
         None => host.source_files().iter().collect(),
         Some(target_source_files) => target_source_files.to_vec(),

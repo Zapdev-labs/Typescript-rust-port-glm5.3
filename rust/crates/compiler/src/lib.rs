@@ -33,8 +33,10 @@
 //   - tracing is not ported (no tracing crate yet); the loader drops the
 //     tracing hooks and CompilerHost keeps the Trace callback.
 //   - The checker crate is a parallel wave; CheckerPool is a TODO-shaped
-//     trait handing out unit checkers (`Checker = ()` alias) with the real
-//     locking/association machinery ported around it.
+//     trait handing out unit checkers (`Checker = ()` alias). The pure FENNEL
+//     association functions the pool is built from are ported
+//     (checkerpool.rs); the pool struct itself (per-checker mutexes,
+//     `checker.NewChecker` calls, `fileAssociations`) lands with that wave.
 //   - The content-mapper host machinery (contentmapper.Project, transform
 //     pipeline, failure-budget error types) is not ported; content-mapper
 //     paths degrade to non-mapped loads exactly as Go's zero-config case.
@@ -64,7 +66,7 @@ pub mod project_reference_parser;
 
 pub use ast_shims::{ensure_script_kind_from_file_name, get_script_kind_from_file_name};
 pub use checkerpool::{
-    CheckerPool, Checker, checker_association_base_weight,
+    Checker, CheckerPool, checker_association_base_weight,
     checker_association_order as get_checker_association_order, checker_association_policy,
     checker_association_weights, checker_associations_in_order,
     should_prioritize_source_files, CheckerAssociationPolicy,
@@ -73,12 +75,17 @@ pub use diagnostics_collection::{
     compare_diagnostics, equal_diagnostics, equal_diagnostics_no_related_info,
     sort_and_deduplicate_diagnostics, DiagnosticsCollection, FileDiagnostic,
 };
+pub use emit_host::{new_emit_host, EmitHost, EmitHostImpl};
+pub use emitter::{
+    get_source_files_to_emit, is_source_file_not_json, source_file_may_be_emitted, EmitOnly,
+    SourceFileMayBeEmittedHost,
+};
 pub use file_loader::{
     process_all_program_files, DuplicateSourceFile, LibFile, LibResolution, ProcessedFiles,
 };
 pub use program::{
-    new_program, EmitOptions, EmitResult, EmitOnly, GetDiagnosticsOfAnyProgram,
-    HandleNoEmitOptions, Program, ProgramConfig, ProgramFactories, ProgramHosts, ProgramLike,
+    combine_emit_results, get_diagnostics_of_any_program, handle_no_emit_options, new_program,
+    EmitOptions, EmitResult, Program, ProgramConfig, ProgramFactories, ProgramHosts, ProgramLike,
     SourceMapEmitResult, WriteFile, WriteFileData,
 };
 pub use project_reference_file_mapper::SourceOutputAndProjectReference;

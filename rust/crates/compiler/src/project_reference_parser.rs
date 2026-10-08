@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use tsc_tsoptions::ParsedCommandLine;
-use tsc_tspath::{PathKey, RootedFilePath};
+use tsc_tspath::{CaseSensitivity, PathKey, RootedFilePath, RootedPath};
 
 use crate::project_reference_file_mapper::{
     ProjectReferenceFileMapper, ResolvedProjectReference,
@@ -33,13 +33,19 @@ pub struct ProjectReferenceParseTask {
 }
 
 /// Go: `func (t *projectReferenceParseTask) parse(projectReferenceParser)`.
+///
+/// `path_for` is Go's `p.loader.toPath(task.configName.AsPath())` — the
+/// loader's case sensitivity, threaded as a function because the port's
+/// parser does not hold the loader.
 fn parse_task(
     task_index: usize,
     tasks: &mut [ProjectReferenceParseTask],
     get_resolved: &dyn Fn(&RootedFilePath, &PathKey) -> Option<Arc<ParsedCommandLine>>,
+    case_sensitivity: CaseSensitivity,
 ) {
     let config_name = tasks[task_index].config_name.clone();
-    let path_key = crate::file_loader::path_key_for(&config_name);
+    let path_key =
+        case_sensitivity.path_key(&RootedPath::from(config_name.as_string().to_string()));
     let resolved = get_resolved(&config_name, &path_key);
     if let Some(resolved) = resolved {
         // Go: `t.resolved.ParseInputOutputNames()` — the AST-config wave (see
@@ -79,13 +85,21 @@ fn create_project_reference_parse_tasks(
 /// Go: `type projectReferenceParser struct`.
 pub struct ProjectReferenceParser<'a> {
     get_resolved: &'a dyn Fn(&RootedFilePath, &PathKey) -> Option<Arc<ParsedCommandLine>>,
+    /// Go: `loader *fileLoader` — only its case sensitivity reaches the parse
+    /// walk; the port threads that (the loader handle would borrow the
+    /// loader the parser is being constructed by).
+    case_sensitivity: CaseSensitivity,
 }
 
 impl<'a> ProjectReferenceParser<'a> {
     pub fn new(
         get_resolved: &'a dyn Fn(&RootedFilePath, &PathKey) -> Option<Arc<ParsedCommandLine>>,
+        case_sensitivity: CaseSensitivity,
     ) -> Self {
-        ProjectReferenceParser { get_resolved }
+        ProjectReferenceParser {
+            get_resolved,
+            case_sensitivity,
+        }
     }
 
     /// Go: `func (p *projectReferenceParser) parse(tasks)`.
@@ -110,7 +124,8 @@ impl<'a> ProjectReferenceParser<'a> {
         while !frontier.is_empty() {
             let mut next_frontier: Vec<usize> = Vec::new();
             for task_index in frontier {
-                let path = path_key_of(tasks, task_index);
+                let path =
+                    path_key_of(tasks, task_index, self.case_sensitivity);
                 if tasks_by_file_name.contains_key(&path) {
                     // Go: dedup tasks to ensure correct file order,
                     // regardless of which task would be started first.
@@ -119,7 +134,7 @@ impl<'a> ProjectReferenceParser<'a> {
                 tasks_by_file_name.insert(path.clone(), task_index);
                 order.push(task_index);
                 // Go: `task.parse(p); p.start(task.subTasks)`.
-                parse_task(task_index, tasks, self.get_resolved);
+                parse_task(task_index, tasks, self.get_resolved, self.case_sensitivity);
                 next_frontier.extend(tasks[task_index].sub_tasks.iter().copied());
             }
             frontier = next_frontier;
@@ -128,6 +143,7 @@ impl<'a> ProjectReferenceParser<'a> {
         ParsedProjectReferences {
             tasks_by_file_name,
             order,
+            case_sensitivity: self.case_sensitivity,
         }
     }
 }
@@ -138,6 +154,9 @@ pub struct ParsedProjectReferences {
     pub tasks_by_file_name: rustc_hash::FxHashMap<PathKey, usize>,
     /// The parse-then-DFS order the tasks were visited in.
     pub order: Vec<usize>,
+    /// Go: the parser's `loader.toPath` case sensitivity (see
+    /// `ProjectReferenceParser`).
+    pub case_sensitivity: CaseSensitivity,
 }
 
 impl ParsedProjectReferences {
@@ -180,7 +199,7 @@ impl ParsedProjectReferences {
         let mut results: Vec<PathKey> = Vec::with_capacity(task_indices.len());
         for task_index in task_indices {
             let task = &tasks[task_index];
-            let path = path_key_of(tasks, task_index);
+            let path = path_key_of(tasks, task_index, self.case_sensitivity);
             results.push(path.clone());
             // ensure we only walk each task once
             if !seen.insert(task_index) {
@@ -211,6 +230,12 @@ impl ParsedProjectReferences {
     }
 }
 
-fn path_key_of(tasks: &[ProjectReferenceParseTask], task_index: usize) -> PathKey {
-    crate::file_loader::path_key_for(&tasks[task_index].config_name)
+fn path_key_of(
+    tasks: &[ProjectReferenceParseTask],
+    task_index: usize,
+    case_sensitivity: CaseSensitivity,
+) -> PathKey {
+    case_sensitivity.path_key(&RootedPath::from(
+        tasks[task_index].config_name.as_string().to_string(),
+    ))
 }

@@ -24,10 +24,9 @@ use tsc_ast::{
     node_text,
 };
 use tsc_core::compileroptions::{
-    ModuleKind, ModuleKindCommonJS, ModuleKindESNext, ModuleKindNone, ModuleKindNode16,
-    ModuleKindNodeNext, ModuleKindPreserve, ModuleKindES2015, ResolutionMode, ResolutionModeCommonJS,
-    ResolutionModeESM, ResolutionModeNone,
+    ResolutionMode, ResolutionModeCommonJS, ResolutionModeESM, ResolutionModeNone,
 };
+use tsc_core::options_generated::ModuleKind;
 use tsc_core::options_generated::CompilerOptions;
 use tsc_core::scriptkind::ScriptKind;
 use tsc_core::tristate::Tristate;
@@ -76,19 +75,19 @@ pub fn get_implied_node_format_for_file(
     file_name: &RootedFilePath,
     package_json_type: &str,
 ) -> ModuleKind {
-    let mut implied_node_format = ModuleKind(ResolutionModeNone);
+    let mut implied_node_format = ModuleKind::None;
     if file_name.extension_is_one_of(&[EXTENSION_DMTS, EXTENSION_MTS, EXTENSION_MJS]) {
-        implied_node_format = ModuleKind(ResolutionModeESM);
+        implied_node_format = ModuleKind::ESNext;
     } else if file_name.extension_is_one_of(&[EXTENSION_DCTS, EXTENSION_CTS, EXTENSION_CJS]) {
-        implied_node_format = ModuleKind(ResolutionModeCommonJS);
+        implied_node_format = ModuleKind::CommonJS;
     } else if file_name
         .extension_is_one_of(&[EXTENSION_DTS, EXTENSION_TS, EXTENSION_TSX, EXTENSION_JS, EXTENSION_JSX])
     {
-        implied_node_format = ModuleKind(if package_json_type == "module" {
-            ResolutionModeESM
+        implied_node_format = if package_json_type == "module" {
+            ModuleKind::ESNext
         } else {
-            ResolutionModeCommonJS
-        });
+            ModuleKind::CommonJS
+        };
     }
     implied_node_format
 }
@@ -105,7 +104,7 @@ pub fn get_emit_module_format_of_file_worker(
         source_file_meta_data,
     );
     if result != ResolutionModeNone {
-        return ModuleKind(result);
+        return result;
     }
     options.get_emit_module_kind()
 }
@@ -116,16 +115,16 @@ pub fn get_implied_node_format_for_emit_worker(
     emit_module_kind: ModuleKind,
     source_file_meta_data: &SourceFileMetaData,
 ) -> ResolutionMode {
-    if ModuleKindNode16 <= emit_module_kind && emit_module_kind <= ModuleKindNodeNext {
-        return source_file_meta_data.implied_node_format.0;
+    if ModuleKind::Node16 <= emit_module_kind && emit_module_kind <= ModuleKind::NodeNext {
+        return source_file_meta_data.implied_node_format;
     }
-    if source_file_meta_data.implied_node_format == ModuleKind(ResolutionModeCommonJS)
+    if source_file_meta_data.implied_node_format == ResolutionModeCommonJS
         && (source_file_meta_data.package_json_type == "commonjs"
             || file_name.extension_is_one_of(&[EXTENSION_CJS, EXTENSION_CTS]))
     {
         return ResolutionModeCommonJS;
     }
-    if source_file_meta_data.implied_node_format == ModuleKind(ResolutionModeESM)
+    if source_file_meta_data.implied_node_format == ResolutionModeESM
         && (source_file_meta_data.package_json_type == "module"
             || file_name.extension_is_one_of(&[EXTENSION_MJS, EXTENSION_MTS]))
     {
@@ -144,7 +143,7 @@ pub fn get_external_module_indicator_options(
     options: &CompilerOptions,
     metadata: &SourceFileMetaData,
 ) -> tsc_ast::parseoptions::ExternalModuleIndicatorOptions {
-    use tsc_core::compileroptions::ModuleDetectionKind;
+    use tsc_core::options_generated::ModuleDetectionKind;
 
     if file_name.is_declaration_file() {
         return Default::default();
@@ -199,6 +198,21 @@ fn is_file_forced_to_be_module_by_format(
 /// Go: `func IsExternalModule(file *SourceFile) bool`.
 pub fn is_external_module(file: &SourceFile) -> bool {
     file.payload().external_module_indicator.get().is_some()
+}
+
+/// Go: `func IsSourceFileJS(file *SourceFile) bool` —
+/// `file.ScriptKind == JS || file.ScriptKind == JSX`.
+pub fn is_source_file_js_by_file(file: &SourceFile) -> bool {
+    let script_kind = file.payload().script_kind;
+    script_kind == ScriptKind::JS || script_kind == ScriptKind::JSX
+}
+
+/// Go: `func IsInJSFile(node *ast.Node) bool` — the node's file's script kind
+/// is JS/JSX. The port's node ids are file-scoped (SPEC §5.1), so the check
+/// takes the owning file; every call site in this crate passes a node owned
+/// by that file.
+pub fn is_in_js_file_of(file: &SourceFile, _node: NodeId) -> bool {
+    is_source_file_js_by_file(file)
 }
 
 /// Go: `func IsExternalOrCommonJSModule(file *SourceFile) bool`.
@@ -341,12 +355,12 @@ pub fn should_transform_import_call(
     implied_node_format_for_emit: ModuleKind,
 ) -> bool {
     let module_kind = options.get_emit_module_kind();
-    if (ModuleKindNode16 <= module_kind && module_kind <= ModuleKindNodeNext)
-        || module_kind == ModuleKindPreserve
+    if (ModuleKind::Node16 <= module_kind && module_kind <= ModuleKind::NodeNext)
+        || module_kind == ModuleKind::Preserve
     {
         return false;
     }
-    implied_node_format_for_emit < ModuleKindES2015
+    implied_node_format_for_emit < ModuleKind::ES2015
 }
 
 /// Go: `func IsCheckJSEnabledForFile(sourceFile, compilerOptions) bool`.
