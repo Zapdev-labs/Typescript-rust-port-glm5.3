@@ -59,6 +59,13 @@ pub struct InferenceContextId(pub u32);
 #[derive(Debug, Default)]
 pub struct FlowState;
 
+/// Go: `type FlowLoopInfo struct` (checker/flow.go — M6 wave 13). The shape
+/// exists so the S1 spine can carry Go's `flowLoopStack` field (the
+/// save/restore around `checkExpressionCachedEx`, checker.go:7774) with the
+/// real type landing with the flow wave.
+#[derive(Debug, Default)]
+pub struct FlowLoopInfo;
+
 /// Go: `JsxElementLinks` (checker/jsx.go — M6 wave 5).
 #[derive(Debug, Default)]
 pub struct JsxElementLinks;

@@ -2903,6 +2903,31 @@ fn is_skip_direct_inference_node_for_symbol(_c: &Checker, _symbol: tsc_ast::Symb
     false
 }
 
+impl Checker {
+    /// Go: `func (c *Checker) isSkipDirectInferenceNode(node *ast.Node) bool`
+    /// (inference.go:1634) — `c.skipDirectInferenceNodes.Has(node)`. The set
+    /// is the JSDoc satisfies-attributes registration (the field lives on
+    /// the Checker, activated by S1's spine port).
+    pub(crate) fn is_skip_direct_inference_node(&self, node: tsc_ast::NodeId) -> bool {
+        self.skip_direct_inference_nodes.contains(&node)
+    }
+
+    /// Go: `func (c *Checker) isFromInferenceBlockedSource(t *Type) bool`
+    /// (inference.go:1630) — a type whose declaring symbol has a
+    /// skip-direct-inference declaration.
+    pub(crate) fn is_from_inference_blocked_source(&self, t: TypeId) -> bool {
+        if let Some(symbol) = self.type_(t).symbol {
+            self.program
+                .symbol(symbol)
+                .declarations
+                .iter()
+                .any(|&decl| self.is_skip_direct_inference_node(decl))
+        } else {
+            false
+        }
+    }
+}
+
 /// Go: `func (c *Checker) getElementTypes(t) []*Type`.
 fn get_element_types(c: &mut Checker, t: TypeId) -> Vec<TypeId> {
     // TODO(port M6 S7): the tuple element-type reader (TargetTupleType

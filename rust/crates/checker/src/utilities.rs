@@ -3318,6 +3318,25 @@ pub fn find_in_map<K: std::hash::Hash + Eq + Clone, V: Default + Clone>(
     V::default()
 }
 
+impl Checker {
+    /// Go: `func (c *Checker) isCanceled() bool` — `c.ctx != nil &&
+    /// c.ctx.Err() != nil` (utilities.go:1712).
+    ///
+    /// PORT: the port has no context plumbing (the runner's check stage is
+    /// single-threaded); Go's ctx-derived cancellation becomes a host-set
+    /// flag on the checker (`Checker::canceled`, S1's spine.rs PORT note).
+    pub(crate) fn is_canceled(&self) -> bool {
+        self.canceled
+    }
+
+    /// Go: `func (c *Checker) checkNotCanceled()` (utilities.go:1716).
+    pub(crate) fn check_not_canceled(&self) {
+        if self.was_canceled {
+            panic!("Checker was previously cancelled");
+        }
+    }
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Unit tests (ported where Go has direct coverage; Go's utilities_test.go is
 // the printer/emitter harness, so the pins here are Go-comment-verified).
