@@ -4901,13 +4901,21 @@ pub(crate) fn is_any_import_or_re_export(node: &tsc_ast::Node) -> bool {
     )
 }
 
-/// Go: `ast.GetExternalModuleName` (PORT: dedup candidate).
+/// Go: `ast.GetExternalModuleName` (PORT: dedup candidate) — Go dispatches
+/// to the per-kind `ModuleSpecifier()` accessor; `export { a };` has none
+/// (Go returns nil), so this is an Option.
 pub(crate) fn get_external_module_name(s: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
     let n = s.node(node);
     match n.kind {
-        Kind::ImportDeclaration | Kind::JSImportDeclaration | Kind::ExportDeclaration => {
+        // JSImportDeclaration is the kind-alias node carrying
+        // ImportDeclaration data (factory kind-switch).
+        Kind::ImportDeclaration | Kind::JSImportDeclaration => {
             let d = n.as_import_declaration().expect("ImportDeclaration data");
             Some(d.module_specifier)
+        }
+        Kind::ExportDeclaration => {
+            let d = n.as_export_declaration().expect("ExportDeclaration data");
+            d.module_specifier
         }
         Kind::ImportEqualsDeclaration => {
             let d = n
