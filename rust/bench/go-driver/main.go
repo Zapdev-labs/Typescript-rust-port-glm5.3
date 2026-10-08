@@ -168,7 +168,7 @@ func jsonEscape(sb *strings.Builder, s string) {
 		case c == '\\':
 			sb.WriteString(`\\`)
 		case c < 0x20:
-			fmt.Fprintf(&sb, `\u%04x`, c)
+			fmt.Fprintf(sb, `\u%04x`, c)
 		default:
 			sb.WriteByte(c)
 		}
