@@ -160,7 +160,7 @@ fn parse_cli(args: &[String]) -> Result<Vec<(String, String)>, String> {
 /// whose scriptKind is known (the binder gate's rule — .js/.mjs/.json are
 /// bound too, not just the bench extensions), globally sorted by path
 /// (raw string sort, like `sort.Strings`).
-fn index_symbols_corpus(corpus: &str) -> Result<Vec<BenchFile>, String> {
+pub(crate) fn index_symbols_corpus(corpus: &str) -> Result<Vec<BenchFile>, String> {
     let abs = std::path::absolute(corpus).map_err(|err| format!("resolving corpus dir: {err}"))?;
     let mut paths: Vec<PathBuf> = Vec::new();
     walk_all(&abs, &abs, &mut paths)?;

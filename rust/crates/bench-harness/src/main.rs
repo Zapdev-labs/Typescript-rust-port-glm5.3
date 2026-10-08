@@ -19,6 +19,7 @@ use std::time::Instant;
 mod micro;
 mod parse;
 mod parser_seam;
+mod program_seam;
 mod showconfig_seam;
 mod symbols_seam;
 
@@ -34,6 +35,7 @@ fn main() {
         "showconfig" => showconfig_seam::run_showconfig(&args[1..]),
         "resolvereact" => showconfig_seam::run_resolvereact(&args[1..]),
         "symbols" => symbols_seam::run_symbols(&args[1..]),
+        "program" => program_seam::run_program(&args[1..]),
         _ => usage(),
     }
 }
@@ -45,6 +47,7 @@ fn usage() -> ! {
     eprintln!("       tsc-bench showconfig --corpus <dir> | --tsconfig <path>   (per-config NDJSON: marshaled TSConfig)");
     eprintln!("       tsc-bench resolvereact --corpus <dir>   (per-specifier NDJSON + summary)");
     eprintln!("       tsc-bench symbols --corpus <dir> [--fuzz <dir>]   (per-file NDJSON: binder symbol tables)");
+    eprintln!("       tsc-bench program --corpus <dir> | --file <path>   (per-root NDJSON: Program load/bind/parse-diag counts)");
     std::process::exit(2);
 }
 

@@ -23,5 +23,7 @@ tsc-binder = { path = "../binder" }
 tsc-vfs = { path = "../vfs" }
 tsc-module = { path = "../module" }
 tsc-tsoptions = { path = "../tsoptions" }
+tsc-compiler = { path = "../compiler" }
+tsc-bundled = { path = "../bundled" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

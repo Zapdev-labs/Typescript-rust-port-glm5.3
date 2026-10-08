@@ -38,6 +38,8 @@ import (
 
 	"github.com/microsoft/TypeScript/tsc/internal/ast"
 	"github.com/microsoft/TypeScript/tsc/internal/binder"
+	"github.com/microsoft/TypeScript/tsc/internal/bundled"
+	"github.com/microsoft/TypeScript/tsc/internal/compiler"
 	"github.com/microsoft/TypeScript/tsc/internal/core"
 	tscjson "github.com/microsoft/TypeScript/tsc/internal/json"
 	"github.com/microsoft/TypeScript/tsc/internal/module"
@@ -46,6 +48,7 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/tspath"
 	"github.com/microsoft/TypeScript/tsc/internal/vfs"
 	"github.com/microsoft/TypeScript/tsc/internal/vfs/osvfs"
+	"github.com/microsoft/TypeScript/tsc/internal/vfs/vfstest"
 )
 
 func main() {
@@ -63,6 +66,8 @@ func main() {
 		runResolveReact(os.Args[2:])
 	case "symbols":
 		runSymbols(os.Args[2:])
+	case "program":
+		runProgram(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -77,6 +82,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       go-bench showconfig --corpus <dir> | --tsconfig <path>   (per-config NDJSON: marshaled TSConfig)")
 	fmt.Fprintln(os.Stderr, "       go-bench resolvereact --corpus <dir>   (per-specifier NDJSON + summary)")
 	fmt.Fprintln(os.Stderr, "       go-bench symbols --corpus <dir> [--fuzz <dir>]   (per-file NDJSON: binder symbol tables)")
+	fmt.Fprintln(os.Stderr, "       go-bench program --corpus <dir> | --file <path>   (per-root NDJSON: Program load/bind/parse-diag counts)")
 	os.Exit(2)
 }
 
@@ -1380,4 +1386,329 @@ func truncate200(s string) string {
 		return s
 	}
 	return string(runes[:200])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// program: the M5 program-layer parity twin (SPEC §8 M5 — "tsc <file> on
+// a trivial program loads, binds, parses lib.d.ts, and reports
+// parse-level diagnostics").
+//
+//	go-bench program --corpus <dir>
+//	go-bench program --file <path>
+//
+// For every parseable script file in the corpus (the symbols twin's walk
+// rule: same skip dirs, every file whose scriptKind is known, raw-path
+// sort), builds a ONE-FILE Program exactly the way tsc/internal/
+// compiler's program_test.go drives it — the bundled lib overlay
+// (bundled.WrapFS over a map FS seeded with the corpus tree at its real
+// absolute paths, plus a synthetic tsconfig
+// {"compilerOptions":{"target":"esnext"},"files":["<root>"]}, the
+// ImportSource test's config-parsing route; PORT: the Rust tsoptions has
+// no NewParsedCommandLine, so BOTH drivers take the written-tsconfig
+// route the Rust program_test.rs established), NewCompilerHost +
+// NewProgram, BindSourceFiles — and emits one NDJSON line per root; the
+// Rust driver's `tsc-bench program`
+// (rust/crates/bench-harness/src/program_seam.rs) reproduces every line
+// byte-for-byte:
+//
+//	{"file":"...","ok":true,"config_errors":N,"loaded":N,"parsed":N,
+//	 "bound":N,"symbols":N,"duplicates":N,"parse_diag":[...],
+//	 "program_errors":M,"unresolved":K,"shape_hash":"<16 hex>"}
+//
+// Field semantics (the full PORT contract lives in the Rust module's
+// header, mirrored here): loaded = distinct paths read through the
+// CompilerHost FS (the countingFS wrapper, both drivers identical);
+// parsed = GetSourceFiles (program order, also folded into shape_hash);
+// bound = files bound after BindSourceFiles; symbols = the binder's
+// per-file SymbolCount summed (Program.SymbolCount's checker half is M6 —
+// BOTH sides sum the binder count, PORT-noted); parse_diag = the
+// parse-level diagnostics per file (file.Diagnostics() then
+// file.JSDiagnostics(), the GetSyntacticDiagnostics core minus the
+// unchecked-JS extras the Rust port defers — neither side emits those,
+// the M6 boundary rule); program_errors = GetProgramDiagnostics (option
+// verification + include-processor GLOBAL diagnostics); unresolved =
+// GetUnresolvedImports (sorted names; count in the line). Panics during
+// program build/bind emit {"file":...,"ok":false,"error":...} lines —
+// any ok:false IS a divergence finding. Corpus mode seeds the whole
+// walked tree so in-matrix imports resolve; --file mode seeds only that
+// file. Case sensitivity: CaseSensitive on BOTH drivers (unlike Go's
+// TestProgram corpus — machine-independent parity, PORT-noted).
+// ─────────────────────────────────────────────────────────────────────
+
+func runProgram(args []string) {
+	cli := flag.NewFlagSet("program", flag.ExitOnError)
+	corpus := cli.String("corpus", "", "corpus directory")
+	file := cli.String("file", "", "single root file")
+	_ = cli.Parse(args)
+	if *corpus == "" && *file == "" {
+		fmt.Fprintln(os.Stderr, "go-bench program: missing required --corpus <dir> or --file <path>")
+		os.Exit(2)
+	}
+	var sb strings.Builder
+	if *file != "" {
+		// --file mode: one root, seeded alone (showconfig's dual-mode shape).
+		abs, err := filepath.Abs(*file)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "go-bench: resolving file path: %v\n", err)
+			os.Exit(1)
+		}
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "go-bench: reading %s: %v\n", abs, err)
+			os.Exit(1)
+		}
+		fileName := tspath.ToRootedFilePath(filepath.ToSlash(abs), "/")
+		scriptKind := core.GetScriptKindFromFileName(fileName)
+		if scriptKind == core.ScriptKindUnknown {
+			fmt.Fprintf(os.Stderr, "go-bench program: %s is not a parseable script file\n", abs)
+			os.Exit(2)
+		}
+		root := benchFile{
+			text:       string(data),
+			bytes:      int64(len(data)),
+			fileName:   fileName,
+			pathKey:    tspath.CaseSensitive.PathKey(fileName.AsPath()),
+			scriptKind: scriptKind,
+		}
+		seed := []benchFile{root}
+		sb.Reset()
+		emitProgramLine(&sb, filepath.ToSlash(filepath.Dir(abs)), &root, seed)
+		fmt.Println(sb.String())
+		return
+	}
+	files, _, err := indexSymbolsCorpus(*corpus)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "go-bench: %v\n", err)
+		os.Exit(1)
+	}
+	absCorpus, err := filepath.Abs(*corpus)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "go-bench: resolving corpus dir: %v\n", err)
+		os.Exit(1)
+	}
+	for i := range files {
+		sb.Reset()
+		emitProgramLine(&sb, filepath.ToSlash(absCorpus), &files[i], files)
+		fmt.Println(sb.String())
+	}
+}
+
+// countingFS wraps a vfs.FS and records every DISTINCT path whose
+// ReadFile succeeds — the `loaded` observable (the same wrapper exists in
+// the Rust twin, both drivers identical). Every other method delegates.
+type countingFS struct {
+	inner vfs.FS
+	mu    sync.Mutex
+	read  map[string]bool
+}
+
+func (c *countingFS) CaseSensitivity() tspath.CaseSensitivity { return c.inner.CaseSensitivity() }
+func (c *countingFS) FileExists(p tspath.RootedFilePath) bool  { return c.inner.FileExists(p) }
+func (c *countingFS) ReadFile(p tspath.RootedFilePath) (string, bool) {
+	contents, ok := c.inner.ReadFile(p)
+	if ok {
+		c.mu.Lock()
+		c.read[p.AsString()] = true
+		c.mu.Unlock()
+	}
+	return contents, ok
+}
+func (c *countingFS) WriteFile(p tspath.RootedFilePath, data string) error {
+	return c.inner.WriteFile(p, data)
+}
+func (c *countingFS) AppendFile(p tspath.RootedFilePath, data string) error {
+	return c.inner.AppendFile(p, data)
+}
+func (c *countingFS) Remove(p tspath.RootedPath) error { return c.inner.Remove(p) }
+func (c *countingFS) Chtimes(p tspath.RootedPath, aTime time.Time, mTime time.Time) error {
+	return c.inner.Chtimes(p, aTime, mTime)
+}
+func (c *countingFS) DirectoryExists(p tspath.RootedDirectoryPath) bool {
+	return c.inner.DirectoryExists(p)
+}
+func (c *countingFS) GetAccessibleEntries(p tspath.RootedDirectoryPath) vfs.Entries {
+	return c.inner.GetAccessibleEntries(p)
+}
+func (c *countingFS) Stat(p tspath.RootedPath) vfs.FileInfo      { return c.inner.Stat(p) }
+func (c *countingFS) Realpath(p tspath.RootedPath) tspath.RootedPath {
+	return c.inner.Realpath(p)
+}
+
+// loadedNames returns the distinct successfully-read paths, sorted.
+func (c *countingFS) loadedNames() []string {
+	c.mu.Lock()
+	names := make([]string, 0, len(c.read))
+	for name := range c.read {
+		names = append(names, name)
+	}
+	c.mu.Unlock()
+	sort.Strings(names)
+	return names
+}
+
+// emitProgramLine renders one root's NDJSON parity line (the field set and
+// the shape_hash fold recipe are documented in the Rust twin's header —
+// `hash_lines` there; vectors in its tests).
+func emitProgramLine(sb *strings.Builder, corpusDir string, root *benchFile, seed []benchFile) {
+	stage := "program"
+	defer func() {
+		if r := recover(); r != nil {
+			sb.Reset()
+			sb.WriteString(`{"file":"`)
+			jsonEscape(sb, root.fileName.AsString())
+			sb.WriteString(`","ok":false,"error":"`)
+			jsonEscape(sb, stage+": "+truncate200(fmt.Sprint(r)))
+			sb.WriteString(`"}`)
+		}
+	}()
+
+	// VFS: map FS seeded with the corpus tree (all known-scriptKind files
+	// at their real absolute paths) + the synthetic one-file tsconfig,
+	// bundled lib overlay on top — program_test.go's TestProgram shape
+	// (vfstest.FromMap + bundled.WrapFS), CaseSensitive on both drivers.
+	entries := make(map[string]string, len(seed)+1)
+	for i := range seed {
+		entries[seed[i].fileName.AsString()] = seed[i].text
+	}
+	configPath := tspath.ToRootedFilePath(filepath.ToSlash(filepath.Join(corpusDir, "__program__.tsconfig.json")), "/")
+	var configText strings.Builder
+	configText.WriteString(`{"compilerOptions":{"target":"esnext"},"files":["`)
+	jsonEscape(&configText, root.fileName.AsString())
+	configText.WriteString(`"]}`)
+	entries[configPath.AsString()] = configText.String()
+	fs := bundled.WrapFS(vfstest.FromMap(entries, tspath.CaseSensitive))
+
+	// Config: the ImportSource test's config-parsing route, over the same FS.
+	config, _ := tsoptions.GetParsedCommandLineOfConfigFile(configPath, nil, nil, fs, nil)
+
+	// Program: NewCompilerHost over the counting FS wrapper (the `loaded`
+	// observable) + NewProgram — exactly the program tests' constructors.
+	counting := &countingFS{inner: fs, read: make(map[string]bool)}
+	host := compiler.NewCompilerHost(counting, bundled.LibPath(), nil, nil, nil)
+	program := compiler.NewProgram(compiler.ProgramOptions{
+		ProgramConfig: compiler.ProgramConfig{Config: config},
+		ProgramHosts:  compiler.ProgramHosts{Host: host},
+	})
+	stage = "bind"
+	program.BindSourceFiles()
+
+	// ── The record fields (all deterministic: program order for file
+	//    lists, sorted for read/unresolved sets). ──
+	files := program.GetSourceFiles()
+	programFiles := make([]string, len(files))
+	bound := 0
+	symbols := int64(0)
+	for i, f := range files {
+		programFiles[i] = f.FileName().AsString()
+		if f.IsBound() {
+			bound++
+		}
+		symbols += int64(f.SymbolCount)
+	}
+	duplicates := len(program.DuplicateSourceFiles())
+	type parseDiagRec struct {
+		file string
+		d    *ast.Diagnostic
+	}
+	var parseDiags []parseDiagRec
+	for _, f := range files {
+		for _, d := range f.Diagnostics() {
+			parseDiags = append(parseDiags, parseDiagRec{f.FileName().AsString(), d})
+		}
+		for _, d := range f.JSDiagnostics() {
+			parseDiags = append(parseDiags, parseDiagRec{f.FileName().AsString(), d})
+		}
+	}
+	programErrors := len(program.GetProgramDiagnostics())
+	configErrors := len(program.GetConfigFileParsingDiagnostics())
+	unresolvedSet := program.GetUnresolvedImports()
+	unresolved := make([]string, 0, unresolvedSet.Len())
+	for name := range unresolvedSet.Keys() {
+		unresolved = append(unresolved, name)
+	}
+	sort.Strings(unresolved)
+	loaded := counting.loadedNames()
+
+	// ── shape_hash: FNV-1a 64 over the fold lines (Rust twin's hash_lines;
+	//    identical recipe — offset basis 0xcbf29ce484222325, prime
+	//    0x100000001b3, "%016x" lowercase). ──
+	h := uint64(0xcbf29ce484222325)
+	fold := func(s string) {
+		for i := 0; i < len(s); i++ {
+			h ^= uint64(s[i])
+			h *= 1099511628211
+		}
+	}
+	fold("file=" + root.fileName.AsString() + "\n")
+	fold("config_errors=" + strconv.Itoa(configErrors) + "\n")
+	fold("loaded=" + strconv.Itoa(len(loaded)) + "\n")
+	for _, name := range loaded {
+		fold("loadedfile=" + name + "\n")
+	}
+	fold("parsed=" + strconv.Itoa(len(programFiles)) + "\n")
+	for _, name := range programFiles {
+		fold("programfile=" + name + "\n")
+	}
+	fold("bound=" + strconv.Itoa(bound) + "\n")
+	fold("symbols=" + strconv.FormatInt(symbols, 10) + "\n")
+	fold("duplicates=" + strconv.Itoa(duplicates) + "\n")
+	for _, rec := range parseDiags {
+		fold(fmt.Sprintf("diag=%s|%s|%d|%d|%d|%s\n",
+			rec.file, string(rec.d.MessageKey()), rec.d.Code(), rec.d.Pos(), rec.d.End(),
+			strings.Join(rec.d.MessageArgs(), "\x01")))
+	}
+	fold("program_errors=" + strconv.Itoa(programErrors) + "\n")
+	fold("unresolved=" + strconv.Itoa(len(unresolved)) + "\n")
+	for _, name := range unresolved {
+		fold("unresolvedname=" + name + "\n")
+	}
+
+	// ── The NDJSON line (field order is the contract). ──
+	sb.WriteString(`{"file":"`)
+	jsonEscape(sb, root.fileName.AsString())
+	sb.WriteString(`","ok":true,"config_errors":`)
+	sb.WriteString(strconv.Itoa(configErrors))
+	sb.WriteString(`,"loaded":`)
+	sb.WriteString(strconv.Itoa(len(loaded)))
+	sb.WriteString(`,"parsed":`)
+	sb.WriteString(strconv.Itoa(len(programFiles)))
+	sb.WriteString(`,"bound":`)
+	sb.WriteString(strconv.Itoa(bound))
+	sb.WriteString(`,"symbols":`)
+	sb.WriteString(strconv.FormatInt(symbols, 10))
+	sb.WriteString(`,"duplicates":`)
+	sb.WriteString(strconv.Itoa(duplicates))
+	sb.WriteString(`,"parse_diag":[`)
+	for di, rec := range parseDiags {
+		if di > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(`{"file":"`)
+		jsonEscape(sb, rec.file)
+		sb.WriteString(`","key":"`)
+		jsonEscape(sb, string(rec.d.MessageKey()))
+		sb.WriteString(`","code":`)
+		sb.WriteString(strconv.FormatInt(int64(rec.d.Code()), 10))
+		sb.WriteString(`,"pos":`)
+		sb.WriteString(strconv.Itoa(rec.d.Pos()))
+		sb.WriteString(`,"end":`)
+		sb.WriteString(strconv.Itoa(rec.d.End()))
+		sb.WriteString(`,"args":[`)
+		for ai, a := range rec.d.MessageArgs() {
+			if ai > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteByte('"')
+			jsonEscape(sb, a)
+			sb.WriteByte('"')
+		}
+		sb.WriteString(`]}`)
+	}
+	sb.WriteString(`],"program_errors":`)
+	sb.WriteString(strconv.Itoa(programErrors))
+	sb.WriteString(`,"unresolved":`)
+	sb.WriteString(strconv.Itoa(len(unresolved)))
+	sb.WriteString(`,"shape_hash":"`)
+	sb.WriteString(fmt.Sprintf("%016x", h))
+	sb.WriteString(`"}`)
 }

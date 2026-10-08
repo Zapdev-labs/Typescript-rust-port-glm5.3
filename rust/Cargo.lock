@@ -16,6 +16,8 @@ dependencies = [
  "serde_json",
  "tsc-ast",
  "tsc-binder",
+ "tsc-bundled",
+ "tsc-compiler",
  "tsc-core",
  "tsc-jsnum",
  "tsc-module",

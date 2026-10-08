@@ -1144,21 +1144,36 @@ impl Program {
     }
 
     /// Go: `func (p *Program) GetProgramDiagnostics()`.
+    ///
+    /// PORT (fixed during the M5 program-twin parity run, mirroring Go):
+    /// the port previously folded the include processor's FULL collection
+    /// (`get_diagnostics()` — global + per-file) where Go folds only
+    /// `GetGlobalDiagnostics()`, and concatenated in a different order.
+    /// File-scoped include diagnostics (referenced-location diagnostics
+    /// attached through `processingDiagnostic.toDiagnostic`'s
+    /// `diagnosticAt` path) leaked into the program set — Go keeps them
+    /// out. Mirrored Go exactly: programDiagnostics, then
+    /// contentMapperDiagnostics, then the include processor's GLOBAL
+    /// diagnostics, all through `sort_and_deduplicate_diagnostics`
+    /// (Go: `SortAndDeduplicateDiagnostics(slices.Concat(...))`;
+    /// `contentMapperOptionDiagnostics` is the not-ported content-mapper
+    /// seam — empty here, matching Go's nil-project case).
     pub fn get_program_diagnostics(&self) -> Vec<FileDiagnostic> {
-        sort_and_deduplicate_diagnostics({
-            let mut all: Vec<FileDiagnostic> =
-                self.include_processor.get_diagnostics(self).get_diagnostics();
-            all.extend(self.program_diagnostics.lock().expect("programDiagnostics poisoned").iter().cloned());
-            all.extend(
-                self.content_mapper_diagnostics
-                    .iter()
-                    .map(|diagnostic| FileDiagnostic {
-                        file_name: None,
-                        diagnostic: (**diagnostic).clone(),
-                    }),
-            );
-            all
-        })
+        let mut all: Vec<FileDiagnostic> = self
+            .program_diagnostics
+            .lock()
+            .expect("programDiagnostics poisoned")
+            .clone();
+        all.extend(
+            self.content_mapper_diagnostics
+                .iter()
+                .map(|diagnostic| FileDiagnostic {
+                    file_name: None,
+                    diagnostic: (**diagnostic).clone(),
+                }),
+        );
+        all.extend(self.include_processor.get_diagnostics(self).get_global_diagnostics());
+        sort_and_deduplicate_diagnostics(all)
     }
 
     /// Go: `func (p *Program) GetIncludeProcessorDiagnostics(sourceFile)`.
@@ -1219,6 +1234,15 @@ impl Program {
 
     /// Go: `func (p *Program) GetUnresolvedImports() *collections.Set[string]`
     /// (the lazy `extractUnresolvedImports` surface).
+    ///
+    /// PORT (fixed during the M5 program-twin parity run, mirroring Go):
+    /// the port previously guarded the sweep with
+    /// `!uses_uri_style_node_core_modules` and `!skip_type_checking`,
+    /// neither of which exists in Go's `extractUnresolvedImports` — and
+    /// Go never SETS `p.usesUriStyleNodeCoreModules` (it stays the zero
+    /// `Tristate::Unknown`), so the port's guard made the whole sweep
+    /// dead and `get_unresolved_imports` always returned `[]`. Mirrored
+    /// Go: every file, unfiltered.
     pub fn get_unresolved_imports(&self) -> Vec<String> {
         self.extract_unresolved_imports()
     }
@@ -1227,12 +1251,8 @@ impl Program {
         // Go: a `collections.Set` dedup; the sweep is order-insensitive and
         // the result is deduplicated here.
         let mut unresolved: Vec<String> = Vec::new();
-        if self.uses_uri_style_node_core_modules.is_false() {
-            for source_file in &self.files {
-                if !self.skip_type_checking(source_file, false) {
-                    unresolved.extend(self.extract_unresolved_imports_from_source_file(source_file));
-                }
-            }
+        for source_file in &self.files {
+            unresolved.extend(self.extract_unresolved_imports_from_source_file(source_file));
         }
         unresolved.sort();
         unresolved.dedup();
