@@ -39,8 +39,13 @@ runner-structural — see rust/CONFORMANCE.md)
    diagnostic machinery (`CreateDiagnosticForNodeInSourceFile`: option
    diagnostics carry config-node positions). Owner: the tsoptions/compiler
    surface — a small wave on those crates, or rides the AST-config work.
-2. **TS8009 `'async' modifier … in a .js unit` (1 record)** — Go emits these
-   from the CHECKER; scope them there (the S1/S3 waves).
+2. **TS8009 `'async' modifier … in a .js unit` (1 record)** — **CLOSED by
+   S1** (9ba07335f8), and the original claim here was WRONG: Go emits TS8009
+   from the PARSER's `checkJSSyntax` modifier arm (parser.go:6873) and
+   tsoptions — there is no checker-side site. The actual bug was the Rust
+   parser having Go's exemption condition **inverted** (it errored on
+   exactly the .js-legal modifiers: async/export/static/accessor/default).
+   Fixed in both modifier arms (`& ModifierFlagsJavaScript == 0`).
 3. **Include-reason matched-spec arms** — `GetMatchedFileSpec`'s
    "Part of 'files' list …" reasons need the same AST-config surface as (1).
 
