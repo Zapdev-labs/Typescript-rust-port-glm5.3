@@ -955,3 +955,54 @@ drivers/corpora; `cargo test -p bench-harness -p tsc-binder` green (24 +
 `cargo clippy -p bench-harness -p tsc-binder --all-targets` zero warnings
 in both crates; `go vet ./rust/bench/go-driver` clean; dump/showconfig/
 resolvereact quick regression (fixtures matrix) still byte-identical.
+
+## 2026-10-08 crates/parser/src/reparser.rs — parser/reparser.go (JSDoc reparse machinery)
+The M3-inventory leftovers wave: the full function-by-function port of
+`tsc/internal/parser/reparser.go` (752 LOC — the JSDoc tag REPARSE
+machinery; the task description calling this "tree reuse for edits
+(tryParse@reuse)" is stale) plus `ast.GetAssignmentDeclarationKind` +
+`JSDeclarationKind` (utilities.go:1547) into `crates/ast/src/utilities.rs`.
+
+- **`visitor.rs visit_node_core` NONE-sentinel pass-through (ast crate)**:
+  Go's `visitNode(nil)` returns nil without calling Visit; the generated
+  per-struct `visit_each_child` code hands the `NodeId::NONE` sentinel to
+  `visit_node` for Go-nil fields (non-`Option` `NodeId` payload fields,
+  e.g. `PropertySignatureDeclaration.type_`/`initializer`), so the
+  sentinel is now treated as nil at the `visit_node_core` entry instead
+  of being resolved through the arena (which panicked "NodeId::NONE is
+  foreign to file"). Surfaced by `addDeepCloneReparse` of an @param
+  `{{...}}` TypeLiteral whose property signatures carry NONE fields.
+- **`getFunctionLikeHost` valueless `return`**: Go's
+  `ReturnStatement.Expression()` is nil for `/**@type */ return` (fuzz
+  seed 0ec0d5de7f0264d9); the port's host-expression accessor panicked.
+  The ReturnStatement arm now reads the optional payload field directly
+  (nil → no host, mirroring Go's nil Expression() chain).
+- **File-list deviations (mechanical wiring, disclosed)**: beyond
+  reparser.rs/reparser_test.rs/parser/src/lib.rs/ast/utilities.rs the
+  wave required `parser/src/parser.rs` (Parser.reparsed_clones field,
+  ParserState.reparsed_clones_len in mark/rewind, the reparseList→
+  statements append in parse_source_file_worker, the sort +
+  SourceFileNodeData snapshot in finish_source_file),
+  `parser/src/jsdoc.rs` (removed the no-op reparse_tags stub),
+  `ast/src/source_file.rs` (reparsed_clones field + accessors, not
+  copied by visit_each_child like Go's copyFrom), and the
+  `visitor.rs` sentinel fix above.
+- **Deferred**: the `GetTokenPosOfNode` assertion of Go's
+  TestJSDocTypeSourcePropagatesToConstructedReparse — scanner.go:2526
+  surface not yet ported; the flags/text assertions covering the same
+  reparsed node are kept (reparser_test.rs).
+- **Note**: the binder's ast_shims.rs carries a faithful copy of the
+  GetAssignmentDeclarationKind family (off-limits this wave); the
+  ast/utilities.rs port is the canonical home — dedup candidate.
+
+**Validation** (local, CARGO_TARGET_DIR=/tmp/tsrs-rep,
+CARGO_INCREMENTAL=0 + `-C debuginfo=0` under /tmp quota pressure):
+`cargo test -p tsc-parser -p tsc-ast` green (15 + 60, incl. the 5 new
+reparser/assignment-kind tests); testdata gate `--ignored` GATE: files
+swept=176 parsed_ok=176 **panics=0** (the valueless-return fuzz seed
+regression above was caught by this gate); `cargo clippy -p tsc-parser
+-p tsc-ast --all-targets` zero warnings; dump twin (go-bench/tsc-bench)
+byte-identical on `reachabilityChecksNoCrash1.ts` (the required
+cold-parse file), `tsc/testdata/fixtures` (82 files), and the full
+`tsc/testdata/tests/cases/compiler` sweep (6,890 files) — the reparse
+wiring does not disturb the cold-parse path.
