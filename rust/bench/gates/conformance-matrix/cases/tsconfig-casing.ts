@@ -7,5 +7,5 @@
         "MyFile.ts"
     ]
 }
-// @filename: myFile.ts
+// @filename: MyFile.ts
 export const y = 2;

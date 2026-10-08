@@ -329,7 +329,9 @@ mod tests {
             parse_test_files_and_symlinks("let x = 1;\n", "/corpus/simpleTest.ts");
         assert_eq!(units.len(), 1);
         assert_eq!(units[0].name, "simpleTest.ts");
-        assert_eq!(units[0].content, "let x = 1;");
+        // Go: the trailing newline yields a final empty line, and the join
+        // rule writes the separator (content keeps the trailing "\n")
+        assert_eq!(units[0].content, "let x = 1;\n");
         assert!(symlinks.is_empty());
         assert_eq!(current_dir, "");
         assert!(global.is_empty());

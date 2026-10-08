@@ -41,7 +41,7 @@ mod tests {
     fn run_tests_concatenates_every_runners_enumeration() {
         let mut first = FakeRunner(&["a.ts", "b.ts"]);
         let mut second = FakeRunner(&["c.ts"]);
-        let files = run_tests(&mut [&mut &mut first as &mut dyn Runner, &mut &mut second]);
+        let files = run_tests(&mut [&mut first as &mut dyn Runner, &mut second]);
         assert_eq!(files, vec!["a.ts".to_string(), "b.ts".to_string(), "c.ts".to_string()]);
     }
 }

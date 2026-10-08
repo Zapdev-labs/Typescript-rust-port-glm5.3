@@ -362,8 +362,9 @@ mod tests {
         // \x20 decodes to a space; \x00 to NUL
         assert_eq!(literal_prefix("Example\\x20Name").as_deref(), Some("Example Name"));
         assert_eq!(literal_prefix("Example\\x00Name").as_deref(), Some("Example\u{0}Name"));
-        // metacharacters end the prefix
-        assert_eq!(literal_prefix("Example.ts_target=es2020$").as_deref(), Some("Example.ts_target=es2020"));
+        // metacharacters end the prefix (the unescaped '.' is a metachar —
+        // the prefix stops at "Example"; the escaped form above runs on)
+        assert_eq!(literal_prefix("Example.ts_target=es2020$").as_deref(), Some("Example"));
         // unbalanced / trailing escapes are compile errors
         assert_eq!(literal_prefix("("), None);
         assert_eq!(literal_prefix("Example\\"), None);

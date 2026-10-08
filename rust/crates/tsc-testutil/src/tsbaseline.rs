@@ -244,7 +244,14 @@ fn minimal_diagnostics_to_string(diagnostics: &[&ErrorBaselineDiagnostic<'_>]) -
             out.push_str(&format!("({},{})", line + 1, character + 1));
             out.push_str(": ");
         }
-        out.push_str(&format!("{} {}: ", diag.category().name(), diagnostic_prefix(diag)));
+        // Go: `fmt.Fprintf("%s %s%d: ", category, diagnosticPrefix, code)` —
+        // WriteFormatDiagnostic's exact form.
+        out.push_str(&format!(
+            "{} {}{}: ",
+            diag.category().name(),
+            diagnostic_prefix(diag),
+            diag.code()
+        ));
         out.push_str(&d.localize());
         out.push_str(HARNESS_NEWLINE);
     }
@@ -356,7 +363,7 @@ fn iterate_error_baseline(input_files: &[(&str, &str)], diagnostics: &[&ErrorBas
     // ── Global errors (no file) ──
     let mut output_lines = String::new();
     let mut first_line = true;
-    let mut new_line = |first: &mut bool, out: &mut String| {
+    let new_line = |first: &mut bool, out: &mut String| {
         if *first {
             *first = false;
             return;
@@ -365,7 +372,7 @@ fn iterate_error_baseline(input_files: &[(&str, &str)], diagnostics: &[&ErrorBas
     };
     for d in &sorted {
         if d.file_name.is_empty() {
-            output_error_text(&mut new_line, &mut output_lines, d);
+            output_error_text(&mut first_line, &mut output_lines, d);
         }
     }
     result.push(output_lines.clone());
@@ -377,10 +384,13 @@ fn iterate_error_baseline(input_files: &[(&str, &str)], diagnostics: &[&ErrorBas
         let file_errors: Vec<&&ErrorBaselineDiagnostic<'_>> = sorted
             .iter()
             .filter(|d| {
+                // Go compares the prefix-stripped (relative) strings directly —
+                // ComparePaths handles relative paths; no rooting here.
                 !d.file_name.is_empty()
-                    && tsc_tspath::CaseSensitivity::CaseInsensitive.compare_paths(
-                        &tsc_tspath::to_rooted_path(&remove_test_path_prefixes(d.file_name, false), &Default::default()),
-                        &tsc_tspath::to_rooted_path(&remove_test_path_prefixes(unit_name, false), &Default::default()),
+                    && tsc_tspath::compare_paths(
+                        &remove_test_path_prefixes(d.file_name, false),
+                        &remove_test_path_prefixes(unit_name, false),
+                        tsc_tspath::CaseSensitivity::CaseInsensitive,
                     ) == 0
             })
             .collect();
@@ -429,7 +439,7 @@ fn iterate_error_baseline(input_files: &[(&str, &str)], diagnostics: &[&ErrorBas
                         output_lines.push('~');
                     }
                     if line_index == lines.len() - 1 || next_line_start > end {
-                        output_error_text(&mut new_line, &mut output_lines, err_diagnostic);
+                        output_error_text(&mut first_line, &mut output_lines, err_diagnostic);
                     }
                 }
             }
@@ -443,12 +453,11 @@ fn iterate_error_baseline(input_files: &[(&str, &str)], diagnostics: &[&ErrorBas
 
 /// Go: `outputErrorText` — the `!!! category TScode: message` lines (and
 /// `!!! related TScode...: message` for related information; the location
-/// prefix is PORT-noted away in the module header).
-fn output_error_text(
-    new_line: &mut impl FnMut(&mut bool, &mut String),
-    output_lines: &mut String,
-    d: &ErrorBaselineDiagnostic<'_>,
-) {
+/// prefix is PORT-noted away in the module header). The newline state
+/// (`firstLine`) is the CALLER's — Go's closure captures the shared
+/// `firstLine` across sections, so the first `!!!` line after a squiggle
+/// or a header gets a separator.
+fn output_error_text(first_line: &mut bool, output_lines: &mut String, d: &ErrorBaselineDiagnostic<'_>) {
     let message = d.localize();
     let message = remove_test_path_prefixes(&message, false);
     let diag = d.diagnostic;
@@ -466,9 +475,12 @@ fn output_error_text(
         // `!!! related TS%d%s: %s` with the location in the middle).
         err_lines.push(format!("!!! related TS{}: {}", info.code(), localize_diagnostic(info)));
     }
-    let mut first = true;
     for e in &err_lines {
-        new_line(&mut first, output_lines);
+        if *first_line {
+            *first_line = false;
+        } else {
+            output_lines.push_str(HARNESS_NEWLINE);
+        }
         output_lines.push_str(e);
     }
 }

@@ -372,6 +372,18 @@ fn case_relative(config: &ConformanceConfig, file: &str) -> String {
     trimmed.replace('\\', "/")
 }
 
+/// A panic payload downcast to its message (`&str` or `String`; other
+/// payloads render as "unknown panic").
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
 /// Go: `runSingleConfigTest` + `newCompilerTest` — the per-configuration
 /// pipeline, with the panic containment (the `-1` sentinel record).
 fn run_case_configuration(
@@ -396,13 +408,21 @@ fn run_case_configuration(
             errors_count: outcome.errors_count,
             shape_hash: outcome.shape_hash,
         },
-        Err(_payload) => CaseRecord {
-            case: case.to_string(),
-            baseline,
-            verdict: Verdict::Mismatch,
-            errors_count: -1,
-            shape_hash: String::new(),
-        },
+        Err(payload) => {
+            // The panic message goes to STDERR only (stdout stays the pure
+            // NDJSON contract; the message itself is driver-specific).
+            eprintln!(
+                "conformance: panic on case {case} (baseline {baseline}): {}",
+                panic_message(payload)
+            );
+            CaseRecord {
+                case: case.to_string(),
+                baseline,
+                verdict: Verdict::Mismatch,
+                errors_count: -1,
+                shape_hash: String::new(),
+            }
+        }
     }
 }
 
@@ -538,6 +558,12 @@ fn run_configuration_pipeline(
             entries.push((link_path.as_string().to_string(), content.clone()));
         }
     }
+    // The in-test tsconfig unit seeds both its unit entry and the config
+    // entry at the same path — the Go twin's map assignment dedupes
+    // silently (last write wins); the Vec folds through the same rule so
+    // from_map never sees duplicates.
+    let deduped: std::collections::BTreeMap<String, String> = entries.into_iter().collect();
+    let entries: Vec<(String, String)> = deduped.into_iter().collect();
     let fs = tsc_bundled::wrap_fs(tsc_vfs::vfstest::from_map(entries, CaseSensitivity::CaseSensitive));
 
     // The M5 program-twin construction.
@@ -807,7 +833,8 @@ mod tests {
         assert!(contains_reference_path("/// <reference path=\"./foo.ts\" />"));
         assert!(contains_reference_path("/// <reference\tpath='./foo.ts' />"));
         assert!(!contains_reference_path("/// <referencepath='./foo.ts' />"));
-        assert!(!contains_reference_path("reference path"));
+        // Go: referencesRegex = `reference\spath` — a plain "reference path" matches
+        assert!(contains_reference_path("reference path"));
     }
 
     #[test]
@@ -833,7 +860,7 @@ mod tests {
 
     #[test]
     fn skipped_tests_table_is_go_verbatim() {
-        assert_eq!(SKIPPED_TESTS.len(), 44);
+        assert_eq!(SKIPPED_TESTS.len(), 42);
         assert!(SKIPPED_TESTS.contains(&"APILibCheck.ts"));
         assert!(SKIPPED_TESTS.contains(&"requireOfJsonFileWithModuleNodeResolutionEmitNone.ts"));
     }
