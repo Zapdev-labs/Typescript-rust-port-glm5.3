@@ -26,6 +26,7 @@ use tsc_collections::OrderedMap;
 use tsc_core::options_generated::CompilerOptions;
 use tsc_diagnostics::Message;
 use tsc_json::Value;
+use tsc_ast::{NodeId, NodeStore};
 use tsc_tspath::{
     get_normalized_absolute_path, to_path_pattern, CaseSensitivity, PathKey, RootedDirectoryPath,
     RootedFilePath,
@@ -125,6 +126,17 @@ pub struct ConfigFileSpecs {
     /// Go: `validatedFileNames []tspath.RootedFilePath` — the files-list
     /// entries resolved against the config directory.
     pub validated_file_names: Vec<RootedFilePath>,
+    /// Go: `validatedFilesSpecBeforeSubstitution []tspath.FileSpec` — the
+    /// `files` entries as written (pre-${configDir}); the matched-file-spec
+    /// reasons report these (M6 config-node wave).
+    pub validated_files_specs_before_substitution: Vec<tsc_tspath::FileSpec>,
+    /// Go: `validatedIncludeSpecsBeforeSubstitution []tspath.PathPattern` —
+    /// the include entries as written (pre-${configDir}).
+    pub validated_include_specs_before_substitution: Vec<tsc_tspath::PathPattern>,
+    /// Go: `fileSpecByPath map[tspath.PathKey]tspath.FileSpec` — each
+    /// files-list entry's path → the spec as written (first occurrence
+    /// wins, exactly Go's `if !exists` guard).
+    pub file_spec_by_path: rustc_hash::FxHashMap<PathKey, tsc_tspath::FileSpec>,
     /// Go: whether include defaulted to ["**/*"].
     pub is_default_include_spec: bool,
 }
@@ -146,6 +158,199 @@ pub trait ResolveConfigHost: Send + Sync {
     /// (Go falls through to the "cannot read file" diagnostic).
     fn resolve(&self, specifier: &str, containing_file: &RootedFilePath)
         -> Option<RootedFilePath>;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TsConfigSourceFile + the AST config-syntax walks (Go:
+// tsconfigparsing.go's TsConfigSourceFile/NewTsconfigSourceFileFromFilePath/
+// tsconfigToSourceFile/GetTsConfigPropArrayElementValue/ForEachTsConfigPropArray/
+// GetCallbackForFindingPropertyAssignmentByValue/GetOptionsSyntaxByArrayElementValue/
+// getTsConfigObjectLiteralExpression/ForEachPropertyAssignment — the M6
+// config-node diagnostic surface: option diagnostics and include-reason
+// related info carry positions read out of the config file parsed as a
+// JSON SourceFile)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `type TsConfigSourceFile struct`.
+#[derive(Clone, Debug)]
+pub struct TsConfigSourceFile {
+    /// Go: `ExtendedSourceFiles []tspath.RootedFilePath` — populated by the
+    /// extends-chain walk (getExtendedConfig). PORT: the port's extends path
+    /// does not track the chain's source files yet (the extended-config
+    /// AST-config wave — PORTING-NOTES); the field keeps the Go shape.
+    pub extended_source_files: Vec<RootedFilePath>,
+    /// Go: `SourceFile *ast.SourceFile` — the config text parsed as a JSON
+    /// SourceFile (the node-position surface).
+    pub source_file: Arc<tsc_ast::SourceFile>,
+}
+
+/// Go: `func tsconfigToSourceFile(tsconfigSourceFile *TsConfigSourceFile) *ast.SourceFile`.
+pub fn tsconfig_to_source_file(
+    tsconfig_source_file: Option<&TsConfigSourceFile>,
+) -> Option<&tsc_ast::SourceFile> {
+    tsconfig_source_file.map(|config| config.source_file.as_ref())
+}
+
+/// Go: `func NewTsconfigSourceFileFromFilePath(configFileName, configPath, configSourceText) *TsConfigSourceFile`.
+///
+/// PORT: Go's `configPath` parameter is the caller-computed `PathKey`; the
+/// port derives it from the file name through `case_sensitivity` (the one
+/// Rust caller has the FS at hand — `get_parsed_command_line_of_config_file_path`).
+pub fn new_tsconfig_source_file_from_file_path(
+    config_file_name: &RootedFilePath,
+    case_sensitivity: CaseSensitivity,
+    config_source_text: &str,
+) -> TsConfigSourceFile {
+    let path_key = case_sensitivity.path_key(&config_file_name.as_path());
+    let source_file = tsc_parser::parse_source_file(
+        tsc_ast::SourceFileParseOptions {
+            file_name: config_file_name.clone(),
+            path_key,
+            ..Default::default()
+        },
+        config_source_text,
+        tsc_core::scriptkind::ScriptKind::JSON,
+    );
+    TsConfigSourceFile {
+        extended_source_files: Vec::new(),
+        source_file: Arc::new(source_file),
+    }
+}
+
+/// Go: `func getTsConfigObjectLiteralExpression(tsConfigSourceFile *ast.SourceFile) *ast.ObjectLiteralExpression`.
+pub fn get_ts_config_object_literal_expression(
+    ts_config_source_file: &tsc_ast::SourceFile,
+) -> Option<NodeId> {
+    let statements = ts_config_source_file.payload().statements.as_ref()?;
+    let first = *statements.nodes.first()?;
+    let expression = crate::ast_shims::expression_of(ts_config_source_file, first)?;
+    if tsc_ast::is_object_literal_expression(ts_config_source_file.node(expression)) {
+        return Some(expression);
+    }
+    None
+}
+
+/// Go: `func ForEachPropertyAssignment[T any](objectLiteral, key string, callback, key2 ...) *T`.
+///
+/// PORT: the callback receives the property's node handle (Go receives the
+/// typed `*ast.PropertyAssignment`; the caller resolves name/initializer
+/// through the same `store`). Go's `return callback(...)` semantics are
+/// exact: the FIRST name-matching property decides the result, including a
+/// `None` callback result (no continued search).
+pub fn for_each_property_assignment<T>(
+    store: &dyn tsc_ast::NodeStore,
+    object_literal: Option<NodeId>,
+    key: &str,
+    key2: &str,
+    callback: impl FnOnce(&dyn tsc_ast::NodeStore, NodeId) -> Option<T>,
+) -> Option<T> {
+    let Some(object_literal) = object_literal else {
+        return None;
+    };
+    let data = store
+        .node(object_literal)
+        .as_object_literal_expression()
+        .expect("IsObjectLiteralExpression guaranteed by the walk producers")
+        .clone();
+    let Some(properties) = data.properties else {
+        return None;
+    };
+    for property in properties.nodes.iter() {
+        let node = store.node(*property);
+        if !tsc_ast::is_property_assignment(node) {
+            continue;
+        }
+        let name = node.name().expect("PropertyAssignment name");
+        if let Some(prop_name) = crate::ast_shims::try_get_text_of_property_name(store, name) {
+            if prop_name == key || (!key2.is_empty() && prop_name == key2) {
+                return callback(store, *property);
+            }
+        }
+    }
+    None
+}
+
+/// Go: `func ForEachTsConfigPropArray[T any](tsConfigSourceFile, propKey, callback) *T`.
+pub fn for_each_ts_config_prop_array<T>(
+    ts_config_source_file: Option<&tsc_ast::SourceFile>,
+    prop_key: &str,
+    callback: impl FnOnce(&dyn tsc_ast::NodeStore, NodeId) -> Option<T>,
+) -> Option<T> {
+    if let Some(source_file) = ts_config_source_file {
+        let object_literal = get_ts_config_object_literal_expression(source_file);
+        return for_each_property_assignment(
+            source_file,
+            object_literal,
+            prop_key,
+            "",
+            callback,
+        );
+    }
+    None
+}
+
+/// Go: `func GetCallbackForFindingPropertyAssignmentByValue(value string) func(property *ast.PropertyAssignment) *ast.Node` —
+/// inlined as the shared element-search helper (the Go closure factory's
+/// only two instantiations are the callers below).
+fn find_property_assignment_by_value(
+    store: &dyn tsc_ast::NodeStore,
+    property: NodeId,
+    value: &str,
+) -> Option<NodeId> {
+    let initializer = store
+        .node(property)
+        .as_property_assignment()
+        .expect("IsPropertyAssignment guaranteed by ForEachPropertyAssignment")
+        .initializer;
+    if initializer.is_none() {
+        // Go: nil Initializer → IsArrayLiteralExpression nil-receiver false.
+        return None;
+    }
+    let initializer_node = store.node(initializer);
+    if !tsc_ast::is_array_literal_expression(initializer_node) {
+        return None;
+    }
+    let elements = initializer_node
+        .as_array_literal_expression()
+        .expect("IsArrayLiteralExpression checked")
+        .elements
+        .clone();
+    let Some(elements) = elements else {
+        return None;
+    };
+    elements.nodes.iter().find_map(|element| {
+        let node = store.node(*element);
+        (tsc_ast::is_string_literal(node)
+            && node.as_string_literal().expect("StringLiteral data").text.as_ref() == value)
+            .then_some(*element)
+    })
+}
+
+/// Go: `func GetTsConfigPropArrayElementValue(tsConfigSourceFile, propKey, elementValue) *ast.StringLiteral` —
+/// the `files`/`include` array element whose text equals `element_value`
+/// (the include-reason related-info anchor).
+pub fn get_ts_config_prop_array_element_value(
+    ts_config_source_file: Option<&tsc_ast::SourceFile>,
+    prop_key: &str,
+    element_value: &str,
+) -> Option<NodeId> {
+    for_each_ts_config_prop_array(ts_config_source_file, prop_key, |store, property| {
+        find_property_assignment_by_value(store, property, element_value)
+    })
+}
+
+/// Go: `func GetOptionsSyntaxByArrayElementValue(objectLiteral, propKey, elementValue) *ast.Node` —
+/// the same element search rooted at a compilerOptions object literal (the
+/// `types`/`lib` related-info arms).
+pub fn get_options_syntax_by_array_element_value(
+    store: &dyn tsc_ast::NodeStore,
+    object_literal: Option<NodeId>,
+    prop_key: &str,
+    element_value: &str,
+) -> Option<NodeId> {
+    for_each_property_assignment(store, object_literal, prop_key, "", |store, property| {
+        find_property_assignment_by_value(store, property, element_value)
+    })
 }
 
 // ────────────────────────────────────────────────────────────────────────────

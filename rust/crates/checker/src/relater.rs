@@ -4602,12 +4602,19 @@ impl Relater {
                 if !source_params.is_empty() {
                     // If the source has infer type parameters (Go comment,
                     // verbatim).
-                    let ctx = new_inference_context(c, &source_params, None, InferenceFlags::NONE, TypeComparerKind::RelatedToWorker, Some(self));
-                    let t_extends_ = t_extends;
-                    infer_types(c, &ctx, t_extends_, s_extends, InferencePriority::NO_CONSTRAINTS | InferencePriority::ALWAYS_STRICT, false);
-                    let __lift17 = inference_context_mapper(c, &ctx);
+                    // Go: `ctx := r.c.newInferenceContext(sourceParams, nil, InferenceFlagsNone, r.isRelatedToWorker)` —
+                    // the comparer is the relater's worker (the relation captured; see
+                    // inference.rs's InferenceComparer PORT note).
+                    let ctx = c.new_inference_context(
+                        &source_params,
+                        None,
+                        crate::inference::InferenceFlags::NONE,
+                        crate::inference::InferenceComparer::Relater(self.relation),
+                    );
+                    c.infer_types(ctx, t_extends, s_extends, crate::inference::InferencePriority::NO_CONSTRAINTS | crate::inference::InferencePriority::ALWAYS_STRICT, false);
+                    let __lift17 = crate::inference::inference_context_mapper(c, ctx);
                     s_extends = instantiate_type_ex(c, s_extends, __lift17);
-                    mapper = inference_context_mapper(c, &ctx);
+                    mapper = crate::inference::inference_context_mapper(c, ctx);
                 }
                 let target_check_type = conditional_parts(c, target).0;
                 if c.is_type_identical_to(s_extends, t_extends)
@@ -6101,6 +6108,12 @@ fn chain_depth(chain: Option<&ErrorChain>) -> usize {
         chain = c.next.as_deref();
     }
     depth
+}
+
+/// Go: `func (c *Checker) isObjectTypeWithInferableIndex(t) bool` — the
+/// crate-public form (inference.rs's inferFromIndexTypes is the W2 caller).
+pub(crate) fn is_object_type_with_inferable_index_pub(c: &mut Checker, t: TypeId) -> bool {
+    is_object_type_with_inferable_index(c, t)
 }
 
 /// Go: `func (c *Checker) isObjectTypeWithInferableIndex(t) bool`.
@@ -8264,71 +8277,12 @@ pub(crate) fn get_single_call_signature_of_type(_c: &mut Checker, t: TypeId) -> 
     None
 }
 
-// ── Inference seams (inference.go — W2) ──
-
-// Go: `type InferenceFlags uint32` (the two bits the relater's
-// conditional-vs-conditional arm uses).
-define_flags!(InferenceFlags, u32);
-impl InferenceFlags {
-    /// Go: `InferenceFlagsNoConstraints`.
-    pub const NO_CONSTRAINTS: InferenceFlags = InferenceFlags(1 << 2);
-    /// Go: `InferenceFlagsAlwaysStrict`.
-    pub const ALWAYS_STRICT: InferenceFlags = InferenceFlags(1 << 4);
-}
-
-// Go: `type InferencePriority uint64` (checker.go) — the bits the relater
-// uses; the full ladder lands with inference.rs.
-define_flags!(InferencePriority, u64);
-impl InferencePriority {
-    /// Go: `InferencePriorityNoConstraints`.
-    pub const NO_CONSTRAINTS: InferencePriority = InferencePriority(1 << 6);
-    /// Go: `InferencePriorityAlwaysStrict`.
-    pub const ALWAYS_STRICT: InferencePriority = InferencePriority(1 << 9);
-}
-
-/// Go: `newInferenceContext(typeParameters, signature, flags, compareTypes)` —
-/// PORT: Go's heap context becomes a checker-arena index (the mapper.rs W1
-/// design); the relater's use is fire-and-forget, so a context is allocated
-/// in `inference_contexts` and its id returned.
-pub(crate) struct InferenceContextHandle(#[allow(dead_code)] pub(crate) crate::todo_shapes::InferenceContextId);
-
-/// Go: `func (c *Checker) newInferenceContext(...) *InferenceContext`.
-pub(crate) fn new_inference_context(
-    c: &mut Checker,
-    type_parameters: &[TypeId],
-    signature: Option<crate::types::SignatureId>,
-    flags: InferenceFlags,
-    _compare_types: TypeComparerKind,
-    _relater: Option<&mut Relater>,
-) -> InferenceContextHandle {
-    // TODO(port M6 W2 inference): the real context creation — provisional:
-    // an empty context per the mapper.rs W1 shape.
-    let _ = (type_parameters, signature, flags);
-    let id = crate::todo_shapes::InferenceContextId(c.inference_contexts.len() as u32);
-    c.inference_contexts.push(Default::default());
-    InferenceContextHandle(id)
-}
-
-/// Go: the context's `mapper` field (the non-fixing mapper).
-pub(crate) fn inference_context_mapper(c: &Checker, handle: &InferenceContextHandle) -> Option<crate::todo_shapes::TypeMapperId> {
-    // TODO(port M6 W2 inference).
-    let _ = (c, handle);
-    None
-}
-
-/// Go: `func (c *Checker) inferTypes(inferences, source, target, priority, skipFixing)`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn infer_types(
-    c: &mut Checker,
-    handle: &InferenceContextHandle,
-    source: TypeId,
-    target: TypeId,
-    _priority: InferencePriority,
-    _skip_fixing: bool,
-) {
-    // TODO(port M6 W2 inference): inferTypes/inferFromTypes.
-    let _ = (c, handle, source, target);
-}
+// ── Inference seams ──
+// (M6 W2: the real inference engine lives in inference.rs — the
+// InferencePriority ladder's provisional stub values here were WRONG vs Go's
+// signed int32 ladder (NO_CONSTRAINTS is 1<<9, ALWAYS_STRICT is 1<<10, and
+// InferenceFlags's real bits are the checker.go five); the conditional arm
+// below now routes through crate::inference's real surface.)
 
 // ────────────────────────────────────────────────────────────────────────────
 // Checker method bridges — the free-function stubs above surface as Checker

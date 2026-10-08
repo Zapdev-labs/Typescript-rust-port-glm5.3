@@ -1,17 +1,17 @@
 // Port of tsc/internal/tsoptions/errors.go @ ec47d33c23e464a17cdf2475632cba629bee8763
 //
 // PORT notes:
-//   - The node-positioned diagnostics (`createDiagnosticForInvalidEnumType`,
-//     `CreateDiagnosticForNodeInSourceFile`) need an ast SourceFile/Node; in
-//     the M4 wave the config-parse path parses JSON text directly (see
-//     tsconfigparsing.rs PORT notes), so the node-positioned arm of
-//     `CreateDiagnosticForNodeInSourceFileOrCompilerDiagnostic` is served by
-//     the compiler-diagnostic form until the AST-config path lands.
+//   - `CreateDiagnosticForNodeInSourceFile` is the REAL positioned form
+//     since the M6 config-node wave (the config file parses as a JSON
+//     SourceFile — see tsconfigparsing.rs); `CreateDiagnosticForNodeInSourceFileOrCompilerDiagnostic`
+//     degrades to the compiler-diagnostic form exactly on Go's nil
+//     file/node inputs. `createDiagnosticForInvalidEnumType`'s M4 callers
+//     pass `None` (the command-line path — Go passes nil there too).
 //   - `createUnknownOptionError`'s alternateMode/optionsNameMap plumbing
 //     needs the command-line parser's worker diagnostics, which live in
 //     diagnostics.rs here.
 
-use tsc_ast::Diagnostic;
+use tsc_ast::{Diagnostic, NodeStore};
 use tsc_core::text::TextRange;
 use tsc_diagnostics::Message;
 
@@ -46,15 +46,34 @@ pub fn get_compiler_option_value_type_string(option: &CommandLineOption) -> Stri
 }
 
 /// Go: `func CreateDiagnosticForNodeInSourceFile(sourceFile, node, message, args...)`.
-/// PORT: node positions require the AST config path; the compiler-diagnostic
-/// form is used until that lands (see module PORT notes).
+///
+/// PORT (M6 config-node wave): now positioned like Go —
+/// `scanner.SkipTrivia(text, node.Loc.Pos())` .. `node.End()` — where Go's
+/// config-parse diagnostics carried no spans (the pre-AST-config M4 form),
+/// this restores the exact node range against the config source file.
 pub fn create_diagnostic_for_node_in_source_file(
-    _source_file: &tsc_ast::SourceFile,
-    _node: tsc_ast::NodeId,
+    source_file: &tsc_ast::SourceFile,
+    node: tsc_ast::NodeId,
     message: &'static Message,
     args: &[String],
 ) -> Diagnostic {
-    new_compiler_diagnostic(message, args)
+    let node = source_file.node(node);
+    let loc = tsc_core::text::TextRange::new(
+        tsc_scanner::skip_trivia(source_file.text(), node.loc.pos()),
+        node.loc.end(),
+    );
+    let text = tsc_diagnostics::format(message.text(), args);
+    Diagnostic::new(
+        Some(source_file.as_node_id()),
+        loc,
+        message.code(),
+        message.category(),
+        "",
+        Some(message),
+        text,
+        message.key(),
+        args.to_vec(),
+    )
 }
 
 /// Go: `func CreateDiagnosticForNodeInSourceFileOrCompilerDiagnostic(...)`.

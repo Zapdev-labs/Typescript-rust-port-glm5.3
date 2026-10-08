@@ -41,30 +41,12 @@ pub struct DiagnosticsCollection;
 /// Go: `*InferenceState` / `*InferenceContext` / `ContextualInfo` /
 /// `InferenceContextInfo` (checker/inference.go — M6 wave 2).
 ///
-/// PORT (mapper.go W1): `InferenceTypeMapper.Map` (mapper.go) reads
-/// `n.inferences[i].typeParameter`/`.isFixed` and `clearCachedInferences`
-/// writes `.inferredType`, so the W1 shape carries the inferences slice the
-/// mapper needs — contexts live in `Checker::inference_contexts` and the
-/// mapper reaches its context through [`InferenceContextId`]. The remaining
-/// ~30 Go fields and the real ownership design land with the inference wave,
-/// which replaces this shape wholesale.
-#[derive(Debug, Default)]
-pub struct InferenceContext {
-    /// Go: `inferences []*InferenceInfo`.
-    pub inferences: Vec<InferenceInfo>,
-}
-
-/// Go: `*InferenceInfo` (checker/inference.go — M6 wave 2). The three fields
-/// the mapper reads/writes; the full struct lands with the inference wave.
-#[derive(Debug, Default)]
-pub struct InferenceInfo {
-    /// Go: `typeParameter *Type`.
-    pub type_parameter: crate::types::TypeId,
-    /// Go: `isFixed bool`.
-    pub is_fixed: bool,
-    /// Go: `inferredType *Type` — cleared by `clearCachedInferences`.
-    pub inferred_type: Option<crate::types::TypeId>,
-}
+/// PORT (M6 W2): the W1 stub shapes below are replaced wholesale by
+/// inference.rs's real `InferenceContext`/`InferenceInfo` (checker.go's
+/// structs — the arena design the mapper reaches through
+/// [`InferenceContextId`] is unchanged; the three field names the mapper
+/// reads/writes — `type_parameter`/`is_fixed`/`inferred_type` — are kept).
+pub use crate::inference::{InferenceContext, InferenceInfo};
 
 /// PORT (mapper.go W1): Go's `InferenceTypeMapper` holds `n *InferenceContext`
 /// — a heap pointer the inference engine creates. The Rust port stores

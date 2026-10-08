@@ -331,6 +331,20 @@ pub struct Checker {
     /// indexes this Vec through `InferenceContextId` (the inference wave, M6
     /// wave 2, owns the real design).
     pub(crate) inference_contexts: Vec<InferenceContext>,
+    // ── Inference state (Go checker.go's fields — M6 W2, inference.rs) ──
+    /// Go: `freeinferenceState *InferenceState` — PORT: Go's intrusive free
+    /// list becomes a value stack (states are popped/pushed by value; see
+    /// inference.rs's pool PORT note).
+    pub(crate) free_inference_states: Vec<crate::inference::InferenceState>,
+    /// Go: `reverseMappedCache map[ReverseMappedTypeKey]*Type`.
+    pub(crate) reverse_mapped_cache: FxHashMap<crate::inference::ReverseMappedTypeKey, Option<TypeId>>,
+    /// Go: `reverseHomomorphicMappedCache map[ReverseMappedTypeKey]*Type`.
+    pub(crate) reverse_homomorphic_mapped_cache: FxHashMap<crate::inference::ReverseMappedTypeKey, Option<TypeId>>,
+    /// Go: `reverseMappedSourceStack []*Type` / `reverseMappedTargetStack []*Type` /
+    /// `reverseExpandingFlags ExpandingFlags` (inference.go's reverse-mapped family).
+    pub(crate) reverse_mapped_source_stack: Vec<TypeId>,
+    pub(crate) reverse_mapped_target_stack: Vec<TypeId>,
+    pub(crate) reverse_expanding_flags: crate::relater::ExpandingFlags,
     // ── Relater state (Go relater.go's Checker fields — M6 W2) ──
     /// Go: the five `*Relation` instances (PORT: `RelationKind` identity —
     /// see relater.rs's module note). Fixed at NewChecker; never re-created
@@ -1603,24 +1617,9 @@ impl Checker {
         t
     }
 
-    /// Go: `func (c *Checker) inferFromIntraExpressionSites(n *InferenceContext)`
-    /// (inference.go — M6 wave 2). No-op W1 stub (mapper.go's
-    /// InferenceTypeMapper is its only W1 caller).
-    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
-    pub(crate) fn infer_from_intra_expression_sites(&mut self, n: InferenceContextId) {
-        // TODO(port M6 inference wave): drain intra-expression inference sites.
-        let _ = n;
-    }
-
-    /// Go: `func (c *Checker) getInferredType(n *InferenceContext, index int) *Type`
-    /// (inference.go — M6 wave 2). Obvious-error W1 stub: `errorType`
-    /// (mapper.go's InferenceTypeMapper is its only W1 caller).
-    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
-    pub(crate) fn get_inferred_type(&mut self, n: InferenceContextId, index: usize) -> TypeId {
-        let _ = (n, index);
-        // TODO(port M6 inference wave): the real inference commitment.
-        self.error_type()
-    }
+    // (inferFromIntraExpressionSites/getInferredType moved to inference.rs —
+    // M6 W2's real bodies; mapper.rs's InferenceTypeMapper calls them through
+    // this module's surface, unchanged.)
 
     /// Go: `func (c *Checker) containsArgumentsReference(node *ast.Node) bool`
     /// (checker.go:32675 — S4's flow-walk family). Permissive W1 stub: false
@@ -1868,6 +1867,12 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         active_mappers: Vec::new(),
         active_type_mappers_caches: Vec::new(),
         inference_contexts: Vec::new(),
+        free_inference_states: Vec::new(),
+        reverse_mapped_cache: FxHashMap::default(),
+        reverse_homomorphic_mapped_cache: FxHashMap::default(),
+        reverse_mapped_source_stack: Vec::new(),
+        reverse_mapped_target_stack: Vec::new(),
+        reverse_expanding_flags: crate::relater::ExpandingFlags::NONE,
         identity_relation: Default::default(),
         assignable_relation: Default::default(),
         subtype_relation: Default::default(),

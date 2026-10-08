@@ -11,9 +11,9 @@
 
 use tsc_ast::Diagnostic;
 use tsc_core::options_generated::{BuildOptions, CompilerOptions, TypeAcquisition};
-use tsc_tspath::{CaseSensitivity, PathPattern, RootedDirectoryPath, RootedFilePath, RootedPath};
+use tsc_tspath::{CaseSensitivity, PathKey, PathPattern, RootedDirectoryPath, RootedFilePath, RootedPath};
 
-use crate::tsconfigparsing::{ConfigFileSpecs, ParsedCompilerOptions, ProjectReference};
+use crate::tsconfigparsing::{ConfigFileSpecs, ParsedCompilerOptions, ProjectReference, TsConfigSourceFile};
 
 /// Go: `type ParsedCommandLine struct` (the fields the M4 surface consumes).
 #[derive(Clone, Debug, Default)]
@@ -49,6 +49,24 @@ pub struct ParsedCommandLine {
     /// resolved against the config directory (literal files are included
     /// verbatim with no existence check, exactly as in Go).
     pub(crate) validated_file_names: Vec<RootedFilePath>,
+    /// Go: `configFileSpecs.validatedFilesSpecBeforeSubstitution` — the
+    /// `files` entries as written (pre-${configDir}); the matched-file-spec
+    /// include reasons report these (M6 config-node wave).
+    pub(crate) validated_files_specs_before_substitution: Vec<tsc_tspath::FileSpec>,
+    /// Go: `configFileSpecs.validatedIncludeSpecsBeforeSubstitution` — the
+    /// include entries as written (pre-${configDir}).
+    pub(crate) validated_include_specs_before_substitution: Vec<PathPattern>,
+    /// Go: `configFileSpecs.fileSpecByPath` — each files-list entry's path
+    /// → the spec as written (first occurrence wins, Go's `if !exists`).
+    pub(crate) file_spec_by_path: rustc_hash::FxHashMap<PathKey, tsc_tspath::FileSpec>,
+    /// Go: `ConfigFile *TsConfigSourceFile` — the config file parsed as a
+    /// JSON SourceFile; `None` mirrors Go's nil ConfigFile (config-node
+    /// diagnostics degrade to compiler diagnostics, Go's nil arm). PORT:
+    /// populated on the `GetParsedCommandLineOfConfigFilePath` route only
+    /// (the runner/program seam); direct `ParseJsonConfigFileContent`
+    /// callers keep `None` until the full AST-config conversion wave lands
+    /// (tsconfigparsing.rs PORT notes).
+    pub config_file: Option<std::sync::Arc<TsConfigSourceFile>>,
     /// Go: `configFileSpecs.includeSpecs`/`excludeSpecs` — the raw spec
     /// values as merged into the config (extends rewrite included), kept
     /// for the No-inputs diagnostic's JSON arguments.
@@ -94,6 +112,56 @@ impl ParsedCommandLine {
         &self.file_names
     }
 
+    /// Go: `func (c *ParsedCommandLine) ConfigName() tspath.RootedFilePath` —
+    /// the config source file's name ("" without a config file).
+    pub fn config_name(&self) -> RootedFilePath {
+        match &self.config_file {
+            Some(config_file) => config_file.source_file.file_name().clone(),
+            None => RootedFilePath::default(),
+        }
+    }
+
+    /// Go: `func (p *ParsedCommandLine) GetMatchedFileSpec(fileName) string` —
+    /// the `files`-list spec that matched `file_name` (the spec AS WRITTEN —
+    /// the pre-${configDir} substitution form), "" when the file is not a
+    /// files-list entry.
+    pub fn get_matched_file_spec(&self, file_name: &RootedFilePath) -> tsc_tspath::FileSpec {
+        self.file_spec_by_path
+            .get(&self.case_sensitivity.path_key(&file_name.as_path()))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Go: `func (p *ParsedCommandLine) GetMatchedIncludeSpec(fileName) (string, bool)` —
+    /// the include pattern that matched `file_name` plus whether it is the
+    /// default `["**/*"]` spec; the returned pattern is the AS-WRITTEN
+    /// (pre-${configDir}) form, exactly Go's
+    /// `validatedIncludeSpecsBeforeSubstitution[index]`.
+    pub fn get_matched_include_spec(&self, file_name: &RootedFilePath) -> (PathPattern, bool) {
+        if self.validated_include_specs.is_empty() {
+            return (PathPattern::default(), false);
+        }
+        if self.is_default_include_spec {
+            return (self.validated_include_specs[0].clone(), true);
+        }
+        // Go: `specs.getMatchedIncludeSpec(fileName, p.baseDirectory, p.caseSensitivity)` —
+        // per-spec SpecMatcher; the matched index reads the
+        // before-substitution list.
+        for (index, spec) in self.validated_include_specs.iter().enumerate() {
+            let include_matcher = tsc_module::new_spec_matcher(
+                &[spec.as_string().to_owned()],
+                self.base_directory(),
+                tsc_module::Usage::Files,
+                self.case_sensitivity,
+            );
+            // Go: `includeMatcher != nil && includeMatcher.MatchFileName(fileName)`.
+            if include_matcher.is_some_and(|matcher| matcher.match_file_name(file_name)) {
+                return (self.validated_include_specs_before_substitution[index].clone(), false);
+            }
+        }
+        (PathPattern::default(), false)
+    }
+
     /// Go: `func (c *ParsedCommandLine) ProjectReferences()`.
     pub fn project_references(&self) -> &[ProjectReference] {
         &self.project_references
@@ -116,6 +184,13 @@ impl ParsedCommandLine {
                 .unwrap_or_default(),
             validated_files_specs: self.validated_files_specs.clone(),
             validated_file_names: self.validated_file_names.clone(),
+            validated_files_specs_before_substitution: self
+                .validated_files_specs_before_substitution
+                .clone(),
+            validated_include_specs_before_substitution: self
+                .validated_include_specs_before_substitution
+                .clone(),
+            file_spec_by_path: self.file_spec_by_path.clone(),
             is_default_include_spec: self.is_default_include_spec,
         })
     }

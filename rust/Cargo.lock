@@ -483,6 +483,7 @@ dependencies = [
  "tsc-json",
  "tsc-locale",
  "tsc-module",
+ "tsc-parser",
  "tsc-scanner",
  "tsc-stringutil",
  "tsc-tspath",

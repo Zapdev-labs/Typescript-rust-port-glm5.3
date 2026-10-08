@@ -21,6 +21,10 @@ tsc-diagnostics = { path = "../diagnostics" }
 tsc-glob = { path = "../glob" }
 tsc-json = { path = "../json" }
 tsc-locale = { path = "../locale" }
+# Go's tsconfigparsing parses the config text as a JSON SourceFile through
+# the parser package (NewTsconfigSourceFileFromFilePath — the M6 config-node
+# diagnostic surface).
+tsc-parser = { path = "../parser" }
 # Go's tsconfigparsing imports tsc/internal/module (module-specifier extends
 # + the getFileNamesFromConfigSpecs file enumeration, which uses the module
 # crate's in-crate vfsmatch port: ReadDirectory + SpecMatcher).
