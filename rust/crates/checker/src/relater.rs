@@ -8465,10 +8465,9 @@ impl Checker {
         is_readonly_array_type(self, t)
     }
 
-    /// Go: `func (c *Checker) getConstraintOrUnknownFromTypeParameter(t) *Type`.
-    pub(crate) fn get_constraint_or_unknown_from_type_parameter(&mut self, t: TypeId) -> TypeId {
-        get_constraint_of_type_parameter(self, t).unwrap_or_else(|| self.unknown_type())
-    }
+    // Go: `func (c *Checker) getConstraintOrUnknownFromTypeParameter(t) *Type`
+    // — REMOVED (M6 S2): superseded by typeofsymbol.rs's real body (same
+    // signature; this module's call sites resolve there).
 
     /// Go: `func (c *Checker) getDefaultOrUnknownFromTypeParameter(t) *Type`.
     pub(crate) fn get_default_or_unknown_from_type_parameter(&mut self, t: TypeId) -> TypeId {

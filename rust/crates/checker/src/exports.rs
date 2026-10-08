@@ -319,11 +319,13 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) GetFalseTypeOfConditionalType(t *Type) *Type` →
-    /// `c.getFalseTypeFromConditionalType(t)` (checker.go — S5).
+    /// `c.getFalseTypeFromConditionalType(t)` (checker.go — S5). PORT (M6 S2):
+    /// the payload read (Go returns the false branch or nil; S5 owns the
+    /// branch resolution that populates it).
     pub fn get_false_type_of_conditional_type(&self, t: TypeId) -> Option<TypeId> {
-        // TODO(port M6 S5): getFalseTypeFromConditionalType.
-        let _ = t;
-        None
+        self.type_(t)
+            .as_conditional_type()
+            .and_then(|d| d.resolved_false_type)
     }
 
     /// Go: `func (c *Checker) GetDefaultFromTypeParameter(typeParameter *Type) *Type`
@@ -390,14 +392,13 @@ impl Checker {
     /// W2: the real body landed with relater.rs.
     /// Go: `func (c *Checker) GetLocalTypeParametersOfClassOrInterfaceOrTypeAlias(symbol *ast.Symbol) []*Type`
     /// → `c.getLocalTypeParametersOfClassOrInterfaceOrTypeAlias(symbol)`
-    /// (checker.go — S2/S8).
+    /// (checker.go — S2/S8). PORT (M6 S2): the W1 empty-vec stub flipped to
+    /// the real declared-type read (typeofsymbol.rs).
     pub fn get_local_type_parameters_of_class_or_interface_or_type_alias(
-        &self,
+        &mut self,
         symbol: SymbolId,
     ) -> Vec<TypeId> {
-        // TODO(port M6 S2/S8): declared-type local type parameters.
-        let _ = symbol;
-        Vec::new()
+        self.get_local_type_parameters_of_class_or_interface_or_type_alias_impl(symbol)
     }
 
     /// Go: `func (c *Checker) GetContextualTypeForObjectLiteralElement(element *ast.Node, contextFlags ContextFlags) *Type`

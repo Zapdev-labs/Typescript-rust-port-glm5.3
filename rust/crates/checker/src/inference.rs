@@ -1904,14 +1904,10 @@ impl Checker {
         let _ = t;
     }
 
-    /// Go: `func (c *Checker) getTypeOfReverseMappedSymbol(symbol) *Type`.
-    fn get_type_of_reverse_mapped_symbol(&mut self, symbol: tsc_ast::SymbolId) -> TypeId {
-        // TODO(port M6 S7): the ReverseMappedSymbolLinks read + inferReverseMappedType;
-        // permissive unknown.
-        let _ = symbol;
-        self.unknown_type()
-    }
-
+    // Go: `func (c *Checker) getTypeOfReverseMappedSymbol(symbol) *Type` —
+    // REMOVED (M6 S2): the W2 permissive stub is superseded by the real
+    // reverse-mapped links read in typeofsymbol.rs; this module's call sites
+    // resolve there.
     /// Go: `func (c *Checker) getLimitedConstraint(t) *Type`.
     fn get_limited_constraint(&mut self, t: TypeId) -> Option<TypeId> {
         // If the original mapped type had an intersection constraint we extract its components,

@@ -128,6 +128,7 @@ pub mod spine;
 pub mod stringer_generated;
 pub mod symboltracker;
 pub mod todo_shapes;
+pub mod typeofsymbol;
 pub mod tracer;
 pub mod tracing;
 pub mod types;

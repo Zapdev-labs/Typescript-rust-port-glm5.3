@@ -1162,6 +1162,37 @@ impl Type {
             _ => None,
         }
     }
+    /// Mutable form of [`Type::as_interface_type`] (M6 S2: the
+    /// getDeclaredTypeOfClassOrInterface thisType/instantiations writes).
+    pub fn as_interface_type_mut(&mut self) -> Option<&mut InterfaceType> {
+        match &mut self.data {
+            TypeData::Interface(d) => Some(d),
+            _ => None,
+        }
+    }
+    /// Mutable form of [`Type::as_conditional_type`] (M6 S2: the
+    /// distributive-constraint write).
+    pub fn as_conditional_type_mut(&mut self) -> Option<&mut ConditionalType> {
+        match &mut self.data {
+            TypeData::Conditional(d) => Some(d),
+            _ => None,
+        }
+    }
+    /// Mutable form of [`Type::as_object_type`] (M6 S2: the binding-pattern
+    /// index-info writes).
+    pub fn as_object_type_mut(&mut self) -> Option<&mut ObjectType> {
+        match &mut self.data {
+            TypeData::Object(d) => Some(d),
+            TypeData::TypeReference(d) => Some(&mut d.base),
+            TypeData::Interface(d) => Some(&mut d.base.base),
+            TypeData::Tuple(d) => Some(&mut d.base.base.base),
+            TypeData::InstantiationExpression(d) => Some(&mut d.base),
+            TypeData::Mapped(d) => Some(&mut d.base),
+            TypeData::ReverseMapped(d) => Some(&mut d.base),
+            TypeData::EvolvingArray(d) => Some(&mut d.base),
+            _ => None,
+        }
+    }
 
     /// Go: `func (t *Type) AsUniqueESSymbolType() *UniqueESSymbolType`.
     pub fn as_unique_essymbol_type(&self) -> Option<&UniqueESSymbolType> {
@@ -2353,7 +2384,7 @@ impl TypePredicate {
 /// `declaration` is an IndexSignatureDeclaration; `indexSymbol` is the
 /// synthetic property symbol for this index signature; `components` are
 /// ElementWithComputedPropertyName nodes.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct IndexInfo {
     pub key_type: Option<TypeId>,
     pub value_type: Option<TypeId>,
