@@ -17,8 +17,11 @@ dependencies = [
  "tsc-ast",
  "tsc-core",
  "tsc-jsnum",
+ "tsc-module",
  "tsc-parser",
+ "tsc-tsoptions",
  "tsc-tspath",
+ "tsc-vfs",
 ]
 
 [[package]]

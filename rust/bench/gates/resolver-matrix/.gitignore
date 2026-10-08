@@ -1,0 +1,9 @@
+# The resolver-matrix fixture COMMITS its node_modules trees on purpose:
+# module-resolution parity requires a real node_modules layout (bare
+# packages, scoped packages, exports/main/types fields, index resolution,
+# self-referencing package, imports field). These local rules negate the
+# root .gitignore's blanket `node_modules/` and `dist` exclusions for this
+# fixture subtree only (the scoped package's exports point at ./dist/*).
+!node_modules/
+!dist/
+!**/dist/

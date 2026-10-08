@@ -32,7 +32,7 @@ use tsc_tspath::{
 const KIND_COUNT: usize = Kind::Count as usize;
 
 /// Go: `skipDirs` — directory names skipped during the corpus walk.
-const SKIP_DIRS: [&str; 6] = ["node_modules", ".git", "dist", "build", "out", ".yarn"];
+pub(crate) const SKIP_DIRS: [&str; 6] = ["node_modules", ".git", "dist", "build", "out", ".yarn"];
 
 /// Go: `benchExts` — extensions indexed from the corpus. ".d.ts" ends with
 /// ".ts" and is therefore covered, exactly as in Go (filepath.Ext semantics).
@@ -451,7 +451,7 @@ fn walk_stats(sf: &SourceFile) -> FileStats {
 /// Minimal JSON string escaper — deliberately NOT serde/encoding-json:
 /// both drivers implement these exact rules so the outputs are
 /// byte-identical (HTML escaping, \n/\t shorthand etc. excluded).
-fn json_escape(s: &str, out: &mut String) {
+pub(crate) fn json_escape(s: &str, out: &mut String) {
     for c in s.chars() {
         match c {
             '"' => out.push_str("\\\""),

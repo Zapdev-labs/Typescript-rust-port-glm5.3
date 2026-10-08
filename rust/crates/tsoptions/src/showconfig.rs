@@ -94,6 +94,11 @@ fn indent(depth: usize) -> String {
 }
 
 fn marshal_string_list(values: &[String], depth: usize) -> String {
+    // Go: encoding/json/v2 renders an empty array as `[]` even with
+    // indentation (found by the showconfig parity twin — `"empty": []`).
+    if values.is_empty() {
+        return "[]".to_string();
+    }
     let inner = values
         .iter()
         .map(|v| format!("{}{}", indent(depth + 1), serde_json::json!(v)))
@@ -103,6 +108,9 @@ fn marshal_string_list(values: &[String], depth: usize) -> String {
 }
 
 fn marshal_value_list(values: &[CompilerOptionsValue], depth: usize) -> String {
+    if values.is_empty() {
+        return "[]".to_string();
+    }
     let inner = values
         .iter()
         .map(|v| format!("{}{}", indent(depth + 1), marshal_value(v, depth + 1)))

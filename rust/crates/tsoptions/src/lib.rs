@@ -8,9 +8,12 @@
 //
 // Not yet ported from the Go package (tracked in PORTING-NOTES.md):
 //   - tsconfigparsing.go's AST-based JSON conversion (spans in diagnostics)
-//     and getFileNamesFromConfigSpecs (glob-driven file enumeration)
-//   - the full vfsmatch SpecMatcher (tsc-vfs wave)
 //   - contentmapper's host.go/hostimpl.go (out of M4 scope)
+//
+// getFileNamesFromConfigSpecs (glob-driven file enumeration) and the
+// vfsmatch SpecMatcher were ported with the showconfig parity twin
+// (the twin's byte-diff requires them); see tsconfigparsing.rs and
+// tsc-module's vfsmatch.rs PORT notes.
 
 pub mod commandlineoption;
 pub mod commandlineparser;

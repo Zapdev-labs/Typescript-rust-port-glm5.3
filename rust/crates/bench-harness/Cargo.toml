@@ -19,5 +19,8 @@ tsc-jsnum = { path = "../jsnum" }
 tsc-core = { path = "../core" }
 tsc-ast = { path = "../ast" }
 tsc-parser = { path = "../parser" }
+tsc-vfs = { path = "../vfs" }
+tsc-module = { path = "../module" }
+tsc-tsoptions = { path = "../tsoptions" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

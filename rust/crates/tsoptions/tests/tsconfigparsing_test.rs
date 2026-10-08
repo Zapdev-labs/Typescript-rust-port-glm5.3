@@ -142,7 +142,10 @@ fn test_extends_module_specifier_seam() {
         None,
         Some(&host),
     );
-    assert!(parsed.errors.is_empty(), "errors: {}", parsed.errors.len());
+    // Exactly the No-inputs diagnostic: the fixture fs carries no .ts files,
+    // so the (Go-mirroring) file enumeration finds nothing — same error the
+    // Go worker reports for this fixture.
+    assert_eq!(parsed.errors.len(), 1, "errors: {}", parsed.errors.len());
     assert!(parsed.compiler_options().strict.is_true());
 }
 
@@ -191,7 +194,9 @@ fn test_get_parsed_command_line_of_config_file_path() {
     );
     let config_file_path = rooted_file_path_from_absolute("/project/tsconfig.json");
     let parsed = get_parsed_command_line_of_config_file_path(&config_file_path, fs.as_ref(), None);
-    assert!(parsed.errors.is_empty(), "errors: {}", parsed.errors.len());
+    // Exactly the No-inputs diagnostic (no .ts files in the fixture fs; the
+    // enumeration is the Go-mirroring worker behavior).
+    assert_eq!(parsed.errors.len(), 1, "errors: {}", parsed.errors.len());
     assert!(parsed.compiler_options().strict.is_true());
     assert_eq!(parsed.compiler_options().out_dir.as_string(), "/project/dist");
     assert_eq!(parsed.config_file_name, config_file_path);

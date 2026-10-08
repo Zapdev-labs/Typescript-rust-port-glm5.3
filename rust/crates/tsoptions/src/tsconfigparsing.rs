@@ -788,9 +788,7 @@ fn string_array_prop(
     prop: &str,
     errors: &mut Vec<tsc_ast::Diagnostic>,
 ) -> Option<Vec<String>> {
-    let Some(value) = raw_config.get(prop) else {
-        return None;
-    };
+    let value = raw_config.get(prop)?;
     if value.is_null() {
         return None;
     }

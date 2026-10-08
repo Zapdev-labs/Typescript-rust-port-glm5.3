@@ -679,3 +679,102 @@ subpackage; hoist into tsc-vfs when a second consumer appears).
   byte-identical); Go-parity checker PARITY OK;
   `cargo check -p bench-harness` green. Gate:
   `CARGO_TARGET_DIR=/tmp/tsrs-tsoptions cargo test -p tsc-tsoptions -p tsc-contentmapper`.
+
+## M4 Wave D — showconfig + resolvereact parity twins (bench-harness, gates, tsc-module, tsc-tsoptions)
+
+Two new byte-identical twin harnesses over the `dump` twin's proven
+pattern (same corpus walk, skip rules, minimal json_escape, exit codes):
+
+- **`showconfig`**: corpus walk for `tsconfig.json`/`jsconfig.json`
+  (sorted, `--tsconfig <path>` single-file mode) →
+  `ParseConfigFileTextToJson` → `ParseJsonConfigFileContent` →
+  `ConvertToTSConfig` → 4-space indent marshal. One NDJSON line per
+  config: `{"file":<abs>,"ok":<bool>,"out":"<marshaled>","errors":<n>}`;
+  unreadable configs emit the fixed marker `{"file":<abs>,"ok":false,
+  "error":"cannot read file"}` (os vs io error strings differ across
+  runtimes, so the marker is fixed). errors = parse text diagnostics +
+  parsed errors.
+- **`resolvereact`**: project-dir walk (any dir with package.json or
+  tsconfig.json/jsconfig.json, node_modules skipped) → per dir, a fixed
+  21-specifier canonical list (AST extraction would couple to the parser
+  wave; the list is deterministic and covers bare/relative/absolute/
+  dynamic/node_builtins specs, self-reference, scoped, index, subpath
+  exports, extensions, imports field, missing) resolved against a
+  synthetic `<dir>/__resolvereact__.ts` containing file, ESM mode,
+  CompilerOptions from the dir's tsconfig or `{Bundler,ESNext,ESNext}`.
+  Per record: `{"file":<containing>,"specifier":<s>,"kind":<moduleReso
+  lution int>,"resolved":<path|null>,"failed":<bool>,"external":<bool>,
+  "pkgId":"<id>"|null}` (pkgId only for non-zero PackageId), then one
+  trailing summary `{"summary":true,"dirs":<n>,"specs":<n>,"resolved":
+  <n>,"failed":<n>,"shape_hash":"<16-hex>"}` — the FNV-1a 64 fold over
+  the exact per-record recipe `file=<f>\n specifier=<s>\n kind=<k>\n
+  resolved=<r>\n failed=<0|1>\n external=<0|1>\n pkgId=<id>\n`
+  (hand-verified vectors live in showconfig_seam.rs).
+
+**Crate fixes the parity diff forced (all PORT-noted in source)**:
+
+- **module/vfsmatch.rs**: ported Go vfsmatch.go:672-725 `SpecMatcher` +
+  `newSpecMatcher` (match_string/match_file_name/match_index/
+  match_file_name_index; `Usage`, `UNLIMITED_DEPTH`, `read_directory`
+  re-exported from module/src/lib.rs). tsoptions now depends on
+  tsc-module (Go: tsoptions imports tsc/internal/vfs).
+- **tsoptions/tsconfigparsing.rs**:
+  (1) JSONC parse in `parse_json_text` — comments, trailing commas, BOM
+  strip (Go's tsconfig files are JSONC; the old parser was strict JSON).
+  (2) Full `parseJsonConfigFileContent` worker: file enumeration via
+  `get_file_names_from_config_specs` (literal/wildcard/wildcard-json
+  maps, `get_supported_extensions`(+WithJson),
+  `has_file_with_higher_priority_extension`,
+  `remove_wildcard_files_with_lower_priority_extension`), the
+  "No inputs were found in config file" diagnostic (with the
+  StringifyJson args Go emits) and the empty-`files`-array diagnostic,
+  implied exclude from outDir/declarationDir, default include seeding,
+  `validateSpecs` + ${configDir} substitution. `ConfigFileSpecs` grows
+  validated_include/exclude/files_specs + validated_file_names;
+  `ParsedCommandLine` grows raw_*_spec_values/is_default_include_spec and
+  a populated file_names.
+  (3) `read_extended_config` returns (map, parsed, resolved_path) and
+  `merge_extended_raw_into_config` rewrites extended include/exclude/
+  files spec strings relative to the EXTENDING config's basePath
+  (Go's ConvertToRelativePath + CombinePaths) at each extends level.
+- **tsoptions/showconfig.rs**: `TSConfig::marshal` is 4-space indent
+  (was 2), always emits `compilerOptions` (Go's json/v2 marshal emits the
+  field unconditionally since it is non-omitempty) and renders empty
+  arrays as `[]` (json/v2 renders empty non-nil slices; the Rust marshal
+  previously emitted nothing).
+
+**Known divergence surfaced and deliberately left (tsc-core scope)**:
+the full-repo corpus run (28 configs) flags exactly one file,
+`tsc/testdata/fixtures/compiler/tsconfig.json`, which sets `"types": []`
+explicitly. Go emits `"types": []` (non-nil empty slice passes
+`options.Types != nil` in serializeCompilerOptions); the Rust side drops
+the key because core's `CompilerOptions` collapses Go's nil-vs-empty
+slice distinction into `Vec` (documented core options_generated PORT
+note) and the generated Rust serializer tests `!types.is_empty()`. A
+faithful fix needs core list fields as `Option<Vec<_>>` + a gen-options
+update — outside this wave's crate scope; fixture matrices stay free of
+the pattern (matrix fixtures are byte-identical) and the twin correctly
+reports the diff on any corpus that contains it.
+
+**Fixtures committed** under rust/bench/gates/: `tsconfig-matrix/`
+(18 cases: plain, 2/3-deep extends, extends cycle, ${configDir} templates,
+relative/absolute-missing extends, jsconfig, empty compilerOptions, all
+value shapes, unknown options, JSONC comments, files list, include/
+exclude with invalid specs, extends array, references, extends-include
+rewrite, empty files array) and `resolver-matrix/` (self-referencing
+package with exports/imports, pkg with main/types, @scope/pkg with
+exports+dist, idx index resolution, node16-proj with nodenext + a CJS
+exports package under its node_modules — the fixture .gitignore negates
+the root `node_modules/`+`dist` ignores so the tree actually commits).
+
+- Validation: `cargo test -p bench-harness -p tsc-module -p tsc-tsoptions`
+  all green (17/37+ /all); `cargo clippy` zero warnings on all three;
+  `go vet ./rust/bench/go-driver` clean; every parity run byte-identical:
+  showconfig over tsconfig-matrix (0 diff), resolver-matrix (0),
+  --tsconfig single-file incl. unreadable marker (0), resolvereact over
+  resolver-matrix (0) and tsconfig-matrix (0); real-world
+  packages/typescript/tsconfig.json byte-identical (errors=0); the dump
+  and parse twins re-verified byte-identical after the shared-code
+  changes. Gate:
+  `GOTOOLCHAIN=auto go run ./rust/bench/go-driver <cmd> --corpus <root>` vs
+  `CARGO_TARGET_DIR=/tmp/tsrs-gates cargo run -p bench-harness -- <cmd> --corpus <root>`.
