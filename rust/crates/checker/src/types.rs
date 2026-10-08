@@ -2222,7 +2222,7 @@ impl SignatureFlags {
 /// Go: `type Signature struct` — stored in the checker's signature arena
 /// (`SignatureId` indexes it; Go: `core.Arena[Signature]`, the port a plain
 /// `Vec<Signature>` — see checker.rs's PORT note on arenas).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Signature {
     pub id: SignatureId,
     pub flags: SignatureFlags,

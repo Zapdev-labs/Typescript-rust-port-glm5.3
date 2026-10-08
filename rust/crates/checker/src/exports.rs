@@ -356,15 +356,6 @@ impl Checker {
         None
     }
 
-    /// Go: `func (c *Checker) GetTypePredicateOfSignature(sig *Signature) *TypePredicate`
-    /// → `c.getTypePredicateOfSignature(sig)` (checker.go — S8; resolves the
-    /// target chain then reads `resolvedTypePredicate`).
-    pub fn get_type_predicate_of_signature(&self, sig: SignatureId) -> Option<&crate::types::TypePredicate> {
-        // TODO(port M6 S8): the target-chain resolution.
-        let _ = sig;
-        None
-    }
-
     /// Go: `func (c *Checker) IsTupleTypeTarget(t *Type) bool` →
     /// `isTupleType(t) && t.Target() == t` (real body — `is_tuple_type` is the
     /// collapsed Go pair; the target check needs the arena payload).

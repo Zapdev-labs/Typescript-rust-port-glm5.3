@@ -1398,7 +1398,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) typeResolutionHasProperty(r *TypeResolution) bool`.
-    fn type_resolution_has_property(&mut self, r: &TypeResolution) -> bool {
+    pub(crate) fn type_resolution_has_property(&mut self, r: &TypeResolution) -> bool {
         match r.property_name {
             TypeSystemPropertyName::Type => match r.target {
                 TypeSystemEntity::Symbol(symbol) => {

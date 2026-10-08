@@ -444,9 +444,13 @@ impl TypeTracer {
         if recorded.is_empty() {
             return Ok(());
         }
-        let adapters: Vec<&dyn TracedType> = recorded
+        let wrappers: Vec<_> = recorded
             .iter()
-            .map(|&(shard, t)| &wrap_type(c, shard, t) as &dyn TracedType)
+            .map(|&(shard, t)| wrap_type(c, shard, t))
+            .collect();
+        let adapters: Vec<&dyn TracedType> = wrappers
+            .iter()
+            .map(|w| w as &dyn TracedType)
             .collect();
         let content = crate::tracing::dump_types_to_string(&adapters);
         self.write_dump(&content)

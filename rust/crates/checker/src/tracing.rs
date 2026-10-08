@@ -103,6 +103,16 @@ impl Args {
     pub fn is_empty(&self) -> bool {
         self.0.borrow().is_empty()
     }
+    /// Go: `for k, v := range args` — the map iteration (a snapshot; the
+    /// Rc sharing means callers mutating during iteration is not a thing
+    /// the tracer does).
+    pub fn entries(&self) -> Vec<(String, TraceValue)> {
+        self.0
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
 }
 
 /// Go: `type TraceRecord struct` (JSON field order preserved).
@@ -754,6 +764,15 @@ impl TypeTracer {
     pub fn types_path(&self) -> &str {
         &self.types_path
     }
+
+    /// Go: `func (t *typeTracer) DumpTypes() error` — the file write half
+    /// (the content is built by [`dump_types_to_string`]; the checker's
+    /// Tracer adapts arena types first).
+    pub fn write_dump(&self, content: &str) -> Result<(), String> {
+        self.fs
+            .write_file(&self.types_path, content)
+            .map_err(|e| format!("failed to write types file: {e}"))
+    }
 }
 
 /// Go: `type TracedType interface` — PORT (flattened): Go's methods return
@@ -853,23 +872,21 @@ impl Location {
         use tsc_scanner::get_ecma_line_and_utf16_character_of_position;
         let store = c.store();
         let n = store.node(node);
+        let file_id = n.file_id();
         let file = c
             .program
             .source_files()
             .iter()
-            .find(|f| {
-                let sf = store.node(f.as_node_id());
-                n.pos().0 >= sf.pos().0 && n.end().0 <= sf.end().0
-            })?;
+            .find(|f| f.file_id() == file_id)?;
         let (start_line, start_char) =
-            get_ecma_line_and_utf16_character_of_position(file.as_source_file_like(), n.pos().0);
+            get_ecma_line_and_utf16_character_of_position(file, n.pos());
         let (end_line, end_char) =
-            get_ecma_line_and_utf16_character_of_position(file.as_source_file_like(), n.end().0);
+            get_ecma_line_and_utf16_character_of_position(file, n.end());
         Some(Location {
             // Go: tspath.CaseInsensitive.PathKey(RootedPath(file.FileName()))
             path: file.file_name().to_string(),
-            start: Some((start_line + 1, start_char as i64 + 1)),
-            end: Some((end_line + 1, end_char as i64 + 1)),
+            start: Some(((start_line + 1) as i64, start_char as i64 + 1)),
+            end: Some(((end_line + 1) as i64, end_char as i64 + 1)),
         })
     }
 }
@@ -931,8 +948,15 @@ pub fn build_type_descriptor<'a>(
     };
     // Assign a unique integer token per recursion identity (Go comment).
     let identity = typ.recursion_identity();
-    let token = recursion_identity_map.entry(identity).or_insert_with(|| recursion_identity_map.len());
-    desc.recursion_id = Some(*token);
+    let token = match recursion_identity_map.get(&identity) {
+        Some(t) => *t,
+        None => {
+            let len = recursion_identity_map.len();
+            recursion_identity_map.insert(identity, len);
+            len
+        }
+    };
+    desc.recursion_id = Some(token);
     let name = typ.intrinsic_name();
     if !name.is_empty() {
         desc.intrinsic_name = name;
