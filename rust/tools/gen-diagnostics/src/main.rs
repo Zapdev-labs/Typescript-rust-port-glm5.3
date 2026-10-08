@@ -71,9 +71,8 @@ fn run() -> Result<(), String> {
         .output()
     {
         Ok(result) if result.status.success() => {
-            let formatted = std::fs::read_to_string(&temp).map_err(|e| {
-                format!("failed to read {}: {e}", temp.display())
-            })?;
+            let formatted = std::fs::read_to_string(&temp)
+                .map_err(|e| format!("failed to read {}: {e}", temp.display()))?;
             let _ = std::fs::remove_file(&temp);
             formatted
         }

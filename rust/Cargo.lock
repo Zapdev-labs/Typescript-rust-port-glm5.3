@@ -27,6 +27,11 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 [[package]]
 name = "gen-ast"
 version = "0.0.0"
+dependencies = [
+ "indexmap",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "gen-diagnostics"
@@ -50,6 +55,8 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -173,6 +180,9 @@ dependencies = [
 [[package]]
 name = "tsc-ast"
 version = "0.0.0"
+dependencies = [
+ "tsc-core",
+]
 
 [[package]]
 name = "tsc-collections"
