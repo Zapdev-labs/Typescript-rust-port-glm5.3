@@ -13,15 +13,16 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tsc_ast::{
-    is_arrow_function, is_assignment_operator, is_binary_expression, is_binding_element,
+    get_assignment_declaration_kind, is_arrow_function, is_assignment_operator,
+    is_binary_expression, is_binding_element,
     is_call_expression, is_class_declaration, is_class_expression, is_class_static_block_declaration,
     is_constructor_declaration, is_element_access_expression, is_enum_declaration,
     is_function_declaration, is_function_expression, is_identifier, is_module_declaration,
     is_non_null_expression, is_numeric_literal, is_object_literal_expression,
     is_parameter_declaration, is_parenthesized_expression, is_prefix_unary_expression,
     is_property_access_expression, is_property_declaration, is_source_file, is_type_reference_node,
-    is_variable_statement, Kind, ModifierFlags, Node, NodeData, NodeFlags, NodeId, NodeStore,
-    SourceFile, Symbol, SymbolId, INTERNAL_SYMBOL_NAME_DEFAULT,
+    is_variable_statement, JSDeclarationKind, Kind, ModifierFlags, Node, NodeData, NodeFlags,
+    NodeId, NodeStore, SourceFile, Symbol, SymbolId, INTERNAL_SYMBOL_NAME_DEFAULT,
 };
 use tsc_scanner::go_shims::is_type_node_kind;
 
@@ -966,31 +967,12 @@ pub fn get_assigned_name(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> 
 // JSDeclarationKind (utilities.go:1525-1580)
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Go: `type JSDeclarationKind int` + iota consts.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
-#[repr(i32)]
-pub enum JSDeclarationKind {
-    /// Go: `JSDeclarationKindNone JSDeclarationKind = iota`.
-    #[default]
-    None = 0,
-    /// Go: `JSDeclarationKindModuleExports` — module.exports = expr, except
-    /// for module.exports = exports.
-    ModuleExports,
-    /// Go: `JSDeclarationKindExportsProperty` — exports.name = expr /
-    /// module.exports.name = expr.
-    ExportsProperty,
-    /// Go: `JSDeclarationKindThisProperty` — this.name = expr.
-    ThisProperty,
-    /// Go: `JSDeclarationKindProperty` — F.name = expr, F[name] = expr, in
-    /// JS or TS file.
-    Property,
-    /// Go: `JSDeclarationKindObjectDefinePropertyValue` —
-    /// Object.defineProperty(x, 'name', ...).
-    ObjectDefinePropertyValue,
-    /// Go: `JSDeclarationKindObjectDefinePropertyExports` —
-    /// Object.defineProperty(exports || module.exports, 'name', ...).
-    ObjectDefinePropertyExports,
-}
+// PORT (dedup): `JSDeclarationKind` and `GetAssignmentDeclarationKind` were
+// transcribed here for M4 wave A and are now canonical in
+// tsc_ast::utilities (M5 wave F, the reparser's JSDoc machinery) — this
+// module imports them from there. The section's remaining helpers
+// (IsExportsIdentifier etc.) are still binder-local pending their
+// ast-canonical fold.
 
 /// Go: `func IsExportsIdentifier(node *Node) bool`.
 pub fn is_exports_identifier(store: &dyn NodeStore, node: NodeId) -> bool {
@@ -1076,68 +1058,9 @@ pub fn is_literal_like_element_access(store: &dyn NodeStore, node: NodeId) -> bo
         )
 }
 
-/// Go: `func GetAssignmentDeclarationKind(node *Node) JSDeclarationKind`.
-pub fn get_assignment_declaration_kind(store: &dyn NodeStore, node: NodeId) -> JSDeclarationKind {
-    let n = store.node(node);
-    match n.kind {
-        Kind::BinaryExpression => {
-            let bin = n.as_binary_expression().expect("BinaryExpression data");
-            let operator = store.node(bin.operator_token).kind;
-            if operator == Kind::EqualsToken && is_access_expression(store.node(bin.left)) {
-                if tsc_ast::utilities::is_in_js_file(store.node(bin.left)) {
-                    if is_module_exports_access_expression(store, bin.left)
-                        && !is_exports_identifier(store, bin.right)
-                    {
-                        return JSDeclarationKind::ModuleExports;
-                    }
-                    if (is_module_exports_access_expression(
-                        store,
-                        node_data::expression_of(store, bin.left).expect("access expression"),
-                    ) || is_exports_identifier(
-                        store,
-                        node_data::expression_of(store, bin.left).expect("access expression"),
-                    )) && get_element_or_property_access_name(store, bin.left).is_some()
-                    {
-                        return JSDeclarationKind::ExportsProperty;
-                    }
-                    if node_data::expression_of(store, bin.left).is_some_and(|e| store.node(e).kind == Kind::ThisKeyword) {
-                        return JSDeclarationKind::ThisProperty;
-                    }
-                }
-                if store.node(bin.left).kind == Kind::PropertyAccessExpression
-                    && is_entity_name_expression_ex(
-                        store,
-                        node_data::expression_of(store, bin.left).expect("access expression"),
-                        tsc_ast::utilities::is_in_js_file(store.node(bin.left)),
-                    )
-                    && is_identifier(store.node(store.node(bin.left).name().expect("access name")))
-                    || store.node(bin.left).kind == Kind::ElementAccessExpression
-                        && is_entity_name_expression_ex(
-                            store,
-                            node_data::expression_of(store, bin.left).expect("access expression"),
-                            tsc_ast::utilities::is_in_js_file(store.node(bin.left)),
-                        )
-                {
-                    return JSDeclarationKind::Property;
-                }
-            }
-        }
-        Kind::CallExpression
-            if tsc_ast::utilities::is_in_js_file(store.node(node))
-                && is_bindable_object_define_property_call(store, node) =>
-        {
-            let entity_name = node_data::arguments_of(store, node)[0];
-            if is_exports_identifier(store, entity_name)
-                || is_module_exports_access_expression(store, entity_name)
-            {
-                return JSDeclarationKind::ObjectDefinePropertyExports;
-            }
-            return JSDeclarationKind::ObjectDefinePropertyValue;
-        }
-        _ => {}
-    }
-    JSDeclarationKind::None
-}
+// PORT (dedup): `GetAssignmentDeclarationKind` is canonical in
+// tsc_ast::utilities (M5 wave F); the M4-wave-A transcription here was
+// removed — imported from `tsc_ast` above instead.
 
 // ────────────────────────────────────────────────────────────────────────────
 // Dynamic names / dotted names (utilities.go:1602-1656)

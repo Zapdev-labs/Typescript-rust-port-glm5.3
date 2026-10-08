@@ -26,11 +26,12 @@
 // arenas (SPEC §5.10), same scheme as flow.rs's flow-node ids.
 
 use tsc_ast::{
-    has_syntactic_modifier, is_binary_expression, is_class_declaration, is_export_assignment,
-    is_export_specifier, is_function_declaration, is_function_expression, is_identifier,
-    is_module_declaration, is_namespace_export, is_optional_chain, is_private_identifier,
-    is_type_alias_declaration, is_variable_declaration, is_variable_statement, node_is_missing,
-    node_is_present, node_text, Diagnostic, FlowNodeId, Kind, ModifierFlags, NodeFlags, NodeId,
+    get_assignment_declaration_kind, has_syntactic_modifier, is_binary_expression,
+    is_class_declaration, is_export_assignment, is_export_specifier, is_function_declaration,
+    is_function_expression, is_identifier, is_module_declaration, is_namespace_export,
+    is_optional_chain, is_private_identifier, is_type_alias_declaration, is_variable_declaration,
+    is_variable_statement, node_is_missing, node_is_present, node_text, Diagnostic, FlowNodeId,
+    JSDeclarationKind, Kind, ModifierFlags, NodeFlags, NodeId,
     NodeList, NodeStore, SourceFile, Symbol, SymbolFlags, SymbolId, PatternAmbientModule,
     INTERNAL_SYMBOL_NAME_CALL, INTERNAL_SYMBOL_NAME_CLASS, INTERNAL_SYMBOL_NAME_COMPUTED,
     INTERNAL_SYMBOL_NAME_CONSTRUCTOR, INTERNAL_SYMBOL_NAME_DEFAULT, INTERNAL_SYMBOL_NAME_EXPORT_EQUALS,
@@ -50,7 +51,7 @@ use tsc_diagnostics::Message;
 use tsc_tspath::remove_file_extension;
 
 use crate::ast_shims::{
-    get_assignment_declaration_kind, get_combined_modifier_flags, get_containing_class,
+    get_combined_modifier_flags, get_containing_class,
     get_immediately_invoked_function_expression, get_module_instance_state, get_name_of_declaration,
     has_dynamic_name, is_ambient_module, is_assignment_target, is_block_or_catch_scoped,
     is_boolean_literal, is_declaration_statement, is_destructuring_assignment, is_dotted_name,
@@ -62,7 +63,7 @@ use crate::ast_shims::{
     is_outermost_optional_chain, is_part_of_parameter_declaration, is_part_of_type_query,
     is_potentially_executable_node, is_property_name_literal, is_push_or_unshift_identifier,
     is_signed_numeric_literal, is_string_literal_like, is_string_or_numeric_literal_like,
-    is_variable_declaration_initialized_to_require, ModuleInstanceState, JSDeclarationKind,
+    is_variable_declaration_initialized_to_require, ModuleInstanceState,
 };
 use crate::node_data;
 use crate::scanner_shims::{
