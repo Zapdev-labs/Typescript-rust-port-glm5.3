@@ -5,7 +5,8 @@
  *
  * Build: cc -O2 -o rsswrap rsswrap.c   (see rust/scripts/rig-setup.sh)
  * Usage:  rsswrap CMD [ARGS...]
- * Output: wall_s=<sec> maxrss_kb=<kb> exit=<code>
+/* Output (stderr, so the wrapped command's stdout stays clean):
+ *   wall_s=<sec> maxrss_kb=<kb> exit=<code>
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,6 +38,6 @@ int main(int argc, char **argv) {
     clock_gettime(CLOCK_MONOTONIC, &b);
     double wall = (double)(b.tv_sec - a.tv_sec) + (double)(b.tv_nsec - a.tv_nsec) / 1e9;
     int code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-    printf("wall_s=%.3f maxrss_kb=%ld exit=%d\n", wall, ru.ru_maxrss, code);
+    fprintf(stderr, "wall_s=%.3f maxrss_kb=%ld exit=%d\n", wall, ru.ru_maxrss, code);
     return code;
 }
