@@ -16,5 +16,7 @@ workspace = true
 [dependencies]
 tsc-tspath = { path = "../tspath" }
 tsc-jsnum = { path = "../jsnum" }
+tsc-core = { path = "../core" }
+tsc-ast = { path = "../ast" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

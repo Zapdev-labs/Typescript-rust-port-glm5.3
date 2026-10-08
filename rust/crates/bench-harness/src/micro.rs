@@ -129,7 +129,7 @@ fn go_float_display(f: f64) -> String {
         return sci;
     };
     let exp: i32 = exp_str.parse().unwrap_or(0);
-    if exp < -4 || exp >= 6 {
+    if !(-4..6).contains(&exp) {
         // Go pads the exponent to two digits with an explicit sign.
         let sign = if exp < 0 { '-' } else { '+' };
         format!("{mantissa}e{sign}{:02}", exp.abs())

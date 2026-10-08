@@ -1,8 +1,9 @@
 // Benchmark driver for the Rust port ("tsrs") — SPEC.md §15.
 //
 // Subcommands:
-//   micro --op <name> [--iters N] [--samples N]   Phase 0 micro benches
-//   parse --corpus <dir> [--threads N] [--iters N]  Phase A corpus parse (lands with M3)
+//   micro --op <name> [--iters N] [--samples N]      Phase 0 micro benches
+//   parse --corpus <dir> [--threads N] [--iters K]   Phase A corpus parse
+//     [--iterations K] [--json]
 //
 // Timing protocol mirrors the Go side (`go test -bench -count=N`):
 // 2 warmup invocations, then N samples of fixed-iteration loops; report the
@@ -11,12 +12,13 @@
 // the measured work.
 //
 // Output (stdout, TSV): `median_ns_per_op<TAB>min<TAB>max<TAB>op<TAB>samples`
-// The Go driver (rust/bench/go-driver) emits the same shape for parse runs.
 
 use std::hint::black_box;
 use std::time::Instant;
 
 mod micro;
+mod parse;
+mod parser_seam;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -25,16 +27,14 @@ fn main() {
     };
     match cmd.as_str() {
         "micro" => micro::run(&args[1..]),
-        "parse" => {
-            eprintln!("parse: lands with M3 (scanner + parser); see SPEC.md §15 Phase A");
-            std::process::exit(2);
-        }
+        "parse" => parse::run(&args[1..]),
         _ => usage(),
     }
 }
 
 fn usage() -> ! {
     eprintln!("usage: tsc-bench micro --op <name> [--iters N] [--samples N]");
+    eprintln!("       tsc-bench parse --corpus <dir> [--threads N] [--iterations K] [--iters K] [--json]");
     std::process::exit(2);
 }
 
