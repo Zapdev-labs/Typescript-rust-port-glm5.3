@@ -611,7 +611,9 @@ pub(crate) fn simple_normalize_path(path: &str) -> Option<Cow<'_, str>> {
 }
 
 // hasRelativePathSegment reports whether p contains ".", "..", "./", "../", "/.", "/..", "//", "/./", or "/../".
-pub(crate) fn has_relative_path_segment(p: &str) -> bool {
+// PORT: pub (Go: unexported) — measured by the external bench-harness crate
+// (Phase 0 micro-race, SPEC.md §15); Go benchmarks it in-package.
+pub fn has_relative_path_segment(p: &str) -> bool {
     let bytes = p.as_bytes();
     let n = p.len();
     if n == 0 {

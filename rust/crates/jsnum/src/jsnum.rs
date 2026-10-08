@@ -133,7 +133,9 @@ impl Number {
     }
 
     // https://tc39.es/ecma262/2024/multipage/abstract-operations.html#sec-toint32
-    pub(crate) fn to_int32(self) -> i32 {
+    // PORT: pub (Go: unexported toInt32) — measured by the external bench-harness
+    // crate (Phase 0 micro-race, SPEC.md §15); Go benchmarks it in-package.
+    pub fn to_int32(self) -> i32 {
         let x = self.0;
 
         // Fast path: if the number is in the range (-2^31, 2^32), i.e. an SMI,

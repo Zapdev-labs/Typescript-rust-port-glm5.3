@@ -58,3 +58,16 @@ to "2" so tsc-collections can build.
   first-seen key order is a deterministic superset of the Go contract.
 - `Set`/`MultiMap` keep their public `m` field (Go `M`); `Set.keys()` returns
   `&FxHashSet<T>` mirroring Go returning the map itself.
+
+## 2026-10-07 crates/{tspath,jsnum} — two fn visibility relaxations for bench-harness
+Go benchmarks `hasRelativePathSegment` (tspath) and `Number.toInt32` (jsnum)
+in-package (both unexported). The Rust bench driver (`tsc-bench`, Phase 0
+micro-race, SPEC.md §15.1) lives in a separate crate, so both fns are `pub`
+instead of `pub(crate)`. No behavior change; recorded per §4.4.
+
+## 2026-10-07 bench-harness crate + rust/bench/go-driver — new (SPEC §15)
+`tsc-bench` (rust/crates/bench-harness) is a NEW crate with no Go counterpart:
+it exists to race ported Rust code against the Go originals using identical
+inputs. The Go driver (`rust/bench/go-driver`) is a new Go module added to the
+root `go.work` (fork-level config, one line); it imports `tsc/internal/...`
+but never modifies them.

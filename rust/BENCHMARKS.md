@@ -26,7 +26,7 @@ milestone's green status until explained or fixed.
 
 | date | go | hyperfine | tsgo version | corpus SHA | ts files | ts bytes |
 |---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — |
+| 2026-10-07 | go1.27.1 linux/amd64 | 2.0.0 | 7.1.0-dev | 2559257bb2bcf7f6b8815d6796ba2fd65d8f2b98 | 676 | 8,296,171 |
 
 ## Phase 0 — micro benches (ported M1 crates)
 
