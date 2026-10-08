@@ -17,6 +17,7 @@ dependencies = [
  "tsc-ast",
  "tsc-core",
  "tsc-jsnum",
+ "tsc-parser",
  "tsc-tspath",
 ]
 
