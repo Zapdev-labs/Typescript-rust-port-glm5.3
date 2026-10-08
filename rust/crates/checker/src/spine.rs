@@ -888,35 +888,57 @@ impl Checker {
             self.within_unreachable_code = true;
         }
         match kind {
-            Kind::TypeParameter => { /* TODO(port M6 S3): checkTypeParameter */ }
-            Kind::Parameter => { /* TODO(port M6 S3): checkParameter */ }
-            Kind::PropertyDeclaration => { /* TODO(port M6 S3): checkPropertyDeclaration */ }
-            Kind::PropertySignature => { /* TODO(port M6 S3): checkPropertySignature */ }
+            Kind::TypeParameter => {
+                self.check_type_parameter(node);
+            }
+            Kind::Parameter => {
+                self.check_parameter(node);
+            }
+            Kind::PropertyDeclaration => {
+                self.check_property_declaration(node);
+            }
+            Kind::PropertySignature => {
+                self.check_property_signature(node);
+            }
             Kind::ConstructorType
             | Kind::FunctionType
             | Kind::CallSignature
             | Kind::ConstructSignature
             | Kind::IndexSignature => {
-                /* TODO(port M6 S3): checkSignatureDeclaration */
+                self.check_signature_declaration(node);
             }
             Kind::MethodDeclaration | Kind::MethodSignature => {
-                /* TODO(port M6 S3): checkMethodDeclaration */
+                self.check_method_declaration(node);
             }
             Kind::ClassStaticBlockDeclaration => {
-                /* TODO(port M6 S3): checkClassStaticBlockDeclaration */
+                self.check_class_static_block_declaration(node);
             }
-            Kind::Constructor => { /* TODO(port M6 S3): checkConstructorDeclaration */ }
+            Kind::Constructor => {
+                self.check_constructor_declaration(node);
+            }
             Kind::GetAccessor | Kind::SetAccessor => {
-                /* TODO(port M6 S3): checkAccessorDeclaration */
+                self.check_accessor_declaration(node);
             }
-            Kind::TypeReference => { /* TODO(port M6 S3): checkTypeReferenceNode */ }
-            Kind::TypePredicate => { /* TODO(port M6 S3): checkTypePredicate */ }
-            Kind::TypeQuery => { /* TODO(port M6 S3): checkTypeQuery */ }
-            Kind::TypeLiteral => { /* TODO(port M6 S3): checkTypeLiteral */ }
-            Kind::ArrayType => { /* TODO(port M6 S3): checkArrayType */ }
-            Kind::TupleType => { /* TODO(port M6 S3): checkTupleType */ }
+            Kind::TypeReference => {
+                self.check_type_reference_node(node);
+            }
+            Kind::TypePredicate => {
+                self.check_type_predicate(node);
+            }
+            Kind::TypeQuery => {
+                self.check_type_query(node);
+            }
+            Kind::TypeLiteral => {
+                self.check_type_literal(node);
+            }
+            Kind::ArrayType => {
+                self.check_array_type(node);
+            }
+            Kind::TupleType => {
+                self.check_tuple_type(node);
+            }
             Kind::UnionType | Kind::IntersectionType => {
-                /* TODO(port M6 S3): checkUnionOrIntersectionType */
+                self.check_union_or_intersection_type(node);
             }
             Kind::ParenthesizedType | Kind::OptionalType | Kind::RestType => {
                 // Go: `node.ForEachChild(c.checkSourceElement)` — each of
@@ -939,16 +961,36 @@ impl Checker {
                 };
                 self.check_source_element(Some(child));
             }
-            Kind::ThisType => { /* TODO(port M6 S3): checkThisType */ }
-            Kind::TypeOperator => { /* TODO(port M6 S3): checkTypeOperator */ }
-            Kind::ConditionalType => { /* TODO(port M6 S3): checkConditionalType */ }
-            Kind::InferType => { /* TODO(port M6 S3): checkInferType */ }
-            Kind::TemplateLiteralType => { /* TODO(port M6 S3): checkTemplateLiteralType */ }
-            Kind::ImportType => { /* TODO(port M6 S3): checkImportType */ }
-            Kind::NamedTupleMember => { /* TODO(port M6 S3): checkNamedTupleMember */ }
-            Kind::IndexedAccessType => { /* TODO(port M6 S3): checkIndexedAccessType */ }
-            Kind::MappedType => { /* TODO(port M6 S3): checkMappedType */ }
-            Kind::FunctionDeclaration => { /* TODO(port M6 S3): checkFunctionDeclaration */ }
+            Kind::ThisType => {
+                self.check_this_type(node);
+            }
+            Kind::TypeOperator => {
+                self.check_type_operator(node);
+            }
+            Kind::ConditionalType => {
+                self.check_conditional_type(node);
+            }
+            Kind::InferType => {
+                self.check_infer_type(node);
+            }
+            Kind::TemplateLiteralType => {
+                self.check_template_literal_type(node);
+            }
+            Kind::ImportType => {
+                self.check_import_type(node);
+            }
+            Kind::NamedTupleMember => {
+                self.check_named_tuple_member(node);
+            }
+            Kind::IndexedAccessType => {
+                self.check_indexed_access_type(node);
+            }
+            Kind::MappedType => {
+                self.check_mapped_type(node);
+            }
+            Kind::FunctionDeclaration => {
+                self.check_function_declaration(node);
+            }
             Kind::Block | Kind::ModuleBlock => {
                 self.check_block(node);
             }
@@ -1203,12 +1245,6 @@ impl Checker {
         let _ = source_file;
     }
 
-    /// TODO(port M6 S3): `registerForUnusedIdentifiers` — queues the file's
-    /// identifier-check nodes into sourceFileLinks.identifierCheckNodes.
-    fn register_for_unused_identifiers_stub(&mut self, source_file: NodeId) {
-        let _ = source_file;
-    }
-
     // ────────────────────────────────────────────────────────────────────────
     // The deferred-nodes machinery (Go checker.go:2528-2583; risk 2)
     // ────────────────────────────────────────────────────────────────────────
@@ -1319,13 +1355,13 @@ impl Checker {
                 // TODO(port M6 S3): checkFunctionExpressionOrObjectLiteralMethodDeferred.
             }
             Kind::GetAccessor | Kind::SetAccessor => {
-                // TODO(port M6 S3): checkAccessorDeclaration (the same S3 checker as the live path).
+                self.check_accessor_declaration(node);
             }
             Kind::ClassExpression => {
                 // TODO(port M6 S4): checkClassExpressionDeferred.
             }
             Kind::TypeParameter => {
-                // TODO(port M6 S3): checkTypeParameterDeferred.
+                self.check_type_parameter_deferred(node);
             }
             Kind::JsxSelfClosingElement => {
                 // TODO(port M6 W5): checkJsxSelfClosingElementDeferred (jsx.go).

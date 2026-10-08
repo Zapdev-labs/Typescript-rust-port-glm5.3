@@ -1843,7 +1843,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) hasBindableName(node *ast.Node) bool`.
-    fn has_bindable_name(&mut self, node: NodeId) -> bool {
+    pub(crate) fn has_bindable_name(&mut self, node: NodeId) -> bool {
         // TODO(port M6 S4/S6): the hasLateBindableName half (the computed
         // name's literal-type check); the early-bound half is real.
         !binder_shims::has_dynamic_name(self.store(), node)

@@ -1740,7 +1740,7 @@ fn is_class_like(node: &Node) -> bool {
 
 /// Go: `ast.GetContainingClass` — walks up to the nearest class-like
 /// container through the non-decorated path.
-fn get_containing_class(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+pub(crate) fn get_containing_class(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
     find_ancestor(store, node, &mut is_class_like)
 }
 

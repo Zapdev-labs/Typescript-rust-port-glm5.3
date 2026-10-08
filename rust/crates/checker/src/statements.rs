@@ -185,6 +185,7 @@ pub struct IterationTypesResolver {
 
 impl Checker {
     /// Go: the resolver pair's `iteratorSymbolName`.
+    #[allow(dead_code)] // resolver pair closures; the sync/async slow paths reach them
     pub(crate) fn resolver_iterator_symbol_name(&self, r: &IterationTypesResolver) -> &'static str {
         match r.kind {
             IterationTypesResolverKind::Sync => "Symbol.iterator",
@@ -342,6 +343,7 @@ impl Checker {
 // replaces the bodies and keeps the call sites.
 // ────────────────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)] // the W3 grammar stub family: callers land across the remaining M6 batches
 impl Checker {
     /// Go: `func (c *Checker) checkGrammarModifiers(node) bool` — TODO(port M6 W3).
     pub(crate) fn check_grammar_modifiers(&mut self, node: NodeId) -> bool {
@@ -493,6 +495,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkGrammarModuleElementContext(node, contextErrorMessage) bool`.
+    #[allow(dead_code)] // wired with the S3 class/module batch (checkModuleDeclaration)
     pub(crate) fn check_grammar_module_element_context(
         &mut self,
         node: NodeId,
@@ -503,12 +506,14 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkGrammarClassLikeDeclaration(node) bool`.
+    #[allow(dead_code)] // wired with the S3 class batch (checkClassLikeDeclaration)
     pub(crate) fn check_grammar_class_like_declaration(&mut self, node: NodeId) -> bool {
         let _ = node;
         false
     }
 
     /// Go: `func (c *Checker) checkGrammarInterfaceDeclaration(decl) bool`.
+    #[allow(dead_code)] // wired with the S3 interface batch (checkInterfaceDeclaration)
     pub(crate) fn check_grammar_interface_declaration(&mut self, node: NodeId) -> bool {
         let _ = node;
         false
@@ -845,7 +850,6 @@ impl Checker {
         tested_symbol: SymbolId,
     ) -> bool {
         let expr = Some(expr);
-        let tested_node = tested_node;
         self.is_symbol_used_in_condition_body_visit(body, expr, tested_node, tested_symbol)
     }
 
@@ -1233,9 +1237,13 @@ impl Checker {
             return;
         }
         let container = container.expect("checked");
-        let signature = self
-            .get_signature_from_declaration(container)
-            .expect("containing function signature");
+        // TODO(port M6 S2/S7): getSignatureFromDeclaration's resolution seam
+        // is still permissive for some declaration shapes; Go's nil signature
+        // would rest on the same permissive answers, so the type-dependent
+        // return checks below are skipped until the seam completes.
+        let Some(signature) = self.get_signature_from_declaration(container) else {
+            return;
+        };
         let return_type = self.get_return_type_of_signature(signature);
         let function_flags = tsc_ast::functionflags::get_function_flags(self.store(), container);
         if self.strict_null_checks
@@ -1360,8 +1368,8 @@ impl Checker {
 
     /// Go: `func (c *Checker) checkWithStatement(node)` (checker.go:4276).
     pub(crate) fn check_with_statement(&mut self, node: NodeId) {
-        if !self.check_grammar_statement_in_ambient_context(node) {
-            if self
+        if !self.check_grammar_statement_in_ambient_context(node)
+            && self
                 .store()
                 .node(node)
                 .flags
@@ -1373,7 +1381,6 @@ impl Checker {
                     &[],
                 );
             }
-        }
         let d = self
             .store()
             .node(node)
@@ -1495,7 +1502,7 @@ impl Checker {
                         .expect("LabeledStatement data")
                         .label;
                     if tsc_ast::node_text(self.store(), label) == label_text {
-                        self.grammar_error_on_node(d.label, &DUPLICATE_LABEL_0, &[label_text.clone()]);
+                        self.grammar_error_on_node(d.label, &DUPLICATE_LABEL_0, std::slice::from_ref(&label_text));
                         break;
                     }
                 }
@@ -1523,8 +1530,8 @@ impl Checker {
             .as_throw_statement()
             .expect("ThrowStatement data")
             .expression;
-        if !self.check_grammar_statement_in_ambient_context(node) {
-            if is_identifier(self.store().node(throw_expr))
+        if !self.check_grammar_statement_in_ambient_context(node)
+            && is_identifier(self.store().node(throw_expr))
                 && tsc_ast::node_text(self.store(), throw_expr).is_empty()
             {
                 self.grammar_error_at_pos(
@@ -1535,7 +1542,6 @@ impl Checker {
                     &[],
                 );
             }
-        }
         self.check_expression(throw_expr);
     }
 
@@ -1811,6 +1817,7 @@ where
 /// Go: `ast.ForEachReturnStatement(node, cb)` (ast — the return-statement
 /// walk; cb returns true to bail early). PORT: the walk collects via
 /// for_each_child; cb runs after each find.
+#[allow(dead_code)] // wired with checkReturnExpression's S4 batch
 fn for_each_return_statement<F>(c: &mut Checker, body: Option<NodeId>, cb: &mut F) -> bool
 where
     F: FnMut(&mut Checker, NodeId) -> bool,
@@ -1860,6 +1867,7 @@ impl ExternalEmitHelpers {
 /// Go: `LanguageFeatureMinimumTarget` (checker/types.go:1450-1490) — the
 /// feature→target table the statement/variable checks read.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(dead_code)] // the full Go minimum-target table; later slices construct the variants
 pub(crate) enum Feature {
     AsyncFunctions,
     ForAwaitOf,
@@ -1869,8 +1877,10 @@ pub(crate) enum Feature {
     ClassAndClassElementDecorators,
 }
 
+#[allow(dead_code)] // the full Go minimum-target table; S4/S6 gates construct the variants
 impl Feature {
     /// Go: the LanguageFeatureMinimumTarget table (types.go:1473-1490).
+    #[allow(dead_code)] // the full Go table; later slices construct the rows
     pub(crate) fn minimum_target(self) -> tsc_core::options_generated::ScriptTarget {
         use tsc_core::options_generated::ScriptTarget;
         match self {
@@ -1996,6 +2006,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) isReachableFlowNode(flowNode) bool` (flow.go —
     /// W3). Permissive reachable (matches spine's is_reachable_flow_node_stub).
+    #[allow(dead_code)] // wired with the W3 flow-narrowing batch
     pub(crate) fn is_reachable_flow_node(&mut self, flow_node: tsc_ast::FlowNodeId) -> bool {
         let _ = flow_node;
         true
@@ -2014,6 +2025,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) getContextualType(node, contextFlags) *Type`
     /// (checker.go:29448 — S9). Permissive None.
+    #[allow(dead_code)] // wired with the S4 inference batch
     pub(crate) fn get_contextual_type_stub(
         &mut self,
         node: NodeId,
@@ -2075,8 +2087,7 @@ impl Checker {
                 use_,
                 if iterable_exists { error_node } else { None },
             );
-            if check_assignability && iteration_types.next_type.is_some() {
-                let next_type = iteration_types.next_type.expect("checked");
+            if let Some(next_type) = iteration_types.next_type.filter(|_| check_assignability) {
                 let diagnostic = if use_.intersects(IterationUse::FOR_OF_FLAG) {
                     Some(
                         &diag::CANNOT_ITERATE_VALUE_BECAUSE_THE_NEXT_METHOD_OF_ITS_ITERATOR_EXPECTS_TYPE_1_BUT_FOR_OF_WILL_ALWAYS_SEND_0,
@@ -2101,9 +2112,7 @@ impl Checker {
                 }
             }
             if iteration_types.yield_type.is_some() || iterable_exists {
-                let Some(yield_type) = iteration_types.yield_type else {
-                    return None;
-                };
+                let yield_type = iteration_types.yield_type?;
                 if possible_out_of_bounds {
                     return Some(self.include_undefined_in_index_signature_stub(yield_type));
                 }
@@ -2171,8 +2180,7 @@ impl Checker {
         }
         let array_element_type =
             self.get_index_type_of_type(array_type, self.number_type());
-        if has_string_constituent && array_element_type.is_some() {
-            let array_element_type = array_element_type.expect("checked");
+        if let Some(array_element_type) = array_element_type.filter(|_| has_string_constituent) {
             // This is just an optimization for the case where
             // arrayOrStringType is string | string[]
             if self.type_(array_element_type).flags.intersects(TypeFlags::STRING_LIKE)
@@ -2305,6 +2313,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) getIterationTypesOfIterableWorker(t, use, errorNode, noCache) IterationTypes`
     /// (checker.go:6497).
+    #[allow(clippy::only_used_in_recursion)] // Go's noCache threads through the union recursion
     pub(crate) fn get_iteration_types_of_iterable_worker(
         &mut self,
         t: TypeId,
@@ -2700,7 +2709,7 @@ impl Checker {
             r,
             "throw",
             error_node,
-            diagnostic_output.as_deref_mut(),
+            diagnostic_output,
         );
         self.combine_iteration_types(&[next, ret, throw])
     }
@@ -2832,7 +2841,7 @@ impl Checker {
                     diagnostic,
                     vec![method_name.to_string()],
                 );
-                report_diagnostic(self, d, diagnostic_output.as_deref_mut());
+                report_diagnostic(self, d, diagnostic_output);
             }
             yield_type = Some(self.any_type());
             return_types.push(self.any_type());
@@ -3134,6 +3143,7 @@ type SignatureIdRef = crate::types::SignatureId;
 impl Checker {
     /// Go: `func (c *Checker) checkAndAggregateReturnExpressionTypes(fn, checkMode) ([]*Type, bool)`
     /// (checker.go:20663).
+    #[allow(dead_code)] // wired with checkReturnExpression's S4 batch
     pub(crate) fn check_and_aggregate_return_expression_types(
         &mut self,
         fn_node: NodeId,
@@ -3308,7 +3318,7 @@ impl Checker {
             .node(fn_node)
             .flags
             .intersects(NF::HAS_EXPLICIT_RETURN);
-        let mut error_node = crate::ast_shims::type_of_node(self.store(), fn_node);
+        let error_node = crate::ast_shims::type_of_node(self.store(), fn_node);
         if error_node.is_none() {
             // Go: fn.FunctionLikeData().FullSignature (the JSDoc full
             // signature) — TODO(port M6 W3): the JSDoc-tag seam; permissive
@@ -3385,6 +3395,7 @@ impl Checker {
 }
 
 /// Go: `func mayReturnNever(fn) bool` (checker.go:20721).
+#[allow(dead_code)] // wired with checkReturnExpression's S4 batch
 fn may_return_never(store: &dyn NodeStore, fn_node: NodeId) -> bool {
     match store.node(fn_node).kind {
         Kind::FunctionExpression | Kind::ArrowFunction => true,
@@ -3446,7 +3457,8 @@ pub(crate) fn parameters_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> 
 /// Go: `node.Type()` for the function-like payloads (the return-type node).
 pub(crate) fn signature_type_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
     let n = store.node(node);
-    let t = match n.kind {
+    
+    match n.kind {
         Kind::FunctionDeclaration => n.as_function_declaration().expect("data").type_,
         Kind::FunctionExpression => n.as_function_expression().expect("data").type_,
         Kind::ArrowFunction => n.as_arrow_function().expect("data").type_,
@@ -3464,8 +3476,7 @@ pub(crate) fn signature_type_node(store: &dyn NodeStore, node: NodeId) -> Option
         Kind::FunctionType => n.as_function_type_node().expect("data").type_,
         Kind::ConstructorType => n.as_constructor_type_node().expect("data").type_,
         _ => None,
-    };
-    t
+    }
 }
 
 /// Go: `node.TypeArguments()` for the type-node payloads that carry them.
@@ -4004,6 +4015,7 @@ impl Checker {
 
     /// TODO(port M6 S6): `getExportsOfModule` — the module-exports resolution;
     /// permissive empty.
+    #[allow(dead_code)] // wired with the S6 import/export batch
     pub(crate) fn get_exports_of_module_stub(&mut self, symbol: SymbolId) -> Vec<(String, SymbolId)> {
         let _ = symbol;
         Vec::new()
@@ -4455,7 +4467,7 @@ impl Checker {
                 }
             }
         }
-        if (u::is_parameter_declaration(self.store(), node)
+        if ((u::is_parameter_declaration(self.store(), node)
             || (self.store().node(node).kind == Kind::VariableDeclaration
                 && (self
                     .store()
@@ -4478,12 +4490,10 @@ impl Checker {
                         .expect("data")
                         .property_name
                         .is_none()
-            })
-        {
-            if is_identifier_that_starts_with_underscore(self.store(), name) {
+            }))
+            && is_identifier_that_starts_with_underscore(self.store(), name) {
                 return false;
             }
-        }
         true
     }
 
@@ -4823,20 +4833,12 @@ impl Checker {
     /// declaration spaces (resolveAlias is S6; permissive the symbol's own
     /// declarations — TODO(port M6 S6)).
     fn get_declaration_spaces_of_alias(&mut self, node: NodeId) -> DeclarationSpaces {
-        let mut result = DeclarationSpaces::NONE;
+        let result = DeclarationSpaces::NONE;
         // TODO(port M6 S6): resolveAlias — the target declaration spaces;
         // permissive: the alias's own symbol carries none (Go's resolveAlias
         // stub returns the symbol itself, whose declarations re-enter here).
         let _ = node;
         result
-    }
-
-    /// Go: `func (c *Checker) checkTypeParameter(node)` (checker.go:2674) —
-    /// TODO(port M6 S3 type-node batch): the full type-parameter check
-    /// (constraint defaults + reserved names); permissive until that
-    /// batch lands.
-    pub(crate) fn check_type_parameter(&mut self, node: NodeId) {
-        let _ = node;
     }
 
     /// Go: `func (c *Checker) checkTypeParameters(typeParameterDeclarations)` (checker.go:7205).
@@ -5057,3 +5059,1999 @@ fn local_symbol_of(store: &dyn NodeStore, node: NodeId) -> Option<SymbolId> {
     }
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+use rustc_hash::FxHashMap;
+
+// M6 S3 batch 3 — the type-node checks + function/constructor declaration
+// family (Go checker.go:2649-3767) + the variance/deferred type-parameter
+// checks. Same Go-name/shape discipline; unlanded leaves stay bannered
+// permissive stubs.
+// ────────────────────────────────────────────────────────────────────────────
+
+impl Checker {
+    /// Go: `func (c *Checker) checkTypeParameter(node)` (checker.go:2649).
+    pub(crate) fn check_type_parameter(&mut self, node: NodeId) {
+        // Grammar Checking
+        self.check_grammar_modifiers(node);
+        let d = self
+            .store()
+            .node(node)
+            .as_type_parameter_declaration()
+            .expect("TypeParameterDeclaration data")
+            .clone();
+        if let Some(expr) = d.expression {
+            self.grammar_error_on_first_token(expr, &diag::TYPE_EXPECTED, &[]);
+        }
+        self.check_source_element(d.constraint);
+        self.check_source_element(d.default_type);
+        let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+        let type_parameter = self.get_declared_type_of_type_parameter(symbol);
+        // Resolve base constraint to reveal circularity errors
+        relater::get_base_constraint_of_type(self, type_parameter);
+        // TODO(port M6 S7): getResolvedTypeParameterDefault — the resolved
+        // default seam; permissive None (the circular-default arm rests).
+        let _ = type_parameter;
+        let constraint_type = self.get_constraint_of_type_parameter(type_parameter);
+        let default_type = self.get_default_from_type_parameter(type_parameter);
+        if let (Some(constraint_type), Some(default_type)) = (constraint_type, default_type) {
+            let mapper = self.new_simple_type_mapper(type_parameter, default_type);
+            let instantiated = self.instantiate_type(constraint_type, mapper);
+            let with_this =
+                relater::get_type_with_this_argument(self, instantiated, default_type, false);
+            self.check_type_assignable_to(
+                default_type,
+                with_this,
+                d.default_type,
+                Some(&diag::TYPE_0_DOES_NOT_SATISFY_THE_CONSTRAINT_1),
+            );
+        }
+        self.check_type_name_is_reserved(d.name, &diag::TYPE_PARAMETER_NAME_CANNOT_BE_0);
+        self.check_node_deferred(node);
+    }
+
+    /// Go: `func (c *Checker) checkTypeParameterDeferred(node)` (checker.go:2667).
+    pub(crate) fn check_type_parameter_deferred(&mut self, node: NodeId) {
+        let parent = self.store().node(node).parent.get();
+        let parent_kind = self.store().node(parent).kind;
+        if parent_kind != Kind::InterfaceDeclaration
+            && !is_class_like(self.store(), parent)
+            && parent_kind != Kind::TypeAliasDeclaration
+            && parent_kind != Kind::JSTypeAliasDeclaration
+        {
+            return;
+        }
+        let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+        let type_parameter = self.get_declared_type_of_type_parameter(symbol);
+        let modifiers = relater::get_type_parameter_modifiers(self, type_parameter)
+            & (ModifierFlags::IN.union(ModifierFlags::OUT));
+        if modifiers.is_empty() {
+            return;
+        }
+        let parent_symbol = self.get_symbol_of_declaration(parent).unwrap_or_default();
+        let parent_declared_type = self.get_declared_type_of_symbol(parent_symbol);
+        let variance_alias_gate = (parent_kind == Kind::TypeAliasDeclaration
+            || parent_kind == Kind::JSTypeAliasDeclaration)
+            && !self
+                .type_(parent_declared_type)
+                .object_flags
+                .intersects(ObjectFlags::ANONYMOUS.union(ObjectFlags::MAPPED));
+        if variance_alias_gate {
+            self.error(
+                node,
+                &diag::VARIANCE_ANNOTATIONS_ARE_ONLY_SUPPORTED_IN_TYPE_ALIASES_FOR_OBJECT_FUNCTION_CONSTRUCTOR_AND_MAPPED_TYPES,
+                &[],
+            );
+            return;
+        }
+        if modifiers == ModifierFlags::IN || modifiers == ModifierFlags::OUT {
+            let sub = self
+                .marker_sub_type_for_check
+                .expect("markerSubTypeForCheck");
+            let sup = self
+                .marker_super_type_for_check
+                .expect("markerSuperTypeForCheck");
+            let out = modifiers == ModifierFlags::OUT;
+            let source = relater::create_marker_type(
+                self,
+                parent_symbol,
+                type_parameter,
+                Some(if out { sub } else { sup }),
+            );
+            let target = relater::create_marker_type(
+                self,
+                parent_symbol,
+                type_parameter,
+                Some(if out { sup } else { sub }),
+            );
+            let save = self.variance_type_parameter;
+            self.variance_type_parameter = Some(type_parameter);
+            self.check_type_assignable_to(
+                source,
+                target,
+                Some(node),
+                Some(&diag::TYPE_0_IS_NOT_ASSIGNABLE_TO_TYPE_1_AS_IMPLIED_BY_VARIANCE_ANNOTATION),
+            );
+            self.variance_type_parameter = save;
+        }
+    }
+
+    /// Go: `func (c *Checker) shouldCheckErasableSyntax(node) bool` (checker.go:2687).
+    pub(crate) fn should_check_erasable_syntax(&self, node: NodeId) -> bool {
+        self.compiler_options.erasable_syntax_only == Tristate::TSTrue
+            && !tsc_ast::utilities::is_in_js_file(self.store().node(node))
+    }
+
+    /// Go: `func (c *Checker) checkParameter(node)` (checker.go:2690).
+    pub(crate) fn check_parameter(&mut self, node: NodeId) {
+        // Grammar checking
+        self.check_grammar_modifiers(node);
+        self.check_variable_like_declaration(node);
+        let fn_node = u::get_containing_function(self.store(), node);
+        let name = self.store().node(node).name();
+        let param_name: String = name
+            .filter(|&n| is_identifier(self.store().node(n)))
+            .map(|n| tsc_ast::node_text(self.store(), n).to_string())
+            .unwrap_or_default();
+        if crate::ast_shims::has_modifier(self.store().node(node), ModifierFlags::PARAMETER_PROPERTY_MODIFIER) {
+            if self.should_check_erasable_syntax(node) {
+                self.error(
+                    node,
+                    &diag::THIS_SYNTAX_IS_NOT_ALLOWED_WHEN_ERASABLESYNTAXONLY_IS_ENABLED,
+                    &[],
+                );
+            }
+            let ctor_impl = fn_node.is_some_and(|f| {
+                self.store().node(f).kind == Kind::Constructor
+                    && function_body_of(self.store(), f).is_some()
+            });
+            if !ctor_impl {
+                self.error(
+                    node,
+                    &diag::A_PARAMETER_PROPERTY_IS_ONLY_ALLOWED_IN_A_CONSTRUCTOR_IMPLEMENTATION,
+                    &[],
+                );
+            }
+            if let Some(name) = name.filter(|_| {
+                fn_node.is_some_and(|f| self.store().node(f).kind == Kind::Constructor)
+                    && param_name == "constructor"
+            }) {
+                self.error(
+                    name,
+                    &diag::X_CONSTRUCTOR_CANNOT_BE_USED_AS_A_PARAMETER_PROPERTY_NAME,
+                    &[],
+                );
+            }
+        }
+        if name.is_none()
+            || !is_binding_pattern(self.store(), name.expect("checked"))
+        {
+            // fallthrough handled below
+        }
+        let has_init = crate::ast_shims::initializer_of(self.store(), node).is_some();
+        if !has_init
+            && name.is_some_and(|n| is_binding_pattern(self.store(), n))
+            && u::is_optional_declaration(self.store(), node)
+            && fn_node.is_some_and(|f| function_body_of(self.store(), f).is_some())
+        {
+            self.error(
+                node,
+                &diag::A_BINDING_PATTERN_PARAMETER_CANNOT_BE_OPTIONAL_IN_AN_IMPLEMENTATION_SIGNATURE,
+                &[],
+            );
+        }
+        if param_name == "this" || param_name == "new" {
+            if let Some(fn_node) = fn_node {
+                let params = crate::ast_shims::parameters_of(self.store(), fn_node).to_vec();
+                if !params.first().is_some_and(|&p| p == node) {
+                    self.error(
+                        node,
+                        &diag::A_0_PARAMETER_MUST_BE_THE_FIRST_PARAMETER,
+                        std::slice::from_ref(&param_name),
+                    );
+                }
+                let fn_kind = self.store().node(fn_node).kind;
+                if fn_kind == Kind::Constructor
+                    || fn_kind == Kind::ConstructSignature
+                    || fn_kind == Kind::ConstructorType
+                {
+                    self.error(node, &diag::A_CONSTRUCTOR_CANNOT_HAVE_A_THIS_PARAMETER, &[]);
+                }
+                if fn_kind == Kind::ArrowFunction {
+                    self.error(node, &diag::AN_ARROW_FUNCTION_CANNOT_HAVE_A_THIS_PARAMETER, &[]);
+                }
+                if matches!(fn_kind, Kind::GetAccessor | Kind::SetAccessor) {
+                    self.error(node, &diag::X_GET_AND_SET_ACCESSORS_CANNOT_DECLARE_THIS_PARAMETERS, &[]);
+                }
+            }
+        }
+        // Only check rest parameter type if it's not a binding pattern.
+        let is_pattern = name.is_some_and(|n| is_binding_pattern(self.store(), n));
+        if has_dot_dot_dot_token(self.store(), node)
+            && !is_pattern
+            && self.any_readonly_array_type.is_some()
+        {
+            let param_symbol = self.get_symbol_of_declaration(node);
+            if let Some(param_symbol) = param_symbol {
+                let t = self.get_type_of_symbol(param_symbol);
+                let reduced = self.get_reduced_type(t);
+                let readonly_array = self.any_readonly_array_type.expect("anyReadonlyArrayType");
+                if !self.is_type_assignable_to(reduced, readonly_array) {
+                    self.error(node, &diag::A_REST_PARAMETER_MUST_BE_OF_AN_ARRAY_TYPE, &[]);
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkPropertyDeclaration(node)` (checker.go:2752).
+    pub(crate) fn check_property_declaration(&mut self, node: NodeId) {
+        // Grammar checking
+        let name = self.store().node(node).name();
+        if !self.check_grammar_modifiers(node) && !self.check_grammar_property(node) {
+            if let Some(name) = name {
+                self.check_grammar_computed_property_name_stub(name);
+            }
+        }
+        self.check_variable_like_declaration(node);
+        // TODO(port M6 S8): setNodeLinksForPrivateIdentifierScope — the
+        // private-identifier scope bookkeeping; permissive.
+        if crate::ast_shims::has_modifier(self.store().node(node), ModifierFlags::ABSTRACT)
+            && self.store().node(node).kind == Kind::PropertyDeclaration
+            && crate::ast_shims::initializer_of(self.store(), node).is_some() {
+                if let Some(name) = name {
+                    let name_text =
+                        tsc_scanner::utilities::declaration_name_to_string(self.store(), Some(name));
+                    self.error(
+                        node,
+                        &diag::PROPERTY_0_CANNOT_HAVE_AN_INITIALIZER_BECAUSE_IT_IS_MARKED_ABSTRACT,
+                        &[name_text],
+                    );
+                }
+            }
+    }
+
+    /// Go: `func (c *Checker) checkPropertySignature(node)` (checker.go:2768).
+    pub(crate) fn check_property_signature(&mut self, node: NodeId) {
+        let name = self
+            .store()
+            .node(node)
+            .as_property_signature_declaration()
+            .expect("PropertySignatureDeclaration data")
+            .name;
+        if name != NodeId::NONE
+            && self.store().node(name).kind == Kind::PrivateIdentifier
+        {
+            self.error(node, &diag::PRIVATE_IDENTIFIERS_ARE_NOT_ALLOWED_OUTSIDE_CLASS_BODIES, &[]);
+        }
+        self.check_property_declaration(node);
+    }
+
+    /// Go: `func (c *Checker) checkSignatureDeclaration(node)` (checker.go:2774).
+    pub(crate) fn check_signature_declaration(&mut self, node: NodeId) {
+        // Grammar checking
+        match self.store().node(node).kind {
+            Kind::IndexSignature => {
+                self.check_grammar_index_signature(node);
+            }
+            Kind::FunctionType
+            | Kind::FunctionDeclaration
+            | Kind::ConstructorType
+            | Kind::CallSignature
+            | Kind::Constructor
+            | Kind::ConstructSignature => {
+                self.check_grammar_function_like_declaration(node);
+            }
+            _ => {}
+        }
+        let function_flags = tsc_ast::functionflags::get_function_flags(self.store(), node);
+        if !function_flags.intersects(FunctionFlags::INVALID) {
+            // Async generators prior to ES2018 require the __await and
+            // __asyncGenerator helpers
+            if function_flags == FunctionFlags::ASYNC_GENERATOR
+                && self.language_version < Feature::AsyncGenerators.minimum_target()
+            {
+                self.check_external_emit_helpers_stub(
+                    node,
+                    ExternalEmitHelpers::ASYNC_GENERATOR_INCLUDES,
+                );
+            }
+            if function_flags == FunctionFlags::ASYNC
+                && self.language_version < Feature::AsyncFunctions.minimum_target()
+            {
+                self.check_external_emit_helpers_stub(node, ExternalEmitHelpers::AWAITER);
+            }
+        }
+        let type_parameters = type_parameters_of(self.store(), node);
+        self.check_type_parameters(&type_parameters);
+        // TODO(port M6 W3): checkUnmatchedJSDocParameters (jsdoc.go);
+        // permissive no-op.
+        let parameters = crate::ast_shims::parameters_of(self.store(), node).to_vec();
+        self.check_source_elements(&parameters);
+        let return_type_node = signature_type_node(self.store(), node);
+        if let Some(return_type_node) = return_type_node {
+            self.check_source_element(Some(return_type_node));
+        }
+        if self.no_implicit_any && return_type_node.is_none() {
+            match self.store().node(node).kind {
+                Kind::ConstructSignature => {
+                    self.error(
+                        node,
+                        &diag::CONSTRUCT_SIGNATURE_WHICH_LACKS_RETURN_TYPE_ANNOTATION_IMPLICITLY_HAS_AN_ANY_RETURN_TYPE,
+                        &[],
+                    );
+                }
+                Kind::CallSignature => {
+                    self.error(
+                        node,
+                        &diag::CALL_SIGNATURE_WHICH_LACKS_RETURN_TYPE_ANNOTATION_IMPLICITLY_HAS_AN_ANY_RETURN_TYPE,
+                        &[],
+                    );
+                }
+                _ => {}
+            }
+        }
+        if let Some(return_type_node) = return_type_node {
+            if (function_flags
+                & (FunctionFlags::INVALID.union(FunctionFlags::GENERATOR)))
+                == FunctionFlags::GENERATOR
+            {
+                let return_type = self.get_type_from_type_node(return_type_node);
+                if return_type == self.void_type() {
+                    self.error(
+                        return_type_node,
+                        &diag::A_GENERATOR_CANNOT_HAVE_A_VOID_TYPE_ANNOTATION,
+                        &[],
+                    );
+                } else {
+                    // TODO(port M6 S7): checkGeneratorInstantiation-
+                    // AssignabilityToReturnType (the generator return-type
+                    // relation); permissive.
+                    let _ = return_type;
+                }
+            } else if (function_flags & FunctionFlags::ASYNC_GENERATOR) == FunctionFlags::ASYNC {
+                self.check_async_function_return_type(node, return_type_node);
+            }
+        }
+        if self.store().node(node).kind != Kind::IndexSignature {
+            self.register_for_unused_identifiers_check(node);
+        }
+    }
+
+    /// Go: `func (c *Checker) checkAsyncFunctionReturnType(node, returnTypeNode)`
+    /// (checker.go:2838).
+    pub(crate) fn check_async_function_return_type(&mut self, node: NodeId, return_type_node: NodeId) {
+        let return_type = self.get_type_from_type_node(return_type_node);
+        if relater::is_error_type(self, return_type) {
+            return;
+        }
+        let global_promise_type = self.get_global_promise_type_checked();
+        if global_promise_type != self.empty_generic_type()
+            && !self.is_reference_to_type(return_type, global_promise_type)
+        {
+            // The promise type was not a valid type reference to the global
+            // promise type, so we report an error and return the unknown type.
+            let awaited = self.get_awaited_type_no_alias(return_type);
+            let awaited_text = self.type_to_string(awaited.unwrap_or_else(|| self.void_type()));
+            self.error(
+                return_type_node,
+                &diag::THE_RETURN_TYPE_OF_AN_ASYNC_FUNCTION_OR_METHOD_MUST_BE_THE_GLOBAL_PROMISE_T_TYPE_DID_YOU_MEAN_TO_WRITE_PROMISE_0,
+                &[awaited_text],
+            );
+            return;
+        }
+        self.check_awaited_type(
+            return_type,
+            false, // withAlias
+            node,
+            &diag::THE_RETURN_TYPE_OF_AN_ASYNC_FUNCTION_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER,
+        );
+    }
+
+    /// Go: `func (c *Checker) checkMethodDeclaration(node)` (checker.go:2861).
+    pub(crate) fn check_method_declaration(&mut self, node: NodeId) {
+        // Grammar checking
+        let name = self.store().node(node).name();
+        if !self.check_grammar_method(node) {
+            if let Some(name) = name {
+                let t = self.check_grammar_computed_property_name_stub(name);
+                let _ = t;
+            }
+            if self.store().node(node).kind == Kind::MethodDeclaration {
+                let d = self
+                    .store()
+                    .node(node)
+                    .as_method_declaration()
+                    .expect("MethodDeclaration data")
+                    .clone();
+                if d.asterisk_token.is_some()
+                    && name.is_some_and(|n| is_identifier(self.store().node(n)))
+                    && tsc_ast::node_text(self.store(), name.expect("checked")) == "constructor"
+                {
+                    self.error(node, &diag::CLASS_CONSTRUCTOR_MAY_NOT_BE_A_GENERATOR, &[]);
+                }
+            }
+        }
+        // Grammar checking for modifiers is done inside the function
+        // checkGrammarFunctionLikeDeclaration
+        self.check_function_or_method_declaration(node);
+        // method signatures already report "implementation not allowed in
+        // ambient context" elsewhere
+        if crate::ast_shims::has_modifier(self.store().node(node), ModifierFlags::ABSTRACT)
+            && self.store().node(node).kind == Kind::MethodDeclaration
+            && function_body_of(self.store(), node).is_some()
+        {
+            if let Some(name) = name {
+                let name_text =
+                    tsc_scanner::utilities::declaration_name_to_string(self.store(), Some(name));
+                self.error(
+                    node,
+                    &diag::METHOD_0_CANNOT_HAVE_AN_IMPLEMENTATION_BECAUSE_IT_IS_MARKED_ABSTRACT,
+                    &[name_text],
+                );
+            }
+        }
+        // Private named methods are only allowed in class declarations
+        if name.is_some_and(|n| self.store().node(n).kind == Kind::PrivateIdentifier)
+            && u::get_containing_class(self.store(), node).is_none()
+        {
+            self.error(node, &diag::PRIVATE_IDENTIFIERS_ARE_NOT_ALLOWED_OUTSIDE_CLASS_BODIES, &[]);
+        }
+        // TODO(port M6 S8): setNodeLinksForPrivateIdentifierScope; permissive.
+    }
+
+    /// Go: `func (c *Checker) checkClassStaticBlockDeclaration(node)` (checker.go:2883).
+    pub(crate) fn check_class_static_block_declaration(&mut self, node: NodeId) {
+        // Grammar checking
+        self.check_grammar_modifiers(node);
+        let children = children_of(self.store(), node);
+        for child in children {
+            self.check_source_element(Some(child));
+        }
+        if has_locals(self.store(), node) {
+            self.register_for_unused_identifiers_check(node);
+        }
+    }
+
+    /// Go: `func (c *Checker) checkConstructorDeclaration(node)` (checker.go:2891).
+    pub(crate) fn check_constructor_declaration(&mut self, node: NodeId) {
+        self.check_signature_declaration(node);
+        // Grammar check for checking only related to constructorDeclaration
+        if !self.check_grammar_constructor_type_parameters(node) {
+            self.check_grammar_constructor_type_annotation(node);
+        }
+        let body = function_body_of(self.store(), node);
+        self.check_source_element(body);
+        let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+        self.check_function_or_constructor_symbol(symbol);
+        // exit early in the case of signature - super checks are not
+        // relevant to them
+        if body.is_none() {
+            return;
+        }
+        // TS 1.0 spec (April 2014): 8.3.2
+        let containing_class_decl = self.store().node(node).parent.get();
+        if get_class_extends_heritage_element(self.store(), containing_class_decl).is_none() {
+            return;
+        }
+        // TODO(port M6 W3): classDeclarationExtendsNull — the `extends null`
+        // grammar fact; permissive false.
+        let class_extends_null = false;
+        let super_call = self.find_first_super_call(body.expect("checked"));
+        if let Some(super_call) = super_call {
+            if class_extends_null {
+                self.error(
+                    super_call,
+                    &diag::A_CONSTRUCTOR_CANNOT_CONTAIN_A_SUPER_CALL_WHEN_ITS_CLASS_EXTENDS_NULL,
+                    &[],
+                );
+            }
+            // A super call must be root-level in a constructor if both of the
+            // following are true:
+            // - The containing class is a derived class.
+            // - The constructor declares parameter properties or the
+            //   containing class declares instance member variables with
+            //   initializers.
+            let members = members_of(self.store(), containing_class_decl);
+            let parameters = crate::ast_shims::parameters_of(self.store(), node).to_vec();
+            let has_param_props = parameters.iter().any(|&p| {
+                crate::ast_shims::has_modifier(self.store().node(p), ModifierFlags::PARAMETER_PROPERTY_MODIFIER)
+            });
+            let has_initialized_members = members.iter().any(|&m| {
+                is_instance_property_with_initializer_or_private_identifier_property(self.store(), m)
+            });
+            let super_call_should_be_root_level =
+                !self.emit_standard_class_fields && (has_initialized_members || has_param_props);
+            if super_call_should_be_root_level {
+                // Until we have better flow analysis, it is an error to
+                // place the super call within any kind of block or
+                // conditional. See GH #8277
+                if !super_call_is_root_level_in_constructor(self.store(), super_call, body.expect("checked")) {
+                    self.error(
+                        super_call,
+                        &diag::A_SUPER_CALL_MUST_BE_A_ROOT_LEVEL_STATEMENT_WITHIN_A_CONSTRUCTOR_OF_A_DERIVED_CLASS_THAT_CONTAINS_INITIALIZED_PROPERTIES_PARAMETER_PROPERTIES_OR_PRIVATE_IDENTIFIERS,
+                        &[],
+                    );
+                } else {
+                    let body_node = body.expect("checked");
+                    let statements = block_statements(self.store(), body_node);
+                    let mut super_call_statement: Option<NodeId> = None;
+                    for &statement in &statements {
+                        if self.store().node(statement).kind == Kind::ExpressionStatement {
+                            let expr = self
+                                .store()
+                                .node(statement)
+                                .as_expression_statement()
+                                .expect("ExpressionStatement data")
+                                .expression;
+                            // TODO(port M6 S4): SkipOuterExpressions —
+                            // permissive direct read.
+                            if u::is_super_call(self.store(), expr) {
+                                super_call_statement = Some(statement);
+                                break;
+                            }
+                        }
+                        if node_immediately_references_super_or_this(self.store(), statement) {
+                            break;
+                        }
+                    }
+                    // Until we have better flow analysis, it is an error to
+                    // place the super call within any kind of block or
+                    // conditional. See GH #8277
+                    if super_call_statement.is_none() {
+                        self.error(
+                            node,
+                            &diag::A_SUPER_CALL_MUST_BE_THE_FIRST_STATEMENT_IN_THE_CONSTRUCTOR_TO_REFER_TO_SUPER_OR_THIS_WHEN_A_DERIVED_CLASS_CONTAINS_INITIALIZED_PROPERTIES_PARAMETER_PROPERTIES_OR_PRIVATE_IDENTIFIERS,
+                            &[],
+                        );
+                    }
+                }
+            }
+        } else if !class_extends_null {
+            self.error(node, &diag::CONSTRUCTORS_FOR_DERIVED_CLASSES_MUST_CONTAIN_A_SUPER_CALL, &[]);
+        }
+    }
+
+    /// Go: `func (c *Checker) findFirstSuperCall(node) *Node` (checker.go:2943).
+    pub(crate) fn find_first_super_call(&mut self, node: NodeId) -> Option<NodeId> {
+        let mut super_call: Option<NodeId> = None;
+        find_first_super_call_visit(self.store(), node, &mut super_call);
+        super_call
+    }
+
+    /// Go: `func (c *Checker) checkAccessorDeclaration(node)` (checker.go:2969).
+    pub(crate) fn check_accessor_declaration(&mut self, node: NodeId) {
+        // Grammar checking accessors
+        let name = self.store().node(node).name();
+        if !self.check_grammar_function_like_declaration(node) && !self.check_grammar_accessor(node) {
+            if let Some(name) = name {
+                let t = self.check_grammar_computed_property_name_stub(name);
+                let _ = t;
+            }
+        }
+        if name.is_some_and(|n| is_identifier(self.store().node(n)))
+            && name.is_some_and(|n| tsc_ast::node_text(self.store(), n) == "constructor")
+            && is_class_like(self.store(), self.store().node(node).parent.get())
+        {
+            self.error(
+                name.expect("checked"),
+                &diag::CLASS_CONSTRUCTOR_MAY_NOT_BE_AN_ACCESSOR,
+                &[],
+            );
+        }
+        self.check_decorators(node);
+        self.check_signature_declaration(node);
+        let n = self.store().node(node);
+        if n.kind == Kind::GetAccessor
+            && !n.flags.intersects(NF::AMBIENT)
+            && function_body_of(self.store(), node).is_some()
+            && n.flags.intersects(NF::HAS_IMPLICIT_RETURN)
+            && !n.flags.intersects(NF::HAS_EXPLICIT_RETURN)
+        {
+            if let Some(name) = name {
+                self.error(name, &diag::A_GET_ACCESSOR_MUST_RETURN_A_VALUE, &[]);
+            }
+        }
+        // Do not use hasDynamicName here, because that returns false for
+        // well known symbols. We want to perform checkComputedPropertyName
+        // for all computed properties, including well known symbols.
+        if name.is_some_and(|n| self.store().node(n).kind == Kind::ComputedPropertyName) {
+            let t = self.check_grammar_computed_property_name_stub(name.expect("checked"));
+            let _ = t;
+        }
+        if self.has_bindable_name(node) {
+            // TypeScript 1.0 spec (April 2014): 8.4.3
+            // Accessors for the same member name must specify the same
+            // accessibility.
+            let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+            let getter = get_declaration_of_kind(self.store(), self.program_symbol(symbol), Kind::GetAccessor);
+            let setter = get_declaration_of_kind(self.store(), self.program_symbol(symbol), Kind::SetAccessor);
+            if let (Some(getter), Some(setter)) = (getter, setter) {
+                // TODO(port M6 S8): the NodeCheckFlags TypeChecked gate —
+                // permissive: run the check (idempotent diagnostics gate on
+                // the modifier comparison itself).
+                let getter_flags = tsc_binder::ast_shims::get_combined_modifier_flags(self.store(), getter);
+                let setter_flags = tsc_binder::ast_shims::get_combined_modifier_flags(self.store(), setter);
+                if (getter_flags & ModifierFlags::ABSTRACT) != (setter_flags & ModifierFlags::ABSTRACT) {
+                    if let Some(gname) = self.store().node(getter).name() {
+                        self.error(gname, &diag::ACCESSORS_MUST_BOTH_BE_ABSTRACT_OR_NON_ABSTRACT, &[]);
+                    }
+                    if let Some(sname) = self.store().node(setter).name() {
+                        self.error(sname, &diag::ACCESSORS_MUST_BOTH_BE_ABSTRACT_OR_NON_ABSTRACT, &[]);
+                    }
+                }
+                if (getter_flags.intersects(ModifierFlags::PROTECTED)
+                    && !(setter_flags
+                        .intersects(ModifierFlags::PROTECTED.union(ModifierFlags::PRIVATE))))
+                    || (getter_flags.intersects(ModifierFlags::PRIVATE)
+                        && !setter_flags.intersects(ModifierFlags::PRIVATE))
+                {
+                    if let Some(gname) = self.store().node(getter).name() {
+                        self.error(gname, &diag::A_GET_ACCESSOR_MUST_BE_AT_LEAST_AS_ACCESSIBLE_AS_THE_SETTER, &[]);
+                    }
+                    if let Some(sname) = self.store().node(setter).name() {
+                        self.error(sname, &diag::A_GET_ACCESSOR_MUST_BE_AT_LEAST_AS_ACCESSIBLE_AS_THE_SETTER, &[]);
+                    }
+                }
+            }
+        }
+        let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+        let return_type = self.get_type_of_accessors(symbol);
+        if self.store().node(node).kind == Kind::GetAccessor {
+            self.check_all_code_paths_in_non_void_function_return_or_throw(node, Some(return_type));
+        }
+        let body = function_body_of(self.store(), node);
+        self.check_source_element(body);
+        // TODO(port M6 S8): setNodeLinksForPrivateIdentifierScope; permissive.
+    }
+
+    /// Go: `func (c *Checker) checkTypeReferenceNode(node)` (checker.go:3028).
+    pub(crate) fn check_type_reference_node(&mut self, node: NodeId) {
+        // Go: node.TypeArgumentList() — the Rust payload keeps the list
+        // inline; the W3 grammar stub takes the list node, which the
+        // permissive stub ignores.
+        self.check_grammar_type_arguments(node, None);
+        // Go: the JSDoc DotToken scan between TypeName and TypeArguments is
+        // a W3 scanner-seam fact; TODO(port M6 W3): ScanTokenAtPosition.
+        let type_arguments = type_arguments_of(self.store(), node);
+        self.check_source_elements(&type_arguments);
+        // Go: isConstTypeReference(node) && IsAssertionExpression(node.Parent)
+        // — the const-assertion fact is an S4 expression leaf; permissive
+        // false (the assertion parent walk lands with S4).
+        if !is_const_type_reference_stub(node) {
+            self.check_type_reference_or_import(node);
+        }
+    }
+
+    /// Go: `func (c *Checker) checkTypeReferenceOrImport(node)` (checker.go:3048).
+    pub(crate) fn check_type_reference_or_import(&mut self, node: NodeId) {
+        let t = self.get_type_from_type_node(node);
+        if !relater::is_error_type(self, t) {
+            let type_arguments = type_arguments_of(self.store(), node);
+            if !type_arguments.is_empty() {
+                // TODO(port M6 S5): getTypeParametersForTypeReferenceOrImport
+                // — the type-parameter resolution seam; permissive empty
+                // (checkTypeArgumentConstraints rests).
+                let type_parameters: Vec<TypeId> = Vec::new();
+                if !type_parameters.is_empty() {
+                    self.check_type_argument_constraints(node, &type_parameters);
+                }
+            }
+            let symbol = self.get_resolved_symbol_nil(node);
+            if let Some(symbol) = symbol {
+                // TODO(port M6 S10): IsDeprecatedDeclaration +
+                // addDeprecatedSuggestion (the deprecation family);
+                // permissive.
+                let _ = symbol;
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkTypeArgumentConstraints(node, typeParameters) bool`
+    /// (checker.go:3064).
+    pub(crate) fn check_type_argument_constraints(&mut self, node: NodeId, type_parameters: &[TypeId]) -> bool {
+        let mut type_arguments: Option<Vec<TypeId>> = None;
+        let mut mapper: Option<crate::todo_shapes::TypeMapperId> = None;
+        let mut result = true;
+        let type_argument_nodes = type_arguments_of(self.store(), node);
+        for (i, &type_parameter) in type_parameters.iter().enumerate() {
+            let constraint = self.get_constraint_of_type_parameter(type_parameter);
+            if let Some(constraint) = constraint {
+                if type_arguments.is_none() {
+                    // TODO(port M6 S5): getEffectiveTypeArguments — the
+                    // deferred type-argument resolution; permissive: the
+                    // raw nodes' types via getTypeFromTypeNode.
+                    type_arguments = Some(
+                        type_argument_nodes
+                            .iter()
+                            .map(|&ta| self.get_type_from_type_node(ta))
+                            .collect(),
+                    );
+                    let args = type_arguments.clone().expect("checked");
+                    mapper = Some(self.new_type_mapper(type_parameters, &args));
+                }
+                let instantiated = self.instantiate_type(
+                    constraint,
+                    mapper.expect("checked"),
+                );
+                let ta = type_arguments.as_ref().expect("checked")[i];
+                let error_node = type_argument_nodes.get(i).copied();
+                result = result
+                    && self.check_type_assignable_to_ex(
+                        ta,
+                        instantiated,
+                        error_node,
+                        Some(&diag::TYPE_0_DOES_NOT_SATISFY_THE_CONSTRAINT_1),
+                        None,
+                    );
+            }
+        }
+        result
+    }
+
+    /// Go: `func (c *Checker) checkTypePredicate(node)` (checker.go:3110).
+    pub(crate) fn check_type_predicate(&mut self, node: NodeId) {
+        // Always check the predicate's type so nested type errors are
+        // reported even when the predicate is in an invalid position, keeping
+        // diagnostics stable.
+        let predicate_type = self
+            .store()
+            .node(node)
+            .as_type_predicate_node()
+            .expect("TypePredicateNode data")
+            .type_;
+        self.check_source_element(predicate_type);
+        let parent = get_type_predicate_parent(self.store(), node);
+        let Some(parent) = parent else {
+            // The parent must not be valid.
+            self.error(
+                node,
+                &diag::A_TYPE_PREDICATE_IS_ONLY_ALLOWED_IN_RETURN_TYPE_POSITION_FOR_FUNCTIONS_AND_METHODS,
+                &[],
+            );
+            return;
+        };
+        let Some(signature) = self.get_signature_from_declaration(parent) else {
+            return;
+        };
+        let Some(type_predicate) = self.get_type_predicate_of_signature(signature).map(|p| *p) else {
+            return;
+        };
+        let parameter_name = self
+            .store()
+            .node(node)
+            .as_type_predicate_node()
+            .expect("TypePredicateNode data")
+            .parameter_name;
+        let parameter_name_opt = (parameter_name != NodeId::NONE).then_some(parameter_name);
+        if type_predicate.kind != crate::types::TypePredicateKind::This
+            && type_predicate.kind != crate::types::TypePredicateKind::AssertsThis
+        {
+            if type_predicate.parameter_index >= 0 {
+                let signature_params = self.signatures[signature.0 as usize].parameters.clone();
+                // Go: signatureHasRestParameter(signature) && index == len-1
+                // TODO(port M6 S7): signatureHasRestParameter; permissive
+                // false (the rest-parameter predicate arm rests).
+                let has_rest = false;
+                if has_rest && type_predicate.parameter_index == signature_params.len() as i32 - 1 {
+                    if let Some(parameter_name) = parameter_name_opt {
+                        self.error(
+                            parameter_name,
+                            &diag::A_TYPE_PREDICATE_CANNOT_REFERENCE_A_REST_PARAMETER,
+                            &[],
+                        );
+                    }
+                } else if let Some(t) = type_predicate.t {
+                    let param = signature_params
+                        .get(type_predicate.parameter_index as usize)
+                        .copied();
+                    if let Some(param) = param {
+                        let param_type = self.get_type_of_symbol(param);
+                        let mut diags: Vec<tsc_ast::Diagnostic> = Vec::new();
+                        let ok = self.check_type_assignable_to_ex(
+                            t,
+                            param_type,
+                            predicate_type,
+                            None,
+                            Some(&mut diags),
+                        );
+                        if !ok && !diags.is_empty() {
+                            // Go: NewDiagnosticChain(diags[0], ...) — the
+                            // chain's head carries the wrap message.
+                            let mut chained = diags.remove(0);
+                            chained.add_related_info(u::new_diagnostic_for_node(
+                                self.store(),
+                                predicate_type.expect("checked"),
+                                &diag::A_TYPE_PREDICATE_S_TYPE_MUST_BE_ASSIGNABLE_TO_ITS_PARAMETER_S_TYPE,
+                                vec![],
+                            ));
+                            self.add_diagnostic(chained);
+                        }
+                    }
+                }
+            } else if let Some(parameter_name) = parameter_name_opt {
+                let mut has_reported_error = false;
+                for param in crate::ast_shims::parameters_of(self.store(), parent).to_vec() {
+                    let name = self.store().node(param).name();
+                    if name.is_some_and(|n| is_binding_pattern(self.store(), n))
+                        && self.check_if_type_predicate_variable_is_declared_in_binding_pattern(
+                            name.expect("checked"),
+                            parameter_name,
+                            &type_predicate.parameter_name,
+                        ) {
+                            has_reported_error = true;
+                            break;
+                        }
+                }
+                if !has_reported_error {
+                    self.error(
+                        parameter_name,
+                        &diag::CANNOT_FIND_PARAMETER_0,
+                        std::slice::from_ref(&type_predicate.parameter_name),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkIfTypePredicateVariableIsDeclaredInBindingPattern(pattern, predicateVariableNode, predicateVariableName) bool`
+    /// (checker.go:3153).
+    pub(crate) fn check_if_type_predicate_variable_is_declared_in_binding_pattern(
+        &mut self,
+        pattern: NodeId,
+        predicate_variable_node: NodeId,
+        predicate_variable_name: &str,
+    ) -> bool {
+        for element in binding_pattern_elements(self.store(), pattern) {
+            let name = self.store().node(element).name();
+            let Some(name) = name else { continue };
+            if is_identifier(self.store().node(name))
+                && tsc_ast::node_text(self.store(), name) == predicate_variable_name
+            {
+                self.error(
+                    predicate_variable_node,
+                    &diag::A_TYPE_PREDICATE_CANNOT_REFERENCE_ELEMENT_0_IN_A_BINDING_PATTERN,
+                    &[predicate_variable_name.to_string()],
+                );
+                return true;
+            }
+            if is_binding_pattern(self.store(), name)
+                && self.check_if_type_predicate_variable_is_declared_in_binding_pattern(
+                    name,
+                    predicate_variable_node,
+                    predicate_variable_name,
+                )
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) checkTypeQuery(node)` (checker.go:3179).
+    pub(crate) fn check_type_query(&mut self, node: NodeId) {
+        let t = self.get_type_from_type_node(node);
+        let _ = t;
+    }
+
+    /// Go: `func (c *Checker) checkTypeLiteral(node)` (checker.go:3182).
+    pub(crate) fn check_type_literal(&mut self, node: NodeId) {
+        let members = members_of(self.store(), node);
+        self.check_source_elements(&members);
+        let t = self.get_type_from_type_node(node);
+        // TODO(port M6 S10): checkIndexConstraints (the index-constraint
+        // relation family); permissive.
+        // TODO(port M6 S3 class batch): checkTypeForDuplicateIndexSignatures
+        // — lands with checkClassOrInterfaceForDuplicateIndexSignatures.
+        let _ = t;
+        self.check_object_type_for_duplicate_declarations(node, false /*checkPrivateNames*/);
+    }
+
+    /// Go: `func (c *Checker) checkObjectTypeForDuplicateDeclarations(node, checkPrivateNames)`
+    /// (checker.go:3191).
+    pub(crate) fn check_object_type_for_duplicate_declarations(
+        &mut self,
+        node: NodeId,
+        check_private_names: bool,
+    ) {
+        let mut instance_names: FxHashMap<String, i32> = FxHashMap::default();
+        let mut static_names: FxHashMap<String, i32> = FxHashMap::default();
+        let mut private_names: FxHashMap<String, i32> = FxHashMap::default();
+        let node_in_ambient_context = self.store().node(node).flags.intersects(NF::AMBIENT);
+        for member in members_of(self.store(), node) {
+            if self.store().node(member).kind == Kind::Constructor {
+                for param in crate::ast_shims::parameters_of(self.store(), member).to_vec() {
+                    let parent = self.store().node(member);
+                    let _ = parent;
+                    let param_symbol = self.get_symbol_of_declaration(param);
+                    let param_name = param_symbol
+                        .map(|s| self.program_symbol(s).name.clone());
+                    if u::is_parameter_property_declaration(
+                        self.store(),
+                        param,
+                        member,
+                    ) && !self.store().node(param).name().is_some_and(|n| is_binding_pattern(self.store(), n))
+                    {
+                        check_property_or_accessor(
+                            self,
+                            &mut instance_names,
+                            &mut static_names,
+                            param,
+                            1,
+                            false,
+                            param_name.as_ref(),
+                        );
+                    }
+                }
+            } else {
+                let symbol = self.get_symbol_of_declaration(member);
+                let is_static = has_static_modifier(self.store(), member);
+                // In non-ambient contexts, check that static members are not
+                // named 'prototype'.
+                if !node_in_ambient_context && is_static {
+                    if let Some(symbol) = symbol {
+                        if self.program_symbol(symbol).name == "prototype" {
+                            if let Some(name) = self.store().node(member).name() {
+                                let symbol_name = self.program_symbol(symbol).name.clone();
+                                let node_symbol = self.get_symbol_of_declaration(node);
+                                let node_symbol_name = node_symbol
+                                    .map(|s| self.program_symbol(s).name.clone())
+                                    .unwrap_or_default();
+                                self.error(
+                                    name,
+                                    &diag::STATIC_PROPERTY_0_CONFLICTS_WITH_BUILT_IN_PROPERTY_FUNCTION_0_OF_CONSTRUCTOR_FUNCTION_1,
+                                    &[symbol_name, node_symbol_name],
+                                );
+                            }
+                        }
+                    }
+                }
+                // Check that this object type declaration doesn't contain
+                // multiple declarations of the same property, or accessor and
+                // property declarations with the same name.
+                let member_kind = self.store().node(member).kind;
+                let is_property_declaration = member_kind == Kind::PropertyDeclaration;
+                let is_property_signature = member_kind == Kind::PropertySignature;
+                let is_accessor = matches!(member_kind, Kind::GetAccessor | Kind::SetAccessor);
+                if (is_property_declaration
+                    && !crate::ast_shims::has_modifier(self.store().node(member), ModifierFlags::ACCESSOR))
+                    || is_property_signature
+                {
+                    if let Some(symbol) = symbol {
+                        check_property_or_accessor(
+                            self,
+                            &mut instance_names,
+                            &mut static_names,
+                            member,
+                            1,
+                            is_static,
+                            // Go reads symbol.Name through checkPropertyOrAccessor
+                            Some(&self.program_symbol(symbol).name.clone()),
+                        );
+                    }
+                } else if is_accessor
+                    || (is_property_declaration
+                        && crate::ast_shims::has_modifier(self.store().node(member), ModifierFlags::ACCESSOR))
+                {
+                    if let Some(symbol) = symbol {
+                        check_property_or_accessor(
+                            self,
+                            &mut instance_names,
+                            &mut static_names,
+                            member,
+                            2,
+                            is_static,
+                            Some(&self.program_symbol(symbol).name.clone()),
+                        );
+                    }
+                }
+                // Check that each private identifier is used only for
+                // instance members or only for static members.
+                if check_private_names
+                    && self
+                        .store()
+                        .node(member)
+                        .name()
+                        .is_some_and(|n| self.store().node(n).kind == Kind::PrivateIdentifier)
+                {
+                    if let Some(symbol) = symbol {
+                        let symbol_name = self.program_symbol(symbol).name.clone();
+                        let flags = private_names.get(&symbol_name).copied().unwrap_or(0);
+                        if flags != 3 {
+                            let flags =
+                                flags | if is_static { 2 } else { 1 };
+                            private_names.insert(symbol_name.clone(), flags);
+                            if flags == 3 {
+                                self.report_duplicate_member_errors(
+                                    node,
+                                    &symbol_name,
+                                    false, /*checkStatic*/
+                                    false, /*isStatic*/
+                                    &diag::DUPLICATE_IDENTIFIER_0_STATIC_AND_INSTANCE_ELEMENTS_CANNOT_SHARE_THE_SAME_PRIVATE_NAME,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = (check_private_names,);
+    }
+
+    /// Go: `func (c *Checker) reportDuplicateMemberErrors(node, name, checkStatic, isStatic, message)`
+    /// (checker.go:3254).
+    pub(crate) fn report_duplicate_member_errors(
+        &mut self,
+        node: NodeId,
+        name: &str,
+        check_static: bool,
+        is_static: bool,
+        message: &'static Message,
+    ) {
+        for member in members_of(self.store(), node) {
+            if self.store().node(member).kind == Kind::Constructor {
+                for param in crate::ast_shims::parameters_of(self.store(), member).to_vec() {
+                    if u::is_parameter_property_declaration(self.store(), param, member)
+                        && !self
+                            .store()
+                            .node(param)
+                            .name()
+                            .is_some_and(|n| is_binding_pattern(self.store(), n))
+                    {
+                        if let Some(symbol) = self.get_symbol_of_declaration(param) {
+                            if self.program_symbol(symbol).name == name {
+                                let symbol_name = self.program_symbol(symbol).name.clone();
+                                if let Some(pname) = self.store().node(param).name() {
+                                    self.error(pname, message, &[symbol_name]);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if let Some(symbol) = self.get_symbol_of_declaration(member) {
+                if self.program_symbol(symbol).name == name
+                    && (!check_static || is_static == is_static_modifier(self.store(), member))
+                {
+                    let symbol_name = self.program_symbol(symbol).name.clone();
+                    if let Some(mname) = self.store().node(member).name() {
+                        self.error(mname, message, &[symbol_name]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkArrayType(node)` (checker.go:3274).
+    pub(crate) fn check_array_type(&mut self, node: NodeId) {
+        let element_type = self
+            .store()
+            .node(node)
+            .as_array_type_node()
+            .expect("ArrayTypeNode data")
+            .element_type;
+        self.check_source_element(Some(element_type));
+    }
+
+    /// Go: `func (c *Checker) checkTupleType(node)` (checker.go:3278).
+    pub(crate) fn check_tuple_type(&mut self, node: NodeId) {
+        let mut seen_optional_element = false;
+        let mut seen_rest_element = false;
+        let elements = self
+            .store()
+            .node(node)
+            .as_tuple_type_node()
+            .expect("TupleTypeNode data")
+            .elements
+            .as_ref()
+            .map(|l| l.nodes.to_vec())
+            .unwrap_or_default();
+        for &e in &elements {
+            // TODO(port M6 S7): getTupleElementFlags — the element-flag
+            // computation; permissive Required (1).
+            let flags = crate::types::ElementFlags::REQUIRED;
+            if flags.intersects(crate::types::ElementFlags::VARIADIC) {
+                let t = self.get_type_from_type_node(element_type_of(self.store(), e));
+                // TODO(port M6 S7): isArrayLikeType/isArrayType/isTupleType —
+                // the array-family predicates; permissive false (both
+                // error arms rest).
+                let _ = t;
+            }
+            if flags.intersects(crate::types::ElementFlags::REST) {
+                if seen_rest_element {
+                    self.grammar_error_on_node(e, &diag::A_REST_ELEMENT_CANNOT_FOLLOW_ANOTHER_REST_ELEMENT, &[]);
+                    break;
+                }
+                seen_rest_element = true;
+            } else if flags.intersects(crate::types::ElementFlags::OPTIONAL) {
+                if seen_rest_element {
+                    self.grammar_error_on_node(e, &diag::AN_OPTIONAL_ELEMENT_CANNOT_FOLLOW_A_REST_ELEMENT, &[]);
+                    break;
+                }
+                seen_optional_element = true;
+            } else if flags.intersects(crate::types::ElementFlags::REQUIRED)
+                && seen_optional_element
+            {
+                self.grammar_error_on_node(
+                    e,
+                    &diag::A_REQUIRED_ELEMENT_CANNOT_FOLLOW_AN_OPTIONAL_ELEMENT,
+                    &[],
+                );
+                break;
+            }
+            let _ = flags;
+        }
+        self.check_source_elements(&elements);
+        let t = self.get_type_from_type_node(node);
+        let _ = t;
+    }
+
+    /// Go: `func (c *Checker) checkUnionOrIntersectionType(node)` (checker.go:3308).
+    pub(crate) fn check_union_or_intersection_type(&mut self, node: NodeId) {
+        for child in children_of(self.store(), node) {
+            self.check_source_element(Some(child));
+        }
+        let t = self.get_type_from_type_node(node);
+        let _ = t;
+    }
+
+    /// Go: `func (c *Checker) checkThisType(node)` (checker.go:3312).
+    pub(crate) fn check_this_type(&mut self, node: NodeId) {
+        let t = self.get_type_from_type_node(node);
+        let _ = t;
+    }
+
+    /// Go: `func (c *Checker) checkTypeOperator(node)` (checker.go:3315).
+    pub(crate) fn check_type_operator(&mut self, node: NodeId) {
+        // TODO(port M6 W3): checkGrammarTypeOperatorNode; permissive.
+        let type_node = self
+            .store()
+            .node(node)
+            .as_type_operator_node()
+            .expect("TypeOperatorNode data")
+            .type_;
+        self.check_source_element(Some(type_node));
+    }
+
+    /// Go: `func (c *Checker) checkConditionalType(node)` (checker.go:3319).
+    pub(crate) fn check_conditional_type(&mut self, node: NodeId) {
+        for child in children_of(self.store(), node) {
+            self.check_source_element(Some(child));
+        }
+    }
+
+    /// Go: `func (c *Checker) checkInferType(node)` (checker.go:3322).
+    pub(crate) fn check_infer_type(&mut self, node: NodeId) {
+        // Go: FindAncestor — the extends-clause containment; the parent walk.
+        let mut in_extends_clause = false;
+        let mut current = self.store().node(node).parent.get();
+        while current != NodeId::NONE {
+            let parent = self.store().node(current).parent.get();
+            if parent != NodeId::NONE && self.store().node(parent).kind == Kind::ConditionalType {
+                let extends_type = self
+                    .store()
+                    .node(parent)
+                    .as_conditional_type_node()
+                    .expect("ConditionalTypeNode data")
+                    .extends_type;
+                if extends_type == current {
+                    in_extends_clause = true;
+                    break;
+                }
+            }
+            current = parent;
+        }
+        if !in_extends_clause {
+            self.grammar_error_on_node(
+                node,
+                &diag::X_INFER_DECLARATIONS_ARE_ONLY_PERMITTED_IN_THE_EXTENDS_CLAUSE_OF_A_CONDITIONAL_TYPE,
+                &[],
+            );
+        }
+        let type_parameter_declaration_node = self
+            .store()
+            .node(node)
+            .as_infer_type_node()
+            .expect("InferTypeNode data")
+            .type_parameter;
+        self.check_source_element(Some(type_parameter_declaration_node));
+        if let Some(symbol) = self.get_symbol_of_declaration(type_parameter_declaration_node) {
+            let declarations = self.program_symbol(symbol).declarations.clone();
+            if declarations.len() > 1 {
+                // TODO(port M6 S7): the declaredTypeLinks typeParametersChecked
+                // gate + areTypeParametersIdentical — lands with the class
+                // batch's identical-constraints family; permissive skip.
+                let _ = declarations;
+            }
+        }
+        self.register_for_unused_identifiers_check(node);
+    }
+
+    /// Go: `func (c *Checker) checkTemplateLiteralType(node)` (checker.go:3349).
+    pub(crate) fn check_template_literal_type(&mut self, node: NodeId) {
+        let spans = self
+            .store()
+            .node(node)
+            .as_template_literal_type_node()
+            .expect("TemplateLiteralTypeNode data")
+            .template_spans
+            .as_ref()
+            .map(|l| l.nodes.to_vec())
+            .unwrap_or_default();
+        for span in spans {
+            let span_type = self
+                .store()
+                .node(span)
+                .as_template_literal_type_span()
+                .expect("TypeSpanNode data")
+                .type_;
+            self.check_source_element(Some(span_type));
+            let t = self.get_type_from_type_node(span_type);
+            // Go: checkTypeAssignableTo(t, templateConstraintType, ...) —
+            // the template constraint is the string-literal-or-union family;
+            // permissive skip until S7's constraint type exists.
+            let _ = t;
+        }
+        let t = self.get_type_from_type_node(node);
+        let _ = t;
+    }
+
+    /// Go: `func (c *Checker) checkImportType(node)` (checker.go:3362).
+    pub(crate) fn check_import_type(&mut self, node: NodeId) {
+        let d = self
+            .store()
+            .node(node)
+            .as_import_type_node()
+            .expect("ImportTypeNode data")
+            .clone();
+        self.check_source_element(Some(d.argument));
+        if let Some(attributes) = d.attributes {
+            // TODO(port M6 W3): checkGrammarImportAttributeValues +
+            // getResolutionModeOverride (jsdoc/import-attributes grammar);
+            // permissive.
+            let _ = attributes;
+        }
+        self.check_type_reference_or_import(node);
+        // Go: checkImportAttributes(node) — lands with the import/export
+        // batch (checker.go:5460).
+    }
+
+    /// Go: `func (c *Checker) checkNamedTupleMember(node)` (checker.go:3386).
+    pub(crate) fn check_named_tuple_member(&mut self, node: NodeId) {
+        let d = self
+            .store()
+            .node(node)
+            .as_named_tuple_member()
+            .expect("NamedTupleMember data")
+            .clone();
+        if d.dot_dot_dot_token.is_some() && d.question_token.is_some() {
+            self.grammar_error_on_node(node, &diag::A_TUPLE_MEMBER_CANNOT_BE_BOTH_OPTIONAL_AND_REST, &[]);
+        }
+        if self.store().node(d.type_).kind == Kind::OptionalType {
+            self.grammar_error_on_node(
+                d.type_,
+                &diag::A_LABELED_TUPLE_ELEMENT_IS_DECLARED_AS_OPTIONAL_WITH_A_QUESTION_MARK_AFTER_THE_NAME_AND_BEFORE_THE_COLON_RATHER_THAN_AFTER_THE_TYPE,
+                &[],
+            );
+        }
+        if self.store().node(d.type_).kind == Kind::RestType {
+            self.grammar_error_on_node(
+                d.type_,
+                &diag::A_LABELED_TUPLE_ELEMENT_IS_DECLARED_AS_REST_WITH_A_BEFORE_THE_NAME_RATHER_THAN_BEFORE_THE_TYPE,
+                &[],
+            );
+        }
+        self.check_source_element(Some(d.type_));
+        let t = self.get_type_from_type_node(node);
+        let _ = t;
+    }
+
+    /// Go: `func (c *Checker) checkIndexedAccessType(node)` (checker.go:3402).
+    pub(crate) fn check_indexed_access_type(&mut self, node: NodeId) {
+        for child in children_of(self.store(), node) {
+            self.check_source_element(Some(child));
+        }
+        // TODO(port M6 S10): checkIndexedAccessIndexType — the index-type
+        // constraint family; permissive.
+        let t = self.get_type_from_type_node(node);
+        let _ = t;
+    }
+
+    /// Go: `func (c *Checker) checkMappedType(node)` (checker.go:3409).
+    pub(crate) fn check_mapped_type(&mut self, node: NodeId) {
+        let d = self
+            .store()
+            .node(node)
+            .as_mapped_type_node()
+            .expect("MappedTypeNode data")
+            .clone();
+        // TODO(port M6 W3): checkGrammarMappedType; permissive.
+        self.check_source_element(Some(d.type_parameter));
+        self.check_source_element(d.name_type);
+        self.check_source_element(d.type_);
+        if d.type_.is_none() {
+            let any_type = self.any_type();
+            self.report_implicit_any(node, any_type, crate::typeofsymbol::WideningKind::Normal);
+        }
+        let t = self.get_type_from_type_node(node);
+        // TODO(port M6 S10): getNameTypeFromMappedType /
+        // getConstraintTypeFromMappedType — the mapped-type constraint
+        // family; permissive.
+        let _ = t;
+    }
+
+    /// Go: `func (c *Checker) checkFunctionDeclaration(node)` (checker.go:3436).
+    pub(crate) fn check_function_declaration(&mut self, node: NodeId) {
+        self.check_function_or_method_declaration(node);
+        // TODO(port M6 W3): checkGrammarForGenerator; permissive.
+        self.check_collisions_for_declaration_name_stub(node, self.store().node(node).name());
+    }
+
+    /// Go: `func (c *Checker) checkFunctionOrMethodDeclaration(node)` (checker.go:3441).
+    pub(crate) fn check_function_or_method_declaration(&mut self, node: NodeId) {
+        self.check_decorators(node);
+        self.check_signature_declaration(node);
+        let function_flags = tsc_ast::functionflags::get_function_flags(self.store(), node);
+        // Do not use hasDynamicName here, because that returns false for
+        // well known symbols.
+        if let Some(name) = self.store().node(node).name() {
+            if self.store().node(name).kind == Kind::ComputedPropertyName {
+                let t = self.check_grammar_computed_property_name_stub(name);
+                let _ = t;
+            }
+        }
+        if self.has_bindable_name(node) {
+            // first we want to check the local symbol that contain this
+            // declaration
+            let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+            let local_symbol = local_symbol_of(self.store(), node).unwrap_or(symbol);
+            // Since the javascript won't do semantic analysis like
+            // typescript, ignore javascript function declarations so that
+            // redeclaring a function in a JS file is not reported as a
+            // duplicate.
+            if !self
+                .store()
+                .node(node)
+                .flags
+                .intersects(NF::JAVASCRIPT_FILE)
+            {
+                self.check_function_or_constructor_symbol(local_symbol);
+            }
+            if self.program_symbol(symbol).parent.is_some() {
+                // run check on export symbol to check that modifiers agree
+                // across all exported declarations
+                self.check_function_or_constructor_symbol(symbol);
+            }
+        }
+        let body = function_body_of(self.store(), node);
+        self.check_source_element(body);
+        let return_type_annotation = self.get_return_type_from_annotation(node);
+        self.check_all_code_paths_in_non_void_function_return_or_throw(node, return_type_annotation);
+        // TODO(port M6 W4): node.FunctionLikeData().FullSignature — the
+        // JSDoc @type full-signature seam; permissive (the FunctionLike
+        // payload's full_signature lands with the JSDoc wave).
+        if signature_type_node(self.store(), node).is_none() {
+            // Report an implicit any error if there is no body, no explicit
+            // return type, and node is not a private method in an ambient
+            // context
+            if body.is_none() && !is_private_within_ambient(self.store(), node) {
+                let any_type = self.any_type();
+                self.report_implicit_any(node, any_type, crate::typeofsymbol::WideningKind::Normal);
+            }
+            if function_flags.intersects(FunctionFlags::GENERATOR) && body.is_some() {
+                // A generator with a body and no type annotation can still
+                // cause errors; trigger them by checking its return type.
+                if let Some(signature) = self.get_signature_from_declaration(node) {
+                    let return_type = self.get_return_type_of_signature(signature);
+                    let _ = return_type;
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkFunctionOrConstructorSymbol(symbol)` (checker.go:3504).
+    pub(crate) fn check_function_or_constructor_symbol(&mut self, symbol: SymbolId) {
+        // Only check the symbol once
+        if !self.value_symbol_links.get(symbol).function_or_constructor_checked {
+            self.value_symbol_links.get(symbol).function_or_constructor_checked = true;
+            self.check_function_or_constructor_symbol_worker(symbol);
+        }
+    }
+
+    /// Go: `func (c *Checker) checkFunctionOrConstructorSymbolWorker(symbol)`
+    /// (checker.go:3510, ~232 lines).
+    pub(crate) fn check_function_or_constructor_symbol_worker(&mut self, symbol: SymbolId) {
+        let flags_to_check = ModifierFlags::EXPORT
+            .union(ModifierFlags::AMBIENT)
+            .union(ModifierFlags::PRIVATE)
+            .union(ModifierFlags::PROTECTED)
+            .union(ModifierFlags::ABSTRACT);
+        let mut some_node_flags = ModifierFlags::NONE;
+        let mut all_node_flags = flags_to_check;
+        let mut some_have_question_token = false;
+        let mut all_have_question_token = true;
+        let mut has_overloads = false;
+        let mut body_declaration: Option<NodeId> = None;
+        let mut last_seen_non_ambient_declaration: Option<NodeId> = None;
+        let mut previous_declaration: Option<NodeId> = None;
+        let is_constructor = self
+            .program_symbol(symbol)
+            .flags
+            .intersects(SymbolFlags::CONSTRUCTOR);
+        let mut duplicate_function_declaration = false;
+        let mut multiple_constructor_implementation = false;
+        let mut has_non_ambient_class = false;
+        let mut function_declarations: Vec<NodeId> = Vec::new();
+        let declarations = self.program_symbol(symbol).declarations.clone();
+        for &node in &declarations {
+            let in_ambient_context = self.store().node(node).flags.intersects(NF::AMBIENT);
+            let parent = self.store().node(node).parent.get();
+            let parent_kind = self.store().node(parent).kind;
+            let in_ambient_context_or_interface = in_ambient_context
+                || (parent_kind == Kind::InterfaceDeclaration || parent_kind == Kind::TypeLiteral);
+            // check if declarations are consecutive only if they are non-ambient
+            if in_ambient_context_or_interface {
+                previous_declaration = None;
+            }
+            let node_kind = self.store().node(node).kind;
+            if is_class_like(self.store(), node) && !in_ambient_context {
+                has_non_ambient_class = true;
+            }
+            if node_kind == Kind::FunctionDeclaration
+                || node_kind == Kind::MethodDeclaration
+                || node_kind == Kind::MethodSignature
+                || node_kind == Kind::Constructor
+            {
+                function_declarations.push(node);
+                let current_node_flags = self.get_effective_declaration_flags(node, flags_to_check);
+                some_node_flags |= current_node_flags;
+                all_node_flags &= current_node_flags;
+                let optional = u::is_optional_declaration(self.store(), node);
+                some_have_question_token = some_have_question_token || optional;
+                all_have_question_token = all_have_question_token && optional;
+                let body_is_present = function_body_of(self.store(), node).is_some();
+                if body_is_present && body_declaration.is_some() {
+                    if is_constructor {
+                        multiple_constructor_implementation = true;
+                    } else {
+                        duplicate_function_declaration = true;
+                    }
+                } else if let Some(previous) = previous_declaration {
+                    let previous_parent = self.store().node(previous).parent.get();
+                    let reparsed = self
+                        .store()
+                        .node(previous)
+                        .flags
+                        .intersects(NF::REPARSED);
+                    if previous_parent == parent
+                        && self.store().node(previous).end() != self.store().node(node).pos()
+                        && !reparsed
+                    {
+                        self.report_implementation_expected_error(previous);
+                    }
+                }
+                if body_is_present {
+                    if body_declaration.is_none() {
+                        body_declaration = Some(node);
+                    }
+                } else {
+                    has_overloads = true;
+                }
+                previous_declaration = Some(node);
+                if !in_ambient_context_or_interface {
+                    last_seen_non_ambient_declaration = Some(node);
+                }
+            }
+        }
+        if multiple_constructor_implementation {
+            for &declaration in &function_declarations {
+                self.error(declaration, &diag::MULTIPLE_CONSTRUCTOR_IMPLEMENTATIONS_ARE_NOT_ALLOWED, &[]);
+            }
+        }
+        if duplicate_function_declaration {
+            for &declaration in &function_declarations {
+                let name = tsc_binder::ast_shims::get_name_of_declaration(self.store(), declaration);
+                self.error(
+                    name.unwrap_or(declaration),
+                    &diag::DUPLICATE_FUNCTION_IMPLEMENTATION,
+                    &[],
+                );
+            }
+        }
+        if has_non_ambient_class
+            && !is_constructor
+            && self.program_symbol(symbol).flags.intersects(SymbolFlags::FUNCTION)
+            && !declarations.is_empty()
+        {
+            let mut related_diagnostics: Vec<tsc_ast::Diagnostic> = Vec::new();
+            for &declaration in &declarations {
+                if self.store().node(declaration).kind == Kind::ClassDeclaration {
+                    related_diagnostics.push(u::new_diagnostic_for_node(
+                        self.store(),
+                        declaration,
+                        &diag::CONSIDER_ADDING_A_DECLARE_MODIFIER_TO_THIS_CLASS,
+                        vec![],
+                    ));
+                }
+            }
+            for &declaration in &declarations {
+                let message = match self.store().node(declaration).kind {
+                    Kind::ClassDeclaration => Some(&diag::CLASS_DECLARATION_CANNOT_IMPLEMENT_OVERLOAD_LIST_FOR_0),
+                    Kind::FunctionDeclaration => {
+                        Some(&diag::FUNCTION_WITH_BODIES_CAN_ONLY_MERGE_WITH_CLASSES_THAT_ARE_AMBIENT)
+                    }
+                    _ => None,
+                };
+                if let Some(message) = message {
+                    let name =
+                        tsc_binder::ast_shims::get_name_of_declaration(self.store(), declaration);
+                    let mut diagnostic =
+                        self.error(name.unwrap_or(declaration), message, &[self.program_symbol(symbol).name.clone()]);
+                    diagnostic.set_related_info(related_diagnostics.clone());
+                }
+            }
+        }
+        // Abstract methods can't have an implementation -- in particular,
+        // they don't need one.
+        if let Some(last) = last_seen_non_ambient_declaration {
+            if function_body_of(self.store(), last).is_none()
+                && !crate::ast_shims::has_modifier(self.store().node(last), ModifierFlags::ABSTRACT)
+                && !u::is_optional_declaration(self.store(), last)
+            {
+                self.report_implementation_expected_error(last);
+            }
+        }
+        if has_overloads {
+            // Go: checkFlagAgreementBetweenOverloads — the per-file
+            // canonical-flag grouping; the effective-flags seam is S8's
+            // getEffectiveDeclarationFlags (permissive NONE ⇒ no
+            // deviations). The XOR math is preserved on that answer.
+            let some_but_not_all = ModifierFlags(some_node_flags.bits() ^ all_node_flags.bits());
+            if !some_but_not_all.is_empty() {
+                let canonical = body_declaration
+                    .or_else(|| declarations.first().copied())
+                    .unwrap_or_default();
+                let canonical_flags = self.get_effective_declaration_flags(canonical, flags_to_check);
+                for &node in &declarations {
+                    let deviation = ModifierFlags(
+                        self.get_effective_declaration_flags(node, flags_to_check).bits()
+                            ^ canonical_flags.bits(),
+                    );
+                    if deviation.intersects(ModifierFlags::EXPORT) {
+                        let name = tsc_binder::ast_shims::get_name_of_declaration(self.store(), node);
+                        self.error(
+                            name.unwrap_or(node),
+                            &diag::OVERLOAD_SIGNATURES_MUST_ALL_BE_EXPORTED_OR_NON_EXPORTED,
+                            &[],
+                        );
+                    } else if deviation.intersects(ModifierFlags::AMBIENT) {
+                        let name = tsc_binder::ast_shims::get_name_of_declaration(self.store(), node);
+                        self.error(
+                            name.unwrap_or(node),
+                            &diag::OVERLOAD_SIGNATURES_MUST_ALL_BE_AMBIENT_OR_NON_AMBIENT,
+                            &[],
+                        );
+                    } else if deviation
+                        .intersects(ModifierFlags::PRIVATE.union(ModifierFlags::PROTECTED))
+                    {
+                        let name = tsc_binder::ast_shims::get_name_of_declaration(self.store(), node);
+                        self.error(
+                            name.unwrap_or(node),
+                            &diag::OVERLOAD_SIGNATURES_MUST_ALL_BE_PUBLIC_PRIVATE_OR_PROTECTED,
+                            &[],
+                        );
+                    } else if deviation.intersects(ModifierFlags::ABSTRACT) {
+                        let name = tsc_binder::ast_shims::get_name_of_declaration(self.store(), node);
+                        self.error(
+                            name.unwrap_or(node),
+                            &diag::OVERLOAD_SIGNATURES_MUST_ALL_BE_ABSTRACT_OR_NON_ABSTRACT,
+                            &[],
+                        );
+                    }
+                }
+            }
+            // Go: checkQuestionTokenAgreementBetweenOverloads
+            if some_have_question_token != all_have_question_token {
+                let canonical = body_declaration
+                    .or_else(|| declarations.first().copied())
+                    .unwrap_or_default();
+                let canonical_optional = u::is_optional_declaration(self.store(), canonical);
+                for &node in &declarations {
+                    if u::is_optional_declaration(self.store(), node) != canonical_optional {
+                        let name = tsc_binder::ast_shims::get_name_of_declaration(self.store(), node);
+                        self.error(
+                            name.unwrap_or(node),
+                            &diag::OVERLOAD_SIGNATURES_MUST_ALL_BE_OPTIONAL_OR_REQUIRED,
+                            &[],
+                        );
+                    }
+                }
+            }
+            if let Some(body_declaration) = body_declaration {
+                let Some(body_signature) = self.get_signature_from_declaration(body_declaration)
+                else {
+                    return;
+                };
+                let signature_kind = if is_constructor { SignatureKind::Construct } else { SignatureKind::Call };
+                let symbol_type = self.get_type_of_symbol(symbol);
+                let signatures =
+                    relater::get_signatures_of_type(self, symbol_type, signature_kind);
+                for &signature in &signatures {
+                    if !self.is_implementation_compatible_with_overload(body_signature, signature) {
+                        let error_node = self.signatures[signature.0 as usize]
+                            .declaration
+                            .unwrap_or(body_declaration);
+                        let mut diagnostic = self.error(
+                            error_node,
+                            &diag::THIS_OVERLOAD_SIGNATURE_IS_NOT_COMPATIBLE_WITH_ITS_IMPLEMENTATION_SIGNATURE,
+                            &[],
+                        );
+                        diagnostic.add_related_info(u::new_diagnostic_for_node(
+                            self.store(),
+                            body_declaration,
+                            &diag::THE_IMPLEMENTATION_SIGNATURE_IS_DECLARED_HERE,
+                            vec![],
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) reportImplementationExpectedError(node)` (the
+    /// worker's local closure, checker.go:3572-3625).
+    pub(crate) fn report_implementation_expected_error(&mut self, node: NodeId) {
+        let name = self.store().node(node).name();
+        if name.is_some_and(|n| self.store().node(n).pos() == self.store().node(n).end()) {
+            return;
+        }
+        let parent = self.store().node(node).parent.get();
+        let siblings = children_of(self.store(), parent);
+        let mut subsequent_node: Option<NodeId> = None;
+        let mut seen = false;
+        for &child in &siblings {
+            if seen {
+                subsequent_node = Some(child);
+                break;
+            }
+            seen = child == node;
+        }
+        // We may be here because of some extra nodes between overloads that
+        // could not be parsed into a valid node.
+        if let Some(subsequent) = subsequent_node {
+            if self.store().node(subsequent).pos() == self.store().node(node).end()
+                && self.store().node(subsequent).kind == self.store().node(node).kind
+            {
+                let subsequent_name = self.store().node(subsequent).name();
+                let error_node = subsequent_name.unwrap_or(subsequent);
+                if let (Some(name), Some(subsequent_name)) = (name, subsequent_name) {
+                    let name_kind = self.store().node(name).kind;
+                    let subsequent_kind = self.store().node(subsequent_name).kind;
+                    let same = (name_kind == Kind::PrivateIdentifier
+                        && subsequent_kind == Kind::PrivateIdentifier
+                        && tsc_ast::node_text(self.store(), name)
+                            == tsc_ast::node_text(self.store(), subsequent_name))
+                        || (name_kind == Kind::ComputedPropertyName
+                            && subsequent_kind == Kind::ComputedPropertyName)
+                        || (is_property_name_literal(self.store(), name)
+                            && is_property_name_literal(self.store(), subsequent_name)
+                            && tsc_ast::node_text(self.store(), name)
+                                == tsc_ast::node_text(self.store(), subsequent_name));
+                    if same {
+                        let node_kind = self.store().node(node).kind;
+                        let report_error = (node_kind == Kind::MethodDeclaration
+                            || node_kind == Kind::MethodSignature)
+                            && is_static_modifier(self.store(), node)
+                                != is_static_modifier(self.store(), subsequent);
+                        if report_error {
+                            let message = if is_static_modifier(self.store(), node) {
+                                &diag::FUNCTION_OVERLOAD_MUST_BE_STATIC
+                            } else {
+                                &diag::FUNCTION_OVERLOAD_MUST_NOT_BE_STATIC
+                            };
+                            self.error(error_node, message, &[]);
+                        }
+                        return;
+                    }
+                }
+                if function_body_of(self.store(), subsequent).is_some() {
+                    let name_text = tsc_scanner::utilities::declaration_name_to_string(
+                        self.store(),
+                        name,
+                    );
+                    self.error(error_node, &diag::FUNCTION_IMPLEMENTATION_NAME_MUST_BE_0, &[name_text]);
+                    return;
+                }
+            }
+        }
+        let error_node = name.unwrap_or(node);
+        if self.store().node(node).kind == Kind::Constructor {
+            self.error(error_node, &diag::CONSTRUCTOR_IMPLEMENTATION_IS_MISSING, &[]);
+        } else {
+            if crate::ast_shims::has_modifier(self.store().node(node), ModifierFlags::ABSTRACT) {
+                self.error(
+                    error_node,
+                    &diag::ALL_DECLARATIONS_OF_AN_ABSTRACT_METHOD_MUST_BE_CONSECUTIVE,
+                    &[],
+                );
+            } else {
+                self.error(
+                    error_node,
+                    &diag::FUNCTION_IMPLEMENTATION_IS_MISSING_OR_NOT_IMMEDIATELY_FOLLOWING_THE_DECLARATION,
+                    &[],
+                );
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) isImplementationCompatibleWithOverload(implementation, overload) bool`
+    /// (checker.go:3745).
+    pub(crate) fn is_implementation_compatible_with_overload(
+        &mut self,
+        implementation: crate::types::SignatureId,
+        overload: crate::types::SignatureId,
+    ) -> bool {
+        let erased_source = relater::get_erased_signature(self, implementation);
+        let erased_target = relater::get_erased_signature(self, overload);
+        // First see if the return types are compatible in either direction.
+        let source_return_type = self.get_return_type_of_signature(erased_source);
+        let target_return_type = self.get_return_type_of_signature(erased_target);
+        if target_return_type == self.void_type()
+            || self.is_type_related_to(
+                target_return_type,
+                source_return_type,
+                crate::relater::RelationKind::Assignable,
+            )
+            || self.is_type_related_to(
+                source_return_type,
+                target_return_type,
+                crate::relater::RelationKind::Assignable,
+            )
+        {
+            self.is_signature_assignable_to(erased_source, erased_target, true /*ignoreReturnTypes*/)
+        } else {
+            false
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Free helpers for the type-node batch.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `ast.IsClassLike`.
+pub(crate) fn is_class_like(store: &dyn NodeStore, node: NodeId) -> bool {
+    matches!(
+        store.node(node).kind,
+        Kind::ClassDeclaration | Kind::ClassExpression
+    )
+}
+
+/// Go: `ast.GetClassExtendsHeritageElement` — the class's `extends` heritage
+/// element (ExpressionWithTypeArguments) or None.
+pub(crate) fn get_class_extends_heritage_element(
+    store: &dyn NodeStore,
+    node: NodeId,
+) -> Option<NodeId> {
+    let n = store.node(node);
+    let clauses = match n.kind {
+        Kind::ClassDeclaration => n.as_class_declaration().expect("data").heritage_clauses.as_ref(),
+        Kind::ClassExpression => n.as_class_expression().expect("data").heritage_clauses.as_ref(),
+        _ => None,
+    }?;
+    for &clause in &clauses.nodes {
+        let c = store.node(clause);
+        if c.kind == Kind::HeritageClause
+            && c.as_heritage_clause().expect("HeritageClause data").token == Kind::ExtendsKeyword
+        {
+            let elements = c
+                .as_heritage_clause()
+                .expect("HeritageClause data")
+                .types
+                .as_ref()
+                .map(|l| l.nodes.to_vec())
+                .unwrap_or_default();
+            return elements.first().copied();
+        }
+    }
+    None
+}
+
+/// Go: `isInstancePropertyWithInitializerOrPrivateIdentifierProperty`.
+pub(crate) fn is_instance_property_with_initializer_or_private_identifier_property(
+    store: &dyn NodeStore,
+    n: NodeId,
+) -> bool {
+    let node = store.node(n);
+    // Go: IsPrivateIdentifierClassElementDeclaration
+    let name_kind = node.name().map(|nm| store.node(nm).kind);
+    if name_kind == Some(Kind::PrivateIdentifier)
+        && matches!(node.kind, Kind::PropertyDeclaration | Kind::MethodDeclaration | Kind::GetAccessor | Kind::SetAccessor)
+    {
+        return true;
+    }
+    node.kind == Kind::PropertyDeclaration
+        && !has_static_modifier(store, n)
+        && crate::ast_shims::initializer_of(store, n).is_some()
+}
+
+/// Go: `superCallIsRootLevelInConstructor`.
+pub(crate) fn super_call_is_root_level_in_constructor(
+    store: &dyn NodeStore,
+    super_call: NodeId,
+    body: NodeId,
+) -> bool {
+    let mut parent = store.node(super_call).parent.get();
+    // Go: WalkUpParenthesizedExpressions
+    while matches!(store.node(parent).kind, Kind::ParenthesizedExpression) {
+        parent = store.node(parent).parent.get();
+    }
+    let is_expression_statement = store.node(parent).kind == Kind::ExpressionStatement;
+    let grandparent = store.node(parent).parent.get();
+    is_expression_statement && grandparent == body
+}
+
+/// Go: `nodeImmediatelyReferencesSuperOrThis`.
+pub(crate) fn node_immediately_references_super_or_this(
+    store: &dyn NodeStore,
+    node: NodeId,
+) -> bool {
+    let n = store.node(node);
+    match n.kind {
+        Kind::SuperKeyword | Kind::ThisKeyword => true,
+        Kind::ArrowFunction
+        | Kind::FunctionDeclaration
+        | Kind::FunctionExpression
+        | Kind::PropertyDeclaration => false,
+        Kind::Block => {
+            let parent_kind = store.node(n.parent.get()).kind;
+            if matches!(
+                parent_kind,
+                Kind::Constructor
+                    | Kind::MethodDeclaration
+                    | Kind::GetAccessor
+                    | Kind::SetAccessor
+            ) {
+                return false;
+            }
+            children_of(store, node)
+                .iter()
+                .any(|&c| node_immediately_references_super_or_this(store, c))
+        }
+        _ => children_of(store, node)
+            .iter()
+            .any(|&c| node_immediately_references_super_or_this(store, c)),
+    }
+}
+
+/// Go: `findFirstSuperCall`'s visitor closure.
+fn find_first_super_call_visit(store: &dyn NodeStore, node: NodeId, super_call: &mut Option<NodeId>) -> bool {
+    if u::is_super_call(store, node) {
+        *super_call = Some(node);
+        return true;
+    }
+    if is_function_like(store, node) {
+        return false;
+    }
+    for child in children_of(store, node) {
+        if find_first_super_call_visit(store, child, super_call) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Go: `getTypePredicateParent`.
+pub(crate) fn get_type_predicate_parent(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    let parent = store.node(node).parent.get();
+    match store.node(parent).kind {
+        Kind::ArrowFunction
+        | Kind::CallSignature
+        | Kind::FunctionDeclaration
+        | Kind::FunctionExpression
+        | Kind::FunctionType
+        | Kind::MethodDeclaration
+        | Kind::MethodSignature => {
+            if signature_type_node(store, parent) == Some(node) {
+                Some(parent)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The `checkPropertyOrAccessor` closure of checkObjectTypeForDuplicate-
+/// Declarations. `symbol_name` is the Go `symbol.Name` read.
+#[allow(clippy::too_many_arguments)]
+fn check_property_or_accessor(
+    _c: &mut Checker,
+    instance_names: &mut FxHashMap<String, i32>,
+    static_names: &mut FxHashMap<String, i32>,
+    declaration: NodeId,
+    kind: i32,
+    is_static: bool,
+    symbol_name: Option<&String>,
+) {
+    let Some(symbol_name) = symbol_name else { return };
+    let names = if is_static { static_names } else { instance_names };
+    let state = names.get(symbol_name).copied().unwrap_or(0);
+    match state {
+        0 => {
+            names.insert(symbol_name.clone(), kind);
+        }
+        1 | 2
+            if (kind != 2 || state == 1) => {
+                // Error on second property or combination of property and
+                // accessor
+                let _ = declaration;
+                // reported below via the caller's node context
+                names.insert(symbol_name.clone(), 3);
+            }
+        _ => {}
+    }
+}
+
+/// Go: `ast.IsPropertyNameLiteral` — identifier/string/numeric literal names.
+pub(crate) fn is_property_name_literal(store: &dyn NodeStore, node: NodeId) -> bool {
+    matches!(
+        store.node(node).kind,
+        Kind::Identifier | Kind::StringLiteral | Kind::NumericLiteral
+    )
+}
+
+/// Go: `hasStaticModifier` / `ast.IsStatic`.
+pub(crate) fn has_static_modifier(store: &dyn NodeStore, node: NodeId) -> bool {
+    crate::ast_shims::has_modifier(store.node(node), ModifierFlags::STATIC)
+}
+
+/// `ast.IsStatic` alias used by the duplicate-member walk.
+pub(crate) fn is_static_modifier(store: &dyn NodeStore, node: NodeId) -> bool {
+    has_static_modifier(store, node)
+}
+
+/// Go: `isPrivateWithinAmbient` (expressions.go) — a private-named method
+/// inside an ambient context needs no implicit-any report.
+pub(crate) fn is_private_within_ambient(store: &dyn NodeStore, node: NodeId) -> bool {
+    let name_kind = store.node(node).name().map(|n| store.node(n).kind);
+    if name_kind != Some(Kind::PrivateIdentifier) {
+        return false;
+    }
+    let mut current = store.node(node).parent.get();
+    while current != NodeId::NONE {
+        if store.node(current).flags.intersects(NF::AMBIENT) {
+            return true;
+        }
+        current = store.node(current).parent.get();
+    }
+    false
+}
+
+/// The element type of a tuple member node (OptionalType/RestType wrap one).
+fn element_type_of(store: &dyn NodeStore, e: NodeId) -> NodeId {
+    let n = store.node(e);
+    match n.kind {
+        Kind::OptionalType => n.as_optional_type_node().expect("data").type_,
+        Kind::RestType => n.as_rest_type_node().expect("data").type_,
+        _ => e,
+    }
+}
+
+/// TODO(port M6 S4): `isConstTypeReference` — the const-assertion fact;
+/// permissive false until the S4 expression wave lands.
+fn is_const_type_reference_stub(_node: NodeId) -> bool {
+    false
+}
+
+/// Go: `func GetDeclarationOfKind(symbol, kind) *Node` — first declaration
+/// of the given kind, in declaration order.
+pub(crate) fn get_declaration_of_kind(
+    store: &dyn NodeStore,
+    symbol: &tsc_ast::Symbol,
+    kind: Kind,
+) -> Option<NodeId> {
+    symbol
+        .declarations
+        .iter()
+        .copied()
+        .find(|&d| store.node(d).kind == kind)
+}

@@ -1706,7 +1706,7 @@ impl Checker {
 }
 
 /// Go: `func (c *Checker) createMarkerType(symbol, source, target) *Type`.
-fn create_marker_type(c: &mut Checker, symbol: SymbolId, source: TypeId, target: Option<TypeId>) -> TypeId {
+pub(crate) fn create_marker_type(c: &mut Checker, symbol: SymbolId, source: TypeId, target: Option<TypeId>) -> TypeId {
     let target = target.expect("marker type (S7 constructs them in NewChecker)");
     let mapper = c.new_simple_type_mapper(source, target);
     let t = get_declared_type_of_symbol(c, symbol);
@@ -1734,7 +1734,7 @@ fn create_marker_type(c: &mut Checker, symbol: SymbolId, source: TypeId, target:
 }
 
 /// Go: `func (c *Checker) getTypeParameterModifiers(tp) ast.ModifierFlags`.
-fn get_type_parameter_modifiers(c: &Checker, tp: TypeId) -> ModifierFlags {
+pub(crate) fn get_type_parameter_modifiers(c: &Checker, tp: TypeId) -> ModifierFlags {
     let mut flags = ModifierFlags::NONE;
     if let Some(symbol) = c.type_(tp).symbol {
         for &d in &c.program_symbol(symbol).declarations {

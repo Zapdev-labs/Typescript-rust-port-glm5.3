@@ -429,6 +429,9 @@ pub struct Checker {
     pub(crate) context_free_types: FxHashMap<NodeId, TypeId>,
     /// Go: `renamedBindingElementsInTypes []*ast.Node`.
     pub(crate) renamed_binding_elements_in_types: Vec<NodeId>,
+    /// Go: `varianceTypeParameter *Type` (checker.go:548) — the variance
+    /// annotation check's in-flight type parameter.
+    pub(crate) variance_type_parameter: Option<TypeId>,
     /// Go: `skipDirectInferenceNodes *collections.OrderedSet`.
     pub(crate) skip_direct_inference_nodes: tsc_collections::OrderedSet<NodeId>,
     /// Go: `serializationLevel uint32` (checker.go:14263).
@@ -1409,6 +1412,7 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         flow_invocation_count: 0,
         context_free_types: FxHashMap::default(),
         renamed_binding_elements_in_types: Vec::new(),
+        variance_type_parameter: None,
         skip_direct_inference_nodes: tsc_collections::OrderedSet::new(),
         serialization_level: 0,
         diagnostics: crate::spine::DiagnosticsCollection::default(),
