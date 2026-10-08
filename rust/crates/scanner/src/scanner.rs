@@ -2818,10 +2818,16 @@ impl<'a> Scanner<'a> {
     /// Go (inlined at the '0b'/'0o' Scan arms): `s.tokenValue = "0b"/"0o" + digits`.
     fn set_base_prefixed_number_value(&mut self, prefix: &[u8], digits: Cow<'a, [u8]>) {
         // The fast path borrows the source text when the literal already reads
-        // exactly prefix+digits (lowercase prefix, no separators).
+        // exactly prefix+digits (lowercase prefix, no separators). The length
+        // check excludes the digitless error case: the caller substitutes "0"
+        // for empty digits (Go: `digits = "0"`), so the raw region is shorter
+        // than the substituted digits and Go unconditionally builds the
+        // prefix+substitute string there (a raw borrow would drop it, e.g.
+        // `0bn` keeping tokenValue "0b" and panicking in ParsePseudoBigInt).
         let start = self.state.token_start;
         if !self.state.token_flags.intersects(TokenFlags::CONTAINS_SEPARATOR)
             && self.bytes()[start..start + 2] == *prefix
+            && self.state.pos == start + 2 + digits.len()
         {
             let value = &self.bytes()[start..self.state.pos];
             self.state.token_value = Cow::Borrowed(value);
