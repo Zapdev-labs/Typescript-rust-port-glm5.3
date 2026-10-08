@@ -108,6 +108,67 @@ pub fn extra_key_did_you_mean_diagnostics(s: &str) -> Option<&'static Message> {
     }
 }
 
+/// Go: `func createUnknownOptionError(unknownOption, unknownOptionDiagnostic, unknownOptionErrorText, node, sourceFile, alternateMode, unknownDidYouMeanDiagnostic, optionsNameMap)`.
+///
+/// PORT: `node`/`sourceFile` are `None` on the command-line path this crate
+/// serves in M4 (see module PORT notes); the alternate-mode and
+/// spelling-suggestion arms are exact.
+#[allow(clippy::too_many_arguments)]
+pub fn create_unknown_option_error(
+    unknown_option: &str,
+    unknown_option_diagnostic: &'static Message,
+    unknown_option_error_text: &str,
+    source_file: Option<&tsc_ast::SourceFile>,
+    node: Option<tsc_ast::NodeId>,
+    alternate_mode: Option<&crate::diagnostics::AlternateModeDiagnostics>,
+    unknown_did_you_mean_diagnostic: Option<&'static Message>,
+    options_name_map: Option<&crate::namemap::NameMap>,
+) -> Diagnostic {
+    if let Some(alternate_mode) = alternate_mode {
+        // Go: `alternateMode.optionsNameMap` (never nil in the two worker
+        // bundles this port wires).
+        let other_option = (alternate_mode.options_name_map)().get(unknown_option);
+        if let Some(other_option) = other_option {
+            // tscbuildoption
+            let diagnostic = if other_option.name == "build" {
+                &tsc_diagnostics::OPTION_BUILD_MUST_BE_THE_FIRST_COMMAND_LINE_ARGUMENT
+            } else {
+                alternate_mode.diagnostic
+            };
+            return create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
+                source_file,
+                node,
+                diagnostic,
+                &[unknown_option.to_string()],
+            );
+        }
+    }
+    let unknown_option_error_text = if unknown_option_error_text.is_empty() {
+        unknown_option
+    } else {
+        unknown_option_error_text
+    };
+    if let (Some(diagnostic), Some(map)) = (unknown_did_you_mean_diagnostic, options_name_map) {
+        if let Some(possible_option) = map.get_spelling_suggestion(unknown_option) {
+            return create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
+                source_file,
+                node,
+                diagnostic,
+                &[
+                    unknown_option_error_text.to_string(),
+                    possible_option.name.to_string(),
+                ],
+            );
+        }
+    }
+    create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
+        source_file,
+        node,
+        unknown_option_diagnostic,
+        &[unknown_option_error_text.to_string()],
+    )
+}
+
 /// Go: `func createDiagnosticForInvalidEnumType(opt, sourceFile, node)`.
 pub fn create_diagnostic_for_invalid_enum_type(
     opt: &CommandLineOption,

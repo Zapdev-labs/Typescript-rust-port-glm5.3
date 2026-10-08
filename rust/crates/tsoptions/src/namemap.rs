@@ -133,7 +133,7 @@ pub fn build_name_map() -> &'static NameMap {
     MAP.get_or_init(|| {
         let mut all: Vec<&'static CommandLineOption> =
             crate::declarations_generated::COMMON_OPTIONS_WITH_BUILD.to_vec();
-        all.extend_from_slice(&crate::declarations_generated::OPTIONS_FOR_BUILD);
+        all.extend_from_slice(crate::declarations_generated::OPTIONS_FOR_BUILD);
         get_name_map_from_list(&all)
     })
 }

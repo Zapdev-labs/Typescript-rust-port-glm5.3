@@ -68,11 +68,6 @@ pub fn compiler_options_did_you_mean_diagnostics() -> &'static ParseCommandLineW
 pub fn build_options_did_you_mean_diagnostics() -> &'static ParseCommandLineWorkerDiagnostics {
     static DIAGNOSTICS: OnceLock<ParseCommandLineWorkerDiagnostics> = OnceLock::new();
     DIAGNOSTICS.get_or_init(|| {
-        let mut all: Vec<&'static CommandLineOption> =
-            crate::declarations_generated::COMMON_OPTIONS_WITH_BUILD.to_vec();
-        all.extend_from_slice(&crate::declarations_generated::OPTIONS_FOR_BUILD);
-        let all: &'static [&'static CommandLineOption] = Box::leak(all.into_boxed_slice());
-        let _ = all;
         ParseCommandLineWorkerDiagnostics {
             did_you_mean: DidYouMeanOptionsDiagnostics {
                 alternate_mode: Some(AlternateModeDiagnostics {
@@ -102,7 +97,7 @@ fn build_decls() -> &'static [&'static CommandLineOption] {
     DECLS.get_or_init(|| {
         let mut all: Vec<&'static CommandLineOption> =
             crate::declarations_generated::COMMON_OPTIONS_WITH_BUILD.to_vec();
-        all.extend_from_slice(&crate::declarations_generated::OPTIONS_FOR_BUILD);
+        all.extend_from_slice(crate::declarations_generated::OPTIONS_FOR_BUILD);
         Box::leak(all.into_boxed_slice())
     })
 }

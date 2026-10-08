@@ -18,7 +18,7 @@
 //     it is defined in tsconfigparsing.rs and re-exported here.
 
 use tsc_collections::{OrderedMap, Set};
-use tsc_core::options_generated::CompilerOptions;
+use tsc_core::options_generated::{BuildOptions, CompilerOptions};
 use tsc_core::tristate::Tristate;
 use tsc_tspath::{
     get_normalized_absolute_path, rooted_directory_path_from_normalized,
@@ -39,18 +39,17 @@ pub fn starts_with_config_dir_template(value: &str) -> bool {
 }
 
 /// Go: `func getSubstitutedPathWithConfigDirTemplate(value string, basePath tspath.RootedDirectoryPath) string`
-/// (tsconfigparsing.go). Note Go's asymmetry: the *check* is
-/// case-insensitive but the *trim* is the exact template — an input like
-/// `${configDIR}/x` passes the check and then keeps its prefix.
+/// Go: `func getSubstitutedPathWithConfigDirTemplate(value string, basePath) string`
+/// (tsconfigparsing.go): `strings.Replace(value, configDirTemplate, "./", 1)`
+/// then normalize against the base path. Note Go's asymmetry: the *check*
+/// (`startsWithConfigDirTemplate`) is case-insensitive but the *substitution*
+/// matches the exact `${configDir}` casing — callers guard with the check.
 pub fn get_substituted_path_with_config_dir_template(
     value: &str,
     base_path: &RootedDirectoryPath,
 ) -> String {
-    if starts_with_config_dir_template(value) {
-        let trimmed = value.strip_prefix(CONFIG_DIR_TEMPLATE).unwrap_or(value);
-        return get_normalized_absolute_path(trimmed, base_path).into_owned();
-    }
-    value.to_string()
+    get_normalized_absolute_path(&value.replacen(CONFIG_DIR_TEMPLATE, "./", 1), base_path)
+        .into_owned()
 }
 
 /// Go: `func getSubstitutedStringArrayWithConfigDirTemplate[T ~string](list []T, basePath) []T` —
@@ -343,6 +342,36 @@ impl OptionParser for CompilerOptionsParser<'_> {
 
     fn unknown_did_you_mean_diagnostic() -> Option<&'static tsc_diagnostics::Message> {
         Some(&tsc_diagnostics::UNKNOWN_COMPILER_OPTION_0_DID_YOU_MEAN_1)
+    }
+}
+
+/// Go: `type buildOptionsParser struct` (parsinghelpers.go).
+pub struct BuildOptionsParser<'a> {
+    pub build_options: &'a mut BuildOptions,
+}
+
+impl OptionParser for BuildOptionsParser<'_> {
+    fn parse_option(&mut self, key: &str, value: &CompilerOptionsValue) {
+        crate::options_generated::parse_build_options(key, value, self.build_options);
+    }
+
+    fn unknown_option_diagnostic() -> Option<&'static tsc_diagnostics::Message> {
+        Some(&tsc_diagnostics::UNKNOWN_BUILD_OPTION_0)
+    }
+
+    fn unknown_did_you_mean_diagnostic() -> Option<&'static tsc_diagnostics::Message> {
+        Some(&tsc_diagnostics::UNKNOWN_BUILD_OPTION_0_DID_YOU_MEAN_1)
+    }
+}
+
+/// Go: `func convertMapToOptions[O optionParser](compilerOptions, result) O` —
+/// values have already been validated and converted.
+pub fn convert_map_to_options<O: OptionParser>(
+    compiler_options: &OrderedMap<String, CompilerOptionsValue>,
+    result: &mut O,
+) {
+    for (key, value) in compiler_options.entries() {
+        result.parse_option(key, value);
     }
 }
 

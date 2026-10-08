@@ -2674,10 +2674,10 @@ pub fn serialize_compiler_options(
             CompilerOptionsValue::Bool(options.verbatim_module_syntax == Tristate::TSTrue),
         );
     }
-    if options.max_node_module_js_depth.is_some() {
+    if let Some(value) = options.max_node_module_js_depth {
         result.set(
             "maxNodeModuleJsDepth".to_string(),
-            CompilerOptionsValue::Int(options.max_node_module_js_depth.unwrap()),
+            CompilerOptionsValue::Int(value),
         );
     }
     if options.allow_synthetic_default_imports == Tristate::TSTrue

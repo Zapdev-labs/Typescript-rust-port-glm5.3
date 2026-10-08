@@ -7,21 +7,24 @@
 // PORT notes list the M4-scope deltas (see PORTING-NOTES.md for the roll-up).
 //
 // Not yet ported from the Go package (tracked in PORTING-NOTES.md):
-//   - commandlineparser.go / parsedcommandline.go's watch machinery
 //   - tsconfigparsing.go's AST-based JSON conversion (spans in diagnostics)
 //     and getFileNamesFromConfigSpecs (glob-driven file enumeration)
 //   - the full vfsmatch SpecMatcher (tsc-vfs wave)
 //   - contentmapper's host.go/hostimpl.go (out of M4 scope)
 
 pub mod commandlineoption;
+pub mod commandlineparser;
 pub mod declarations_generated;
 pub mod diagnostics;
 pub mod enummaps;
 pub mod errors;
 pub mod namemap;
 pub mod options_generated;
+pub mod parsedbuildcommandline;
 pub mod parsedcommandline;
+pub mod parsedoptions;
 pub mod parsinghelpers;
+pub mod rawcompileroptions;
 pub mod showconfig;
 pub mod tsconfigparsing;
 pub mod wildcarddirectories;
@@ -45,11 +48,18 @@ pub use options_generated::{
     get_default_type_acquisition, parse_build_options, parse_compiler_options,
     parse_type_acquisition, serialize_compiler_option_enum, serialize_compiler_options,
 };
+pub use commandlineparser::{
+    parse_build_command_line, parse_command_line, parse_list_type_option, CommandLineParser,
+};
+pub use parsedbuildcommandline::ParsedBuildCommandLine;
 pub use parsedcommandline::ParsedCommandLine;
+pub use parsedoptions::ParsedOptions;
 pub use parsinghelpers::{
     parse_content_mapper, parse_project_reference, parse_string, parse_string_array,
-    parse_string_array_strict, parse_tristate, CompilerOptionsParser,
+    parse_string_array_strict, parse_tristate, BuildOptionsParser, CompilerOptionsParser,
+    OptionParser,
 };
+pub use rawcompileroptions::RawCompilerOptions;
 pub use showconfig::{convert_to_tsconfig, TSConfig};
 pub use tsconfigparsing::{
     get_parsed_command_line_of_config_file_path, parse_config_file_text_to_json,

@@ -22,5 +22,6 @@ tsc-glob = { path = "../glob" }
 tsc-json = { path = "../json" }
 tsc-locale = { path = "../locale" }
 tsc-scanner = { path = "../scanner" }
+tsc-stringutil = { path = "../stringutil" }
 tsc-tspath = { path = "../tspath" }
 tsc-vfs = { path = "../vfs" }

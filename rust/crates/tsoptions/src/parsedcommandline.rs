@@ -26,7 +26,7 @@ pub struct ParsedCommandLine {
     pub build_options: BuildOptions,
     /// Go: `fileNames []tspath.RootedFilePath` — empty in the M4 wave (file
     /// enumeration is the glob/vfs wave; see tsconfigparsing.rs PORT notes).
-    file_names: Vec<RootedFilePath>,
+    pub(crate) file_names: Vec<RootedFilePath>,
     /// Go: `baseDirectory tspath.RootedDirectoryPath`.
     pub base_directory: RootedDirectoryPath,
     /// Go: `caseSensitive tspath.CaseSensitivity`.
@@ -44,6 +44,12 @@ pub struct ParsedCommandLine {
     pub(crate) raw_files_specs: Vec<PathPattern>,
     /// Go: `errors []*ast.Diagnostic`.
     pub errors: Vec<Diagnostic>,
+    /// Go: `raw any` — the option map the command-line parser produced
+    /// (tsconfig parsing leaves it zero).
+    pub raw: tsc_collections::OrderedMap<String, crate::commandlineoption::CompilerOptionsValue>,
+    /// Go: `rootFileNamesForDiagnostics []string` — the un-rooted file name
+    /// strings as they appeared on the command line.
+    pub root_file_names_for_diagnostics: Vec<String>,
     /// Go: `wildcardDirectories` (see wildcarddirectories.rs; empty in M4).
     pub wildcard_directories: Vec<(RootedPath, crate::wildcarddirectories::WildcardDirectoryWatcher)>,
 }

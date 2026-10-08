@@ -93,17 +93,12 @@ pub fn get_wildcard_directories<T: AsRef<str>>(
 
         // Remove any subpaths under an existing recursively watched directory.
         if !recursive_keys.is_empty() {
-            wildcard_directories = wildcard_directories
-                .into_iter()
-                .filter(|(path, _)| {
-                    let path_key = case_sensitivity.path_key(&path.as_path());
-                    !recursive_keys
-                        .iter()
-                        .any(|recursive_key| {
-                            path_key != *recursive_key && recursive_key.contains_path(&path_key)
-                        })
+            wildcard_directories.retain(|(path, _)| {
+                let path_key = case_sensitivity.path_key(&path.as_path());
+                !recursive_keys.iter().any(|recursive_key| {
+                    path_key != *recursive_key && recursive_key.contains_path(&path_key)
                 })
-                .collect();
+            });
             wildcard_key_to_index = wildcard_directories
                 .iter()
                 .enumerate()
