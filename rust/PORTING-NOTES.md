@@ -413,3 +413,25 @@ a view type over unsafe punning. Raw outputs: ~/bench-results/phase0 (rig).
   `\x13f` @420-424) — a scanner-crate escape-sequence slicing issue, out
   of parser scope (reported, not touched). tsc-parser 10/10 tests, gate
   GATE: panics=0, clippy clean in parser files.
+
+### M3 wave-3 follow-up — scanner octal-escape digit ladder (orchestrator)
+
+- **Octal-escape first-digit cap** (scanner.rs): Go's
+  `scanEscapeSequence` is a fallthrough ladder — `case '0'` (after its
+  IsDigit guard) and `case '1','2','3'` reach BOTH digit consumptions
+  (up to 3 digits total, `\011`/`\177`/`\377`), while `case '4'–'7'`
+  enters at the LAST consumption only: at most one further digit
+  (`\47`, never `\477`, since 0o4xx ≥ 256 exceeds the \377 cap).
+  The port's shared `scan_octal_escape_sequence_tail` consumed two
+  further digits for every first digit, so `\477` decoded 0o477=319
+  (`\x13f`, range 420-424) where Go decodes `\47`=39 (`\x27`,
+  420-423) and leaves the third `7` as string text.
+  Found by the full-corpus dump diff
+  (`tsc/testdata/tests/cases/compiler/octalLiteralAndEscapeSequence.ts`);
+  fix: gate the first consumption on `low_first_digit` (true for
+  first digits '0'–'3', false for '4'–'7'), mirroring the ladder.
+- Validation: the octal torture file byte-identical (109 errors,
+  dump diff IDENTICAL); 14-escape edge matrix (strings + templates +
+  regex, `\4`/`\47`/`\477`/`\0`/`\08`/`\011`/`\177`/`\377`/`\400`/
+  `\077`/`\77`/`\310`/`\7`) IDENTICAL; tsc-scanner 6/6, tsc-parser
+  10/10, testdata gate 176/176 panics=0.

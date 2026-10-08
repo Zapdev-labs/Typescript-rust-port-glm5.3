@@ -117,10 +117,18 @@ timings (rig still loaded by the syzkaller campaign, load ~30):
 | zod (colinhacks, depth 1) | 515 | 563,033 | 0 | `15803bfa6c347c94` ✓ | 1.003 | 0.642 |
 | vite (vitejs, depth 1) | 602 | 355,856 | 1 | `db36d00b94e30112` ✓ | 0.835 | 0.398 |
 
-tsc/testdata (torture corpus, 2.5M nodes, 7,218 intentional errors) found the
-only divergences so far: `!`-definite-assignment on a parameter with a generic
-type annotation (6 missing diagnostics) and multi-case JSX mismatched-close
-recovery (both single-case repros byte-identical; both fixes in flight).
+tsc/testdata (torture corpus, 12,957 files, 2,584,705 nodes, 7,218 intentional
+errors) — **PARITY GREEN** (2026-10-08 05:10, shape `b2b6a3ebc8e90d02` on both
+sides) after the two parser fixes (26d303a562): `!`-definite-assignment on a
+parameter with a generic type annotation (6 diagnostics lost to a
+`mem::take` in `finish_source_file` — `reparseTopLevelAwait`'s replay found an
+empty sink) and multi-case JSX mismatched-close recovery (predicates compared
+the `JsxClosingElement` wrapper instead of `ClosingElement.TagName()`). The
+corpus previously diverged 6 nodes / 4 errors. One known residual:
+`compiler/octalLiteralAndEscapeSequence.ts` escape-slicing diagnostic
+(`\x27` vs `\x13f`, range 420-423 vs 420-424) — scanner-crate, invisible to
+the aggregate gate; fixed (Go's octal-escape ladder gives first digits 4-7
+only one further digit — `\47`, never `\477` — since 0o4xx ≥ 256).
 On 2 of 3 new real-world corpora the Rust parser is faster than Go even at
 threads=1 — the 1.051× single-thread gap on the race corpus is JSX-heavy
 file mix, not a general parser deficit.

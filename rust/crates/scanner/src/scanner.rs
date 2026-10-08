@@ -2193,15 +2193,15 @@ impl<'a> Scanner<'a> {
                 }
                 // '\01', '\011'
                 // Go: fallthrough to the octal cases.
-                self.scan_octal_escape_sequence_tail(flags, start, ch)
+                self.scan_octal_escape_sequence_tail(flags, start, ch, true)
             }
             Ok(b'1'..=b'3') => {
                 // '\1', '\17', '\177'
-                self.scan_octal_escape_sequence_tail(flags, start, ch)
+                self.scan_octal_escape_sequence_tail(flags, start, ch, true)
             }
             Ok(b'4'..=b'7') => {
                 // '\4', '\47' but not '\477'
-                self.scan_octal_escape_sequence_tail(flags, start, ch)
+                self.scan_octal_escape_sequence_tail(flags, start, ch, false)
             }
             Ok(b'8' | b'9') => {
                 // the invalid '\8' and '\9'
@@ -2366,15 +2366,20 @@ impl<'a> Scanner<'a> {
     }
 
     /// The shared tail of Go's '0'–'7' escape cases (fallthrough chain):
-    /// up to two further octal digits, invalid-escape flags, and either the
-    /// diagnostic + decoded char (reporting) or the raw text slice.
+    /// Go's `case '1','2','3'` digit consumption only for first digits
+    /// '0'–'3' (its body is unreachable from `case '4'–'7'`), then the
+    /// `case '4'–'7'` consumption for all, invalid-escape flags, and either
+    /// the diagnostic + decoded char (reporting) or the raw text slice.
     fn scan_octal_escape_sequence_tail(
         &mut self,
         flags: EscapeSequenceScanningFlags,
         start: usize,
         ch: i32,
+        low_first_digit: bool,
     ) -> Cow<'a, [u8]> {
-        if stringutil::is_octal_digit(as_char(self.char_())) {
+        // '\01', '\011' / '\1', '\17', '\177' — not reached from '4'–'7',
+        // so a first digit 4–7 consumes at most one more ('\47', not '\477').
+        if low_first_digit && stringutil::is_octal_digit(as_char(self.char_())) {
             self.state.pos += 1;
         }
         // '\17', '\177'
