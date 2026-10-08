@@ -31,26 +31,12 @@ pub type EvaluatorResult = ();
 #[derive(Debug)]
 pub struct Evaluator;
 
-/// Go: `*Tracer` (checker/tracer.go — M6 wave 2, "ported early" per SPEC §8
-/// M6 order). Records type/check events for `--generateTrace`.
-#[derive(Debug)]
-pub struct Tracer;
-
 /// Go: `*ast.DiagnosticsCollection` — the ast crate's diagnostic.go port
 /// currently carries only the `Diagnostic` struct (its header notes the
 /// collection factories are a separate task). This alias marks the checker's
 /// `diagnostics`/`suggestionDiagnostics` fields until that lands.
 #[derive(Debug, Default)]
 pub struct DiagnosticsCollection;
-
-/// Go: `*Relation` (checker/relater.go — M6 wave 2). The four relation
-/// instances live on the checker; empty until the relater wave.
-#[derive(Debug, Default)]
-pub struct Relation;
-
-/// Go: `*Relater` (checker/relater.go).
-#[derive(Debug, Default)]
-pub struct Relater;
 
 /// Go: `*InferenceState` / `*InferenceContext` / `ContextualInfo` /
 /// `InferenceContextInfo` (checker/inference.go — M6 wave 2).

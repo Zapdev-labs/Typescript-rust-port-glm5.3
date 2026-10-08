@@ -25,7 +25,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tsc_ast::{
     CheckFlags, Kind, ModifierFlags, Node, NodeFlags, NodeId, NodeStore, Symbol, SymbolFlags,
     SymbolId, SymbolTable,
@@ -42,7 +42,7 @@ use crate::ast_shims;
 use crate::links::{NodeLinkStore, SymbolArenaLinkStore};
 use crate::mapper::TypeMapperData;
 use crate::todo_shapes::{
-    CacheHashKey, FlowState, InferenceContext, InferenceContextId, Tracer, TypeMapperId,
+    CacheHashKey, FlowState, InferenceContext, InferenceContextId, TypeMapperId,
 };
 use crate::types::{
     AliasSymbolLinks, ArrayLiteralLinks, AssertionLinks, ComputedNameNodeLinks,
@@ -310,7 +310,7 @@ pub struct Checker {
     pub(crate) last_get_combined_modifier_flags_node: Option<NodeId>,
     pub(crate) last_get_combined_modifier_flags_result: ModifierFlags,
     // ── todo_shapes-backed Go fields (§8 M6 waves) ──
-    pub(crate) tracer: Option<Tracer>,
+    pub(crate) tracer: Option<crate::tracer::Tracer>,
     pub(crate) free_flow_state: Option<FlowState>,
     pub(crate) unique_literal_mapper: Option<TypeMapperId>,
     // ── Type-instantiation mapper machinery (mapper.go W1) ──
@@ -331,6 +331,48 @@ pub struct Checker {
     /// indexes this Vec through `InferenceContextId` (the inference wave, M6
     /// wave 2, owns the real design).
     pub(crate) inference_contexts: Vec<InferenceContext>,
+    // ── Relater state (Go relater.go's Checker fields — M6 W2) ──
+    /// Go: the five `*Relation` instances (PORT: `RelationKind` identity —
+    /// see relater.rs's module note). Fixed at NewChecker; never re-created
+    /// (Go's pointer identity for `r.relation == c.identityRelation`).
+    pub(crate) identity_relation: crate::relater::Relation,
+    pub(crate) assignable_relation: crate::relater::Relation,
+    pub(crate) subtype_relation: crate::relater::Relation,
+    pub(crate) strict_subtype_relation: crate::relater::Relation,
+    pub(crate) comparable_relation: crate::relater::Relation,
+    /// Go: `enumRelation map[EnumRelationKey]RelationComparisonResult`.
+    pub(crate) enum_relation:
+        FxHashMap<crate::relater::EnumRelationKey, crate::relater::RelationComparisonResult>,
+    /// Go: `reliabilityFlags RelationComparisonResult` — set when an
+    /// unmeasurable/unreliable comparison is detected (variance probing).
+    pub(crate) reliability_flags: crate::relater::RelationComparisonResult,
+    /// Go: `markerTypes map[*Type]bool` — the marker type parameters
+    /// `getVariancesWorker` measures with.
+    pub(crate) marker_types: FxHashSet<TypeId>,
+    /// Go: `markerSuperType/markerSubType/markerOtherType *Type` — created
+    /// once in NewChecker (Go: the deferred NewChecker marker creation; the
+    /// `expect` on use names the seam).
+    pub(crate) marker_super_type: Option<TypeId>,
+    pub(crate) marker_sub_type: Option<TypeId>,
+    pub(crate) marker_other_type: Option<TypeId>,
+    /// Go: `varianceStack []varianceStackEntry`.
+    pub(crate) variance_stack: Vec<crate::relater::VarianceStackEntry>,
+    /// Go: the `*Relater` free list (`c.freeRelater`). PORT: the pool is a
+    /// stack of idle relaters; `get_relater`/`put_relater` in relater.rs.
+    pub(crate) free_relater: Vec<crate::relater::Relater>,
+    /// Go: `anyArrayType *Type` — NewChecker's `createArrayType(anyType)`.
+    /// TODO(port M6 S7): createArrayType constructs a type reference; until
+    /// that lands the field holds anyType (the array-ness consumers gate on
+    /// `isArrayType`, itself a permissive S7 stub, so no behavior diverges).
+    pub(crate) any_array_type: TypeId,
+    /// Go: `globalArrayType`/`globalReadonlyArrayType`/`globalObjectType`/
+    /// `globalFunctionType` — the globals' declared types (S2 getGlobal*).
+    /// TODO(port M6 S2): None until the globals resolution wave; use sites
+    /// treat None as "not the global" (Go's nil check).
+    pub(crate) global_array_type: Option<TypeId>,
+    pub(crate) global_readonly_array_type: Option<TypeId>,
+    pub(crate) global_object_type: Option<TypeId>,
+    pub(crate) global_function_type: Option<TypeId>,
 }
 
 /// Go: `func createFileIndexMap(files []*ast.SourceFile) map[*ast.SourceFile]int`.
