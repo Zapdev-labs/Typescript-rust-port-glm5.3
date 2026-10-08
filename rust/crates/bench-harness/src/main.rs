@@ -28,6 +28,7 @@ fn main() {
     match cmd.as_str() {
         "micro" => micro::run(&args[1..]),
         "parse" => parse::run(&args[1..]),
+        "dump" => parse::run_dump(&args[1..]),
         _ => usage(),
     }
 }
@@ -35,6 +36,7 @@ fn main() {
 fn usage() -> ! {
     eprintln!("usage: tsc-bench micro --op <name> [--iters N] [--samples N]");
     eprintln!("       tsc-bench parse --corpus <dir> [--threads N] [--iterations K] [--iters K] [--json]");
+    eprintln!("       tsc-bench dump --corpus <dir>   (per-file NDJSON: nodes, diagnostics, histogram)");
     std::process::exit(2);
 }
 

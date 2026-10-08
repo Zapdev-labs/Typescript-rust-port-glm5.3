@@ -48,6 +48,8 @@ func main() {
 	switch os.Args[1] {
 	case "parse":
 		runParse(os.Args[2:])
+	case "dump":
+		runDump(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -58,7 +60,119 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: go-bench parse --corpus <dir> [--threads N] [--iterations K] [--json]")
+	fmt.Fprintln(os.Stderr, "       go-bench dump --corpus <dir>   (per-file NDJSON: nodes, diagnostics, histogram)")
 	os.Exit(2)
+}
+
+// runDump is the parity-debugging twin of the Rust driver's `tsc-bench dump`:
+// parses every file (threads=1, walk order) and prints one NDJSON line per
+// file with nodes, diagnostics (key/code/pos/end/args) and the kind
+// histogram. Both drivers emit byte-identical lines for identical parses —
+// diff the outputs to localize divergence.
+func runDump(args []string) {
+	fs := flag.NewFlagSet("dump", flag.ExitOnError)
+	corpus := fs.String("corpus", "", "corpus directory")
+	_ = fs.Parse(args)
+	if *corpus == "" {
+		fmt.Fprintln(os.Stderr, "go-bench dump: missing required --corpus <dir>")
+		os.Exit(2)
+	}
+	files, _, err := indexCorpus(*corpus)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "go-bench: %v\n", err)
+		os.Exit(1)
+	}
+	var sb strings.Builder
+	for i := range files {
+		f := &files[i]
+		sf := parser.ParseSourceFile(ast.SourceFileParseOptions{
+			FileName: f.fileName,
+			PathKey:  f.pathKey,
+		}, f.text, f.scriptKind)
+		s := walkForDump(sf.AsNode())
+		sb.Reset()
+		sb.WriteString(`{"file":"`)
+		jsonEscape(&sb, f.fileName.AsString())
+		sb.WriteString(`","nodes":`)
+		sb.WriteString(strconv.FormatInt(s.nodes, 10))
+		sb.WriteString(`,"errors":`)
+		sb.WriteString(strconv.Itoa(len(sf.Diagnostics())))
+		sb.WriteString(`,"diag":[`)
+		for di, d := range sf.Diagnostics() {
+			if di > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString(`{"key":"`)
+			jsonEscape(&sb, string(d.MessageKey()))
+			sb.WriteString(`","code":`)
+			sb.WriteString(strconv.FormatInt(int64(d.Code()), 10))
+			sb.WriteString(`,"pos":`)
+			sb.WriteString(strconv.Itoa(d.Pos()))
+			sb.WriteString(`,"end":`)
+			sb.WriteString(strconv.Itoa(d.End()))
+			sb.WriteString(`,"args":[`)
+			for ai, a := range d.MessageArgs() {
+				if ai > 0 {
+					sb.WriteByte(',')
+				}
+				sb.WriteByte('"')
+				jsonEscape(&sb, a)
+				sb.WriteByte('"')
+			}
+			sb.WriteString(`]}`)
+		}
+		sb.WriteString(`],"hist":"`)
+		first := true
+		for o := 0; o < int(ast.KindCount); o++ {
+			if c := s.hist[ast.Kind(o)]; c > 0 {
+				if !first {
+					sb.WriteByte(' ')
+				}
+				first = false
+				sb.WriteString(strconv.Itoa(o))
+				sb.WriteByte(':')
+				sb.WriteString(strconv.FormatInt(c, 10))
+			}
+		}
+		sb.WriteString(`"}`)
+		fmt.Println(sb.String())
+	}
+}
+
+// walkForDump counts nodes and histogram entries exactly like parseAndWalk
+// (contract rule 2), minus the diagnostics count (runDump adds it).
+func walkForDump(root *ast.Node) fileStats {
+	var s fileStats
+	s.hist = make(map[ast.Kind]int64)
+	var visit ast.Visitor
+	visit = func(n *ast.Node) bool {
+		s.nodes++
+		s.hist[n.Kind]++
+		n.ForEachChild(visit)
+		return false
+	}
+	visit(root)
+	return s
+}
+
+// jsonEscape implements the minimal, deliberately-shared escaping rules the
+// Rust driver mirrors byte-for-byte (`json_escape` in parse.rs): `"` and `\`
+// and control characters only. Not encoding/json's rules (no HTML escaping,
+// no \n/\t shorthand) — identical bytes on both sides is the whole point.
+func jsonEscape(sb *strings.Builder, s string) {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"':
+			sb.WriteString(`\"`)
+		case c == '\\':
+			sb.WriteString(`\\`)
+		case c < 0x20:
+			fmt.Fprintf(&sb, `\u%04x`, c)
+		default:
+			sb.WriteByte(c)
+		}
+	}
 }
 
 // benchFile is one indexed corpus file: text, precomputed parse inputs, and

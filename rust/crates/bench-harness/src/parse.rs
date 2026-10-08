@@ -417,10 +417,18 @@ fn run_pass(files: &[BenchFile], threads: usize, parse: ParseFn) -> Vec<FileStat
 /// - `errors`: `len(sf.diagnostics())` — parse diagnostics only (rule 3).
 fn parse_and_walk(f: &BenchFile, parse: ParseFn) -> FileStats {
     let sf = parse(f);
+    let mut stats = walk_stats(&sf);
+    stats.errors = sf.diagnostics().len() as i64;
+    stats
+}
+
+/// The explicit-stack walk (contract rule 2): every node reachable from the
+/// SourceFile root via for_each_child, counted + histogrammed by kind.
+fn walk_stats(sf: &SourceFile) -> FileStats {
     let mut stats = FileStats::empty();
     let mut stack = vec![sf.as_node_id()];
     while let Some(id) = stack.pop() {
-        let node = NodeStore::node(&sf, id);
+        let node = NodeStore::node(sf, id);
         stats.nodes += 1;
         stats.hist[node.kind_value() as usize] += 1;
         node.for_each_child(&mut |child| {
@@ -428,8 +436,115 @@ fn parse_and_walk(f: &BenchFile, parse: ParseFn) -> FileStats {
             false // keep going (true would stop the traversal)
         });
     }
-    stats.errors = sf.diagnostics().len() as i64;
     stats
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// dump: per-file NDJSON for Go-vs-Rust parity debugging (both drivers
+// emit byte-identical lines for identical parses)
+// ──────────────────────────────────────────────────────────────────────
+
+/// Minimal JSON string escaper — deliberately NOT serde/encoding-json:
+/// both drivers implement these exact rules so the outputs are
+/// byte-identical (HTML escaping, \n/\t shorthand etc. excluded).
+fn json_escape(s: &str, out: &mut String) {
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+}
+
+/// Entry point for `tsc-bench dump --corpus <dir>` — parses every file
+/// (threads=1, in the walk's global sort order) and prints one NDJSON line
+/// per file: nodes, diagnostics (key/code/pos/end/args), kind histogram.
+pub fn run_dump(args: &[String]) {
+    let mut corpus = String::new();
+    let mut i = 0;
+    while i < args.len() {
+        let (name, inline) = match args[i].split_once('=') {
+            Some((n, v)) => (n.trim_start_matches('-'), Some(v)),
+            None => (args[i].trim_start_matches('-'), None),
+        };
+        match name {
+            "corpus" => {
+                corpus = inline.map(str::to_string).unwrap_or_else(|| {
+                    i += 1;
+                    args.get(i).cloned().unwrap_or_default()
+                });
+            }
+            other => {
+                eprintln!("tsc-bench dump: flag provided but not defined: -{other}");
+                std::process::exit(2);
+            }
+        }
+        i += 1;
+    }
+    if corpus.is_empty() {
+        eprintln!("tsc-bench dump: missing required --corpus <dir>");
+        std::process::exit(2);
+    }
+    let (files, _read_errs) = match index_corpus(&corpus) {
+        Ok(pair) => pair,
+        Err(err) => {
+            eprintln!("tsc-bench: {err}");
+            std::process::exit(1);
+        }
+    };
+    let parse: ParseFn = crate::parser_seam::bench_parse;
+    for f in &files {
+        let sf = parse(f);
+        let stats = walk_stats(&sf);
+        let mut line = String::with_capacity(128);
+        line.push_str("{\"file\":\"");
+        json_escape(f.file_name.as_string(), &mut line);
+        line.push_str("\",\"nodes\":");
+        line.push_str(&stats.nodes.to_string());
+        line.push_str(",\"errors\":");
+        line.push_str(&(sf.diagnostics().len() as i64).to_string());
+        line.push_str(",\"diag\":[");
+        for (di, d) in sf.diagnostics().iter().enumerate() {
+            if di > 0 {
+                line.push(',');
+            }
+            line.push_str("{\"key\":\"");
+            json_escape(d.message_key(), &mut line);
+            line.push_str("\",\"code\":");
+            line.push_str(&d.code().to_string());
+            line.push_str(",\"pos\":");
+            line.push_str(&d.pos().to_string());
+            line.push_str(",\"end\":");
+            line.push_str(&d.end().to_string());
+            line.push_str(",\"args\":[");
+            for (ai, a) in d.message_args().iter().enumerate() {
+                if ai > 0 {
+                    line.push(',');
+                }
+                line.push('"');
+                json_escape(a, &mut line);
+                line.push('"');
+            }
+            line.push_str("]}");
+        }
+        line.push_str("],\"hist\":\"");
+        let mut first = true;
+        for (ord, count) in stats.hist.iter().enumerate() {
+            if *count > 0 {
+                if !first {
+                    line.push(' ');
+                }
+                first = false;
+                line.push_str(&format!("{ord}:{count}"));
+            }
+        }
+        line.push_str("\"}");
+        println!("{line}");
+    }
 }
 
 fn merge_hist(total: &mut [i64], one: &[i64]) {
