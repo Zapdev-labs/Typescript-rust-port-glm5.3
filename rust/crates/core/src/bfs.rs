@@ -51,13 +51,18 @@ impl<K: std::hash::Hash + Eq, N> BreadthFirstSearchLevel<'_, K, N> {
     }
 }
 
+/// PreprocessLevel callback type: gives the caller an opportunity to remove
+/// nodes from a level before parallel processing.
+pub type PreprocessLevelFn<K, N> =
+    Box<dyn for<'x> Fn(&mut BreadthFirstSearchLevel<'x, K, N>) + Send>;
+
 pub struct BreadthFirstSearchOptions<'a, K, N> {
     /// Visited is a set of nodes that have already been visited.
     /// If nil, a new set will be created.
     pub visited: Option<&'a SyncSet<K>>,
     /// PreprocessLevel is a function that, if provided, will be called
     /// before each level, giving the caller an opportunity to remove nodes.
-    pub preprocess_level: Option<Box<dyn for<'x> Fn(&mut BreadthFirstSearchLevel<'x, K, N>) + Send>>,
+    pub preprocess_level: Option<PreprocessLevelFn<K, N>>,
 }
 
 impl<K, N> Default for BreadthFirstSearchOptions<'_, K, N> {

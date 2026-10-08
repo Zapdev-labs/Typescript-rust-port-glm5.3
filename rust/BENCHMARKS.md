@@ -30,14 +30,30 @@ milestone's green status until explained or fixed.
 
 ## Phase 0 — micro benches (ported M1 crates)
 
-Mirrors of Go's own `go test -bench` cases (`tsc/internal/tspath/path_test.go`,
-`typed_paths_test.go`, `jsnum/jsnum_test.go`). Go run via
-`go test -bench '^X$' -benchtime=Nx -count=10`; Rust via
-`tsc-bench micro --op <name> --samples 10`. Compare medians.
+**2026-10-07 21:41 — rig: go1.27.1 vs rustc 1.99.0. 45 sub-benches, identical
+inputs (Rust mirrors Go's own `go test -bench` cases), medians of 10 samples.**
 
-| date | op | rust/go median | verdict | note |
-|---|---|---|---|---|
-| — | — | — | — | (first entries land today) |
+**GEOMEAN rust/go: 0.170 — Rust ~5.9× faster. Gate (≤ 1.0×): PASSED.**
+Only 1 of 45 sub-benches was Go-faster (Exponentiate 0.5**-0.5 math.Pow, 1.16×).
+
+| op family | rust/go range | notes |
+|---|---|---|
+| CombinePaths (6) | 0.33–0.47× | |
+| GetNormalizedAbsolutePath (3) | 0.46–0.55× | |
+| ToFileNameLowerCase (5) | 0.17–0.46× | |
+| HasRelativePathSegment (4) | 0.25–0.36× | |
+| PathIsRelative (6) | 0.06–0.11× | up to 16× faster |
+| RootedDirectoryPathResolveFile (2) | 0.59–0.64× | |
+| RootedFilePathToPathKey (2) | 0.52–0.83× | `AlreadyRooted` pays the ported `as_path` String clone (PORTING-NOTES candidate) |
+| ToInt32 (11) | 0.002–0.18× | Go hits a slow path on SMI-boundary cases (MAX_SAFE_INTEGER: 286 ns vs 0.5 ns) |
+| Exponentiate (6) | 0.15–1.16× | bigint paths 0.15–0.22×; math.Pow path 1.16× (Go's `math.Pow` intrinsic) |
+
+Measurement caveat: identical call shapes and inputs on both sides, but the
+harnesses differ in machinery (Go `b.Loop` auto-scaling vs `tsc-bench`
+calibration; black_box checksum folding both sides). The join is reproducible
+via `rust/scripts/bench-micro.sh`; raw per-sub-bench outputs live on the rig
+at `~/bench-results/phase0/`. Sub-bench names matched 1:1 after the join
+script's name-normalization warnings (positional fallback not needed).
 
 ## Phase A — corpus parse race (M3 exit gate)
 

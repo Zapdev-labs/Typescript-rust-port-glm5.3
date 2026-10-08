@@ -31,6 +31,9 @@ impl TextRange {
         self.end
     }
 
+    // PORT: Go has no is_empty; an empty range is `end == pos`. Suppressed
+    // clippy::len_without_is_empty to keep the surface identical to Go.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> i32 {
         self.end - self.pos
     }
