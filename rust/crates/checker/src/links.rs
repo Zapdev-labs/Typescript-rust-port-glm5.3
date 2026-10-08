@@ -21,7 +21,7 @@ pub struct NodeLinkStore<V> {
     pub(crate) store: PagedLinkStore<V>,
 }
 
-impl<V> Default for NodeLinkStore<V> {
+impl<V: Default> Default for NodeLinkStore<V> {
     fn default() -> Self {
         Self { store: PagedLinkStore::new() }
     }

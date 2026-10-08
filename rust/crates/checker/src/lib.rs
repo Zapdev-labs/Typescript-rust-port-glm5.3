@@ -123,6 +123,6 @@ pub mod todo_shapes;
 pub mod types;
 pub mod utilities;
 
-pub use checker::{new_checker, Checker, Program, TypeSystemEntity};
+pub use checker::{is_fresh_literal_type, new_checker, Checker, Program, TypeSystemEntity};
 pub use links::{NodeLinkStore, SymbolArenaLinkStore};
 pub use types::*;

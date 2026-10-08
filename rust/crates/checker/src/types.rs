@@ -46,7 +46,6 @@ define_flags!(SignatureFlags, u32);
 // ParseFlags
 
 impl ParseFlags {
-    pub const NONE: ParseFlags = ParseFlags(0);
     pub const YIELD: ParseFlags = ParseFlags(1 << 0);
     pub const AWAIT: ParseFlags = ParseFlags(1 << 1);
     pub const TYPE: ParseFlags = ParseFlags(1 << 2);
@@ -77,7 +76,6 @@ pub enum MemberOverrideStatus {
 }
 
 impl ContextFlags {
-    pub const NONE: ContextFlags = ContextFlags(0);
     /// Obtaining contextual signature
     pub const SIGNATURE: ContextFlags = ContextFlags(1 << 0);
     /// Don't obtain type variable constraints
@@ -89,7 +87,6 @@ impl ContextFlags {
 }
 
 impl TypeFormatFlags {
-    pub const NONE: TypeFormatFlags = TypeFormatFlags(0);
     /// Don't truncate typeToString result
     pub const NO_TRUNCATION: TypeFormatFlags = TypeFormatFlags(1 << 0);
     /// Write Array<T> instead T[]
@@ -167,7 +164,6 @@ impl TypeFormatFlags {
 }
 
 impl SymbolFormatFlags {
-    pub const NONE: SymbolFormatFlags = SymbolFormatFlags(0);
     // Write symbols's type argument if it is instantiated symbol
     // eg. class C<T> { p: T }   <-- Show p as C<T>.p here
     //     var a: C<number>;
@@ -537,7 +533,6 @@ pub struct ContainingSymbolLinks {
 }
 
 impl AccessFlags {
-    pub const NONE: AccessFlags = AccessFlags(0);
     pub const INCLUDE_UNDEFINED: AccessFlags = AccessFlags(1 << 0);
     pub const NO_INDEX_SIGNATURES: AccessFlags = AccessFlags(1 << 1);
     pub const WRITING: AccessFlags = AccessFlags(1 << 2);
@@ -551,7 +546,6 @@ impl AccessFlags {
 }
 
 impl NodeCheckFlags {
-    pub const NONE: NodeCheckFlags = NodeCheckFlags(0);
     /// Node has been type checked
     pub const TYPE_CHECKED: NodeCheckFlags = NodeCheckFlags(1 << 0);
     /// Contextual types have been assigned
@@ -659,7 +653,6 @@ pub struct SignatureLinks {
 }
 
 impl TypeFlags {
-    pub const NONE: TypeFlags = TypeFlags(0);
     pub const ANY: TypeFlags = TypeFlags(1 << 0);
     pub const UNKNOWN: TypeFlags = TypeFlags(1 << 1);
     pub const UNDEFINED: TypeFlags = TypeFlags(1 << 2);
@@ -931,7 +924,6 @@ impl std::fmt::Display for TypeFlags {
 // conditional types should sort last as those types are potentially recursive and possibly infinite.
 
 impl ObjectFlags {
-    pub const NONE: ObjectFlags = ObjectFlags(0);
     /// Class
     pub const CLASS: ObjectFlags = ObjectFlags(1 << 0);
     /// Interface
@@ -1277,10 +1269,10 @@ impl Type {
     pub fn as_constrained_type(&self) -> Option<&ConstrainedType> {
         match &self.data {
             TypeData::Intrinsic(_) | TypeData::Literal(_) | TypeData::UniqueESSymbol(_) => None,
-            TypeData::Object(d) => Some(&d.base.base.base),
-            TypeData::TypeReference(d) => Some(&d.base.base.base.base),
-            TypeData::Interface(d) => Some(&d.base.base.base.base.base),
-            TypeData::Tuple(d) => Some(&d.base.base.base.base.base.base),
+            TypeData::Object(d) => Some(&d.base),
+            TypeData::TypeReference(d) => Some(&d.base.base),
+            TypeData::Interface(d) => Some(&d.base.base.base),
+            TypeData::Tuple(d) => Some(&d.base.base.base.base),
             TypeData::InstantiationExpression(d) => Some(&d.base.base.base),
             TypeData::Mapped(d) => Some(&d.base.base.base),
             TypeData::ReverseMapped(d) => Some(&d.base.base.base),
@@ -1300,10 +1292,10 @@ impl Type {
     /// Go: `func (t *Type) AsStructuredType() *StructuredType`.
     pub fn as_structured_type(&self) -> Option<&StructuredType> {
         match &self.data {
-            TypeData::Object(d) => Some(&d.base.base),
-            TypeData::TypeReference(d) => Some(&d.base.base.base),
-            TypeData::Interface(d) => Some(&d.base.base.base.base),
-            TypeData::Tuple(d) => Some(&d.base.base.base.base.base),
+            TypeData::Object(d) => Some(&d.base),
+            TypeData::TypeReference(d) => Some(&d.base.base),
+            TypeData::Interface(d) => Some(&d.base.base.base),
+            TypeData::Tuple(d) => Some(&d.base.base.base.base),
             TypeData::InstantiationExpression(d) => Some(&d.base.base),
             TypeData::Mapped(d) => Some(&d.base.base),
             TypeData::ReverseMapped(d) => Some(&d.base.base),
@@ -1360,7 +1352,7 @@ impl Type {
     /// Go: `func (t *Type) Distributed() []*Type`.
     pub fn distributed(&self) -> Vec<TypeId> {
         if self.flags.intersects(TypeFlags::UNION) {
-            return self.as_union_type().expect("UnionType data").types.clone();
+            return self.as_union_type().expect("UnionType data").base.types.clone();
         }
         if self.flags.intersects(TypeFlags::NEVER) {
             return Vec::new();
@@ -1425,13 +1417,13 @@ impl Type {
     /// returns the target handle; the payload resolves through the checker
     /// arena (`checker.type_of(id).as_interface_type()`).
     pub fn target_interface_type(&self) -> TypeId {
-        self.as_type_reference().expect("TypeReference data").target.expect("interface target")
+        self.as_type_reference().expect("TypeReference data").base.target.expect("interface target")
     }
 
     /// Go: `func (t *Type) TargetTupleType() *TupleType` (same PORT shape as
     /// `target_interface_type`).
     pub fn target_tuple_type(&self) -> TypeId {
-        self.as_type_reference().expect("TypeReference data").target.expect("tuple target")
+        self.as_type_reference().expect("TypeReference data").base.target.expect("tuple target")
     }
 
     /// Go: `func (t *Type) Symbol() *ast.Symbol`.
@@ -1504,10 +1496,13 @@ impl Type {
         self.flags.intersects(TypeFlags::INDEX)
     }
 
-    /// Go: `func (t *Type) IsTupleType() bool` — delegates to the checker.go
-    /// `isTupleType` family (M6 wave); see checker.rs.
+    /// Go: `func (t *Type) IsTupleType() bool` — the flags half of the
+    /// checker.go `isTupleType` (REFERENCE && target.TUPLE). The target's
+    /// flags need the arena (§5.4), so the full check lives in
+    /// [`crate::Checker::is_tuple_type`]; nothing in the spike calls this.
+    #[allow(dead_code)]
     pub fn is_tuple_type(&self) -> bool {
-        crate::checker::is_tuple_type(self)
+        self.object_flags.intersects(ObjectFlags::REFERENCE)
     }
 }
 
@@ -1920,7 +1915,7 @@ impl MappedType {
     /// the first Go site that passes the checker alongside the type, the shape
     /// the §5.4 strategy generalizes. TODO(port) M6: the
     /// get*FromMappedType family (mapped-type resolution wave).
-    pub fn resolve_components(&self, _c: &mut crate::Checker<'_>, _typ: TypeId) {
+    pub fn resolve_components(&self, _c: &mut crate::Checker, _typ: TypeId) {
         panic!("TODO(port) M6 mapped-type wave: MappedType.ResolveComponents (checker.go get*FromMappedType family)")
     }
 }
@@ -2017,7 +2012,6 @@ impl TypeParameter {
 // IndexFlags
 
 impl IndexFlags {
-    pub const NONE: IndexFlags = IndexFlags(0);
     pub const STRINGS_ONLY: IndexFlags = IndexFlags(1 << 0);
     pub const NO_INDEX_SIGNATURES: IndexFlags = IndexFlags(1 << 1);
     pub const NO_REDUCIBLE_CHECK: IndexFlags = IndexFlags(1 << 2);
@@ -2168,7 +2162,6 @@ impl ConditionalType {
 // SignatureFlags
 
 impl SignatureFlags {
-    pub const NONE: SignatureFlags = SignatureFlags(0);
     // Propagating flags
     /// Indicates last parameter is rest parameter
     pub const HAS_REST_PARAMETER: SignatureFlags = SignatureFlags(1 << 0);

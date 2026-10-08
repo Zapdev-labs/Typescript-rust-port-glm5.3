@@ -79,24 +79,27 @@ fn create_project_reference_parse_tasks(
 /// Go: `type projectReferenceParser struct`.
 pub struct ProjectReferenceParser<'a> {
     get_resolved: &'a dyn Fn(&RootedFilePath, &PathKey) -> Option<Arc<ParsedCommandLine>>,
-    /// Go: `wg core.WorkGroup` — the port walks breadth-first (see the file
-    /// header); the parallelism seam is one queue pass over the frontier.
-    single_threaded: bool,
 }
 
 impl<'a> ProjectReferenceParser<'a> {
+    pub fn new(
+        get_resolved: &'a dyn Fn(&RootedFilePath, &PathKey) -> Option<Arc<ParsedCommandLine>>,
+    ) -> Self {
+        ProjectReferenceParser { get_resolved }
+    }
+
     /// Go: `func (p *projectReferenceParser) parse(tasks)`.
     ///
-    /// `init_mapper_data` receives the parsed (path → resolved) pairs in the
-    /// order Go's `initMapper` consumes them (dedup by path, then the
-    /// depth-first walk) so the loader can populate the mapper exactly like
-    /// Go's `initMapper`/`initMapperWorker`.
+    /// PORT: Go runs the parse closures on a WorkGroup (parents parse before
+    /// children start; dedup by path, order preserved by tasksByFileName).
+    /// The port walks the same tree breadth-first, sequentially — the arena
+    /// borrows do not admit the parallel queue pass, and the dataflow
+    /// (dedup by path, parent-before-child) is identical.
     pub fn parse(
         &self,
         root_task_indices: &[usize],
         tasks: &mut Vec<ProjectReferenceParseTask>,
     ) -> ParsedProjectReferences {
-        // Go: start(tasks) — walk the task tree, dedup by config path.
         let mut tasks_by_file_name: rustc_hash::FxHashMap<PathKey, usize> =
             rustc_hash::FxHashMap::default();
         let mut order: Vec<usize> = Vec::new();
@@ -108,26 +111,15 @@ impl<'a> ProjectReferenceParser<'a> {
             let mut next_frontier: Vec<usize> = Vec::new();
             for task_index in frontier {
                 let path = path_key_of(tasks, task_index);
-                match tasks_by_file_name.get(&path) {
-                    // Go: dedup tasks to ensure correct file order.
-                    Some(&loaded) => {
-                        let _ = loaded;
-                        continue;
-                    }
-                    None => {
-                        tasks_by_file_name.insert(path.clone(), task_index);
-                    }
+                if tasks_by_file_name.contains_key(&path) {
+                    // Go: dedup tasks to ensure correct file order,
+                    // regardless of which task would be started first.
+                    continue;
                 }
+                tasks_by_file_name.insert(path.clone(), task_index);
                 order.push(task_index);
                 // Go: `task.parse(p); p.start(task.subTasks)`.
-                if !self.single_threaded {
-                    // The parse itself is the only work; subtasks enqueue
-                    // after (Go's semantics — parents parse before children
-                    // are started).
-                    parse_task(task_index, tasks, self.get_resolved);
-                } else {
-                    parse_task(task_index, tasks, self.get_resolved);
-                }
+                parse_task(task_index, tasks, self.get_resolved);
                 next_frontier.extend(tasks[task_index].sub_tasks.iter().copied());
             }
             frontier = next_frontier;

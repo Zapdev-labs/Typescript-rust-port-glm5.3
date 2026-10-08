@@ -8,13 +8,79 @@ use tsc_ast::{
     ModifierFlags, Node, NodeId, NodeFlags, NodeStore,
 };
 
-use crate::ast_shims::outer::{is_outer_expression, OuterExpressionKinds};
+use crate::ast_shims::outer::{is_outer_expression};
 
 /// Go: `func HasModifier(node *Node, flags ModifierFlags) bool`
 /// (ast/utilities.go). Distinct from `HasSyntacticModifier`, which masks
 /// `ModifierFlagsSyntacticModifiers` first.
 pub fn has_modifier(node: &Node, flags: ModifierFlags) -> bool {
     node.modifier_flags().intersects(flags)
+}
+
+/// Go: the generated `nodeData.Initializer()` accessor family (ast.go)
+/// — reached through the store (SPEC §5.1: handles, not `*Node`).
+/// The variant set is exactly the payloads carrying an `initializer` field;
+/// `NodeDefault` returns nil, mirrored by the `_` arm.
+pub fn initializer_of(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    let n = store.node(node);
+    match &n.data {
+        tsc_ast::NodeData::ForStatement(d) => d.initializer,
+        tsc_ast::NodeData::ForInOrOfStatement(d) => Some(d.initializer),
+        tsc_ast::NodeData::VariableDeclaration(d) => d.initializer,
+        tsc_ast::NodeData::ParameterDeclaration(d) => d.initializer,
+        tsc_ast::NodeData::BindingElement(d) => d.initializer,
+        tsc_ast::NodeData::EnumMember(d) => d.initializer,
+        tsc_ast::NodeData::PropertySignatureDeclaration(d) => Some(d.initializer),
+        tsc_ast::NodeData::PropertyDeclaration(d) => d.initializer,
+        tsc_ast::NodeData::PropertyAssignment(d) => Some(d.initializer),
+        tsc_ast::NodeData::JsxAttribute(d) => d.initializer,
+        _ => None,
+    }
+}
+
+/// Go: the generated `nodeData.Expression()` accessor family (ast.go) —
+/// same store-carrying pattern as [`initializer_of`].
+pub fn expression_of(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    let n = store.node(node);
+    match &n.data {
+        tsc_ast::NodeData::ComputedPropertyName(d) => Some(d.expression),
+        tsc_ast::NodeData::Decorator(d) => Some(d.expression),
+        tsc_ast::NodeData::IfStatement(d) => Some(d.expression),
+        tsc_ast::NodeData::DoStatement(d) => Some(d.expression),
+        tsc_ast::NodeData::WhileStatement(d) => Some(d.expression),
+        tsc_ast::NodeData::ForInOrOfStatement(d) => Some(d.expression),
+        tsc_ast::NodeData::ReturnStatement(d) => d.expression,
+        tsc_ast::NodeData::WithStatement(d) => Some(d.expression),
+        tsc_ast::NodeData::SwitchStatement(d) => Some(d.expression),
+        tsc_ast::NodeData::CaseOrDefaultClause(d) => Some(d.expression),
+        tsc_ast::NodeData::ThrowStatement(d) => Some(d.expression),
+        tsc_ast::NodeData::ExpressionStatement(d) => Some(d.expression),
+        tsc_ast::NodeData::ExternalModuleReference(d) => Some(d.expression),
+        tsc_ast::NodeData::ExportAssignment(d) => Some(d.expression),
+        tsc_ast::NodeData::YieldExpression(d) => d.expression,
+        tsc_ast::NodeData::AsExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::SatisfiesExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::PropertyAccessExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::ElementAccessExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::CallExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::NewExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::NonNullExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::SpreadElement(d) => Some(d.expression),
+        tsc_ast::NodeData::TemplateSpan(d) => Some(d.expression),
+        tsc_ast::NodeData::ParenthesizedExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::SpreadAssignment(d) => Some(d.expression),
+        tsc_ast::NodeData::DeleteExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::TypeOfExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::VoidExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::AwaitExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::TypeAssertion(d) => Some(d.expression),
+        tsc_ast::NodeData::ExpressionWithTypeArguments(d) => Some(d.expression),
+        tsc_ast::NodeData::PartiallyEmittedExpression(d) => Some(d.expression),
+        tsc_ast::NodeData::JsxSpreadAttribute(d) => Some(d.expression),
+        tsc_ast::NodeData::JsxExpression(d) => d.expression,
+        tsc_ast::NodeData::SyntheticReferenceExpression(d) => Some(d.expression),
+        _ => None,
+    }
 }
 
 /// Go: `func IsQuestionToken(node *Node) bool` (ast/utilities.go).
@@ -243,7 +309,7 @@ pub mod outer {
 /// surface; checker-side it is re-exported as `walk_up_outer_expressions`.
 pub fn walk_up_outer_expressions(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
     let mut parent = store.node(node).parent.get();
-    while !parent.is_none() && is_outer_expression(store, parent, OuterExpressionKinds::OEK_ALL) {
+    while !parent.is_none() && is_outer_expression(store, parent, outer::OEK_ALL) {
         parent = store.node(parent).parent.get();
     }
     if parent.is_none() {
@@ -358,7 +424,7 @@ pub fn is_name_of_heritage_clause_type_reference(store: &dyn NodeStore, node: No
     }
     let parent = store.node(node).parent.get();
     let parent_node = store.node(parent);
-    let is_type_ref_name = parent_node.kind == Kind::TypeReferenceNode
+    let is_type_ref_name = parent_node.kind == Kind::TypeReference
         && parent_node
             .as_type_reference_node()
             .expect("TypeReferenceNode data")

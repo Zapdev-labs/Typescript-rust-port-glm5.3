@@ -253,6 +253,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "tsc-compiler"
+version = "0.0.0"
+dependencies = [
+ "tsc-ast",
+ "tsc-binder",
+ "tsc-bundled",
+ "tsc-collections",
+ "tsc-contentmapper",
+ "tsc-core",
+ "tsc-diagnostics",
+ "tsc-json",
+ "tsc-module",
+ "tsc-outputpaths",
+ "tsc-packagejson",
+ "tsc-parser",
+ "tsc-scanner",
+ "tsc-tsoptions",
+ "tsc-tspath",
+ "tsc-vfs",
+]
+
+[[package]]
 name = "tsc-contentmapper"
 version = "0.0.0"
 dependencies = [

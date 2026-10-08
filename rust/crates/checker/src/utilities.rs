@@ -19,13 +19,13 @@ use tsc_ast::{
 };
 use tsc_ast::nodeflags::NodeFlags;
 use tsc_ast::utilities::{
-    is_access_expression as ast_is_access_expression, is_in_js_file, is_literal_expression_of_jsdoc,
+    is_access_expression as ast_is_access_expression, is_in_js_file,
 };
 use tsc_binder::ast_shims as binder_shims;
-use tsc_binder::get_container_flags;
 use tsc_core::text::{TextPos, TextRange};
 use tsc_diagnostics::Message;
-use tsc_jsnum::{self, Number, PseudoBigInt};
+use tsc_jsnum::{Number, PseudoBigInt};
+use tsc_jsnum as jsnum;
 
 use crate::ast_shims::{
     self, find_ancestor, find_ancestor_or_quit, get_property_name_for_property_name_node,
@@ -56,7 +56,7 @@ pub fn new_diagnostic_for_node(
 ) -> tsc_ast::Diagnostic {
     let (file, loc) = match get_file_and_range(store, node) {
         Some((file, pos, end)) => (Some(file), TextRange::new(pos, end)),
-        None => (None, TextRange::new(TextPos::new(0), TextPos::new(0))),
+        None => (None, TextRange::new(0, 0)),
     };
     let code = message.code();
     let category = message.category();
@@ -68,7 +68,7 @@ pub fn new_diagnostic_for_node(
         "" /*source*/,
         Some(message),
         "" /*messageText — resolved at format time, like Go's localized chain*/,
-        message.key().as_str(),
+        message.key(),
         args,
     )
 }
@@ -158,7 +158,7 @@ pub fn is_empty_object_literal(store: &dyn NodeStore, expression: NodeId) -> boo
         return false;
     }
     n.as_object_literal_expression()
-        .map(|d| d.properties.map_or(true, |p| p.nodes.is_empty()))
+        .map(|d| d.properties.as_ref().map_or(true, |p| p.nodes.is_empty()))
         .unwrap_or(true)
 }
 
@@ -180,7 +180,7 @@ pub fn get_assignment_target_kind(store: &dyn NodeStore, node: NodeId) -> Assign
             let d = n.as_binary_expression().expect("BinaryExpression data");
             let binary_operator = store.node(d.operator_token).kind;
             if binary_operator == Kind::EqualsToken
-                || binder_shims::is_logical_or_coalescing_assignment_operator(binary_operator)
+                || tsc_ast::is_logical_or_coalescing_assignment_operator(binary_operator)
             {
                 AssignmentKind::Definite
             } else {
@@ -207,7 +207,7 @@ pub fn is_in_compound_like_assignment(store: &dyn NodeStore, node: NodeId) -> bo
     let Some(target) = binder_shims::get_assignment_target(store, node) else {
         return false;
     };
-    tsc_ast::utilities::is_assignment_expression(store.node(target), true)
+    tsc_ast::utilities::is_assignment_expression(store, target, true)
         && is_compound_like_assignment(store, target)
 }
 
@@ -250,7 +250,7 @@ pub fn is_const_type_reference_name(store: &dyn NodeStore, node: NodeId) -> bool
         return false;
     }
     let grandparent = store.node(parent).parent.get();
-    grandparent.is_some_and(|gp| is_assertion_expression(store, gp))
+    !grandparent.is_none() && is_assertion_expression(store, grandparent)
 }
 
 /// Go: `ast.IsAssertionExpression`.
@@ -272,10 +272,11 @@ pub fn is_export_assignment_expression_name(store: &dyn NodeStore, node: NodeId)
         current = parent;
     }
     let parent = store.node(current).parent.get();
-    parent.is_some_and(|p| {
+    !parent.is_none() && {
+        let p = parent;
         store.node(p).kind == Kind::ExportAssignment
-            && store.node(p).expression().is_some_and(|e| e == current)
-    })
+            && ast_shims::expression_of(store, p).is_some_and(|e| e == current)
+    }
 }
 
 /// Go: `ast.IsPropertyAccessOrQualifiedName`.
@@ -300,7 +301,7 @@ pub fn get_single_variable_of_variable_statement(
         .node(list)
         .as_variable_declaration_list()
         .expect("VariableDeclarationList data")
-        .declarations?;
+        .declarations.as_ref()?;
     declarations.nodes.first().copied()
 }
 
@@ -319,7 +320,7 @@ pub fn is_in_type_query(store: &dyn NodeStore, node: NodeId) -> bool {
         store,
         node,
         &mut |n| match n.kind {
-            Kind::TypeQueryNode => FindAncestorResult::True,
+            Kind::TypeQuery => FindAncestorResult::True,
             Kind::Identifier | Kind::QualifiedName => FindAncestorResult::False,
             _ => FindAncestorResult::Quit,
         },
@@ -333,27 +334,27 @@ pub fn can_have_locals(node: &Node) -> bool {
         node.kind,
         Kind::ArrowFunction
             | Kind::Block
-            | Kind::CallSignatureDeclaration
+            | Kind::CallSignature
             | Kind::CaseBlock
             | Kind::CatchClause
             | Kind::ClassStaticBlockDeclaration
-            | Kind::ConditionalTypeNode
-            | Kind::ConstructorDeclaration
-            | Kind::ConstructorTypeNode
-            | Kind::ConstructSignatureDeclaration
+            | Kind::ConditionalType
+            | Kind::Constructor
+            | Kind::ConstructorType
+            | Kind::ConstructSignature
             | Kind::ForStatement
-            | Kind::ForInOrOfStatement
+            | Kind::ForInStatement
             | Kind::FunctionDeclaration
             | Kind::FunctionExpression
-            | Kind::FunctionTypeNode
-            | Kind::GetAccessorDeclaration
-            | Kind::IndexSignatureDeclaration
+            | Kind::FunctionType
+            | Kind::GetAccessor
+            | Kind::IndexSignature
             | Kind::JSDocSignature
-            | Kind::MappedTypeNode
+            | Kind::MappedType
             | Kind::MethodDeclaration
-            | Kind::MethodSignatureDeclaration
+            | Kind::MethodSignature
             | Kind::ModuleDeclaration
-            | Kind::SetAccessorDeclaration
+            | Kind::SetAccessor
             | Kind::SourceFile
             | Kind::TypeAliasDeclaration
     )
@@ -371,7 +372,10 @@ pub fn is_shorthand_ambient_module_symbol(
 /// Go: `func isShorthandAmbientModule(node *ast.Node) bool` — the only kind of
 /// module that can be missing a body is a shorthand ambient module.
 pub fn is_shorthand_ambient_module(store: &dyn NodeStore, node: Option<NodeId>) -> bool {
-    node.is_some_and(|n| store.node(n).kind == Kind::ModuleDeclaration && store.node(n).body().is_none())
+    node.is_some_and(|n| {
+        store.node(n).kind == Kind::ModuleDeclaration
+            && tsc_binder::node_data::body_of(store, n).is_none()
+    })
 }
 
 /// Go: `func getAliasDeclarationFromName(node *ast.Node) *ast.Node`.
@@ -408,7 +412,7 @@ pub fn get_containing_qualified_name_node(store: &dyn NodeStore, node: NodeId) -
 pub fn is_side_effect_import(store: &dyn NodeStore, node: NodeId) -> bool {
     let ancestor = find_ancestor(store, node, &mut |n| n.kind == Kind::ImportDeclaration);
     match ancestor {
-        Some(a) => store.node(a).import_clause().is_none(),
+        Some(a) => store.node(a).as_import_declaration().map_or(true, |d| d.import_clause.is_none()),
         None => false,
     }
 }
@@ -419,9 +423,8 @@ pub fn get_external_module_require_argument(
     node: NodeId,
 ) -> Option<NodeId> {
     if binder_shims::is_variable_declaration_initialized_to_require(store, node) {
-        let initializer = store.node(node).initializer()?;
-        let args = store.node(initializer).arguments()?;
-        args.first().copied()
+        let initializer = ast_shims::initializer_of(store, node)?;
+        tsc_binder::node_data::arguments_of(store, initializer).first().copied()
     } else {
         None
     }
@@ -450,7 +453,7 @@ pub fn is_top_level_in_external_module_augmentation(store: &dyn NodeStore, node:
         return false;
     }
     let grandparent = store.node(parent).parent.get();
-    grandparent.is_some_and(|gp| is_external_module_augmentation(store, gp))
+    !grandparent.is_none() && is_external_module_augmentation(store, grandparent)
 }
 
 /// Go: `ast.IsExternalModuleAugmentation` — the module is ambient and its
@@ -498,7 +501,7 @@ pub fn has_only_expression_initializer(node: &Node) -> bool {
     matches!(
         node.kind,
         Kind::VariableDeclaration
-            | Kind::ParameterDeclaration
+            | Kind::Parameter
             | Kind::BindingElement
             | Kind::PropertyDeclaration
             | Kind::PropertyAssignment
@@ -544,15 +547,15 @@ pub fn is_optional_declaration(store: &dyn NodeStore, declaration: NodeId) -> bo
 /// `getSignatureFromDeclaration` (TODO(port M6)).
 pub fn is_optional_parameter(c: &Checker, store: &dyn NodeStore, node: NodeId) -> bool {
     // !!! TODO: JSDoc support
-    if store.node(node).kind == Kind::ParameterDeclaration
+    if store.node(node).kind == Kind::Parameter
         && ast_shims::question_token_of(store, node).is_some()
     {
         return true;
     }
-    if store.node(node).kind != Kind::ParameterDeclaration {
+    if store.node(node).kind != Kind::Parameter {
         return false;
     }
-    if store.node(node).initializer().is_some() {
+    if ast_shims::initializer_of(store, node).is_some() {
         panic!("TODO(port M6): isOptionalParameter needs getSignatureFromDeclaration");
     }
     let iife = binder_shims::get_immediately_invoked_function_expression(store, store.node(node).parent.get());
@@ -579,7 +582,7 @@ pub fn declaration_belongs_to_private_ambient_member(
     declaration: NodeId,
 ) -> bool {
     let root = binder_shims::get_root_declaration(store, declaration);
-    let member_declaration = if store.node(root).kind == Kind::ParameterDeclaration {
+    let member_declaration = if store.node(root).kind == Kind::Parameter {
         store.node(root).parent.get()
     } else {
         root
@@ -611,7 +614,7 @@ pub fn create_symbol_table(c: &Checker, symbols: &[SymbolId]) -> SymbolTable {
     let mut result = SymbolTable::new();
     for &symbol in symbols {
         let name = c.program.symbol(symbol).name.clone();
-        result.set(&name, symbol);
+        result.set(name, symbol);
     }
     result
 }
@@ -690,8 +693,7 @@ pub fn compare_nodes(
     store
         .node(n1)
         .pos()
-        .0
-        .cmp(&store.node(n2).pos().0)
+        .cmp(&store.node(n2).pos())
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -734,7 +736,7 @@ pub fn compare_types(c: &Checker, t1: TypeId, t2: TypeId) -> std::cmp::Ordering 
             | TypeFlags::NUMBER
             | TypeFlags::BOOLEAN
             | TypeFlags::BIGINT
-            | TypeFlags::ES_SYMBOL
+            | TypeFlags::ESSYMBOL
             | TypeFlags::VOID
             | TypeFlags::UNDEFINED
             | TypeFlags::NULL
@@ -784,8 +786,8 @@ pub fn compare_types(c: &Checker, t1: TypeId, t2: TypeId) -> std::cmp::Ordering 
         {
             let r1 = t1r.as_type_reference().expect("TypeReference data");
             let r2 = t2r.as_type_reference().expect("TypeReference data");
-            let target1 = c.type_(r1.target.expect("reference target"));
-            let target2 = c.type_(r2.target.expect("reference target"));
+            let target1 = c.type_(r1.base.target.expect("reference target"));
+            let target2 = c.type_(r2.base.target.expect("reference target"));
             if target1.object_flags.intersects(ObjectFlags::TUPLE)
                 && target2.object_flags.intersects(ObjectFlags::TUPLE)
             {
@@ -897,7 +899,7 @@ pub fn compare_types(c: &Checker, t1: TypeId, t2: TypeId) -> std::cmp::Ordering 
         }
     } else if t1r
         .flags
-        .intersects(TypeFlags::ENUM | TypeFlags::ENUM_LITERAL | TypeFlags::UNIQUE_ES_SYMBOL)
+        .intersects(TypeFlags::ENUM | TypeFlags::ENUM_LITERAL | TypeFlags::UNIQUE_ESSYMBOL)
     {
         // Enum members are ordered by their symbol (and thus their
         // declaration order).
@@ -944,7 +946,7 @@ pub fn compare_types(c: &Checker, t1: TypeId, t2: TypeId) -> std::cmp::Ordering 
         if ct != Ordering::Equal {
             return ct;
         }
-        let cf = (i1.index_flags as i32).cmp(&(i2.index_flags as i32));
+        let cf = (i1.index_flags.0 as i32).cmp(&(i2.index_flags.0 as i32));
         if cf != Ordering::Equal {
             return cf;
         }
@@ -1227,6 +1229,7 @@ pub fn compare_type_mappers(
         return Ordering::Equal;
     }
     match (m1, m2) {
+        (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Greater,
         (Some(_), None) => Ordering::Less,
         (Some(a), Some(b)) => a.0.cmp(&b.0),
@@ -1279,14 +1282,14 @@ pub fn get_declaration_modifier_flags_from_symbol_ex(
                 .declarations
                 .iter()
                 .copied()
-                .find(|d| store.node(*d).kind == Kind::SetAccessorDeclaration);
+                .find(|d| store.node(*d).kind == Kind::SetAccessor);
         }
         if declaration.is_none() && symbol.flags.intersects(SymbolFlags::GET_ACCESSOR) {
             declaration = symbol
                 .declarations
                 .iter()
                 .copied()
-                .find(|d| store.node(*d).kind == Kind::GetAccessorDeclaration);
+                .find(|d| store.node(*d).kind == Kind::GetAccessor);
         }
         let declaration = declaration.unwrap_or(value_declaration);
         let flags = binder_shims::get_combined_modifier_flags(store, declaration);
@@ -1531,7 +1534,7 @@ pub fn get_property_name_from_type(t: &Type) -> String {
     if t.flags.intersects(TypeFlags::NUMBER_LITERAL) {
         return literal_number(t).string();
     }
-    if t.flags.intersects(TypeFlags::UNIQUE_ES_SYMBOL) {
+    if t.flags.intersects(TypeFlags::UNIQUE_ESSYMBOL) {
         return t
             .as_unique_essymbol_type()
             .expect("UniqueESSymbolType data")
@@ -1552,7 +1555,7 @@ pub fn is_numeric_literal_name(name: &str) -> bool {
 pub fn is_this_property(store: &dyn NodeStore, node: NodeId) -> bool {
     let n = store.node(node);
     (is_property_access_expression(n) || is_element_access_expression(n))
-        && n.expression().is_some_and(|e| store.node(e).kind == Kind::ThisKeyword)
+        && ast_shims::expression_of(store, node).is_some_and(|e| store.node(e).kind == Kind::ThisKeyword)
 }
 
 /// Go: `func isValidNumberString(s string, roundTripOnly bool) bool`.
@@ -1576,7 +1579,7 @@ pub fn is_valid_big_int_string(s: &str, round_trip_only: bool) -> bool {
     // Go: SetOnError flips `success` — the port's callback has no args to carry
     // state, so the flag is checked via the same closure shape the scanner
     // exposes (TODO(port M7): scanner.SetOnError arg plumbing).
-    scanner.set_on_error(&mut |_diagnostic, _start, _length| {
+    scanner.set_on_error(&mut |_diagnostic, _start, _length, _args: &[String]| {
         success = false;
     });
     scanner.set_text(&(s.to_string() + "n"));
@@ -1615,7 +1618,7 @@ pub fn is_valid_es_symbol_declaration(store: &dyn NodeStore, node: NodeId) -> bo
     if n.kind == Kind::PropertyDeclaration {
         return has_readonly_modifier(n) && binder_shims::has_static_modifier(n);
     }
-    n.kind == Kind::PropertySignatureDeclaration && has_readonly_modifier(n)
+    n.kind == Kind::PropertySignature && has_readonly_modifier(n)
 }
 
 /// Go: `func isVariableDeclarationInVariableStatement(node *ast.Node) bool`.
@@ -1655,18 +1658,19 @@ pub fn get_containing_class_excluding_class_decorators(
     }
     let decorator = find_ancestor_or_quit(store, parent, &mut |n| {
         if is_class_like(n) {
-            FindAncestorResult::Quit;
+            return FindAncestorResult::Quit;
         }
         if n.kind == Kind::Decorator {
-            FindAncestorResult::True;
+            return FindAncestorResult::True;
         }
         FindAncestorResult::False
     });
-    if decorator.is_some() && is_class_like(store.node(store.node(decorator).parent.get())) {
-        return get_containing_class(store, store.node(decorator).parent.get());
-    }
-    if decorator.is_some() {
-        return get_containing_class(store, decorator);
+    if let Some(d) = decorator {
+        let decorator_parent = store.node(d).parent.get();
+        if !decorator_parent.is_none() && is_class_like(store.node(decorator_parent)) {
+            return get_containing_class(store, decorator_parent);
+        }
+        return get_containing_class(store, d);
     }
     get_containing_class(store, node)
 }
@@ -1686,7 +1690,8 @@ fn get_containing_class(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
 pub fn is_class_instance_property(store: &dyn NodeStore, node: NodeId) -> bool {
     let n = store.node(node);
     if is_in_js_file(n)
-        && binder_shims::is_expando_property_declaration(store, node)
+        && !node.is_none()
+        && is_binary_expression(n)
     {
         let d = n.as_binary_expression().expect("BinaryExpression data");
         let left = d.left;
@@ -1695,7 +1700,7 @@ pub fn is_class_instance_property(store: &dyn NodeStore, node: NodeId) -> bool {
             && !binder_shims::is_bindable_static_name_expression(store, left, true);
     }
     let parent = n.parent.get();
-    parent.is_some()
+    !parent.is_none()
         && is_class_like(store.node(parent))
         && n.kind == Kind::PropertyDeclaration
         && !binder_shims::has_accessor_modifier(n)
@@ -1738,7 +1743,7 @@ pub fn is_this_initialized_declaration(store: &dyn NodeStore, node: NodeId) -> b
     }
     let n = store.node(node);
     n.kind == Kind::VariableDeclaration
-        && n.initializer().is_some_and(|i| store.node(i).kind == Kind::ThisKeyword)
+        && ast_shims::initializer_of(store, node).is_some_and(|i| store.node(i).kind == Kind::ThisKeyword)
 }
 
 /// Go: `func isInfinityOrNaNString(name string) bool`.
@@ -1760,7 +1765,7 @@ pub fn is_parameter_or_mutable_local_variable(c: &Checker, store: &dyn NodeStore
     let value_declaration = c.program.symbol(symbol).value_declaration;
     if let Some(decl) = value_declaration {
         let declaration = binder_shims::get_root_declaration(store, decl);
-        return store.node(declaration).kind == Kind::ParameterDeclaration
+        return store.node(declaration).kind == Kind::Parameter
             || (store.node(declaration).kind == Kind::VariableDeclaration
                 && (store.node(store.node(declaration).parent.get()).kind == Kind::CatchClause
                     || is_mutable_local_variable_declaration(store, declaration)));
@@ -1794,16 +1799,10 @@ pub fn is_global_source_file(store: &dyn NodeStore, node: NodeId) -> bool {
     if store.node(node).kind != Kind::SourceFile {
         return false;
     }
-    let file = store.file(store.node(node).file_id());
+    let file = store.file(node.file_id());
     let payload = file.payload();
     payload.external_module_indicator.get().is_none()
         && payload.common_js_module_indicator.get().is_none()
-}
-
-/// Go: `ast.IsGlobalSourceFile` — a source file with no parent node (not part
-/// of a module/namespace augmentation chain).
-pub fn is_global_source_file(store: &dyn NodeStore, node: NodeId) -> bool {
-    store.node(node).kind == Kind::SourceFile && store.node(node).parent.get().is_none()
 }
 
 /// Go: `func isInAmbientOrTypeNode(node *ast.Node) bool`.
@@ -1816,7 +1815,7 @@ pub fn is_in_ambient_or_type_node(store: &dyn NodeStore, node: NodeId) -> bool {
         return false;
     }
     find_ancestor(store, parent, &mut |n| {
-        n.kind == Kind::InterfaceDeclaration || is_type_alias(n) || n.kind == Kind::TypeLiteralNode
+        n.kind == Kind::InterfaceDeclaration || is_type_alias(n) || n.kind == Kind::TypeLiteral
     })
     .is_some()
 }
@@ -1857,7 +1856,7 @@ pub fn can_have_flow_node(node: &Node) -> bool {
             | Kind::PostfixUnaryExpression
             | Kind::VariableDeclaration
             | Kind::BindingElement
-            | Kind::ForInOrOfStatement
+            | Kind::ForInStatement
             | Kind::ForStatement
             | Kind::IfStatement
             | Kind::DoStatement
@@ -1865,7 +1864,7 @@ pub fn can_have_flow_node(node: &Node) -> bool {
             | Kind::ReturnStatement
             | Kind::WithStatement
             | Kind::SwitchStatement
-            | Kind::CaseOrDefaultClause
+            | Kind::CaseClause | Kind::DefaultClause
             | Kind::LabeledStatement
             | Kind::TryStatement
             | Kind::CatchClause
@@ -1877,8 +1876,8 @@ pub fn can_have_flow_node(node: &Node) -> bool {
             | Kind::FunctionDeclaration
             | Kind::FunctionExpression
             | Kind::MethodDeclaration
-            | Kind::GetAccessorDeclaration
-            | Kind::SetAccessorDeclaration
+            | Kind::GetAccessor
+            | Kind::SetAccessor
             | Kind::ClassStaticBlockDeclaration
             | Kind::SourceFile
     )
@@ -1887,7 +1886,8 @@ pub fn can_have_flow_node(node: &Node) -> bool {
 /// Go: `func isNonNullAccess(node *ast.Node) bool`.
 pub fn is_non_null_access(store: &dyn NodeStore, node: NodeId) -> bool {
     let n = store.node(node);
-    is_access_expression(n) && n.expression().is_some_and(|e| store.node(e).kind == Kind::NonNullExpression)
+    is_access_expression(n)
+        && ast_shims::expression_of(store, node).is_some_and(|e| store.node(e).kind == Kind::NonNullExpression)
 }
 
 /// Go: `func getBindingElementPropertyName(node *ast.Node) *ast.Node` —
@@ -1916,7 +1916,7 @@ pub fn call_like_expression_may_have_type_arguments(node: &Node) -> bool {
 pub fn is_super_call(store: &dyn NodeStore, n: NodeId) -> bool {
     let node = store.node(n);
     node.kind == Kind::CallExpression
-        && node.expression().is_some_and(|e| store.node(e).kind == Kind::SuperKeyword)
+        && ast_shims::expression_of(store, n).is_some_and(|e| store.node(e).kind == Kind::SuperKeyword)
 }
 
 /// Go: `func getMembersOfDeclaration(node *ast.Node) []*ast.Node`.
@@ -1926,7 +1926,7 @@ pub fn get_members_of_declaration(store: &dyn NodeStore, node: NodeId) -> &[Node
         Kind::InterfaceDeclaration
         | Kind::ClassDeclaration
         | Kind::ClassExpression
-        | Kind::TypeLiteralNode => tsc_binder::node_data::members_of(store, node),
+        | Kind::TypeLiteral => tsc_binder::node_data::members_of(store, node),
         Kind::ObjectLiteralExpression => n
             .as_object_literal_expression()
             .and_then(|d| d.properties.as_ref())
@@ -1950,13 +1950,13 @@ pub fn is_in_right_side_of_import_or_export_assignment(
     (pn.kind == Kind::ImportEqualsDeclaration
         && pn.as_import_equals_declaration()
             .is_some_and(|d| d.module_reference == node))
-        || (pn.kind == Kind::ExportAssignment && pn.expression() == Some(node))
+        || (pn.kind == Kind::ExportAssignment && ast_shims::expression_of(store, parent) == Some(node))
 }
 
 /// Go: `func isJsxIntrinsicTagName(tagName *ast.Node) bool`.
 pub fn is_jsx_intrinsic_tag_name(store: &dyn NodeStore, tag_name: NodeId) -> bool {
     let n = store.node(tag_name);
-    (is_identifier(n) && tsc_scanner::is_intrinsic_jsx_name(tsc_ast::node_text(store, tag_name)))
+    (is_identifier(n) && tsc_scanner::utilities::is_intrinsic_jsx_name(tsc_ast::node_text(store, tag_name)))
         || n.kind == Kind::JsxNamespacedName
 }
 
@@ -1968,15 +1968,15 @@ pub fn get_containing_object_literal(store: &dyn NodeStore, f: NodeId) -> Option
         return None;
     }
     if (n.kind == Kind::MethodDeclaration
-        || n.kind == Kind::GetAccessorDeclaration
-        || n.kind == Kind::SetAccessorDeclaration)
+        || n.kind == Kind::GetAccessor
+        || n.kind == Kind::SetAccessor)
         && store.node(parent).kind == Kind::ObjectLiteralExpression
     {
         return Some(parent);
     } else if n.kind == Kind::FunctionExpression
         && store.node(parent).kind == Kind::PropertyAssignment
     {
-        return store.node(parent).parent.get();
+        return Some(store.node(parent).parent.get());
     }
     None
 }
@@ -1991,7 +1991,7 @@ pub fn is_import_type_qualifier_part(store: &dyn NodeStore, node: NodeId) -> Opt
     }
     if !parent.is_none() {
         let pn = store.node(parent);
-        if pn.kind == Kind::ImportTypeNode
+        if pn.kind == Kind::ImportType
             && pn.as_import_type_node().is_some_and(|d| d.qualifier == Some(node))
         {
             return Some(parent);
@@ -2040,11 +2040,11 @@ pub fn expression_result_is_unused(store: &dyn NodeStore, node: NodeId) -> bool 
         // result is unused in an expression statement, `void` expression, or
         // the initializer or incrementer of a `for` loop
         let is_for_init_or_incrementer = p.kind == Kind::ForStatement
-            && (p.initializer() == Some(node)
+            && (ast_shims::initializer_of(store, parent) == Some(node)
                 || p.as_for_statement().is_some_and(|d| d.incrementor == Some(node)));
         if p.kind == Kind::ExpressionStatement
             || p.kind == Kind::VoidExpression
-            || is_for_init_or_incrementor
+            || is_for_init_or_incrementer
         {
             return true;
         }
@@ -2096,19 +2096,19 @@ pub fn get_super_container(
                 return Some(node);
             }
             Kind::PropertyDeclaration
-            | Kind::PropertySignatureDeclaration
+            | Kind::PropertySignature
             | Kind::MethodDeclaration
-            | Kind::MethodSignatureDeclaration
-            | Kind::ConstructorDeclaration
-            | Kind::GetAccessorDeclaration
-            | Kind::SetAccessorDeclaration
+            | Kind::MethodSignature
+            | Kind::Constructor
+            | Kind::GetAccessor
+            | Kind::SetAccessor
             | Kind::ClassStaticBlockDeclaration => return Some(node),
             Kind::Decorator => {
                 // Decorators are always applied outside of the body of a class
                 // or method.
                 let parent = n.parent.get();
                 let pkind = store.node(parent).kind;
-                if pkind == Kind::ParameterDeclaration
+                if pkind == Kind::Parameter
                     && is_class_element(store.node(store.node(parent).parent.get()))
                 {
                     // If the decorator's parent is a Parameter, we resolve the
@@ -2131,12 +2131,12 @@ fn is_class_element(node: &Node) -> bool {
         node.kind,
         Kind::PropertyDeclaration
             | Kind::MethodDeclaration
-            | Kind::GetAccessorDeclaration
-            | Kind::SetAccessorDeclaration
+            | Kind::GetAccessor
+            | Kind::SetAccessor
             | Kind::ClassStaticBlockDeclaration
             | Kind::SemicolonClassElement
-            | Kind::ConstructorDeclaration
-            | Kind::IndexSignatureDeclaration
+            | Kind::Constructor
+            | Kind::IndexSignature
     )
 }
 
@@ -2157,7 +2157,7 @@ pub fn for_each_yield_expression(
                 if visitor(node) {
                     return true;
                 }
-                let Some(operand) = n.expression() else {
+                let Some(operand) = ast_shims::expression_of(store, node) else {
                     return false;
                 };
                 traverse(store, operand, visitor)
@@ -2211,24 +2211,24 @@ fn is_part_of_type_node_shim(store: &dyn NodeStore, node: NodeId) -> bool {
             | Kind::UndefinedKeyword
             | Kind::NullKeyword
             | Kind::NeverKeyword
-            | Kind::TypeReferenceNode
-            | Kind::UnionTypeNode
-            | Kind::IntersectionTypeNode
-            | Kind::ConditionalTypeNode
-            | Kind::TypeOperatorNode
-            | Kind::ArrayTypeNode
-            | Kind::IndexedAccessTypeNode
-            | Kind::TupleTypeNode
-            | Kind::TypeLiteralNode
-            | Kind::TypeQueryNode
-            | Kind::MappedTypeNode
-            | Kind::FunctionTypeNode
-            | Kind::ConstructorTypeNode
-            | Kind::ParenthesizedTypeNode
-            | Kind::ImportTypeNode
-            | Kind::LiteralTypeNode
-            | Kind::InferTypeNode
-            | Kind::TemplateLiteralTypeNode
+            | Kind::TypeReference
+            | Kind::UnionType
+            | Kind::IntersectionType
+            | Kind::ConditionalType
+            | Kind::TypeOperator
+            | Kind::ArrayType
+            | Kind::IndexedAccessType
+            | Kind::TupleType
+            | Kind::TypeLiteral
+            | Kind::TypeQuery
+            | Kind::MappedType
+            | Kind::FunctionType
+            | Kind::ConstructorType
+            | Kind::ParenthesizedType
+            | Kind::ImportType
+            | Kind::LiteralType
+            | Kind::InferType
+            | Kind::TemplateLiteralType
     ) {
         return true;
     }
@@ -2286,7 +2286,11 @@ fn collect_children_shim(
 ) {
     use tsc_ast::NodeData as D;
     match &n.data {
-        D::Block(d) => children.extend(d.statements.nodes.iter().copied()),
+        D::Block(d) => {
+            if let Some(list) = &d.statements {
+                children.extend(list.nodes.iter().copied())
+            }
+        }
         D::ExpressionStatement(d) => children.push(d.expression),
         D::VariableStatement(d) => children.push(d.declaration_list),
         D::VariableDeclarationList(d) => {
@@ -2477,7 +2481,7 @@ pub fn get_enclosing_container(store: &dyn NodeStore, node: NodeId) -> Option<No
         return None;
     }
     find_ancestor(store, parent, &mut |n| {
-        get_container_flags(n).intersects(tsc_binder::ContainerFlags::IS_CONTAINER)
+        tsc_binder::binder::get_container_flags(n).intersects(tsc_binder::binder::ContainerFlags::IS_CONTAINER)
     })
 }
 
@@ -2548,36 +2552,36 @@ pub fn get_feature_map() -> &'static FxHashMap<&'static str, Vec<FeatureMapEntry
     FEATURE_MAP.get_or_init(build_feature_map)
 }
 
-macro_rules! feature_entries {
-    ($( $lib:literal => [ $( $prop:literal ),* ] ),* $(,)?) => {
-        vec![ FeatureMapEntry { lib: $lib, props: &[ $($prop),* ] }, * ]
-    };
+/// Inverse-table builder for the Go literal below — same data, same order.
+fn feature_entries(entries: &[(&'static str, &'static [&'static str])]) -> Vec<FeatureMapEntry> {
+    entries
+        .iter()
+        .map(|&(lib, props)| FeatureMapEntry { lib, props })
+        .collect()
 }
 
 fn build_feature_map() -> FxHashMap<&'static str, Vec<FeatureMapEntry>> {
     let mut m = FxHashMap::default();
     m.insert(
         "Array",
-        feature_entries![
-            "es2015" => ["find", "findIndex", "fill", "copyWithin", "entries", "keys", "values"],
-            "es2016" => ["includes"],
-            "es2019" => ["flat", "flatMap"],
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-        ],
+        feature_entries(&[
+            ("es2015", &["find", "findIndex", "fill", "copyWithin", "entries", "keys", "values"]),
+            ("es2016", &["includes"]),
+            ("es2019", &["flat", "flatMap"]),
+            ("es2022", &["at"]),
+            ("es2023", &["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"]),
+        ]),
     );
-    m.insert("Iterator", feature_entries!["es2015" => []]);
-    m.insert("IteratorConstructor", feature_entries!["es2026" => ["concat"]]);
-    m.insert("RawJSON", feature_entries!["es2026" => []]);
-    m.insert(
-        "JSON",
-        feature_entries!["es2026" => ["isRawJSON", "rawJSON"]],
-    );
-    m.insert("AsyncIterator", feature_entries!["es2015" => []]);
+    m.insert("Iterator", feature_entries(&[("es2015", &[])]));
+    m.insert("IteratorConstructor", feature_entries(&[("es2026", &["concat"])]));
+    m.insert("RawJSON", feature_entries(&[("es2026", &[])]));
+    m.insert("JSON", feature_entries(&[("es2026", &["isRawJSON", "rawJSON"])]));
+    m.insert("AsyncIterator", feature_entries(&[("es2015", &[])]));
     m.insert(
         "ArrayBuffer",
-        feature_entries![
-            "es2024" => [
+        feature_entries(&[(
+            "es2024",
+            &[
                 "maxByteLength",
                 "resizable",
                 "resize",
@@ -2585,55 +2589,56 @@ fn build_feature_map() -> FxHashMap<&'static str, Vec<FeatureMapEntry>> {
                 "transfer",
                 "transferToFixedLength",
             ],
-        ],
+        )]),
     );
     m.insert(
         "Atomics",
-        feature_entries![
-            "es2017" => [
-                "add",
-                "and",
-                "compareExchange",
-                "exchange",
-                "isLockFree",
-                "load",
-                "or",
-                "store",
-                "sub",
-                "wait",
-                "notify",
-                "xor",
-            ],
-            "es2024" => ["waitAsync"],
-        ],
+        feature_entries(&[
+            (
+                "es2017",
+                &[
+                    "add",
+                    "and",
+                    "compareExchange",
+                    "exchange",
+                    "isLockFree",
+                    "load",
+                    "or",
+                    "store",
+                    "sub",
+                    "wait",
+                    "notify",
+                    "xor",
+                ],
+            ),
+            ("es2024", &["waitAsync"]),
+        ]),
     );
     m.insert(
         "SharedArrayBuffer",
-        feature_entries![
-            "es2017" => ["byteLength", "slice"],
-            "es2024" => ["growable", "maxByteLength", "grow"],
-        ],
+        feature_entries(&[
+            ("es2017", &["byteLength", "slice"]),
+            ("es2024", &["growable", "maxByteLength", "grow"]),
+        ]),
     );
-    m.insert("AsyncIterable", feature_entries!["es2018" => []]);
-    m.insert("AsyncIterableIterator", feature_entries!["es2018" => []]);
-    m.insert("AsyncGenerator", feature_entries!["es2018" => []]);
-    m.insert("AsyncGeneratorFunction", feature_entries!["es2018" => []]);
+    m.insert("AsyncIterable", feature_entries(&[("es2018", &[])]));
+    m.insert("AsyncIterableIterator", feature_entries(&[("es2018", &[])]));
+    m.insert("AsyncGenerator", feature_entries(&[("es2018", &[])]));
+    m.insert("AsyncGeneratorFunction", feature_entries(&[("es2018", &[])]));
     m.insert(
         "RegExp",
-        feature_entries![
-            "es2015" => ["flags", "sticky", "unicode"],
-            "es2018" => ["dotAll"],
-            "es2024" => ["unicodeSets"],
-        ],
+        feature_entries(&[
+            ("es2015", &["flags", "sticky", "unicode"]),
+            ("es2018", &["dotAll"]),
+            ("es2024", &["unicodeSets"]),
+        ]),
     );
-    m.insert(
-        "RegExpConstructor",
-        feature_entries!["es2025" => ["escape"]],
-    );
+    m.insert("RegExpConstructor", feature_entries(&[("es2025", &["escape"])]));
     m.insert(
         "Reflect",
-        feature_entries![
-            "es2015" => [
+        feature_entries(&[(
+            "es2015",
+            &[
                 "apply",
                 "construct",
                 "defineProperty",
@@ -2648,288 +2653,250 @@ fn build_feature_map() -> FxHashMap<&'static str, Vec<FeatureMapEntry>> {
                 "set",
                 "setPrototypeOf",
             ],
-        ],
+        )]),
     );
     m.insert(
         "ArrayConstructor",
-        feature_entries![
-            "es2015" => ["from", "of"],
-            "es2026" => ["fromAsync"],
-        ],
+        feature_entries(&[("es2015", &["from", "of"]), ("es2026", &["fromAsync"])]),
     );
     m.insert(
         "ObjectConstructor",
-        feature_entries![
-            "es2015" => ["assign", "getOwnPropertySymbols", "keys", "is", "setPrototypeOf"],
-            "es2017" => ["values", "entries", "getOwnPropertyDescriptors"],
-            "es2019" => ["fromEntries"],
-            "es2022" => ["hasOwn"],
-            "es2024" => ["groupBy"],
-        ],
+        feature_entries(&[
+            ("es2015", &["assign", "getOwnPropertySymbols", "keys", "is", "setPrototypeOf"]),
+            ("es2017", &["values", "entries", "getOwnPropertyDescriptors"]),
+            ("es2019", &["fromEntries"]),
+            ("es2022", &["hasOwn"]),
+            ("es2024", &["groupBy"]),
+        ]),
     );
     m.insert(
         "NumberConstructor",
-        feature_entries![
-            "es2015" => ["isFinite", "isInteger", "isNaN", "isSafeInteger", "parseFloat", "parseInt"],
-        ],
+        feature_entries(&[(
+            "es2015",
+            &["isFinite", "isInteger", "isNaN", "isSafeInteger", "parseFloat", "parseInt"],
+        )]),
     );
     m.insert(
         "Math",
-        feature_entries![
-            "es2015" => [
-                "clz32",
-                "imul",
-                "sign",
-                "log10",
-                "log2",
-                "log1p",
-                "expm1",
-                "cosh",
-                "sinh",
-                "tanh",
-                "acosh",
-                "asinh",
-                "atanh",
-                "hypot",
-                "trunc",
-                "fround",
-                "cbrt",
-            ],
-            "es2025" => ["f16round"],
-            "es2026" => ["sumPrecise"],
-        ],
+        feature_entries(&[
+            (
+                "es2015",
+                &[
+                    "clz32",
+                    "imul",
+                    "sign",
+                    "log10",
+                    "log2",
+                    "log1p",
+                    "expm1",
+                    "cosh",
+                    "sinh",
+                    "tanh",
+                    "acosh",
+                    "asinh",
+                    "atanh",
+                    "hypot",
+                    "trunc",
+                    "fround",
+                    "cbrt",
+                ],
+            ),
+            ("es2025", &["f16round"]),
+            ("es2026", &["sumPrecise"]),
+        ]),
     );
     m.insert(
         "Map",
-        feature_entries![
-            "es2015" => ["entries", "keys", "values"],
-            "es2026" => ["getOrInsert", "getOrInsertComputed"],
-        ],
+        feature_entries(&[
+            ("es2015", &["entries", "keys", "values"]),
+            ("es2026", &["getOrInsert", "getOrInsertComputed"]),
+        ]),
     );
-    m.insert(
-        "MapConstructor",
-        feature_entries!["es2024" => ["groupBy"]],
-    );
+    m.insert("MapConstructor", feature_entries(&[("es2024", &["groupBy"])]));
     m.insert(
         "Set",
-        feature_entries![
-            "es2015" => ["entries", "keys", "values"],
-            "es2025" => [
-                "union",
-                "intersection",
-                "difference",
-                "symmetricDifference",
-                "isSubsetOf",
-                "isSupersetOf",
-                "isDisjointFrom",
-            ],
-        ],
+        feature_entries(&[
+            ("es2015", &["entries", "keys", "values"]),
+            (
+                "es2025",
+                &[
+                    "union",
+                    "intersection",
+                    "difference",
+                    "symmetricDifference",
+                    "isSubsetOf",
+                    "isSupersetOf",
+                    "isDisjointFrom",
+                ],
+            ),
+        ]),
     );
     m.insert(
         "PromiseConstructor",
-        feature_entries![
-            "es2015" => ["all", "race", "reject", "resolve"],
-            "es2020" => ["allSettled"],
-            "es2021" => ["any"],
-            "es2024" => ["withResolvers"],
-            "es2025" => ["try"],
-        ],
+        feature_entries(&[
+            ("es2015", &["all", "race", "reject", "resolve"]),
+            ("es2020", &["allSettled"]),
+            ("es2021", &["any"]),
+            ("es2024", &["withResolvers"]),
+            ("es2025", &["try"]),
+        ]),
     );
     m.insert(
         "Symbol",
-        feature_entries![
-            "es2015" => ["for", "keyFor"],
-            "es2019" => ["description"],
-        ],
+        feature_entries(&[
+            ("es2015", &["for", "keyFor"]),
+            ("es2019", &["description"]),
+        ]),
     );
     m.insert(
         "WeakMap",
-        feature_entries![
-            "es2015" => [],
-            "es2026" => ["getOrInsert", "getOrInsertComputed"],
-        ],
+        feature_entries(&[
+            ("es2015", &[]),
+            ("es2026", &["getOrInsert", "getOrInsertComputed"]),
+        ]),
     );
-    m.insert("WeakSet", feature_entries!["es2015" => []]);
+    m.insert("WeakSet", feature_entries(&[("es2015", &[])]));
     m.insert(
         "String",
-        feature_entries![
-            "es2015" => [
-                "codePointAt",
-                "includes",
-                "endsWith",
-                "normalize",
-                "repeat",
-                "startsWith",
-                "anchor",
-                "big",
-                "blink",
-                "bold",
-                "fixed",
-                "fontcolor",
-                "fontsize",
-                "italics",
-                "link",
-                "small",
-                "strike",
-                "sub",
-                "sup",
-            ],
-            "es2017" => ["padStart", "padEnd"],
-            "es2019" => ["trimStart", "trimEnd", "trimLeft", "trimRight"],
-            "es2020" => ["matchAll"],
-            "es2021" => ["replaceAll"],
-            "es2022" => ["at"],
-            "es2024" => ["isWellFormed", "toWellFormed"],
-        ],
+        feature_entries(&[
+            (
+                "es2015",
+                &[
+                    "codePointAt",
+                    "includes",
+                    "endsWith",
+                    "normalize",
+                    "repeat",
+                    "startsWith",
+                    "anchor",
+                    "big",
+                    "blink",
+                    "bold",
+                    "fixed",
+                    "fontcolor",
+                    "fontsize",
+                    "italics",
+                    "link",
+                    "small",
+                    "strike",
+                    "sub",
+                    "sup",
+                ],
+            ),
+            ("es2017", &["padStart", "padEnd"]),
+            ("es2019", &["trimStart", "trimEnd", "trimLeft", "trimRight"]),
+            ("es2020", &["matchAll"]),
+            ("es2021", &["replaceAll"]),
+            ("es2022", &["at"]),
+            ("es2024", &["isWellFormed", "toWellFormed"]),
+        ]),
     );
     m.insert(
         "StringConstructor",
-        feature_entries!["es2015" => ["fromCodePoint", "raw"]],
+        feature_entries(&[("es2015", &["fromCodePoint", "raw"])]),
     );
     m.insert(
         "DateTimeFormat",
-        feature_entries!["es2017" => ["formatToParts"]],
+        feature_entries(&[("es2017", &["formatToParts"])]),
     );
-    m.insert(
-        "Promise",
-        feature_entries!["es2015" => [], "es2018" => ["finally"]],
-    );
-    m.insert(
-        "RegExpMatchArray",
-        feature_entries!["es2018" => ["groups"]],
-    );
-    m.insert(
-        "RegExpExecArray",
-        feature_entries!["es2018" => ["groups"]],
-    );
+    m.insert("Promise", feature_entries(&[("es2015", &[]), ("es2018", &["finally"])]));
+    m.insert("RegExpMatchArray", feature_entries(&[("es2018", &["groups"])]));
+    m.insert("RegExpExecArray", feature_entries(&[("es2018", &["groups"])]));
     m.insert(
         "Intl",
-        feature_entries![
-            "es2018" => ["PluralRules"],
-            "es2020" => ["RelativeTimeFormat", "Locale", "DisplayNames"],
-            "es2021" => ["ListFormat", "DateTimeFormat"],
-            "es2022" => ["Segmenter"],
-            "es2025" => ["DurationFormat"],
-        ],
+        feature_entries(&[
+            ("es2018", &["PluralRules"]),
+            ("es2020", &["RelativeTimeFormat", "Locale", "DisplayNames"]),
+            ("es2021", &["ListFormat", "DateTimeFormat"]),
+            ("es2022", &["Segmenter"]),
+            ("es2025", &["DurationFormat"]),
+        ]),
     );
     m.insert(
         "NumberFormat",
-        feature_entries!["es2018" => ["formatToParts"]],
+        feature_entries(&[("es2018", &["formatToParts"])]),
     );
     m.insert(
         "SymbolConstructor",
-        feature_entries![
-            "es2020" => ["matchAll"],
-            "esnext" => ["metadata", "dispose", "asyncDispose"],
-        ],
+        feature_entries(&[
+            ("es2020", &["matchAll"]),
+            ("esnext", &["metadata", "dispose", "asyncDispose"]),
+        ]),
     );
     m.insert(
         "DataView",
-        feature_entries![
-            "es2020" => ["setBigInt64", "setBigUint64", "getBigInt64", "getBigUint64"],
-            "es2025" => ["setFloat16", "getFloat16"],
-        ],
+        feature_entries(&[
+            ("es2020", &["setBigInt64", "setBigUint64", "getBigInt64", "getBigUint64"]),
+            ("es2025", &["setFloat16", "getFloat16"]),
+        ]),
     );
-    m.insert("BigInt", feature_entries!["es2020" => []]);
+    m.insert("BigInt", feature_entries(&[("es2020", &[])]));
     m.insert(
         "RelativeTimeFormat",
-        feature_entries!["es2020" => ["format", "formatToParts", "resolvedOptions"]],
+        feature_entries(&[("es2020", &["format", "formatToParts", "resolvedOptions"])]),
     );
-    m.insert(
+    let typed_array_tail = &[
+        "findLastIndex",
+        "findLast",
+        "toReversed",
+        "toSorted",
+        "toSpliced",
+        "with",
+    ];
+    for name in [
         "Int8Array",
-        feature_entries![
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-        ],
-    );
+        "Uint8Array",
+        "Uint8ClampedArray",
+        "Int16Array",
+        "Uint16Array",
+        "Int32Array",
+        "Uint32Array",
+        "Float32Array",
+        "Float64Array",
+        "BigInt64Array",
+        "BigUint64Array",
+    ] {
+        m.insert(
+            name,
+            feature_entries(&[("es2022", &["at"]), ("es2023", typed_array_tail)]),
+        );
+    }
     m.insert(
         "Uint8Array",
-        feature_entries![
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-            "es2026" => ["toBase64", "setFromBase64", "toHex", "setFromHex"],
-        ],
-    );
-    m.insert(
-        "Uint8ClampedArray",
-        feature_entries![
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-        ],
-    );
-    m.insert(
-        "Int16Array",
-        feature_entries![
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-        ],
-    );
-    m.insert(
-        "Uint16Array",
-        feature_entries![
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-        ],
-    );
-    m.insert(
-        "Int32Array",
-        feature_entries![
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-        ],
-    );
-    m.insert(
-        "Uint32Array",
-        feature_entries![
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-        ],
-    );
-    m.insert("Float16Array", feature_entries!["es2025" => []]);
-    m.insert(
-        "Float32Array",
-        feature_entries![
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-        ],
-    );
-    m.insert(
-        "Float64Array",
-        feature_entries![
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-        ],
+        feature_entries(&[
+            ("es2022", &["at"]),
+            ("es2023", typed_array_tail),
+            ("es2026", &["toBase64", "setFromBase64", "toHex", "setFromHex"]),
+        ]),
     );
     m.insert(
         "BigInt64Array",
-        feature_entries![
-            "es2020" => [],
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-        ],
+        feature_entries(&[
+            ("es2020", &[]),
+            ("es2022", &["at"]),
+            ("es2023", typed_array_tail),
+        ]),
     );
     m.insert(
         "BigUint64Array",
-        feature_entries![
-            "es2020" => [],
-            "es2022" => ["at"],
-            "es2023" => ["findLastIndex", "findLast", "toReversed", "toSorted", "toSpliced", "with"],
-        ],
+        feature_entries(&[
+            ("es2020", &[]),
+            ("es2022", &["at"]),
+            ("es2023", typed_array_tail),
+        ]),
     );
-    m.insert("Error", feature_entries!["es2022" => ["cause"]]);
-    m.insert(
-        "ErrorConstructor",
-        feature_entries!["es2026" => ["isError"]],
-    );
+    m.insert("Float16Array", feature_entries(&[("es2025", &[])]));
+    m.insert("Error", feature_entries(&[("es2022", &["cause"])]));
+    m.insert("ErrorConstructor", feature_entries(&[("es2026", &["isError"])]));
     m.insert(
         "Uint8ArrayConstructor",
-        feature_entries!["es2026" => ["fromBase64", "fromHex"]],
+        feature_entries(&[("es2026", &["fromBase64", "fromHex"])]),
     );
-    m.insert("DisposableStack", feature_entries!["esnext" => []]);
-    m.insert("AsyncDisposableStack", feature_entries!["esnext" => []]);
+    m.insert("DisposableStack", feature_entries(&[("esnext", &[])]));
+    m.insert("AsyncDisposableStack", feature_entries(&[("esnext", &[])]));
     m.insert(
         "Date",
-        feature_entries!["esnext" => ["toTemporalInstant"]],
+        feature_entries(&[("esnext", &["toTemporalInstant"])]),
     );
     m
 }
@@ -2941,10 +2908,8 @@ pub fn range_of_type_parameters(
 ) -> TextRange {
     let text = source_file.text();
     TextRange::new(
-        TextPos::new(type_parameters.pos().0.saturating_sub(1)),
-        TextPos::new(
-            (text.len() as u32).min(tsc_scanner::skip_trivia(text, type_parameters.end()).0 + 1),
-        ),
+        type_parameters.pos().saturating_sub(1),
+        (text.len() as i32).min(tsc_scanner::skip_trivia(text, type_parameters.end()) + 1),
     )
 }
 
@@ -3023,7 +2988,7 @@ pub fn contains_non_missing_undefined_type(c: &Checker, t: TypeId) -> bool {
     let tr = c.type_(t);
     let candidate = if tr.flags.intersects(TypeFlags::UNION) {
         tr.as_union_type()
-            .and_then(|d| d.types.first().copied())
+            .and_then(|d| d.base.types.first().copied())
             .map(|id| c.type_(id))
     } else {
         Some(tr)
@@ -3070,10 +3035,10 @@ pub fn introduces_arguments_exotic_object(node: &Node) -> bool {
     matches!(
         node.kind,
         Kind::MethodDeclaration
-            | Kind::MethodSignatureDeclaration
-            | Kind::ConstructorDeclaration
-            | Kind::GetAccessorDeclaration
-            | Kind::SetAccessorDeclaration
+            | Kind::MethodSignature
+            | Kind::Constructor
+            | Kind::GetAccessor
+            | Kind::SetAccessor
             | Kind::FunctionDeclaration
             | Kind::FunctionExpression
     )
@@ -3082,7 +3047,7 @@ pub fn introduces_arguments_exotic_object(node: &Node) -> bool {
 /// Go: `func symbolsToArray(symbols ast.SymbolTable) []*ast.Symbol`.
 pub fn symbols_to_array(symbols: &SymbolTable) -> Vec<SymbolId> {
     let mut result = Vec::new();
-    for (id, symbol) in symbols.iter() {
+    for (id, symbol) in symbols.entries() {
         if !is_reserved_member_name(id) {
             result.push(*symbol);
         }
@@ -3188,13 +3153,13 @@ pub fn escape_string(s: &str) -> String {
 pub fn node_starts_new_lexical_environment(node: &Node) -> bool {
     matches!(
         node.kind,
-        Kind::ConstructorDeclaration
+        Kind::Constructor
             | Kind::FunctionExpression
             | Kind::FunctionDeclaration
             | Kind::ArrowFunction
             | Kind::MethodDeclaration
-            | Kind::GetAccessorDeclaration
-            | Kind::SetAccessorDeclaration
+            | Kind::GetAccessor
+            | Kind::SetAccessor
             | Kind::ModuleDeclaration
             | Kind::SourceFile
     )
@@ -3207,7 +3172,7 @@ pub fn node_starts_new_lexical_environment(node: &Node) -> bool {
 /// compilerOptions.CheckJs file-level gate is the spike's reachable surface;
 /// everything past it is M6.
 pub fn is_unchecked_js_suggestion(c: &Checker, _node: NodeId, _suggestion: Option<SymbolId>, _exclude_classes: bool) -> bool {
-    if c.program.options().check_js == tsc_core::Tristate::TSUnknown {
+    if c.program.options().check_js.is_unknown() {
         return false;
     }
     false

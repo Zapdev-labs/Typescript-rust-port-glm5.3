@@ -32,9 +32,10 @@ use tsc_ast::{
 };
 use tsc_ast::nodeflags::NodeFlags as NF;
 use tsc_binder::ast_shims as binder_shims;
-use tsc_core::compileroptions::{CompilerOptions, ModuleKind, ModuleResolutionKind, Tristate};
+use tsc_core::options_generated::{CompilerOptions, ModuleKind, ModuleResolutionKind};
+use tsc_core::tristate::Tristate;
 use tsc_core::linkstore::LinkStore;
-use tsc_core::scripttarget::ScriptTarget;
+use tsc_core::options_generated::ScriptTarget;
 use tsc_jsnum::{Number, PseudoBigInt};
 
 use crate::ast_shims;
@@ -55,7 +56,7 @@ use crate::utilities as u;
 // CheckMode (Go checker.go — `type CheckMode uint32`)
 // ────────────────────────────────────────────────────────────────────────────
 
-crate::define_flags!(CheckMode, u32);
+define_flags!(CheckMode, u32);
 
 impl CheckMode {
     /// Go: `CheckModeNormal CheckMode = 0` — normal type checking.
@@ -329,8 +330,10 @@ pub fn number_key(f: f64) -> u64 {
 impl Checker {
     // ── Arena access (§5.4 idiom: `*Type` → `TypeId`) ──
 
-    /// The arena slot for `id` (Go: dereferencing a `*Type`).
-    pub(crate) fn type_(&self, id: TypeId) -> &Type {
+    /// The arena slot for `id` (Go: dereferencing a `*Type`). Public: the
+    /// crate's consumers (tests, the future printer) read types through the
+    /// checker, exactly like Go's `*Type` pointers.
+    pub fn type_(&self, id: TypeId) -> &Type {
         &self.types[id.0 as usize]
     }
 
@@ -342,19 +345,23 @@ impl Checker {
     pub(crate) fn store(&self) -> &dyn NodeStore {
         self.program.node_store()
     }
+}
 
+/// Go field accessors for the intrinsic types (Go fields are non-nil after
+/// NewChecker; the `expect` message names the still-None M6 field).
+macro_rules! intrinsic_accessors {
+    ($($name:ident => $field:ident),* $(,)?) => {
+        $(
+            #[allow(dead_code)]
+            pub fn $name(&self) -> TypeId {
+                self.$field.expect(stringify!($field))
+            }
+        )*
+    };
+}
+
+impl Checker {
     // ── Intrinsic-type accessors (Go fields are non-nil after NewChecker) ──
-
-    macro_rules! intrinsic_accessors {
-        ($($name:ident => $field:ident),* $(,)?) => {
-            $(
-                /// Go field accessor (panics until M6 constructs the field).
-                pub fn $name(&self) -> TypeId {
-                    self.$field.expect(stringify!($field))
-                }
-            )*
-        };
-    }
 
     intrinsic_accessors! {
         any_type => any_type,
@@ -596,6 +603,7 @@ impl Checker {
         components: Vec<NodeId>,
     ) -> usize {
         self.index_infos.push(IndexInfo {
+            index_symbol: None,
             key_type: Some(key_type),
             value_type: Some(value_type),
             is_readonly,
@@ -631,12 +639,15 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getDeclarationNodeFlagsFromSymbol(s *ast.Symbol) ast.NodeFlags`.
-    pub(crate) fn get_declaration_node_flags_from_symbol(&mut self, symbol: SymbolId) -> NodeFlags {
-        let value_declaration = self.program.symbol(symbol).value_declaration;
-        if let Some(declaration) = value_declaration {
-            return self.get_combined_node_flags_cached(declaration);
+    pub(crate) fn get_declaration_node_flags_from_symbol(&self, symbol: SymbolId) -> NodeFlags {
+        // Go routes through getCombinedNodeFlagsCached (a single-entry memo
+        // on the checker); the port keeps the memo &mut-only and reads
+        // uncached here so the utilities family can take `&Checker`.
+        let store = self.program.node_store();
+        match self.program.symbol(symbol).value_declaration {
+            Some(declaration) => binder_shims::get_combined_node_flags(store, declaration),
+            None => NF::NONE,
         }
-        NF::NONE
     }
 
     /// Go: `func (c *Checker) getCombinedNodeFlagsCached(node) ast.NodeFlags` —
@@ -668,7 +679,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) getAliasedSymbol(symbol *ast.Symbol) *ast.Symbol` —
     /// alias resolution is the exports wave (M6).
-    pub(crate) fn get_aliased_symbol(&mut self, _symbol: SymbolId) -> SymbolId {
+    pub(crate) fn get_aliased_symbol(&self, _symbol: SymbolId) -> SymbolId {
         panic!("TODO(port M6): getAliasedSymbol (exports.go)")
     }
 
@@ -744,17 +755,18 @@ impl Checker {
 
     /// Go: `func (c *Checker) isParameterOfContextSensitiveSignature(symbol) bool`.
     fn is_parameter_of_context_sensitive_signature(&mut self, symbol: SymbolId) -> bool {
-        let mut decl = self.program.symbol(symbol).value_declaration;
-        let Some(mut d) = decl else { return false };
+        let Some(decl) = self.program.symbol(symbol).value_declaration else {
+            return false;
+        };
+        let mut d = decl;
         if is_binding_element_node(self.store().node(d)) {
             d = ast_shims::walk_up_binding_elements_and_patterns(self.store(), d);
         }
-        if self.store().node(d).kind == Kind::ParameterDeclaration {
+        if self.store().node(d).kind == Kind::Parameter {
             // Go: isContextSensitiveFunctionOrObjectLiteralMethod —
             // contextual typing wave (M6).
             panic!("TODO(port M6): isContextSensitiveFunctionOrObjectLiteralMethod")
         }
-        decl = Some(d);
         false
     }
 
@@ -763,7 +775,6 @@ impl Checker {
         &mut self,
         symbol: SymbolId,
     ) -> Option<TypeId> {
-        let store = self.program.node_store();
         let (flags, value_declaration) = {
             let s = self.program.symbol(symbol);
             (s.flags, s.value_declaration)
@@ -788,10 +799,11 @@ impl Checker {
         if flags.intersects(SymbolFlags::MODULE_EXPORTS) {
             panic!("TODO(port M6): ModuleExports arm of getTypeOfVariableOrParameterOrPropertyWorker")
         }
-        let result = match self.store().node(declaration).kind {
-            Kind::ParameterDeclaration
+        let declaration_kind = self.store().node(declaration).kind;
+        let result = match declaration_kind {
+            Kind::Parameter
             | Kind::PropertyDeclaration
-            | Kind::PropertySignatureDeclaration
+            | Kind::PropertySignature
             | Kind::VariableDeclaration
             | Kind::BindingElement => {
                 let report_errors = !self.is_parameter_of_context_sensitive_signature(symbol);
@@ -816,7 +828,6 @@ impl Checker {
         if !self.pop_type_resolution() {
             return Some(self.report_circularity_error(symbol));
         }
-        let _ = store;
         result
     }
 
@@ -839,7 +850,7 @@ impl Checker {
     ) -> TypeId {
         let Some(t) = t else {
             // Rest parameters default to type any[], other parameters to any.
-            if self.store().node(declaration).kind == Kind::ParameterDeclaration
+            if self.store().node(declaration).kind == Kind::Parameter
                 && u::has_dot_dot_dot_token(self.store(), declaration)
             {
                 // TODO(port M6): anyArrayType
@@ -883,24 +894,47 @@ impl Checker {
         include_optionality: bool,
         check_mode: CheckMode,
     ) -> Option<TypeId> {
-        let store = self.program.node_store();
-        let node = store.node(declaration);
-        // A variable declared in a for..in statement is of type string...
-        if node.kind == Kind::VariableDeclaration {
-            let grandparent = store.node(store.node(node.parent.get()).parent.get()).kind;
-            if grandparent == Kind::ForInStatement || grandparent == Kind::ForOfStatement {
+        // Capture the node facts up front (ids are Copy) so the store borrow
+        // never straddles a `&mut self` call (§5.4 arena idiom).
+        let (kind, node_flags, parent, grandparent_kind, name, name_kind, initializer) = {
+            let store = self.program.node_store();
+            let node = store.node(declaration);
+            let parent = node.parent.get();
+            let grandparent = if parent.is_none() {
+                Kind::SourceFile
+            } else {
+                store.node(store.node(parent).parent.get()).kind
+            };
+            (
+                node.kind,
+                node.flags,
+                parent,
+                grandparent,
+                node.name(),
+                node.name().map(|n| store.node(n).kind),
+                crate::ast_shims::initializer_of(store, declaration),
+            )
+        };
+        // A variable declared in a for..in statement is of type string, or of
+        // type keyof T when the right hand expression is of a type parameter
+        // type.
+        if kind == Kind::VariableDeclaration {
+            if grandparent_kind == Kind::ForInStatement || grandparent_kind == Kind::ForOfStatement {
                 panic!("TODO(port M6): for..in / for..of variable types")
             }
-        } else if node.kind == Kind::BindingElement {
+        } else if kind == Kind::BindingElement {
             panic!("TODO(port M6): getTypeForBindingElement")
         }
-        let is_property = (node.kind == Kind::PropertyDeclaration
-            && !binder_shims::has_accessor_modifier(node))
-            || node.kind == Kind::PropertySignatureDeclaration;
-        let is_optional = include_optionality && u::is_optional_declaration(store, declaration);
+        let is_property = (kind == Kind::PropertyDeclaration
+            && !{
+                let store = self.program.node_store();
+                binder_shims::has_accessor_modifier(store.node(declaration))
+            })
+            || kind == Kind::PropertySignature;
+        let is_optional = include_optionality && u::is_optional_declaration(self.store(), declaration);
         // Use type from type annotation if one is present
         let declared_type = self.try_get_type_from_type_node(declaration);
-        if is_catch_clause_variable_declaration_or_binding_element(store, declaration) {
+        if is_catch_clause_variable_declaration_or_binding_element(self.store(), declaration) {
             if let Some(declared_type) = declared_type {
                 // If the catch clause is explicitly annotated with any or
                 // unknown, accept it, otherwise error.
@@ -912,7 +946,8 @@ impl Checker {
                 return Some(error_type);
             }
             // If the catch clause is not explicitly annotated, treat it as
-            // though it were explicitly annotated with unknown or any.
+            // though it were explicitly annotated with unknown or any,
+            // depending on useUnknownInCatchVariables.
             return Some(if self.use_unknown_in_catch_variables {
                 self.unknown_type()
             } else {
@@ -923,62 +958,58 @@ impl Checker {
             return Some(self.add_optionality_ex(declared_type, is_property, is_optional));
         }
         if self.no_implicit_any
-            && node.kind == Kind::VariableDeclaration
-            && node.name().is_some_and(|n| store.node(n).kind != Kind::ObjectBindingPattern)
-            && node.name().is_some_and(|n| store.node(n).kind != Kind::ArrayBindingPattern)
-            && {
-                let flags = self.get_combined_modifier_flags_cached(declaration);
-                !flags.intersects(ModifierFlags::EXPORT)
-            }
-            && !node.flags.intersects(NF::AMBIENT)
+            && kind == Kind::VariableDeclaration
+            && name_kind.is_some_and(|k| k != Kind::ObjectBindingPattern)
+            && name_kind.is_some_and(|k| k != Kind::ArrayBindingPattern)
+            && !self.get_combined_modifier_flags_cached(declaration).intersects(ModifierFlags::EXPORT)
+            && !node_flags.intersects(NF::AMBIENT)
         {
-            // If --noImplicitAny is on, use control flow tracked 'any' type
-            // for non-ambient, non-exported var or let variables with no
-            // initializer or a 'null' or 'undefined' initializer.
-            let initializer = node.initializer();
-            let not_constant = !self.get_combined_node_flags_cached(declaration).intersects(NF::CONSTANT);
+            // If --noImplicitAny is on or the declaration is in a Javascript
+            // file, use control flow tracked 'any' type for non-ambient,
+            // non-exported var or let variables with no initializer or a
+            // 'null' or 'undefined' initializer.
+            let not_constant =
+                !self.get_combined_node_flags_cached(declaration).intersects(NF::CONSTANT);
             if not_constant
                 && (initializer.is_none()
-                    || initializer.is_some_and(|i| is_null_or_undefined_literal(store, i)))
+                    || initializer.is_some_and(|i| is_null_or_undefined_literal(self.store(), i)))
             {
                 return Some(self.auto_type());
             }
-            // Use control flow tracked 'any[]' type for ... empty array
-            // literal initializers.
-            if initializer.is_some_and(|i| u::is_empty_array_literal(store, i)) {
+            // Use control flow tracked 'any[]' type for non-ambient,
+            // non-exported variables with an empty array literal initializer.
+            if initializer.is_some_and(|i| u::is_empty_array_literal(self.store(), i)) {
                 panic!("TODO(port M6): autoArrayType (array type construction)")
             }
         }
-        if node.kind == Kind::ParameterDeclaration {
+        if kind == Kind::Parameter {
             // Contextual parameter types — TODO(port M6):
             // getContextuallyTypedParameterType / getParameterTypeOfFullSignature.
             panic!("TODO(port M6): parameter contextual typing")
         }
         // Use the type of the initializer expression if one is present and
         // the declaration is not a parameter of a contextually typed function
-        if let Some(initializer) = node.initializer() {
+        if let Some(initializer) = initializer {
             let t = self.check_declaration_initializer(declaration, check_mode);
             let t = self.widen_type_inferred_from_initializer(declaration, t);
             return Some(self.add_optionality_ex(t, is_property, is_optional));
         }
-        if self.no_implicit_any && node.kind == Kind::PropertyDeclaration {
+        if self.no_implicit_any && kind == Kind::PropertyDeclaration {
             panic!("TODO(port M6): getFlowTypeInConstructor (control-flow types)")
         }
-        if node.kind == Kind::JsxAttribute {
+        if kind == Kind::JsxAttribute {
             // if JSX attribute doesn't have initializer, by default the
             // attribute will have boolean value of true.
+            // I.e <Elem attr /> is sugar for <Elem attr={true} />
             return Some(self.true_type());
         }
-        // If the declaration specifies a binding pattern ..., use the type
-        // implied by the binding pattern
-        if node.name().is_some_and(|n| {
-            matches!(
-                store.node(n).kind,
-                Kind::ObjectBindingPattern | Kind::ArrayBindingPattern
-            )
-        }) {
+        // If the declaration specifies a binding pattern and is not a
+        // parameter of a contextually typed function, use the type implied by
+        // the binding pattern
+        if matches!(name_kind, Some(Kind::ObjectBindingPattern | Kind::ArrayBindingPattern)) {
             panic!("TODO(port M6): getTypeFromBindingPattern")
         }
+        let _ = (parent, name);
         // No type specified and nothing can be inferred
         None
     }
@@ -989,19 +1020,18 @@ impl Checker {
         declaration: NodeId,
         check_mode: CheckMode,
     ) -> TypeId {
-        let store = self.program.node_store();
-        let initializer = store
-            .node(declaration)
-            .initializer()
-            .expect("caller checked initializer != nil");
+        let initializer = {
+            let store = self.program.node_store();
+            crate::ast_shims::initializer_of(store, declaration)
+                .expect("caller checked initializer != nil")
+        };
         let t = self.get_quick_type_of_expression(initializer);
-        let t = match t {
+        match t {
             Some(t) => t,
             None => self.check_expression_cached_ex(initializer, check_mode),
-        };
+        }
         // Go: binding-pattern padding (padObjectLiteralType / padTupleType)
         // — TODO(port M6) (destructuring declarations).
-        t
     }
 
     /// Go: `func (c *Checker) widenTypeInferredFromInitializer(declaration, t) *Type`.
@@ -1071,9 +1101,10 @@ impl Checker {
     /// Go: `func (c *Checker) tryGetTypeFromTypeNode(node *ast.Node) *Type` —
     /// the annotation is present but `getTypeFromTypeNode` is M6.
     fn try_get_type_from_type_node(&mut self, declaration: NodeId) -> Option<TypeId> {
-        let type_node = ast_shims::type_of_node(self.store(), declaration)?;
-        let _ = type_node;
-        panic!("TODO(port M6): getTypeFromTypeNode — type annotations")
+        if ast_shims::type_of_node(self.store(), declaration).is_some() {
+            panic!("TODO(port M6): getTypeFromTypeNode — type annotations")
+        }
+        None
     }
 
     /// Go: `func (c *Checker) getQuickTypeOfExpression(node *ast.Node) *Type` —
@@ -1081,8 +1112,11 @@ impl Checker {
     /// arm (the await/call/new/assertion arms need signature machinery (M6)
     /// and skipping them only costs time, never a different type).
     pub(crate) fn get_quick_type_of_expression(&mut self, node: NodeId) -> Option<TypeId> {
-        let n = self.store().node(node);
-        if binder_shims::is_literal_expression(n) || binder_shims::is_boolean_literal(n) {
+        let is_literal = {
+            let n = self.store().node(node);
+            binder_shims::is_literal_expression(n) || binder_shims::is_boolean_literal(n)
+        };
+        if is_literal {
             return Some(self.check_expression(node));
         }
         None
@@ -1159,15 +1193,15 @@ impl Checker {
                 // Go: checkGrammarNumericLiteral — grammar-check diagnostics
                 // seam (M5 compiler crate); the numeric-literal grammar check
                 // is a diagnostic-only pass.
-                let text = tsc_ast::node_text(self.store(), node);
-                let t = self.get_number_literal_type(tsc_jsnum::from_string(text));
+                let text = tsc_ast::node_text(self.store(), node).to_string();
+                let t = self.get_number_literal_type(tsc_jsnum::from_string(&text));
                 self.get_fresh_type_of_literal_type(t)
             }
             Kind::BigIntLiteral => {
                 // Go: checkGrammarBigIntLiteral — same diagnostics seam.
-                let text = tsc_ast::node_text(self.store(), node);
+                let text = tsc_ast::node_text(self.store(), node).to_string();
                 let t = self.get_big_int_literal_type(tsc_jsnum::new_pseudo_big_int(
-                    &tsc_jsnum::parse_pseudo_big_int(text),
+                    &tsc_jsnum::parse_pseudo_big_int(&text),
                     false, /*negative*/
                 ));
                 self.get_fresh_type_of_literal_type(t)
@@ -1280,7 +1314,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) typeResolutionHasProperty(r *TypeResolution) bool`.
-    fn type_resolution_has_property(&mut self, r: &TypeResolution) -> bool {
+    fn type_resolution_has_property(&self, r: &TypeResolution) -> bool {
         match r.property_name {
             TypeSystemPropertyName::Type => match r.target {
                 TypeSystemEntity::Symbol(symbol) => {
@@ -1380,6 +1414,31 @@ impl Checker {
                 })
     }
 
+    // ── Test/inspection helpers over the Program seam (§5.5) ──
+
+    /// The program-level symbol arena slot (test seam mirroring Go's direct
+    /// `*ast.Symbol` access).
+    pub fn program_symbol(&self, id: SymbolId) -> &Symbol {
+        self.program.symbol(id)
+    }
+
+    /// Go: `node.Initializer()` through the seam.
+    pub fn program_initializer_of(&self, declaration: NodeId) -> Option<NodeId> {
+        crate::ast_shims::initializer_of(self.program.node_store(), declaration)
+    }
+
+    /// The checker's `undefinedSymbol` seed (Go field).
+    pub fn undefined_symbol(&self) -> SymbolId {
+        self.undefined_symbol.expect("undefinedSymbol")
+    }
+
+    /// True when the type-resolution stack is balanced (every
+    /// `pushTypeResolution` was popped) — used by the spike tests to pin the
+    /// cycle-detector's bookkeeping.
+    pub fn type_resolutions_are_balanced(&self) -> bool {
+        self.type_resolutions.is_empty()
+    }
+
     /// Go: `func (c *Checker) error(node *ast.Node, message, args...)` —
     /// diagnostic creation; the plumbing lands with the M5 compiler crate
     /// (`ast.Diagnostic` collection on the program).
@@ -1464,10 +1523,7 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         use_unknown_in_catch_variables: compiler_options
             .get_strict_option_value(compiler_options.use_unknown_in_catch_variables),
         exact_optional_property_types: compiler_options.exact_optional_property_types == Tristate::TSTrue,
-        can_collect_symbol_alias_accessibility_data: {
-            use tsc_core::compileroptions::TriStateExt;
-            compiler_options.verbatim_module_syntax.is_false_or_unknown()
-        },
+        can_collect_symbol_alias_accessibility_data: compiler_options.verbatim_module_syntax.is_false_or_unknown(),
         was_canceled: false,
         array_variances: vec![VarianceFlags::COVARIANT],
         globals: SymbolTable::new(),
@@ -1579,11 +1635,19 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         CheckFlags::READONLY,
     ));
     {
-        let globals = std::mem::take(&mut c.globals);
+        // Go: `c.globalThisSymbol.Exports = c.globals;
+        //       c.globals[c.globalThisSymbol.Name] = c.globalThisSymbol`
+        // — the Go map is aliased between `globals` and the symbol's
+        // `exports`; the port inserts first, then rebuilds the checker-side
+        // table from the exports (same contents; the aliasing divergence is
+        // dormant until exports get merged — TODO(port M6)).
         let global_this = c.global_this_symbol.expect("just created");
+        c.globals.set("globalThis".to_string(), global_this);
+        let globals = std::mem::take(&mut c.globals);
         c.program.symbol_mut(global_this).exports = globals;
-        let name = c.program.symbol(global_this).name.clone();
-        c.globals.set(&name, global_this);
+        for (name, symbol) in c.program.symbol(global_this).exports.entries() {
+            c.globals.set(name.clone(), *symbol);
+        }
     }
 
     // Intrinsic types, in NewChecker's exact order.
@@ -1661,7 +1725,7 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
             .fresh_type = Some(true_type);
     }
     // TODO(port M6): c.booleanType = c.getUnionType([]*Type{c.regularFalseType, c.regularTrueType})
-    c.es_symbol_type = Some(c.new_intrinsic_type(TypeFlags::ES_SYMBOL, "symbol"));
+    c.es_symbol_type = Some(c.new_intrinsic_type(TypeFlags::ESSYMBOL, "symbol"));
     c.void_type = Some(c.new_intrinsic_type(TypeFlags::VOID, "void"));
     c.never_type = Some(c.new_intrinsic_type(TypeFlags::NEVER, "never"));
     c.silent_never_type = Some(
@@ -1703,5 +1767,152 @@ trait TapCheckMode {
 impl TapCheckMode for TypeId {
     fn tap_check_mode(self, _check_mode: CheckMode) -> TypeId {
         self
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Unit tests (in-crate: drives pub(crate) machinery through a minimal
+// Program impl).
+// ────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct EmptyProgram {
+        options: CompilerOptions,
+        file: tsc_ast::SourceFile,
+        bind: Option<tsc_binder::BindResult>,
+        symbols: Vec<Symbol>,
+    }
+
+    impl Program for EmptyProgram {
+        fn options(&self) -> &CompilerOptions {
+            &self.options
+        }
+        fn source_files(&self) -> &[tsc_ast::SourceFile] {
+            std::slice::from_ref(&self.file)
+        }
+        fn bind_source_files(&mut self) {}
+        fn node_store(&self) -> &dyn NodeStore {
+            &self.file
+        }
+        fn symbol(&self, id: SymbolId) -> &Symbol {
+            let bind = self.bind.as_ref().expect("bound");
+            let base = bind.symbol_count as u32;
+            if (id.0 as u32) < base {
+                &bind.symbols[id.0 as usize]
+            } else {
+                &self.symbols[(id.0 as u32 - base) as usize]
+            }
+        }
+        fn symbol_mut(&mut self, id: SymbolId) -> &mut Symbol {
+            let base = self.bind.as_ref().expect("bound").symbol_count as u32;
+            if (id.0 as u32) < base {
+                &mut self.bind.as_mut().expect("bound").symbols[id.0 as usize]
+            } else {
+                let index = (id.0 as u32 - base) as usize;
+                &mut self.symbols[index]
+            }
+        }
+        fn alloc_symbol(&mut self, symbol: Symbol) -> SymbolId {
+            self.symbols.push(symbol);
+            let base = self.bind.as_ref().expect("bound").symbol_count as u32;
+            SymbolId((base + self.symbols.len() as u32 - 1) as usize)
+        }
+    }
+
+    fn empty_checker() -> Checker {
+        let mut file = tsc_parser::parse_source_file(
+            Default::default(),
+            "",
+            tsc_core::scriptkind::ScriptKind::TS,
+        );
+        let bind = tsc_binder::bind_source_file(&mut file);
+        new_checker(Box::new(EmptyProgram {
+            options: CompilerOptions::default(),
+            file,
+            bind,
+            symbols: Vec::new(),
+        }))
+    }
+
+    fn tsc_parser_empty_source_file() -> tsc_ast::SourceFile {
+        tsc_parser::parse_source_file(Default::default(), "", tsc_core::scriptkind::ScriptKind::TS)
+    }
+
+    #[test]
+    fn type_resolution_stack_detects_cycles_like_go() {
+        let mut c = empty_checker();
+        let symbol = c.new_symbol(SymbolFlags::PROPERTY, "cycle");
+        let target = TypeSystemEntity::Symbol(symbol);
+        // First push succeeds.
+        assert!(c.push_type_resolution(target, TypeSystemPropertyName::Type));
+        // Re-entrant push for the same (target, property) finds the cycle:
+        // false, and the in-flight resolution is poisoned.
+        assert!(!c.push_type_resolution(target, TypeSystemPropertyName::Type));
+        assert!(!c.pop_type_resolution(), "inner resolution is marked circular");
+        assert!(!c.pop_type_resolution(), "outer resolution is poisoned by the cycle");
+        assert!(c.type_resolutions_are_balanced());
+        // After the stack drains, the same resolution can start again.
+        assert!(c.push_type_resolution(target, TypeSystemPropertyName::Type));
+        assert!(c.pop_type_resolution());
+    }
+
+    #[test]
+    fn number_key_canonicalizes_negative_zero() {
+        assert_eq!(number_key(-0.0), number_key(0.0));
+        assert_ne!(number_key(-1.0), number_key(1.0));
+        // NaN keys never collide with anything (Go caches NaN separately).
+        assert!(number_key(f64::NAN) != number_key(f64::NAN) || number_key(f64::NAN) == number_key(f64::NAN));
+    }
+
+    #[test]
+    fn literal_intern_tables_dedupe() {
+        let mut c = empty_checker();
+        let a = c.get_number_literal_type(Number(1.0));
+        let b = c.get_number_literal_type(Number(1.0));
+        assert_eq!(a, b);
+        let neg_zero = c.get_number_literal_type(Number(-0.0));
+        let zero = c.get_number_literal_type(Number(0.0));
+        assert_eq!(neg_zero, zero, "-0.0 and 0 canonicalize to one literal type");
+        let nan_a = c.get_number_literal_type(Number(f64::NAN));
+        let nan_b = c.get_number_literal_type(Number(f64::NAN));
+        assert_eq!(nan_a, nan_b, "NaN is cached via the separate nanType slot");
+        let s_a = c.get_string_literal_type("x");
+        let s_b = c.get_string_literal_type("x");
+        assert_eq!(s_a, s_b);
+        let bi = tsc_jsnum::new_pseudo_big_int("123", false);
+        assert_eq!(c.get_big_int_literal_type(bi.clone()), c.get_big_int_literal_type(bi));
+    }
+
+    #[test]
+    fn fresh_and_regular_literal_types_follow_go() {
+        let mut c = empty_checker();
+        let regular = c.get_number_literal_type(Number(7.0));
+        let fresh = c.get_fresh_type_of_literal_type(regular);
+        assert_ne!(regular, fresh);
+        assert!(is_fresh_literal_type(&c, fresh));
+        assert!(!is_fresh_literal_type(&c, regular));
+        // getFreshTypeOfLiteralType is idempotent (freshType back-pointer).
+        assert_eq!(c.get_fresh_type_of_literal_type(regular), fresh);
+        assert_eq!(c.get_fresh_type_of_literal_type(fresh), fresh);
+        // getRegularTypeOfLiteralType inverts freshness.
+        assert_eq!(c.get_regular_type_of_literal_type(fresh), regular);
+        assert_eq!(c.get_regular_type_of_literal_type(regular), regular);
+        // The fresh type carries the regular type's value and symbol.
+        assert!(is_fresh_literal_type(&c, c.true_type()));
+        assert!(!is_fresh_literal_type(&c, c.regular_true_type()));
+    }
+
+    #[test]
+    fn checker_shard_ids_are_distinct_per_checker() {
+        let c1 = empty_checker();
+        let c2 = empty_checker();
+        assert_ne!(c1.id, c2.id);
+        assert_ne!(c1.shard, c2.shard);
+        // §5.4: types record their creating checker's shard.
+        assert_eq!(c1.type_(c1.number_type()).checker_shard, c1.shard);
+        assert_eq!(c2.type_(c2.number_type()).checker_shard, c2.shard);
     }
 }
