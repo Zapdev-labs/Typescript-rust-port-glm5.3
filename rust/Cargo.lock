@@ -219,6 +219,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "tsc-bundled"
+version = "0.0.0"
+dependencies = [
+ "tsc-tspath",
+ "tsc-vfs",
+]
+
+[[package]]
+name = "tsc-checker"
+version = "0.0.0"
+dependencies = [
+ "rustc-hash",
+ "tsc-ast",
+ "tsc-binder",
+ "tsc-collections",
+ "tsc-core",
+ "tsc-debug",
+ "tsc-diagnostics",
+ "tsc-jsnum",
+ "tsc-parser",
+ "tsc-scanner",
+]
+
+[[package]]
 name = "tsc-collections"
 version = "0.0.0"
 dependencies = [
@@ -309,6 +333,15 @@ version = "0.0.0"
 [[package]]
 name = "tsc-osutil"
 version = "0.0.0"
+
+[[package]]
+name = "tsc-outputpaths"
+version = "0.0.0"
+dependencies = [
+ "tsc-ast",
+ "tsc-core",
+ "tsc-tspath",
+]
 
 [[package]]
 name = "tsc-packagejson"

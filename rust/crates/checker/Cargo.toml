@@ -1,0 +1,24 @@
+[package]
+name = "tsc-checker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Rust port of the Go tsc checker (tsc/internal/checker) — M5 spike: types.go + utilities.go + intrinsic/literal types (SPEC §8 M5)"
+
+[dependencies]
+rustc-hash = { workspace = true } # scratch/intern map hashing — never output-ordered (SPEC §5.2 rule)
+tsc-ast = { path = "../ast" }
+tsc-binder = { path = "../binder" } # Go checker imports binder (utilities.go: getEnclosingContainer)
+tsc-collections = { path = "../collections" }
+tsc-core = { path = "../core" }
+tsc-debug = { path = "../debug" }
+tsc-diagnostics = { path = "../diagnostics" }
+tsc-jsnum = { path = "../jsnum" }
+tsc-scanner = { path = "../scanner" }
+
+[dev-dependencies]
+tsc-parser = { path = "../parser" }
+
+[lints]
+workspace = true
