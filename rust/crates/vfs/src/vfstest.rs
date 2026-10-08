@@ -23,11 +23,15 @@ use tsc_tspath::CaseSensitivity;
 use crate::sysfs::{FileMode, SubFs, SubDirEntry};
 use crate::vfs::{FileInfo, err_not_exist};
 
-const UMASK: FileMode = FileMode::from_bits(0o022);
+// PORT: Go's const Umask = 0o022 — FileMode's constructor is not const, so
+// the mask is expressed as bits.
+fn umask() -> FileMode {
+    FileMode::from_bits(0o022)
+}
 
 /// MapFile mirrors `fstest.MapFile` (what vfstest stores per path): raw data,
 /// mode, modification time, and an arbitrary user attachment.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct MapFile {
     /// File data (for symlinks, the target path).
     pub data: Vec<u8>,
@@ -37,6 +41,17 @@ pub struct MapFile {
     pub mod_time: SystemTime,
     /// Go MapFile.Sys: arbitrary attached value.
     pub sys: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+impl Default for MapFile {
+    fn default() -> MapFile {
+        MapFile {
+            data: Vec::new(),
+            mode: FileMode::EMPTY,
+            mod_time: SystemTime::UNIX_EPOCH,
+            sys: None,
+        }
+    }
 }
 
 impl MapFile {
@@ -187,8 +202,8 @@ impl From<&LookupError> for io::Error {
 /// The paths must be normalized absolute paths according to the tspath package,
 /// without trailing directory separators.
 /// The paths must be all POSIX-style or all Windows-style, but not both.
-pub fn from_map<V: Into<MapFile>>(
-    m: impl IntoIterator<Item = (String, V)>,
+pub fn from_map<P: Into<String>, V: Into<MapFile>>(
+    m: impl IntoIterator<Item = (P, V)>,
     case_sensitivity: CaseSensitivity,
 ) -> Arc<dyn crate::vfs::Fs> {
     from_map_with_clock(m, case_sensitivity, Arc::new(ClockImpl::new()))
@@ -196,8 +211,8 @@ pub fn from_map<V: Into<MapFile>>(
 
 /// FromMapWithClock creates a new [Fs] from a map of paths to file contents.
 /// See [from_map] for the path requirements.
-pub fn from_map_with_clock<V: Into<MapFile>>(
-    m: impl IntoIterator<Item = (String, V)>,
+pub fn from_map_with_clock<P: Into<String>, V: Into<MapFile>>(
+    m: impl IntoIterator<Item = (P, V)>,
     case_sensitivity: CaseSensitivity,
     clock: Arc<dyn Clock>,
 ) -> Arc<dyn crate::vfs::Fs> {
@@ -208,7 +223,7 @@ pub fn from_map_with_clock<V: Into<MapFile>>(
     // Sorted creation to ensure times are always guaranteed to be in order.
     let mut entries: Vec<(String, MapFile)> = m
         .into_iter()
-        .map(|(path, file)| (path, file.into()))
+        .map(|(path, file)| (path.into(), file.into()))
         .collect();
     entries.sort_by(|a, b| compare_paths_by_parts(&a.0, &b.0));
     for (p, mut file) in entries {
@@ -216,9 +231,8 @@ pub fn from_map_with_clock<V: Into<MapFile>>(
         if !tsc_tspath::is_rooted_disk_path(&p) {
             panic!("non-rooted path {p:?}");
         }
-        let normal = tsc_tspath::remove_trailing_directory_separator(
-            tsc_tspath::normalize_path(&p).as_ref(),
-        );
+        let normalized = tsc_tspath::normalize_path(&p);
+        let normal = tsc_tspath::remove_trailing_directory_separator(&normalized);
         if normal != p {
             panic!("non-normalized path {p:?}");
         }
@@ -239,9 +253,8 @@ pub fn from_map_with_clock<V: Into<MapFile>>(
             if !tsc_tspath::is_rooted_disk_path(&target) {
                 panic!("non-rooted path {target:?}");
             }
-            let normal = tsc_tspath::remove_trailing_directory_separator(
-                tsc_tspath::normalize_path(&target).as_ref(),
-            );
+            let normalized = tsc_tspath::normalize_path(&target);
+            let normal = tsc_tspath::remove_trailing_directory_separator(&normalized);
             if normal != target {
                 panic!("non-normalized path {target:?}");
             }
@@ -263,12 +276,15 @@ pub fn from_map_with_clock<V: Into<MapFile>>(
 /// convertMapFS verifies a well-formed fstest-style map (relative, canonical
 /// keys) and materializes it into a [MapFS], creating all intermediate
 /// directories so every entry carries its realpath (Go convertMapFS).
-pub fn convert_map_fs(
-    input: impl IntoIterator<Item = (String, MapFile)>,
+pub fn convert_map_fs<P: Into<String>>(
+    input: impl IntoIterator<Item = (P, MapFile)>,
     case_sensitivity: CaseSensitivity,
     clock: Option<Arc<dyn Clock>>,
 ) -> Arc<MapFS> {
-    let input: Vec<(String, MapFile)> = input.into_iter().collect();
+    let input: Vec<(String, MapFile)> = input
+        .into_iter()
+        .map(|(path, file)| (path.into(), file))
+        .collect();
     let clock = clock.unwrap_or_else(|| Arc::new(ClockImpl::new()));
     let m = Arc::new(MapFS {
         mu: RwLock::new(MapFsState { files: HashMap::new(), symlinks: HashMap::new() }),
@@ -302,7 +318,7 @@ pub fn convert_map_fs(
         // Create all missing intermediate directories so we can attach the realpath to each of them.
         let dir = dir_name(&p);
         if !dir.is_empty() {
-            if let Err(err) = mfs_mkdir_all(&m, &mut state, &dir, 0o777) {
+            if let Err(err) = mfs_mkdir_all(&m, &mut state, dir, 0o777) {
                 panic!("failed to create intermediate directories for {p:?}: {err}");
             }
         }
@@ -503,7 +519,7 @@ fn mfs_mkdir_all(
             &canonical,
             MapFile {
                 data: Vec::new(),
-                mode: FileMode::DIR | (FileMode::from_bits(perm) & !UMASK),
+                mode: FileMode::DIR | (FileMode::from_bits(perm) & !umask()),
                 mod_time: m.clock.now(),
                 sys: None,
             },
@@ -800,7 +816,7 @@ fn mfs_write_file(
 
     let mut mode = existing_mode;
     if mode == FileMode::EMPTY {
-        mode = FileMode::from_bits(perm) & !UMASK;
+        mode = FileMode::from_bits(perm) & !umask();
     }
 
     set_entry(

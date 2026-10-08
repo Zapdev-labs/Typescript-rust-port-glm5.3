@@ -153,7 +153,7 @@ impl WalkCtx<'_> {
             }
 
             let mut child_realpath = RootedPath::default();
-            let mut is_symlink = false;
+            let is_symlink;
             if let Some(symlinks) = &entries.symlinks {
                 is_symlink = symlinks.contains(&name);
                 if !is_symlink && mode.is_dir() {

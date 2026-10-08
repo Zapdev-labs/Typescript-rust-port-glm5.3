@@ -4,13 +4,9 @@
 // Go's `SplitPath` helper is not ported (no caller in the ported packages).
 
 use std::collections::HashSet;
-use std::io;
 use std::sync::Arc;
 
-use tsc_tspath::{
-    RootedDirectoryPath, RootedFilePath, RootedPath, get_encoded_root_length, normalize_path,
-    remove_trailing_directory_separator,
-};
+use tsc_tspath::{RootedDirectoryPath, RootedFilePath, RootedPath, get_encoded_root_length};
 
 use crate::sysfs::{FileMode, SubFs, SubDirEntry};
 use crate::vfs::{Entries, FileInfo};
@@ -20,6 +16,9 @@ use crate::vfs::{Entries, FileInfo};
 /// like "/" or "c:/" onto a sub-filesystem (Go's `RootFor func(root string)
 /// fs.FS`, where nil means the root is unusable, e.g. a URL) — and optionally
 /// `is_reparse_point` for Windows reparse-point detection.
+// PORT: the boxed-closure field types mirror Go's function-typed fields; the
+// complexity allow covers exactly those two fields.
+#[allow(clippy::type_complexity)]
 pub(crate) struct Common {
     pub root_for: Box<dyn Fn(&str) -> Option<Arc<dyn SubFs>> + Send + Sync>,
     pub is_reparse_point: Option<Box<dyn Fn(&str) -> bool + Send + Sync>>,
@@ -51,10 +50,7 @@ impl Common {
     pub(crate) fn stat(&self, path: &RootedPath) -> Option<Arc<dyn FileInfo>> {
         let (fsys, _, rest) = self.root_and_path(path);
         let fsys = fsys?;
-        match fsys.stat(&rest) {
-            Ok(stat) => Some(stat),
-            Err(_) => None,
-        }
+        fsys.stat(&rest).ok()
     }
 
     pub(crate) fn file_exists(&self, path: &RootedFilePath) -> bool {
@@ -72,8 +68,10 @@ impl Common {
     }
 
     pub(crate) fn get_accessible_entries(&self, path: &RootedDirectoryPath) -> Entries {
-        let mut result = Entries::default();
-        result.symlinks = Some(HashSet::new());
+        let mut result = Entries {
+            symlinks: Some(HashSet::new()),
+            ..Default::default()
+        };
 
         fn add_to_result(result: &mut Entries, name: &str, mode: FileMode, is_link: bool) -> bool {
             if mode.is_dir() {
@@ -109,12 +107,12 @@ impl Common {
             }
 
             if entry_type & FileMode::IRREGULAR != FileMode::EMPTY
-                && self.is_reparse_point.is_some()
+                && let Some(is_reparse_point) = self.is_reparse_point.as_ref()
             {
                 // Could be a Windows junction or other reparse point.
                 // Check using the OS-specific helper.
                 let full_path = path.resolve_file(&entry.name);
-                if (self.is_reparse_point.as_ref().unwrap())(full_path.as_string()) {
+                if is_reparse_point(full_path.as_string()) {
                     if let Some(stat) = self.stat(&full_path.as_path()) {
                         add_to_result(&mut result, &entry.name, stat.mode(), true);
                     }
@@ -131,10 +129,7 @@ impl Common {
         let Some(fsys) = fsys else {
             return Vec::new();
         };
-        match fsys.read_dir(&rest) {
-            Ok(entries) => entries,
-            Err(_) => Vec::new(),
-        }
+        fsys.read_dir(&rest).unwrap_or_default()
     }
 
     pub(crate) fn read_file(&self, path: &RootedFilePath) -> Option<String> {

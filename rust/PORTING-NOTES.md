@@ -113,3 +113,41 @@ a view type over unsafe punning. Raw outputs: ~/bench-results/phase0 (rig).
 - Derived `PartialOrd`/`Ord` on the option enums equal the numeric order
   (generator-validated: member values monotonic in declaration order), so
   Go's int32 range checks port directly to variant comparisons.
+
+## 2026-10-07 crates/spanmap + crates/vfs — internal/spanmap + internal/vfs port
+- `internal/spanmap` -> `tsc-spanmap` (one file pair, lib + tests): Go's
+  exported-but-out-of-range `Kind`/`Feature` values must survive round trips
+  for `Validate`, so both are i32 newtypes over the Go consts (not enums);
+  only `Fidelity` is a closed enum. Nil `*SpanMap` receivers (identity
+  mapping) are `impl SpanMapRef for Option<&SpanMap>`; `sync.Once` ->
+  `OnceLock`. Marshal/unmarshal go through the `tsc-json` facade.
+- `internal/vfs` -> `tsc-vfs` as one crate with modules mirroring the Go
+  package tree (`sysfs`, `vfs`, `walkdir`, `internal` (pub(crate)),
+  `iovfs`, `osvfs`, `vfstest`, `wrapvfs`); subpackages `cachedvfs`,
+  `trackingvfs`, `vfsmatch`, `vfsmock` are not ported (no ported package
+  imports them).
+- Trait design: this Go revision's `FS` is flat (no RealFS/SortedReadDirFS
+  composition here — that text in the task brief corresponds to a different
+  upstream revision), ported as one object-safe `Fs` trait (`Send + Sync`,
+  `Arc<dyn Fs>` values). The Go io/fs substrate becomes `sysfs::SubFs`
+  (`stat`/`read_file`/`read_dir`, "." is the sub-root); the iovfs
+  capability interfaces (`RealpathFS`/`WritableFS`, detected by Go type
+  assertion) become default methods on `SubFs` — defaults reproduce what
+  `iovfs.From` does when the wrapped fs.FS lacks the interface (identity
+  realpath, failing writes), so trait-object dynamic dispatch replaces the
+  type assertion. `fs.Sub` -> `sysfs::PrefixSubFs`.
+- Go stdlib doubles: `fstest.MapFS` semantics are folded into
+  `vfstest::MapFS` (the Go package embeds it anyway); `fstest.TestFS`
+  consistency checks and the Go test `assert`/`vfsmock` infra are dropped
+  with PORT comments at each test site. `fs.SkipDir`/`fs.SkipAll` ->
+  `WalkDirControl` enum; the three-channel Go walkFunc error flow ->
+  `WalkAbort` enum.
+- Divergences: `internal.read_file` returns `None` (not a lossy string) for
+  non-UTF-8 bytes after UTF-8 BOM handling; Go `ReadFile` would produce an
+  invalid string. Error sentinels are `io::Error` constructors with the
+  exact Go message strings. `File::set_times` (futimens) replaces Go
+  `os.Chtimes`; `MapFS` mod times are `SystemTime` (zero -> `UNIX_EPOCH`).
+- Validation: `cargo test -p tsc-spanmap -p tsc-vfs` 67/67 green
+  (32 spanmap + 35 vfs), clippy `--all-targets` clean for both crates
+  (pre-existing tsc-tspath warnings untouched), `cargo check --workspace
+  --exclude tsc-ast` green.

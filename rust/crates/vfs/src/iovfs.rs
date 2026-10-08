@@ -82,8 +82,8 @@ impl IoFs {
         if op(self.fsys.as_ref(), rest, content).is_ok() {
             return Ok(());
         }
-        let directory = cut_slash(path.directory().as_string());
-        self.fsys.mkdir_all(directory)?;
+        let directory = path.directory();
+        self.fsys.mkdir_all(cut_slash(directory.as_string()))?;
         op(self.fsys.as_ref(), rest, content)
     }
 }
