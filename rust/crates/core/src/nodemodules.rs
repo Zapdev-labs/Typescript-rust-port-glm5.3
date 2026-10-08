@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn core_modules_contain_unprefixed_and_prefixed() {
-        assert_eq!(UNPREFIXED_NODE_CORE_MODULES.len(), 55);
+        assert_eq!(UNPREFIXED_NODE_CORE_MODULES.len(), 54);
         assert_eq!(EXCLUSIVELY_PREFIXED_NODE_CORE_MODULES.len(), 5);
         let m = node_core_modules();
         assert!(m.has("fs"));

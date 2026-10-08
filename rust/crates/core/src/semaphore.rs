@@ -135,16 +135,21 @@ mod tests {
 
     #[test]
     fn limited_acquire_release_roundtrip() {
+        // PORT: Go's TryAcquire *blocks* until either a slot frees or the
+        // context is cancelled (select); it never returns false while the
+        // context is live and no release is pending.
         let s = new_limited_semaphore(2);
         let r1 = s.acquire();
         let r2 = s.acquire();
         let ctx = CancelToken::new();
-        let (r3, acquired) = s.try_acquire(&ctx);
-        assert!(!acquired, "no slot should be free with max=2 held");
+        let cancelled = CancelToken::new();
+        cancelled.cancel();
+        let (r3, acquired) = s.try_acquire(&cancelled);
+        assert!(!acquired, "cancelled context must not acquire");
         r3();
         r1();
         let (r4, acquired) = s.try_acquire(&ctx);
-        assert!(acquired);
+        assert!(acquired, "released slot must be acquirable");
         r4();
         r2();
         // All released; two more acquires must succeed.

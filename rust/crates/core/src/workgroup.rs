@@ -316,7 +316,10 @@ mod tests {
             tg.go(Box::new(move || {
                 let mut a = active.lock().unwrap();
                 *a += 1;
-                *max.lock().unwrap() = (*max.lock().unwrap()).max(*a);
+                {
+                    let mut m = max.lock().unwrap();
+                    *m = (*m).max(*a);
+                }
                 std::thread::sleep(std::time::Duration::from_millis(2));
                 *a -= 1;
                 Ok(())
@@ -330,11 +333,14 @@ mod tests {
     }
 
     #[test]
-    fn throttle_group_captures_first_error() {
+    fn throttle_group_captures_error() {
+        // PORT: Go's "first error wins" is inherently racy between two
+        // concurrently failing goroutines; the port pins a single failing
+        // task (plus a succeeding one) to keep the assertion deterministic.
         let ctx = CancelToken::new();
         let tg = new_throttle_group(ctx, Box::new(UnlimitedSemaphore));
+        tg.go(Box::new(|| Ok(())));
         tg.go(Box::new(|| Err(Box::new(std::io::Error::other("first")) as ThrottleError)));
-        tg.go(Box::new(|| Err(Box::new(std::io::Error::other("second")) as ThrottleError)));
         let err = tg.wait();
         assert_eq!(err.unwrap().to_string(), "first");
     }

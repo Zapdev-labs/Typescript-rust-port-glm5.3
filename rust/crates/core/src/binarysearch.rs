@@ -44,7 +44,7 @@ mod tests {
         let xs = [10, 20, 30, 40, 50];
         // cmp(element, target): mirror slices.BinarySearchFunc's cmp(element, target) sign.
         let find = |target: i32| {
-            binary_search_unique_func(&xs, |_i, e| (*e - target))
+            binary_search_unique_func(&xs, |_i, e| *e - target)
         };
         assert_eq!(find(30), (2, true));
         assert_eq!(find(10), (0, true));

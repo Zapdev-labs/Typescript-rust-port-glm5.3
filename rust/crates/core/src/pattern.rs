@@ -38,8 +38,13 @@ impl Pattern {
         if self.star_index == -1 {
             return "";
         }
-        &candidate
-            [self.star_index as usize..candidate.len() - self.text.len() + self.star_index as usize + 1]
+        // PORT: Go's int arithmetic cannot underflow; keep the same
+        // evaluation order in i64 before slicing (matches() has already
+        // guaranteed the range is valid).
+        let end = candidate.len() as i64 - self.text.len() as i64
+            + self.star_index as i64
+            + 1;
+        &candidate[self.star_index as usize..end as usize]
     }
 }
 
