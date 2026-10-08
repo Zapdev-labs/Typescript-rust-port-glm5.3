@@ -76,7 +76,6 @@ fn static_resolver() {
                     resolved_file_name: RootedFilePath::from("/directory-esm.d.ts"),
                     ..Default::default()
                 })),
-                ..Default::default()
             },
             StaticResolutionEntry {
                 module_name: "unresolved".to_string(),

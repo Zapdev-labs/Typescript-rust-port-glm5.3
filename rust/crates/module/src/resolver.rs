@@ -277,6 +277,10 @@ pub(crate) struct ResolutionCandidate {
     pub(crate) directory_only: bool,
 }
 
+// Go: `func resolutionCandidateFromNormalized(path string) resolutionCandidate` —
+// exercised by the in-package tests and indirectly through
+// resolveResolutionCandidate; kept for API parity.
+#[allow(dead_code)]
 fn resolution_candidate_from_normalized(path: &str) -> ResolutionCandidate {
     let directory_only = has_trailing_directory_separator(path);
     let mut path = path;
@@ -290,6 +294,9 @@ fn resolution_candidate_from_normalized(path: &str) -> ResolutionCandidate {
     }
 }
 
+// Go: `func resolveResolutionCandidate(path string, paths ...string) resolutionCandidate` —
+// exercised by the in-package tests; kept for API parity.
+#[allow(dead_code)]
 pub(crate) fn resolve_resolution_candidate(path: &str, paths: &[&str]) -> ResolutionCandidate {
     resolution_candidate_from_normalized(&resolve_path(path, paths))
 }
@@ -742,6 +749,7 @@ impl DefaultResolver {
 
     /// A bare resolver for the in-package tests (Go tests write
     /// `&DefaultResolver{ResolutionData: ..., fs: ...}` via struct literals).
+    #[allow(dead_code)]
     pub(crate) fn bare(resolution_data: Arc<ResolutionData>, fs: Arc<dyn Fs>) -> DefaultResolver {
         DefaultResolver {
             resolution_data,
@@ -863,6 +871,8 @@ impl DefaultResolver {
     }
 
     // Go: `func (r *DefaultResolver) getParsedPatternsForPaths(compilerOptions) *ParsedPatterns`.
+    // Exercised by the in-package tests; kept for API parity.
+    #[allow(dead_code)]
     pub(crate) fn get_parsed_patterns_for_paths(
         &self,
         compiler_options: &CompilerOptions,
@@ -1901,6 +1911,8 @@ impl ResolutionState<'_> {
     }
 
     // Go: `func (r *resolutionState) loadModuleFromTargetExportOrImport(...)`.
+    // Go signature has 9 parameters; kept for parity.
+    #[allow(clippy::too_many_arguments)]
     fn load_module_from_target_export_or_import(
         &mut self,
         extensions: Extensions,

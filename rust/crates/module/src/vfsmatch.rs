@@ -829,6 +829,10 @@ fn match_file_names(
         Usage::Directories,
     );
 
+    // Go: `results: make([][]string, max(len(fileMatcher.includes), 1))` —
+    // computed off the matcher's compiled includes (the matchers must be
+    // constructed first, so the length is a separate expression).
+    let results_len = file_matcher.includes.len().max(1);
     let mut v = GlobVisitor {
         host,
         file_matcher,
@@ -836,11 +840,8 @@ fn match_file_names(
         extensions: extensions.to_vec(),
         case_sensitivity,
         visited: Set::new(),
-        // Go: results has max(len(includes), 1) buckets — computed off the
-        // matcher's compiled includes.
-        results: vec![Vec::new(); 1.max(0)],
+        results: vec![Vec::new(); results_len],
     };
-    v.results = vec![Vec::new(); v.file_matcher.includes.len().max(1)];
 
     for base_path in get_base_paths(path, includes, case_sensitivity) {
         v.visit(&base_path, depth, None);

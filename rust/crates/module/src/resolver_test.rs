@@ -1571,7 +1571,7 @@ fn resolve_module_name_trailing_slash_race() {
 #[test]
 fn resolve_subpath_nil_contents_race() {
     let root_pkg_json = "/repo/node_modules/pkg/package.json";
-    let files = vec![
+    let files = [
         (root_pkg_json.to_string(), r#"{"name":"pkg","version":"1.0.0"}"#.to_string()),
         ("/repo/node_modules/pkg/sub/index.d.ts".to_string(), "export declare const sub: number;".to_string()),
         ("/repo/node_modules/pkg/sub/index.js".to_string(), "exports.sub = 1;".to_string()),
@@ -1699,7 +1699,7 @@ fn node_module_package_root() {
 #[test]
 fn resolve_peer_dependency_nil_contents_race() {
     let peer_pkg_json = "/repo/node_modules/peer/package.json";
-    let files = vec![
+    let files = [
         (
             "/repo/node_modules/pkg/package.json".to_string(),
             r#"{"name":"pkg","version":"1.0.0","types":"index.d.ts","peerDependencies":{"peer":"*"}}"#.to_string(),
