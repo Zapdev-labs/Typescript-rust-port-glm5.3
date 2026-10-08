@@ -55,9 +55,12 @@ use tsc_diagnostics::{Message, ASTERISK_SLASH_EXPECTED, BINARY_DIGIT_EXPECTED,
     DECIMAL_ESCAPE_SEQUENCES_AND_BACKREFERENCES_ARE_NOT_ALLOWED_IN_A_CHARACTER_CLASS,
     ESCAPE_SEQUENCE_0_IS_NOT_ALLOWED, X_CAN_ONLY_BE_USED_AT_THE_START_OF_A_FILE};
 
-use crate::go_shims::{decode_last_rune_in_string, is_type_node_kind};
+use tsc_jsnum as jsnum;
+use tsc_stringutil as stringutil;
+
+use crate::go_shims::{decode_last_rune_in_string, decode_rune_in_string, position_is_synthesized, utf16_len, UTF16Offset};
 use crate::regexp::RegExpParser;
-use crate::{as_char, unicodeproperties};
+use crate::as_char;
 
 // ────────────────────────────────────────────────────────────────────────────
 // Flags / variants
@@ -129,7 +132,7 @@ pub type ErrorCallback<'c> = Box<dyn FnMut(&'static Message, i32, i32, &[String]
 
 /// Go: `var textToKeyword = map[string]ast.Kind{...}` — a `match` compiles to
 /// a length+prefix dispatch (no allocation, no hash map).
-fn text_to_keyword(s: &str) -> Option<Kind> {
+pub(crate) fn text_to_keyword(s: &str) -> Option<Kind> {
     Some(match s {
         "abstract" => Kind::AbstractKeyword,
         "accessor" => Kind::AccessorKeyword,
@@ -1020,7 +1023,7 @@ impl<'a> Scanner<'a> {
                     self.state.token = Kind::SemicolonToken;
                 }
                 Ok(b'<') => {
-                    if self.char_at(1) == b'<' as i32 && is_conflict_marker_trivia(self.text, self.state.pos) {
+                    if self.char_at(1) == b'<' as i32 && is_conflict_marker_trivia(self.text.as_bytes(), self.state.pos) {
                         let new_pos = self.scan_conflict_marker_at(self.state.pos);
                         self.state.pos = new_pos;
                         if self.skip_trivia {
@@ -1052,7 +1055,7 @@ impl<'a> Scanner<'a> {
                     }
                 }
                 Ok(b'=') => {
-                    if self.char_at(1) == b'=' as i32 && is_conflict_marker_trivia(self.text, self.state.pos) {
+                    if self.char_at(1) == b'=' as i32 && is_conflict_marker_trivia(self.text.as_bytes(), self.state.pos) {
                         let new_pos = self.scan_conflict_marker_at(self.state.pos);
                         self.state.pos = new_pos;
                         if self.skip_trivia {
@@ -1078,7 +1081,7 @@ impl<'a> Scanner<'a> {
                     }
                 }
                 Ok(b'>') => {
-                    if self.char_at(1) == b'>' as i32 && is_conflict_marker_trivia(self.text, self.state.pos) {
+                    if self.char_at(1) == b'>' as i32 && is_conflict_marker_trivia(self.text.as_bytes(), self.state.pos) {
                         let new_pos = self.scan_conflict_marker_at(self.state.pos);
                         self.state.pos = new_pos;
                         if self.skip_trivia {
@@ -1129,7 +1132,7 @@ impl<'a> Scanner<'a> {
                     self.state.token = Kind::OpenBraceToken;
                 }
                 Ok(b'|') => {
-                    if self.char_at(1) == b'|' as i32 && is_conflict_marker_trivia(self.text, self.state.pos) {
+                    if self.char_at(1) == b'|' as i32 && is_conflict_marker_trivia(self.text.as_bytes(), self.state.pos) {
                         let new_pos = self.scan_conflict_marker_at(self.state.pos);
                         self.state.pos = new_pos;
                         if self.skip_trivia {
@@ -1520,16 +1523,12 @@ impl<'a> Scanner<'a> {
                     let save_token_pos = self.state.token_start;
                     let save_token_flags = self.state.token_flags;
                     self.end = end_of_reg_exp_body;
-                    let mut parser = RegExpParser {
-                        scanner: self,
-                        end: end_of_reg_exp_body,
+                    let mut parser = RegExpParser::new(
+                        &mut *self,
+                        end_of_reg_exp_body,
                         reg_exp_flags,
-                        any_unicode_mode: reg_exp_flags & crate::regexp::REG_EXP_FLAGS_ANY_UNICODE_MODE != 0,
-                        unicode_sets_mode: reg_exp_flags & crate::regexp::REG_EXP_FLAGS_UNICODE_SETS != 0,
-                        annex_b: true,
                         named_capture_groups,
-                        ..RegExpParser::new_state()
-                    };
+                    );
                     parser.run();
                     self.end = save_end;
                     self.state.pos = p;
@@ -1637,7 +1636,7 @@ impl<'a> Scanner<'a> {
                         break;
                     }
                     if ch == b'<' as i32 {
-                        if is_conflict_marker_trivia(self.text, self.state.pos) {
+                        if is_conflict_marker_trivia(self.text.as_bytes(), self.state.pos) {
                             let new_pos = self.scan_conflict_marker_at(self.state.pos);
                             self.state.pos = new_pos;
                             self.state.token = Kind::ConflictMarkerTrivia;
@@ -1941,7 +1940,7 @@ impl<'a> Scanner<'a> {
                 _ => LanguageVariant::Standard,
             };
             let mut size = size;
-            let mut ch = ch;
+            let mut ch;
             loop {
                 self.state.pos += size;
                 let (next_ch, next_size) = self.char_and_size();
@@ -2230,11 +2229,11 @@ impl<'a> Scanner<'a> {
                 let value = &self.bytes()[start..self.state.pos];
                 return Cow::Borrowed(value);
             }
-            Ok(b'b') => return Cow::Borrowed(b"\b"),
+            Ok(b'b') => return Cow::Borrowed(b"\x08"),
             Ok(b't') => return Cow::Borrowed(b"\t"),
             Ok(b'n') => return Cow::Borrowed(b"\n"),
-            Ok(b'v') => return Cow::Borrowed(b"\v"),
-            Ok(b'f') => return Cow::Borrowed(b"\f"),
+            Ok(b'v') => return Cow::Borrowed(b"\x0B"),
+            Ok(b'f') => return Cow::Borrowed(b"\x0C"),
             Ok(b'r') => return Cow::Borrowed(b"\r"),
             Ok(b'\'') => return Cow::Borrowed(b"'"),
             Ok(b'"') => return Cow::Borrowed(b"\""),
@@ -2540,7 +2539,11 @@ impl<'a> Scanner<'a> {
                     // PORT: Go's `strconv.ParseInt(digits, 8, 64)` returns the
                     // clamped maximum on overflow (error ignored); unwrap_or
                     // mirrors the clamped value.
-                    let val = i64::from_str_radix(digits, 8).unwrap_or(i64::MAX);
+                    let val = i64::from_str_radix(
+                        std::str::from_utf8(digits).unwrap_or(""),
+                        8,
+                    )
+                    .unwrap_or(i64::MAX);
                     self.state.token_value = Cow::Owned(val.to_string().into_bytes());
                     self.state.token_flags |= TokenFlags::OCTAL;
                     let with_minus = self.state.token == Kind::MinusToken;
@@ -2982,7 +2985,7 @@ impl<'a> ValueBuilder<'a> {
 /// Go: `string(rune)` for the runes the escape scanner produces — UTF-8
 /// encoding of a valid code point; invalid values encode U+FFFD exactly as
 /// Go's string(rune) does.
-fn rune_bytes(r: i32) -> Vec<u8> {
+pub(crate) fn rune_bytes(r: i32) -> Vec<u8> {
     match char::from_u32(r as u32) {
         Some(c) => c.encode_utf8(&mut [0u8; 4]).as_bytes().to_vec(),
         None => "\u{FFFD}".as_bytes().to_vec(),
@@ -3053,8 +3056,9 @@ pub fn is_valid_identifier(s: &str) -> bool {
     true
 }
 
-/// Go: `func isWordCharacter(ch rune) bool` — Section 6.1.4.
-fn is_word_character(ch: i32) -> bool {
+/// Go: `func isWordCharacter(ch rune) bool` — Section 6.1.4. `pub(crate)`:
+/// regexp.go shares this package-level helper.
+pub(crate) fn is_word_character(ch: i32) -> bool {
     stringutil::is_ascii_letter(as_char(ch))
         || stringutil::is_digit(as_char(ch))
         || ch == b'_' as i32
@@ -3247,11 +3251,535 @@ pub fn get_viable_keyword_suggestions() -> Vec<&'static str> {
     KEYWORDS_WITH_LONG_NAMES.to_vec()
 }
 
+// Every textToKeyword key longer than 2 characters, in map declaration order
+// (Go: `for text := range textToKeyword { if len(text) > 2 { ... } }`).
 static KEYWORDS_WITH_LONG_NAMES: &[&str] = &[
-    "abstract", "accessor", "asserts", "bigint", "boolean", "constructor", "continue", "declare",
-    "default", "delete", "extends", "finally", "function", "implement", "implements", "instanceof",
-    "interface", "intrinsic", "module", "namespace", "number", "package", "protected", "readonly",
-    "satisfies", "static", "string", "symbol", "typeof", "undefined", "unknown",
+    "abstract", "accessor", "any", "asserts", "assert", "bigint", "boolean", "break", "case",
+    "catch", "class", "continue", "const", "constructor", "debugger", "declare", "default",
+    "defer", "delete", "else", "enum", "export", "extends", "false", "finally", "for", "from",
+    "function", "get", "immediate", "implements", "import", "infer", "instanceof", "interface",
+    "intrinsic", "keyof", "let", "module", "namespace", "never", "new", "null", "number",
+    "object", "package", "private", "protected", "public", "override", "out", "readonly",
+    "require", "global", "return", "satisfies", "set", "source", "static", "string", "super",
+    "switch", "symbol", "this", "throw", "true", "try", "type", "typeof", "undefined", "unique",
+    "unknown", "using", "var", "void", "while", "with", "yield", "async", "await",
 ];
 
-// (The Go textToKeyword map keys with len > 2, in declaration order.)
+// ────────────────────────────────────────────────────────────────────────────
+// SkipTrivia / conflict markers / shebang (scanner.go free functions)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `func couldStartTrivia(text string, pos int) bool`.
+pub fn could_start_trivia(text: &[u8], pos: usize) -> bool {
+    // Keep in sync with skip_trivia
+    match text[pos] {
+        // Characters that could start normal trivia
+        b'\r' | b'\n' | b'\t' | 0x0B | 0x0C | b' ' | b'/'
+        // Characters that could start conflict marker trivia
+        | b'<' | b'|' | b'=' | b'>' => true,
+        b'#' =>
+            // Only if its the beginning can we have #! trivia
+            pos == 0,
+        ch => ch > MAX_ASCII_CHARACTER,
+    }
+}
+
+/// Go: `type SkipTriviaOptions struct`.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct SkipTriviaOptions {
+    pub stop_after_line_break: bool,
+    pub stop_at_comments: bool,
+    pub in_jsdoc: bool,
+}
+
+/// Go: `func SkipTrivia(text string, pos int) int` — positions are `i32`
+/// (`core.TextPos`) because they may be synthesized (negative).
+pub fn skip_trivia(text: &str, pos: i32) -> i32 {
+    skip_trivia_ex(text, pos, None)
+}
+
+/// Go: `func SkipTriviaEx(text string, pos int, options *SkipTriviaOptions) int`.
+pub fn skip_trivia_ex(text: &str, pos: i32, options: Option<&SkipTriviaOptions>) -> i32 {
+    if position_is_synthesized(pos) {
+        return pos;
+    }
+    let default_options = SkipTriviaOptions::default();
+    let options = options.copied().unwrap_or(default_options);
+
+    let bytes = text.as_bytes();
+    let text_len = bytes.len() as i32;
+    let mut pos = pos;
+    let mut can_consume_star = false;
+    // Keep in sync with could_start_trivia
+    loop {
+        if pos >= text_len {
+            return pos;
+        }
+        let (ch, size) = decode_rune_in_string(&bytes[pos as usize..]);
+        let matched = match u8::try_from(ch) {
+            // Go: `case '\r': ...; fallthrough; case '\n':` — '\r' first
+            // consumes the '\n' of a CRLF pair.
+            Ok(b'\r') => {
+                if pos + 1 < text_len && bytes[(pos + 1) as usize] == b'\n' {
+                    pos += 1;
+                }
+                pos += 1;
+                if options.stop_after_line_break {
+                    return pos;
+                }
+                can_consume_star = options.in_jsdoc;
+                continue;
+            }
+            Ok(b'\n') => {
+                pos += 1;
+                if options.stop_after_line_break {
+                    return pos;
+                }
+                can_consume_star = options.in_jsdoc;
+                continue;
+            }
+            Ok(b'\t' | 0x0B | 0x0C | b' ') => {
+                pos += 1;
+                continue;
+            }
+            // Go: `case '/': if options.StopAtComments { break }` — with
+            // stop_at_comments the guard fails and this arm is skipped
+            // entirely (falling out of the switch, i.e. returning pos).
+            Ok(b'/') if !options.stop_at_comments => {
+                if pos + 1 < text_len {
+                    if bytes[(pos + 1) as usize] == b'/' {
+                        pos += 2;
+                        while pos < text_len {
+                            let (ch, size) = decode_rune_in_string(&bytes[pos as usize..]);
+                            if stringutil::is_line_break(as_char(ch)) {
+                                break;
+                            }
+                            pos += size as i32;
+                        }
+                        can_consume_star = false;
+                        continue;
+                    }
+                    if bytes[(pos + 1) as usize] == b'*' {
+                        pos += 2;
+                        while pos < text_len {
+                            if bytes[pos as usize] == b'*'
+                                && pos + 1 < text_len
+                                && bytes[(pos + 1) as usize] == b'/'
+                            {
+                                pos += 2;
+                                break;
+                            }
+                            let (_, size) = decode_rune_in_string(&bytes[pos as usize..]);
+                            pos += size as i32;
+                        }
+                        can_consume_star = false;
+                        continue;
+                    }
+                }
+                false
+            }
+            Ok(b'<' | b'|' | b'=' | b'>') => {
+                if is_conflict_marker_trivia(bytes, pos as usize) {
+                    pos = scan_conflict_marker_trivia(bytes, pos as usize, None) as i32;
+                    can_consume_star = false;
+                    continue;
+                }
+                false
+            }
+            Ok(b'#') => {
+                if pos == 0 && is_shebang_trivia(bytes, 0) {
+                    pos = scan_shebang_trivia(bytes, 0) as i32;
+                    can_consume_star = false;
+                    continue;
+                }
+                false
+            }
+            Ok(b'*') => {
+                if can_consume_star {
+                    pos += 1;
+                    can_consume_star = false;
+                    continue;
+                }
+                false
+            }
+            _ => {
+                if ch > MAX_ASCII_CHARACTER as i32 && stringutil::is_white_space_like(as_char(ch)) {
+                    pos += size as i32;
+                    continue;
+                }
+                false
+            }
+        };
+        let _ = matched;
+        return pos;
+    }
+}
+
+// All conflict markers consist of the same character repeated seven times.  If
+// it is a <<<<<<< or >>>>>>> marker then it is also followed by a space.
+const MERGE_CONFLICT_MARKER_LENGTH: usize = 7; // len("<<<<<<<")
+const MAX_ASCII_CHARACTER: u8 = 127;
+
+/// Go: `func isConflictMarkerTrivia(text string, pos int) bool`.
+pub fn is_conflict_marker_trivia(text: &[u8], pos: usize) -> bool {
+    // Fast reject: a conflict marker is the same byte repeated seven times. If
+    // the second byte differs (the overwhelmingly common case for `<`, `>`,
+    // `=`, `|` tokens), it cannot be a marker, so skip the line-start check
+    // entirely.
+    if pos + 1 >= text.len() || text[pos + 1] != text[pos] {
+        return false;
+    }
+
+    // Conflict markers must be at the start of a line.
+    let mut at_line_start = pos == 0 || stringutil::is_line_break(text[pos - 1] as char);
+    if !at_line_start && pos >= 2 {
+        let (prev, _) = decode_last_rune_in_string(&text[..pos - 2]);
+        at_line_start = stringutil::is_line_break(as_char(prev));
+    }
+    if at_line_start {
+        let ch = text[pos];
+
+        if (pos + MERGE_CONFLICT_MARKER_LENGTH) < text.len() {
+            for i in 0..MERGE_CONFLICT_MARKER_LENGTH {
+                if text[pos + i] != ch {
+                    return false;
+                }
+            }
+
+            return ch == b'=' || text[pos + MERGE_CONFLICT_MARKER_LENGTH] == b' ';
+        }
+    }
+
+    false
+}
+
+/// Go: `func scanConflictMarkerTrivia(text string, pos int, reportError func(...)) int`.
+pub fn scan_conflict_marker_trivia(
+    text: &[u8],
+    pos: usize,
+    report_error: Option<&mut dyn FnMut(&'static Message, usize, usize, &[String])>,
+) -> usize {
+    if let Some(report_error) = report_error {
+        report_error(
+            &MERGE_CONFLICT_MARKER_ENCOUNTERED,
+            pos,
+            MERGE_CONFLICT_MARKER_LENGTH,
+            &[],
+        );
+    }
+    let mut pos = pos;
+    let (ch, size) = decode_rune_in_string(&text[pos..]);
+    let length = text.len();
+
+    if ch == '<' as i32 || ch == '>' as i32 {
+        let mut ch = ch;
+        let mut size = size;
+        while pos < length && !stringutil::is_line_break(as_char(ch)) {
+            pos += size;
+            if pos >= length {
+                break;
+            }
+            let (next_ch, next_size) = decode_rune_in_string(&text[pos..]);
+            ch = next_ch;
+            size = next_size;
+        }
+    } else {
+        if ch != '|' as i32 && ch != '=' as i32 {
+            panic!("Assertion failed: ch must be either '|' or '='");
+        }
+        // Consume everything from the start of a ||||||| or ======= marker to
+        // the start of the next ======= or >>>>>>> marker.
+        while pos < length {
+            let current_char = text[pos];
+            if (current_char == b'=' || current_char == b'>')
+                && current_char as i32 != ch
+                && is_conflict_marker_trivia(text, pos)
+            {
+                break;
+            }
+
+            pos += 1;
+        }
+    }
+
+    pos
+}
+
+/// Go: `func isShebangTrivia(text string, pos int) bool`.
+pub fn is_shebang_trivia(text: &[u8], pos: usize) -> bool {
+    if text.len() < 2 {
+        return false;
+    }
+    assert!(pos == 0, "Shebangs check must only be done at the start of the file");
+    text[0] == b'#' && text[1] == b'!'
+}
+
+/// Go: `func scanShebangTrivia(text string, pos int) int`.
+pub fn scan_shebang_trivia(text: &[u8], pos: usize) -> usize {
+    let mut pos = pos + 2;
+    while pos < text.len() {
+        let (ch, size) = decode_rune_in_string(&text[pos..]);
+        if stringutil::is_line_break(as_char(ch)) {
+            break;
+        }
+        pos += size;
+    }
+    pos
+}
+
+/// Go: `func GetShebang(text string) string`.
+pub fn get_shebang(text: &str) -> &str {
+    if !is_shebang_trivia(text.as_bytes(), 0) {
+        return "";
+    }
+
+    let end = scan_shebang_trivia(text.as_bytes(), 0);
+    &text[..end]
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Scanner-for-source-file helpers (scanner.go free functions)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `func GetScannerForSourceFile(sourceFile *ast.SourceFile, pos int) *Scanner`.
+/// The returned scanner borrows the source file's text (Go's `*Scanner` keeps
+/// a string header; the Rust port ties the lifetime to the source file).
+pub fn get_scanner_for_source_file<'a>(source_file: &'a SourceFile, pos: i32) -> Scanner<'a> {
+    let mut s = Scanner::new();
+    s.text = source_file.text();
+    s.state.pos = pos as usize;
+    s.end = s.text.len();
+    s.language_variant = source_file.payload().language_variant;
+    s.scan();
+    s
+}
+
+/// Go: `func ScanTokenAtPosition(sourceFile *ast.SourceFile, pos int) ast.Kind`.
+pub fn scan_token_at_position(source_file: &SourceFile, pos: i32) -> Kind {
+    get_scanner_for_source_file(source_file, pos).token()
+}
+
+/// Go: `func GetRangeOfTokenAtPosition(sourceFile *ast.SourceFile, pos int) core.TextRange`.
+pub fn get_range_of_token_at_position(source_file: &SourceFile, pos: i32) -> TextRange {
+    get_scanner_for_source_file(source_file, pos).token_range()
+}
+
+// PORT-TODO(parser wave, M3-DISPATCH wave 1 exclusion): the following
+// scanner.go free functions are deferred because they need AST surface that
+// tsc-ast does not expose yet:
+//   - `GetTokenPosOfNode` (needs `node.JSDoc(sourceFile)` — the JSDoc comment
+//     list accessor; the underlying cache field exists on SourceFileNodeData
+//     but no accessor is public)
+//   - `getErrorRangeForArrowFunction` / `findOriginatingJSDocSatisfiesTag` /
+//     `GetErrorRangeForNode` (need `node.Body()`, `node.Statements()`,
+//     `node.Name()`, `ast.GetNameOfDeclaration`, `AsSatisfiesExpression`,
+//     `EagerJSDoc`)
+//   - `GetLeadingCommentRanges` / `GetTrailingCommentRanges` /
+//     `iterateCommentRanges` (need `ast.NodeFactory`; note that the Rust
+//     `ast::new_comment_range` constructor now exists, so this is unblocked
+//     once the factory-owned iteration shape is decided)
+// None of these are in the wave-1 parser-facing API surface (M3-DISPATCH.md).
+
+// ────────────────────────────────────────────────────────────────────────────
+// Line/position math (scanner.go free functions)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `type ast.SourceFileLike interface { Text() string; ECMALineMap() []core.TextPos }`
+/// — implemented here (the scanner owns the consumer side; the trait stays
+/// local until core/ast needs it elsewhere).
+pub trait SourceFileLike {
+    /// Go: `Text() string`.
+    fn text(&self) -> &str;
+    /// Go: `ECMALineMap() []core.TextPos`.
+    fn ecma_line_map(&self) -> &[TextPos];
+}
+
+impl SourceFileLike for SourceFile {
+    fn text(&self) -> &str {
+        SourceFile::text(self)
+    }
+    fn ecma_line_map(&self) -> &[TextPos] {
+        SourceFile::ecma_line_map(self)
+    }
+}
+
+/// Go: `func ComputeLineOfPosition(lineStarts []core.TextPos, pos int) int`.
+///
+/// PORT: Go returns `-1` when `pos` sorts before `lineStarts[0]` (only
+/// reachable for synthesized negative positions, where the Go caller then
+/// panics indexing with it); the `usize` return saturates to `0` instead so
+/// the Rust callers index in-bounds. Unreachable for real positions
+/// (`lineStarts[0] == 0` by construction).
+pub fn compute_line_of_position(line_starts: &[TextPos], pos: i32) -> usize {
+    let mut low: usize = 0;
+    let mut high: i64 = line_starts.len() as i64 - 1;
+    while low as i64 <= high {
+        let middle: usize = (low as i64 + ((high - low as i64) >> 1)) as usize;
+        let value = line_starts[middle];
+        if value < pos {
+            low = middle + 1;
+        } else if value > pos {
+            high = middle as i64 - 1;
+        } else {
+            return middle;
+        }
+    }
+    low.saturating_sub(1)
+}
+
+/// Go: `func GetECMALineStarts(sourceFile ast.SourceFileLike) []core.TextPos`.
+pub fn get_ecma_line_starts(source_file: &dyn SourceFileLike) -> &[TextPos] {
+    source_file.ecma_line_map()
+}
+
+/// Go: `func GetECMALineOfPosition(sourceFile ast.SourceFileLike, pos int) int`.
+pub fn get_ecma_line_of_position(source_file: &dyn SourceFileLike, pos: i32) -> usize {
+    let line_map = get_ecma_line_starts(source_file);
+    compute_line_of_position(line_map, pos)
+}
+
+/// Go: `func GetECMALineAndUTF16CharacterOfPosition(sourceFile ast.SourceFileLike, pos int) (line int, character core.UTF16Offset)` —
+/// returns the 0-based line number and the UTF-16 code unit offset from the
+/// start of that line for the given byte position. Uses ECMAScript line
+/// separators (LF, CR, CRLF, LS, PS).
+pub fn get_ecma_line_and_utf16_character_of_position(
+    source_file: &dyn SourceFileLike,
+    pos: i32,
+) -> (usize, UTF16Offset) {
+    let line_map = get_ecma_line_starts(source_file);
+    let line = compute_line_of_position(line_map, pos);
+    let character = utf16_len(&source_file.text()[line_map[line] as usize..pos as usize]);
+    (line, character)
+}
+
+/// Go: `func GetECMALineAndByteOffsetOfPosition(sourceFile ast.SourceFileLike, pos int) (line int, byteOffset int)` —
+/// returns the 0-based line number and the raw UTF-8 byte offset from the
+/// start of that line for the given byte position. Uses ECMAScript line
+/// separators (LF, CR, CRLF, LS, PS). Unlike
+/// `get_ecma_line_and_utf16_character_of_position`, the offset is in bytes,
+/// not UTF-16 code units.
+pub fn get_ecma_line_and_byte_offset_of_position(
+    source_file: &dyn SourceFileLike,
+    pos: i32,
+) -> (usize, i32) {
+    let line_map = get_ecma_line_starts(source_file);
+    let line = compute_line_of_position(line_map, pos);
+    let byte_offset = pos - line_map[line];
+    (line, byte_offset)
+}
+
+/// Go: `func GetECMAEndLinePosition(sourceFile *ast.SourceFile, line int) int`.
+pub fn get_ecma_end_line_position(source_file: &SourceFile, line: usize) -> i32 {
+    let mut pos = get_ecma_line_starts(source_file)[line];
+    let text = source_file.text();
+    let bytes = text.as_bytes();
+    loop {
+        let (ch, size) = decode_rune_in_string(&bytes[pos as usize..]);
+        if size == 0 || stringutil::is_line_break(as_char(ch)) {
+            return pos - 1;
+        }
+        pos += size as i32;
+    }
+}
+
+/// Go: `func GetECMAPositionOfLineAndUTF16Character(sourceFile ast.SourceFileLike, line int, character core.UTF16Offset) int` —
+/// converts a 0-based line number and UTF-16 code unit character offset back
+/// to an absolute byte position in the source text. Uses ECMAScript line
+/// separators.
+pub fn get_ecma_position_of_line_and_utf16_character(
+    source_file: &dyn SourceFileLike,
+    line: usize,
+    character: UTF16Offset,
+) -> i32 {
+    let line_starts = get_ecma_line_starts(source_file);
+    compute_position_of_line_and_utf16_character(line_starts, line, character, source_file.text(), false)
+}
+
+/// Go: `func GetECMAPositionOfLineAndByteOffset(sourceFile ast.SourceFileLike, line int, byteOffset int) int` —
+/// converts a 0-based line number and byte offset from line start back to an
+/// absolute byte position in the source text. Uses ECMAScript line separators.
+pub fn get_ecma_position_of_line_and_byte_offset(
+    source_file: &dyn SourceFileLike,
+    line: usize,
+    byte_offset: i32,
+) -> i32 {
+    compute_position_of_line_and_byte_offset(get_ecma_line_starts(source_file), line, byte_offset)
+}
+
+/// Go: `func ComputePositionOfLineAndByteOffset(lineStarts []core.TextPos, line int, byteOffset int) int` —
+/// computes a byte position from a line and raw byte offset from the line
+/// start. This is a simple addition with validation.
+pub fn compute_position_of_line_and_byte_offset(
+    line_starts: &[TextPos],
+    line: usize,
+    byte_offset: i32,
+) -> i32 {
+    if line >= line_starts.len() {
+        panic!("Bad line number. Line: {}, lineStarts.length: {}.", line, line_starts.len());
+    }
+    line_starts[line] + byte_offset
+}
+
+/// Go: `func ComputePositionOfLineAndUTF16Character(lineStarts []core.TextPos, line int, character core.UTF16Offset, text string, allowEdits bool) int` —
+/// converts a line and UTF-16 character offset back to a byte position. The
+/// character parameter is measured in UTF-16 code units. It scans from the
+/// line start to correctly handle multi-byte characters. When `allow_edits`
+/// is true, out-of-range values are clamped instead of panicking.
+pub fn compute_position_of_line_and_utf16_character(
+    line_starts: &[TextPos],
+    line: usize,
+    character: UTF16Offset,
+    text: &str,
+    allow_edits: bool,
+) -> i32 {
+    // PORT: `line` is `usize`, so Go's `line < 0` clamp branch is unreachable
+    // by construction (Go callers never pass negative lines here).
+    let mut line = line;
+    if line >= line_starts.len() {
+        if allow_edits {
+            // Clamp line to nearest allowable value
+            line = line_starts.len() - 1;
+        } else {
+            panic!("Bad line number. Line: {}, lineStarts.length: {}.", line, line_starts.len());
+        }
+    }
+
+    let line_start = line_starts[line];
+
+    if character > 0 {
+        // UTF-16 character offset: scan from line start counting UTF-16 code units.
+        let line_end = if line + 1 < line_starts.len() {
+            line_starts[line + 1]
+        } else {
+            text.len() as i32
+        };
+        let bytes = text.as_bytes();
+        let mut utf16_count: UTF16Offset = 0;
+        let mut pos = line_start;
+        while pos < line_end {
+            if utf16_count >= character {
+                break;
+            }
+            let (r, size) = decode_rune_in_string(&bytes[pos as usize..]);
+            utf16_count += if r > 0xFFFF { 2 } else { 1 };
+            pos += size as i32;
+        }
+        if !allow_edits {
+            if pos == line_end && utf16_count < character {
+                panic!("Bad UTF-16 character offset. Line: {}, character: {}.", line, character);
+            }
+            tsc_debug::assert_!(pos <= text.len() as i32);
+            return pos;
+        }
+        return pos.min(text.len() as i32);
+    }
+
+    // Character is 0: line start position.
+    let res = line_start;
+
+    if allow_edits {
+        return res.min(text.len() as i32);
+    }
+    tsc_debug::assert_!(res <= text.len() as i32); // Allow single character overflow for trailing newline
+    res
+}

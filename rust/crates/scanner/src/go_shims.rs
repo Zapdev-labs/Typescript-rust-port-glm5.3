@@ -22,6 +22,23 @@ use tsc_core::options_generated::ScriptTarget;
 const RUNE_ERROR: i32 = 0xFFFD;
 
 // ────────────────────────────────────────────────────────────────────────────
+// ast/utilities.go: PositionIsSynthesized / NodeIsMissing
+// (TODO(porting): dedup into tsc-ast when ast/utilities.go lands wholesale)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `func PositionIsSynthesized(pos int) bool` — whether a position is
+/// synthetic (`pos < 0`).
+pub fn position_is_synthesized(pos: i32) -> bool {
+    pos < 0
+}
+
+/// Go: `func NodeIsMissing(node *ast.Node) bool` — determines if a node is
+/// missing (Go's `nil` is handled by the `Option<NodeId>` at call sites).
+pub fn node_is_missing(node: &tsc_ast::Node) -> bool {
+    node.loc.pos() == node.loc.end() && node.loc.pos() >= 0 && node.kind != Kind::EndOfFile
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // utf8.DecodeRuneInString / utf8.DecodeLastRuneInString (Go algorithm over raw
 // bytes; never panics on truncated/misaligned input, including (RuneError, 1))
 // ────────────────────────────────────────────────────────────────────────────

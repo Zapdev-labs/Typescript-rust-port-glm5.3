@@ -41,3 +41,16 @@ pub use scanner::*;
 
 #[cfg(test)]
 mod scanner_test;
+
+/// Go `rune` → `char` conversion for the stringutil predicates (which are
+/// `char`-typed in the Rust port). `-1` (the scanner's EOF sentinel) and
+/// other non-code-point values map to U+FFFD, which is inert in every
+/// predicate the scanner consults (whitespace/line-break/identifier tables
+/// never classify U+FFFD), so the comparison result is unchanged.
+#[inline]
+pub(crate) fn as_char(ch: i32) -> char {
+    if !(0..=0x10FFFF).contains(&ch) {
+        return '\u{FFFD}';
+    }
+    char::from_u32(ch as u32).unwrap_or('\u{FFFD}')
+}
