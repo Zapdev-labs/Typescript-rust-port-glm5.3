@@ -6,8 +6,8 @@
 
 use crate::{
     CaseSensitivity, FileNameStem, ModuleSpecifier, PathKey, RelativePath, RootedDirectoryPath,
-    RootedFilePath, RootedPath, get_encoded_root_length, get_normalized_absolute_path,
-    get_root_length, is_rooted_disk_path, path_key_from_canonical, relative_path_from_normalized,
+    RootedFilePath, RootedPath, get_root_length, path_key_from_canonical,
+    relative_path_from_normalized,
     rooted_directory_path_from_absolute, rooted_directory_path_from_normalized,
     rooted_directory_path_from_path, rooted_file_path_from_absolute,
     rooted_file_path_from_normalized, rooted_file_path_from_path, rooted_path_from_absolute,
@@ -17,8 +17,10 @@ use crate::{
     try_rooted_path_from_absolute, try_rooted_path_from_normalized,
 };
 
-fn assert_panics(f: impl FnOnce()) {
-    // PORT: mirrors Go's assertPanics helper (recover() != nil).
+fn assert_panics<R>(f: impl FnOnce() -> R) {
+    // PORT: mirrors Go's assertPanics helper (recover() != nil). Generic over
+    // the closure's return so call sites can pass value-returning closures
+    // (Go's func() bodies freely discard results).
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err());
 }
 
@@ -667,8 +669,10 @@ fn test_rooted_file_path_without_root() {
 
 #[test]
 fn test_rooted_file_path_root_and_relative_path() {
-    let (root, relative) =
-        rooted_file_path_from_normalized("file:///project/src/a.ts").root_and_relative_path();
+    // PORT: bind the path so the returned borrows outlive the statement (Rust
+    // temporary-lifetime rule; Go has no equivalent constraint).
+    let path = rooted_file_path_from_normalized("file:///project/src/a.ts");
+    let (root, relative) = path.root_and_relative_path();
     assert_eq!(root.as_string(), "file:///");
     assert_eq!(relative, "project/src/a.ts");
     assert_eq!(
