@@ -20,6 +20,7 @@ mod micro;
 mod parse;
 mod parser_seam;
 mod showconfig_seam;
+mod symbols_seam;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -32,6 +33,7 @@ fn main() {
         "dump" => parse::run_dump(&args[1..]),
         "showconfig" => showconfig_seam::run_showconfig(&args[1..]),
         "resolvereact" => showconfig_seam::run_resolvereact(&args[1..]),
+        "symbols" => symbols_seam::run_symbols(&args[1..]),
         _ => usage(),
     }
 }
@@ -42,6 +44,7 @@ fn usage() -> ! {
     eprintln!("       tsc-bench dump --corpus <dir>   (per-file NDJSON: nodes, diagnostics, histogram)");
     eprintln!("       tsc-bench showconfig --corpus <dir> | --tsconfig <path>   (per-config NDJSON: marshaled TSConfig)");
     eprintln!("       tsc-bench resolvereact --corpus <dir>   (per-specifier NDJSON + summary)");
+    eprintln!("       tsc-bench symbols --corpus <dir> [--fuzz <dir>]   (per-file NDJSON: binder symbol tables)");
     std::process::exit(2);
 }
 

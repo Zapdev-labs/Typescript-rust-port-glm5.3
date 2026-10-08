@@ -239,6 +239,10 @@ pub struct SourceFileNodeData {
     pub uses_uri_style_node_core_modules: Tristate,
     pub identifier_count: i32,
     pub imports: Vec<NodeId>,
+    // PORT (reparser wave): Go `ReparsedClones []*Node` (ast.go:2482) — the
+    // position-sorted reparsed JSDoc clones, set by finishSourceFile. Not
+    // copied by Go's `copyFrom`, so `visit_each_child` omits it too.
+    pub reparsed_clones: Vec<NodeId>,
     pub module_augmentations: Vec<NodeId>,
     pub ambient_module_names: Vec<String>,
     pub comment_directives: Vec<CommentDirective>,
@@ -449,6 +453,17 @@ impl SourceFile {
     /// Go: `func (node *SourceFile) IsJS() bool`.
     pub fn is_js(&self) -> bool {
         crate::utilities::is_source_file_js(self.payload().script_kind)
+    }
+
+    /// Go: `func (node *SourceFile) Imports() []*LiteralLikeNode`.
+    pub fn imports(&self) -> &[NodeId] {
+        &self.payload().imports
+    }
+
+    /// PORT (reparser wave): Go `ReparsedClones []*Node` field access (set by
+    /// the parser's finishSourceFile, consumed by GetReparsedNodeForNode).
+    pub fn reparsed_clones(&self) -> &[NodeId] {
+        &self.payload().reparsed_clones
     }
 
     /// Go: `func (node *SourceFile) Diagnostics() []*Diagnostic`.

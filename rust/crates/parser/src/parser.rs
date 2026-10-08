@@ -114,11 +114,11 @@ pub(crate) struct ParserState<'a> {
     pub diagnostics_len: usize,
     pub js_diagnostics_len: usize,
     pub jsdoc_infos_len: usize,
+    pub reparsed_clones_len: usize,
     pub statement_has_await_identifier: bool,
     pub has_parse_error: bool,
-    // PORT: Go also tracks `reparsedClonesLen`; reparsed clones are part of
-    // the skipped reparser.go wave, so the field is dropped (the vec is
-    // always empty).
+    // PORT: Go also tracks `reparsedClonesLen`; the reparser.go wave landed,
+    // so the field is restored (mirror of the Go ParserState).
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -159,10 +159,14 @@ pub(crate) struct Parser<'a, 'f> {
     pub not_parenthesized_arrow: Set<i32>,
     pub jsdoc_infos: Vec<JSDocInfo>,
     pub possible_await_spans: Vec<i32>,
-    /// Go: `reparseList` — only ever extended by `reparseTags` (the skipped
-    /// reparser.go wave); kept so `parseListIndex`'s propagation plumbing is
-    /// already in place when that wave lands.
+    /// Go: `reparseList` — extended by `reparseTags` (reparser.rs); the
+    /// toplevel statement list appends it before the SourceFile node is
+    /// built (parseSourceFileWorker).
     pub reparse_list: Vec<NodeId>,
+    /// Go: `reparsedClones` — the deep-clone bookkeeping of the reparser.go
+    /// wave (addDeepCloneReparse / addTransformedReparse / wrapInJSDocNamespace);
+    /// finishSourceFile sorts it and copies it onto the SourceFile.
+    pub(crate) reparsed_clones: Vec<NodeId>,
     /// PORT: Go distinguishes "missing" node lists from empty ones via the
     /// `missingListNodes` sentinel (a cap==1 backing array trick, which has
     /// no `Box<[NodeId]>` equivalent). The only consumer is
@@ -203,6 +207,7 @@ impl<'a, 'f> Parser<'a, 'f> {
             jsdoc_infos: Vec::new(),
             possible_await_spans: Vec::new(),
             reparse_list: Vec::new(),
+            reparsed_clones: Vec::new(),
             last_parameters_list_missing: false,
             missing_function_type_params: Set::new(),
         };
@@ -314,6 +319,7 @@ impl<'a, 'f> Parser<'a, 'f> {
             diagnostics_len: self.sink.borrow().diagnostics.len(),
             js_diagnostics_len: self.sink.borrow().js_diagnostics.len(),
             jsdoc_infos_len: self.jsdoc_infos.len(),
+            reparsed_clones_len: self.reparsed_clones.len(),
             statement_has_await_identifier: self.statement_has_await_identifier,
             has_parse_error: self.sink.borrow().has_parse_error,
         }
@@ -329,6 +335,7 @@ impl<'a, 'f> Parser<'a, 'f> {
             sink.js_diagnostics.truncate(state.js_diagnostics_len);
         }
         self.jsdoc_infos.truncate(state.jsdoc_infos_len);
+        self.reparsed_clones.truncate(state.reparsed_clones_len);
         self.statement_has_await_identifier = state.statement_has_await_identifier;
         self.sink.borrow_mut().has_parse_error = state.has_parse_error;
     }
@@ -709,7 +716,13 @@ impl<'a, 'f> Parser<'a, 'f> {
         if res {
             panic!("Expected end of file token from scanner.");
         }
-        // (Go: reparseList append — always empty until the reparser wave.)
+        // Go: `if len(p.reparseList) != 0 { statements = append(statements,
+        // p.reparseList...); p.reparseList = nil }` — the reparser.go wave.
+        let mut statements = statements;
+        let reparse = std::mem::take(&mut self.reparse_list);
+        if !reparse.is_empty() {
+            statements.extend(reparse);
+        }
         let node = {
             let __hoist_1_24 = {
                 let __hoist_2_2 = Some(self.new_node_list(TextRange::new(pos, end), statements));
@@ -787,6 +800,12 @@ impl<'a, 'f> Parser<'a, 'f> {
             self.factory.text_count() as i32,
         );
         let is_js = self.is_javascript();
+        // Go: `slices.SortFunc(p.reparsedClones, ast.CompareNodePositions)` —
+        // the reparser.go wave's clone list, sorted before the SourceFile
+        // snapshot (`result.ReparsedClones = slices.Clone(p.reparsedClones)`).
+        let mut reparsed_clones = std::mem::take(&mut self.reparsed_clones);
+        reparsed_clones.sort_by(|a, b| tsc_ast::compare_node_positions(self.factory.store(), *a, *b));
+        self.reparsed_clones = reparsed_clones.clone();
         {
             let s = self.factory.store();
             s.node_mut(result).flags |= self.source_flags;
@@ -803,6 +822,7 @@ impl<'a, 'f> Parser<'a, 'f> {
             d.text_count = text_count;
             d.identifier_count = self.identifier_count;
             d.jsdoc_cache = Some(jsdoc_cache);
+            d.reparsed_clones = reparsed_clones;
             // For non-JS files, enable lazy JSDoc parsing on demand
             if !is_js {
                 d.has_lazy_jsdoc = true;
@@ -1767,7 +1787,9 @@ impl<'a, 'f> Parser<'a, 'f> {
     }
 
     /// Go: `func (p *Parser) overrideParentInImmediateChildren(node *ast.Node)`.
-    fn override_parent_in_immediate_children(&mut self, node: NodeId) {
+    /// pub(crate): the reparser.go wave (reparser.rs) calls it through
+    /// finishReparsedNode / finishMutatedNode.
+    pub(crate) fn override_parent_in_immediate_children(&mut self, node: NodeId) {
         let mut children: Vec<NodeId> = Vec::new();
         {
             let s = self.factory.store();

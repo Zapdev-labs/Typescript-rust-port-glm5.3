@@ -116,11 +116,6 @@ impl<'a, 'f> Parser<'a, 'f> {
         Vec::new()
     }
 
-    /// Go: reparser.go `func (p *Parser) reparseTags(node *ast.Node, jsdoc []*ast.Node)`
-    /// — the reparser.go wave is explicitly out of scope (see the lib.rs PORT
-    /// banner); this is a no-op so the call sites stay identical.
-    fn reparse_tags(&mut self, _node: NodeId, _jsdoc: &[NodeId]) {}
-
     /// Go: `func (p *Parser) parseJSDocTypeExpression(mayOmitBraces bool) *ast.Node`.
     fn parse_jsdoc_type_expression(&mut self, may_omit_braces: bool) -> NodeId {
         let pos = self.node_pos();

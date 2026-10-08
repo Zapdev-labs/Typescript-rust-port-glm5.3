@@ -19,6 +19,7 @@ tsc-jsnum = { path = "../jsnum" }
 tsc-core = { path = "../core" }
 tsc-ast = { path = "../ast" }
 tsc-parser = { path = "../parser" }
+tsc-binder = { path = "../binder" }
 tsc-vfs = { path = "../vfs" }
 tsc-module = { path = "../module" }
 tsc-tsoptions = { path = "../tsoptions" }

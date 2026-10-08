@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/microsoft/TypeScript/tsc/internal/ast"
+	"github.com/microsoft/TypeScript/tsc/internal/binder"
 	"github.com/microsoft/TypeScript/tsc/internal/core"
 	tscjson "github.com/microsoft/TypeScript/tsc/internal/json"
 	"github.com/microsoft/TypeScript/tsc/internal/module"
@@ -60,6 +61,8 @@ func main() {
 		runShowConfig(os.Args[2:])
 	case "resolvereact":
 		runResolveReact(os.Args[2:])
+	case "symbols":
+		runSymbols(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -73,6 +76,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       go-bench dump --corpus <dir>   (per-file NDJSON: nodes, diagnostics, histogram)")
 	fmt.Fprintln(os.Stderr, "       go-bench showconfig --corpus <dir> | --tsconfig <path>   (per-config NDJSON: marshaled TSConfig)")
 	fmt.Fprintln(os.Stderr, "       go-bench resolvereact --corpus <dir>   (per-specifier NDJSON + summary)")
+	fmt.Fprintln(os.Stderr, "       go-bench symbols --corpus <dir> [--fuzz <dir>]   (per-file NDJSON: binder symbol tables)")
 	os.Exit(2)
 }
 
@@ -873,4 +877,507 @@ func shapeHash(totalNodes, totalErrors int64, hist map[ast.Kind]int64) string {
 
 func round3(x float64) float64 {
 	return math.Round(x*1000) / 1000
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// symbols: the binder parity twin (M4, SPEC §8 — ".symbols-style output
+// for conformance corpus matches Go").
+//
+//	go-bench symbols --corpus <dir> [--fuzz <dir>]
+//
+// Parses + binds every corpus file (binder.BindSourceFile — the same entry
+// the binder tests drive) and dumps each file's symbol tables in the
+// canonical format the Rust driver's `tsc-bench symbols`
+// (rust/crates/bench-harness/src/symbols_seam.rs) reproduces byte-for-byte:
+//
+//	{"file":"...","ok":true,"alloc":A,"symbols":N,"sym":[...],
+//	 "diag":[...],"shape_hash":"<16 hex>"}
+//
+// Canonical walk (see the Rust module's PORT notes — the full contract
+// lives there and is mirrored here exactly): AST pre-order over
+// ForEachChild, visiting each node's Locals, then its Symbol, then its
+// LocalSymbol; each discovered symbol recurses into its Members then
+// Exports tables in canonical-key order; the file's GlobalExports close
+// the walk. Canonical ids are encounter order. Go's SymbolTable maps
+// iterate RANDOMLY, so every table is read in sorted canonical-key order
+// — the deterministic order BOTH drivers emit (the same escape rule the
+// Go port's own baselines use: ast.EscapeInternalSymbolName).
+// ─────────────────────────────────────────────────────────────────────
+
+func runSymbols(args []string) {
+	fs := flag.NewFlagSet("symbols", flag.ExitOnError)
+	corpus := fs.String("corpus", "", "corpus directory")
+	fuzz := fs.String("fuzz", "", "go test fuzz v1 seed directory")
+	_ = fs.Parse(args)
+	if *corpus == "" && *fuzz == "" {
+		fmt.Fprintln(os.Stderr, "go-bench symbols: missing required --corpus <dir> or --fuzz <dir>")
+		os.Exit(2)
+	}
+	var files []benchFile
+	if *corpus != "" {
+		indexed, _, err := indexSymbolsCorpus(*corpus)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "go-bench: %v\n", err)
+			os.Exit(1)
+		}
+		files = append(files, indexed...)
+	}
+	if *fuzz != "" {
+		seeds, err := indexFuzzSeeds(*fuzz)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "go-bench: %v\n", err)
+			os.Exit(1)
+		}
+		files = append(files, seeds...)
+	}
+	var sb strings.Builder
+	for i := range files {
+		sb.Reset()
+		emitSymbolsLine(&sb, &files[i])
+		fmt.Println(sb.String())
+	}
+}
+
+// indexSymbolsCorpus walks the corpus with dump's walk/skip rules but
+// indexes EVERY file whose scriptKind is known (the binder gate's rule:
+// .js/.mjs/.json bind too, not just the bench extensions), globally
+// sorted by path (raw string sort, like indexCorpus).
+func indexSymbolsCorpus(dir string) ([]benchFile, int64, error) {
+	absCorpus, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, 0, fmt.Errorf("resolving corpus dir: %w", err)
+	}
+	var paths []string
+	var readErrs int64
+	err = filepath.WalkDir(absCorpus, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if path == absCorpus {
+				return err
+			}
+			readErrs++
+			return nil
+		}
+		if d.IsDir() {
+			if path != absCorpus && skipDirs[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("walking corpus: %w", err)
+	}
+	sort.Strings(paths)
+	files := make([]benchFile, 0, len(paths))
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			readErrs++
+			continue
+		}
+		fileName := tspath.ToRootedFilePath(filepath.ToSlash(p), "/")
+		scriptKind := core.GetScriptKindFromFileName(fileName)
+		if scriptKind == core.ScriptKindUnknown {
+			continue
+		}
+		files = append(files, benchFile{
+			text:       string(data),
+			bytes:      int64(len(data)),
+			fileName:   fileName,
+			pathKey:    tspath.CaseSensitive.PathKey(fileName.AsPath()),
+			scriptKind: scriptKind,
+		})
+	}
+	return files, readErrs, nil
+}
+
+// indexFuzzSeeds indexes a `go test fuzz v1` seed directory (the binder
+// gate's fuzz sweep): each seed contributes one synthetic `<path>.<ext>`
+// file, sorted by path.
+func indexFuzzSeeds(dir string) ([]benchFile, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("resolving fuzz dir: %w", err)
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return nil, fmt.Errorf("walking fuzz dir: %w", err)
+	}
+	var paths []string
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			paths = append(paths, filepath.Join(abs, e.Name()))
+		}
+	}
+	sort.Strings(paths)
+	var files []benchFile
+	for _, p := range paths {
+		ext, text, ok := readFuzzSeed(p)
+		if !ok {
+			continue
+		}
+		name := filepath.ToSlash(p) + "." + strings.TrimPrefix(ext, ".")
+		fileName := tspath.ToRootedFilePath(name, "/")
+		scriptKind := core.GetScriptKindFromFileName(fileName)
+		if scriptKind == core.ScriptKindUnknown {
+			continue
+		}
+		files = append(files, benchFile{
+			text:       text,
+			bytes:      int64(len(text)),
+			fileName:   fileName,
+			pathKey:    tspath.CaseSensitive.PathKey(fileName.AsPath()),
+			scriptKind: scriptKind,
+		})
+	}
+	return files, nil
+}
+
+// readFuzzSeed reads one `go test fuzz v1` corpus file: the header, then
+// the extension `string(".ts")` line, then the text `string("...")` line
+// (the binder gate's read_fuzz_seed contract; the Rust twin reimplements
+// the quote parser, Go uses strconv.Unquote — identical for the corpus's
+// escapes).
+func readFuzzSeed(path string) (ext, text string, ok bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", false
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) < 3 || strings.TrimSpace(lines[0]) != "go test fuzz v1" {
+		return "", "", false
+	}
+	ext, ok = unquoteCorpusString(lines[1])
+	if !ok {
+		return "", "", false
+	}
+	text, ok = unquoteCorpusString(lines[2])
+	if !ok {
+		return "", "", false
+	}
+	return ext, text, true
+}
+
+// unquoteCorpusString parses one `string("...")` corpus value line.
+func unquoteCorpusString(line string) (string, bool) {
+	s := strings.TrimPrefix(line, "string(")
+	s = strings.TrimSuffix(s, ")")
+	v, err := strconv.Unquote(s)
+	if err != nil {
+		return "", false
+	}
+	return v, true
+}
+
+// canonicalSymbolName is Go's ast.EscapeInternalSymbolName — a leading
+// internal "\xFE" prefix becomes "__". This is the twin's canonical name
+// form (the raw byte differs from the Rust port's U+00FE prefix; see the
+// Rust module's PORT notes).
+func canonicalSymbolName(name string) string {
+	if rest, ok := strings.CutPrefix(name, ast.InternalSymbolNamePrefix); ok {
+		return "__" + rest
+	}
+	return name
+}
+
+// sortedSymbolKeys returns a table's keys in canonical order: (canonical
+// form, raw form) — the deterministic order BOTH drivers emit (Go map
+// iteration is random; the Rust port's is insertion-ordered — neither is
+// the shared order, the sort is).
+func sortedSymbolKeys(table ast.SymbolTable) []string {
+	keys := make([]string, 0, len(table))
+	for k := range table {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		ci, cj := canonicalSymbolName(keys[i]), canonicalSymbolName(keys[j])
+		if ci != cj {
+			return ci < cj
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
+
+// symWalker carries one file's canonical-walk state.
+type symWalker struct {
+	file      *ast.SourceFile
+	seen      map[*ast.Symbol]int
+	order     []*ast.Symbol
+	symStack  []*ast.Symbol
+	nodeStack []*ast.Node
+	children  []*ast.Node
+}
+
+// discover walks every symbol reachable from root, assigning canonical
+// ids in encounter order (members before exports, both in canonical-key
+// order — iterative DFS, the pop order mirrors the Rust walker exactly).
+func (w *symWalker) discover(root *ast.Symbol) {
+	if root == nil {
+		return
+	}
+	w.symStack = append(w.symStack, root)
+	for len(w.symStack) > 0 {
+		sym := w.symStack[len(w.symStack)-1]
+		w.symStack = w.symStack[:len(w.symStack)-1]
+		if _, ok := w.seen[sym]; ok {
+			continue
+		}
+		w.seen[sym] = len(w.order)
+		w.order = append(w.order, sym)
+		// Push exports reversed first, then members reversed: members pop
+		// first, then exports — both in canonical-key order.
+		exportKeys := sortedSymbolKeys(sym.Exports)
+		for i := len(exportKeys) - 1; i >= 0; i-- {
+			if s, ok := sym.Exports[exportKeys[i]]; ok {
+				w.symStack = append(w.symStack, s)
+			}
+		}
+		memberKeys := sortedSymbolKeys(sym.Members)
+		for i := len(memberKeys) - 1; i >= 0; i-- {
+			if s, ok := sym.Members[memberKeys[i]]; ok {
+				w.symStack = append(w.symStack, s)
+			}
+		}
+	}
+}
+
+// walk runs the canonical walk: AST pre-order (ForEachChild), then the
+// file's GlobalExports.
+func (w *symWalker) walk() []*ast.Symbol {
+	w.nodeStack = append(w.nodeStack, w.file.AsNode())
+	for len(w.nodeStack) > 0 {
+		node := w.nodeStack[len(w.nodeStack)-1]
+		w.nodeStack = w.nodeStack[:len(w.nodeStack)-1]
+		// 1. The node's Locals table (canonical-key order).
+		if table := node.Locals(); table != nil {
+			for _, k := range sortedSymbolKeys(table) {
+				w.discover(table[k])
+			}
+		}
+		// 2. The node's own symbol and local symbol.
+		w.discover(node.Symbol())
+		w.discover(node.LocalSymbol())
+		// 3. Children (reversed push = ForEachChild pop order: pre-order).
+		w.children = w.children[:0]
+		node.ForEachChild(func(c *ast.Node) bool {
+			w.children = append(w.children, c)
+			return false // keep going (true would stop the traversal)
+		})
+		for i := len(w.children) - 1; i >= 0; i-- {
+			w.nodeStack = append(w.nodeStack, w.children[i])
+		}
+	}
+	// 4. The file's GlobalExports.
+	for _, k := range sortedSymbolKeys(w.file.GlobalExports) {
+		w.discover(w.file.GlobalExports[k])
+	}
+	return w.order
+}
+
+// symRecord is one canonical symbol record, in the fold-friendly pieces
+// the shape_hash recipe also consumes (val "" == none).
+type symRecord struct {
+	name         string
+	flags        string
+	kind         int
+	parent       int // -1 == none
+	declarations []string
+	val          string
+	exports      int
+	members      int
+}
+
+// collectSymbolsRecords materializes the records in canonical order.
+func collectSymbolsRecords(order []*ast.Symbol, seen map[*ast.Symbol]int) []symRecord {
+	records := make([]symRecord, 0, len(order))
+	for _, sym := range order {
+		kind := -1
+		if len(sym.Declarations) > 0 {
+			kind = int(sym.Declarations[0].Kind)
+		}
+		parent := -1
+		if sym.Parent != nil {
+			if id, ok := seen[sym.Parent]; ok {
+				parent = id
+			}
+		}
+		declarations := make([]string, 0, len(sym.Declarations))
+		for _, d := range sym.Declarations {
+			declarations = append(declarations, strconv.Itoa(int(d.Kind))+":"+strconv.Itoa(d.Loc.Pos()))
+		}
+		val := ""
+		if sym.ValueDeclaration != nil {
+			val = strconv.Itoa(int(sym.ValueDeclaration.Kind)) + ":" + strconv.Itoa(sym.ValueDeclaration.Loc.Pos())
+		}
+		records = append(records, symRecord{
+			name:         canonicalSymbolName(sym.Name),
+			flags:        fmt.Sprintf("%08x", uint32(sym.Flags)),
+			kind:         kind,
+			parent:       parent,
+			declarations: declarations,
+			val:          val,
+			exports:      len(sym.Exports),
+			members:      len(sym.Members),
+		})
+	}
+	return records
+}
+
+// symbolsHashLines is the exact byte stream the shape_hash folds (the
+// recipe both drivers MUST reproduce — see the Rust tests for FNV-1a
+// vectors).
+func symbolsHashLines(alloc int, records []symRecord, diagCount int) []string {
+	lines := []string{
+		"alloc=" + strconv.Itoa(alloc) + "\n",
+		"symbols=" + strconv.Itoa(len(records)) + "\n",
+	}
+	for id, r := range records {
+		parent := "-"
+		if r.parent >= 0 {
+			parent = strconv.Itoa(r.parent)
+		}
+		decls := "-"
+		if len(r.declarations) > 0 {
+			decls = strings.Join(r.declarations, ",")
+		}
+		val := r.val
+		if val == "" {
+			val = "-"
+		}
+		lines = append(lines, fmt.Sprintf("%d|%s|%s|%d|%s|%s|%s|%d|%d\n",
+			id, r.name, r.flags, r.kind, parent, decls, val, r.exports, r.members))
+	}
+	lines = append(lines, fmt.Sprintf("diag=%d\n", diagCount))
+	return lines
+}
+
+// symbolsShapeHash: FNV-1a 64 over symbolsHashLines, lowercase 16-hex.
+func symbolsShapeHash(alloc int, records []symRecord, diagCount int) string {
+	h := uint64(0xcbf29ce484222325)
+	for _, line := range symbolsHashLines(alloc, records, diagCount) {
+		for i := 0; i < len(line); i++ {
+			h ^= uint64(line[i])
+			h *= 1099511628211
+		}
+	}
+	return fmt.Sprintf("%016x", h)
+}
+
+// emitSymbolsLine emits one file's NDJSON line. A parse or bind panic
+// becomes an ok:false line instead of aborting the run (the binder gate
+// proves the gate corpus panic-free, so any ok:false is a divergence
+// finding).
+func emitSymbolsLine(sb *strings.Builder, f *benchFile) {
+	stage := "parse"
+	defer func() {
+		if r := recover(); r != nil {
+			sb.Reset()
+			sb.WriteString(`{"file":"`)
+			jsonEscape(sb, f.fileName.AsString())
+			sb.WriteString(`","ok":false,"error":"`)
+			jsonEscape(sb, stage+": "+truncate200(fmt.Sprint(r)))
+			sb.WriteString(`"}`)
+		}
+	}()
+	sf := parser.ParseSourceFile(ast.SourceFileParseOptions{
+		FileName: f.fileName,
+		PathKey:  f.pathKey,
+	}, f.text, f.scriptKind)
+	stage = "bind"
+	binder.BindSourceFile(sf)
+
+	w := symWalker{file: sf, seen: make(map[*ast.Symbol]int)}
+	order := w.walk()
+	records := collectSymbolsRecords(order, w.seen)
+	diags := sf.BindDiagnostics()
+	alloc := sf.SymbolCount
+
+	sb.WriteString(`{"file":"`)
+	jsonEscape(sb, f.fileName.AsString())
+	sb.WriteString(`","ok":true,"alloc":`)
+	sb.WriteString(strconv.Itoa(alloc))
+	sb.WriteString(`,"symbols":`)
+	sb.WriteString(strconv.Itoa(len(records)))
+	sb.WriteString(`,"sym":[`)
+	for id, r := range records {
+		if id > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(`{"id":`)
+		sb.WriteString(strconv.Itoa(id))
+		sb.WriteString(`,"name":"`)
+		jsonEscape(sb, r.name)
+		sb.WriteString(`","flags":"`)
+		sb.WriteString(r.flags)
+		sb.WriteString(`","kind":`)
+		sb.WriteString(strconv.Itoa(r.kind))
+		sb.WriteString(`,"parent":`)
+		if r.parent >= 0 {
+			sb.WriteString(strconv.Itoa(r.parent))
+		} else {
+			sb.WriteString("null")
+		}
+		sb.WriteString(`,"declarations":[`)
+		for di, d := range r.declarations {
+			if di > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteByte('"')
+			jsonEscape(sb, d)
+			sb.WriteByte('"')
+		}
+		sb.WriteString(`],"exports":`)
+		sb.WriteString(strconv.Itoa(r.exports))
+		sb.WriteString(`,"members":`)
+		sb.WriteString(strconv.Itoa(r.members))
+		sb.WriteString(`,"valueDeclaration":`)
+		if r.val != "" {
+			sb.WriteByte('"')
+			jsonEscape(sb, r.val)
+			sb.WriteByte('"')
+		} else {
+			sb.WriteString("null")
+		}
+		sb.WriteByte('}')
+	}
+	sb.WriteString(`],"diag":[`)
+	for di, d := range diags {
+		if di > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(`{"key":"`)
+		jsonEscape(sb, string(d.MessageKey()))
+		sb.WriteString(`","code":`)
+		sb.WriteString(strconv.FormatInt(int64(d.Code()), 10))
+		sb.WriteString(`,"pos":`)
+		sb.WriteString(strconv.Itoa(d.Pos()))
+		sb.WriteString(`,"end":`)
+		sb.WriteString(strconv.Itoa(d.End()))
+		sb.WriteString(`,"args":[`)
+		for ai, a := range d.MessageArgs() {
+			if ai > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteByte('"')
+			jsonEscape(sb, a)
+			sb.WriteByte('"')
+		}
+		sb.WriteString(`]}`)
+	}
+	sb.WriteString(`],"shape_hash":"`)
+	sb.WriteString(symbolsShapeHash(alloc, records, len(diags)))
+	sb.WriteString(`"}`)
+}
+
+// truncate200 truncates to 200 chars (the gate's panic-message rule — a
+// full panic payload is not a shared format).
+func truncate200(s string) string {
+	runes := []rune(s)
+	if len(runes) <= 200 {
+		return s
+	}
+	return string(runes[:200])
 }

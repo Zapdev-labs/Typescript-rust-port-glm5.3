@@ -358,7 +358,7 @@ fn lower_ext(name: &OsStr) -> String {
 /// mapped by final (any-)extension, lowercased. Since the driver only
 /// indexes .ts/.tsx/.mts/.cts the effective mapping is TSX for ".tsx", TS
 /// for the rest (contract rule 1); the full mapping is ported anyway.
-fn script_kind_from_file_name(file_name: &RootedFilePath) -> ScriptKind {
+pub(crate) fn script_kind_from_file_name(file_name: &RootedFilePath) -> ScriptKind {
     let extension = file_name.any_extension(&[], CaseSensitivity::CaseSensitive);
     if !extension.is_empty() {
         match extension.to_lowercase().as_str() {

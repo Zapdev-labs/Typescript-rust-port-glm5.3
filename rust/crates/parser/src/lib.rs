@@ -14,26 +14,33 @@
 //!                         arenas are GC-era space optimizations with no
 //!                         observable semantics; dropped, see PORTING-NOTES)
 //!
-//! PORT: `reparser.go` (752 LOC: reparseTags, the JSDoc @typedef/@import →
-//! statement reparsing machinery, reparsed-clones bookkeeping) is explicitly
-//! OUT OF SCOPE for the M3 parser wave and will land in a follow-up wave.
-//! Consequences carried through the port:
-//!   * `withJSDoc` calls a stubbed `reparse_tags` (no-op) — `reparse_list`
-//!     therefore stays empty and `IsJSTypeAliasDeclaration`/`IsJSImportDeclaration`
-//!     statements are not produced by lazy JSDoc reparsing yet.
-//!   * `finishSourceFile`'s `reparsedClones` sorting/clone is dropped
-//!     (always empty).
-//!   * `ParserState.reparsedClonesLen` is dropped from mark/rewind.
+//! PORT: `reparser.go` (752 LOC) LANDED as `reparser.rs` (the JSDoc
+//! @typedef/@callback/@import → statement reparsing machinery,
+//! reparsed-clones bookkeeping, the hosted-tag mutations). The wiring it
+//! requires in the already-landed waves:
+//!   * `withJSDoc` calls the real `reparse_tags` (reparser.rs) for JS files.
+//!   * `parseSourceFileWorker` appends `reparseList` to the toplevel
+//!     statements (Go parser.go:444).
+//!   * `finishSourceFile` sorts `reparsedClones` (ast.CompareNodePositions)
+//!     and snapshots them onto the SourceFile (Go parser.go:483-484).
+//!   * `ParserState.reparsedClonesLen` is restored in mark/rewind.
+//!   * `ast.GetReparsedNodeForNode`/`CompareNodePositions` and the
+//!     `GetAssignmentDeclarationKind` family live in
+//!     `tsc_ast::utilities` (the Go utilities.go home).
+//!   * `SourceFileNodeData.reparsedClones` mirrors Go ast.go:2482.
 
 pub mod comment_ranges;
 pub mod parser;
 #[cfg(test)]
 mod parser_test;
+#[cfg(test)]
+mod reparser_test;
 
 mod expressions;
 mod jsdoc;
 mod jsx;
 mod references;
+mod reparser;
 mod types;
 
 use tsc_ast::{CommentRange, Kind, NodeId, NodeStore, SourceFile, SourceFileParseOptions};
