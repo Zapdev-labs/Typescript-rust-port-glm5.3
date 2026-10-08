@@ -872,7 +872,7 @@ impl Location {
         use tsc_scanner::get_ecma_line_and_utf16_character_of_position;
         let store = c.store();
         let n = store.node(node);
-        let file_id = n.file_id();
+        let file_id = node.file_id();
         let file = c
             .program
             .source_files()

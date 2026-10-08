@@ -2138,7 +2138,7 @@ impl SubstitutionType {
 }
 
 /// Go: `type ConditionalRoot struct`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ConditionalRoot {
     /// Go: `*ast.ConditionalTypeNode`
     pub node: Option<NodeId>,
