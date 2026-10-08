@@ -160,6 +160,76 @@ pub fn is_ambient_module_symbol_name(s: &str) -> bool {
     try_get_ambient_module_name_from_symbol_name(s).is_some()
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// PORT (parser-wave additions): the utilities.go subset the M3 parser wave
+// calls that were not yet ported. Each mirrors its Go body exactly; dedup
+// into the wholesale utilities.go port when that task lands (tsc-scanner's
+// go_shims::node_is_missing is the same Go function — it carries its own
+// dedup note and now has this ast-side home to fold into).
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `func NodeIsMissing(node *Node) bool` — "Determines if a node is
+/// missing (either `nil` or empty)". The `node == nil` half is expressed by
+/// the caller's `Option`/`NodeId::NONE`; a resolved node checks the same
+/// empty-non-negative-range condition (KindEndOfFile exempt, as in Go).
+pub fn node_is_missing(node: &Node) -> bool {
+    node.loc.pos() == node.loc.end()
+        && node.loc.pos() >= 0
+        && node.kind != Kind::EndOfFile
+}
+
+/// Go: `func NodeIsPresent(node *Node) bool` — "Determines if a node is
+/// present" (the negation of [`node_is_missing`], same `nil` note).
+pub fn node_is_present(node: &Node) -> bool {
+    !node_is_missing(node)
+}
+
+/// Go: `func ModifiersToFlags(modifiers []*Node) ModifierFlags` — ORs
+/// `ModifierToFlag` over the modifier nodes. `ModifierToFlag` lives in
+/// visitor.rs (crate::modifier_to_flag); an already-built `ModifierList`
+/// carries the same value in `modifier_flags` (see NodeFactory::
+/// new_modifier_list).
+pub fn modifiers_to_flags(store: &dyn crate::NodeStore, modifiers: &[NodeId]) -> crate::ModifierFlags {
+    let mut flags = crate::ModifierFlags::NONE;
+    for &modifier in modifiers {
+        if modifier == NodeId::NONE {
+            continue; // Go skips nil modifiers (as new_modifier_list does)
+        }
+        flags |= crate::visitor::modifier_to_flag(store.node(modifier).kind);
+    }
+    flags
+}
+
+/// Go: `func TagNamesAreEquivalent(lhs *Expression, rhs *Expression) bool`
+/// — the JSX tag-name equivalence used by the parser's element/fragment
+/// recovery. Both tags are always non-nil at the Go call sites (typed
+/// payload fields), so the port takes handles; the final `panic!` mirrors
+/// Go's "Unhandled case in TagNamesAreEquivalent".
+pub fn tag_names_are_equivalent(store: &dyn crate::NodeStore, lhs: NodeId, rhs: NodeId) -> bool {
+    let l = store.node(lhs);
+    let r = store.node(rhs);
+    if l.kind != r.kind {
+        return false;
+    }
+    match l.kind {
+        Kind::Identifier => crate::node_text(store, lhs) == crate::node_text(store, rhs),
+        Kind::ThisKeyword => true,
+        Kind::JsxNamespacedName => {
+            let ld = l.as_jsx_namespaced_name().expect("JsxNamespacedName data");
+            let rd = r.as_jsx_namespaced_name().expect("JsxNamespacedName data");
+            crate::node_text(store, ld.namespace) == crate::node_text(store, rd.namespace)
+                && crate::node_text(store, ld.name) == crate::node_text(store, rd.name)
+        }
+        Kind::PropertyAccessExpression => {
+            let ld = l.as_property_access_expression().expect("PropertyAccessExpression data");
+            let rd = r.as_property_access_expression().expect("PropertyAccessExpression data");
+            crate::node_text(store, ld.name) == crate::node_text(store, rd.name)
+                && tag_names_are_equivalent(store, ld.expression, rd.expression)
+        }
+        _ => panic!("Unhandled case in TagNamesAreEquivalent: {}", l.kind_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +257,27 @@ mod tests {
         // is_optional_chain needs a Node; covered in the visitor tests through
         // the flag/kind checks. Spot-check the pure flag logic here.
         assert_eq!(NodeFlags::OPTIONAL_CHAIN, NodeFlags(1 << 5));
+    }
+
+    /// Go: NodeIsMissing — empty non-negative range (missing), zero-width
+    /// EndOfFile (not missing), negative positions (synthesized, missing).
+    #[test]
+    fn node_missing_mirrors_go() {
+        let make = |pos: i32, end: i32, kind: Kind| Node {
+            kind,
+            flags: NodeFlags::NONE,
+            loc: crate::TextRange::new(pos, end),
+            id: std::cell::Cell::new(0),
+            parent: std::cell::Cell::new(NodeId::NONE),
+            data: crate::NodeData::Token(Box::new(crate::ast_generated::Token {})),
+        };
+        assert!(node_is_missing(&make(3, 3, Kind::Identifier)));
+        assert!(!node_is_missing(&make(3, 4, Kind::Identifier)));
+        // Go: KindEndOfFile is exempt (a zero-width EOF token is present).
+        assert!(!node_is_missing(&make(3, 3, Kind::EndOfFile)));
+        // Go: NodeIsMissing requires Pos >= 0, so a zero-width node at
+        // synthesized (negative) positions is NOT missing — NodeIsPresent
+        // is true. (Synthesis is its own predicate: NodeIsSynthesized.)
+        assert!(node_is_present(&make(-1, -1, Kind::Identifier)));
     }
 }

@@ -277,6 +277,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tsc-parser"
+version = "0.1.0"
+dependencies = [
+ "tsc-ast",
+ "tsc-collections",
+ "tsc-core",
+ "tsc-debug",
+ "tsc-diagnostics",
+ "tsc-scanner",
+ "tsc-stringutil",
+ "tsc-tspath",
+]
+
+[[package]]
 name = "tsc-repo"
 version = "0.0.0"
 
