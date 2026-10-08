@@ -473,6 +473,31 @@ pub struct Checker {
     pub(crate) global_newable_function_type: Option<TypeId>,
     /// Go: `globalRegexpType`.
     pub(crate) global_regexp_type: Option<TypeId>,
+    // ── M6 S2 (typeofsymbol.rs): the getTypeOfSymbol spine's state ──
+    /// Go: `enumLiteralTypes map[EnumLiteralKey]*Type` — the enum-literal
+    /// intern table (PORT: the key is the normalized map-key form; see
+    /// typeofsymbol.rs's EnumLiteralKey PORT note).
+    pub(crate) enum_literal_types: FxHashMap<crate::typeofsymbol::EnumLiteralKey, TypeId>,
+    /// Go: `enumNaNLiteralTypes map[*ast.Symbol]*Type` — NaN caches by enum
+    /// symbol (NaN != NaN can't key the main table).
+    pub(crate) enum_nan_literal_types: FxHashMap<SymbolId, TypeId>,
+    /// Go: `undefinedProperties map[string]*ast.Symbol`.
+    pub(crate) undefined_properties: FxHashMap<String, SymbolId>,
+    /// Go: `cachedTypes map[CachedTypeKey]*Type` (the kind+typeId key,
+    /// checker.go:158).
+    pub(crate) cached_types: FxHashMap<crate::todo_shapes::CachedTypeKey, Option<TypeId>>,
+    /// Go: `noConstraintType` (NewChecker's newAnonymousType, checker.go:1042).
+    pub(crate) no_constraint_type: Option<TypeId>,
+    /// Go: `circularConstraintType` (checker.go:1043).
+    pub(crate) circular_constraint_type: Option<TypeId>,
+    /// Go: `contextualBindingPatterns []*ast.Node`.
+    pub(crate) contextual_binding_patterns: Vec<NodeId>,
+    /// Go: `patternForType map[*Type]*ast.Node`.
+    pub(crate) pattern_for_type: FxHashMap<TypeId, NodeId>,
+    /// Go: `thisExpandoKinds map[*ast.Symbol]ThisAssignmentDeclarationKind`.
+    pub(crate) this_expando_kinds: FxHashMap<SymbolId, crate::typeofsymbol::ThisAssignmentDeclarationKind>,
+    /// Go: `thisExpandoLocations map[*ast.Symbol]*ast.Node`.
+    pub(crate) this_expando_locations: FxHashMap<SymbolId, NodeId>,
 }
 
 /// Go: `func createFileIndexMap(files []*ast.SourceFile) map[*ast.SourceFile]int`.
@@ -565,6 +590,11 @@ impl Checker {
         empty_string_type => empty_string_type,
         zero_type => zero_type,
         zero_bigint_type => zero_bigint_type,
+        // M6 S2: the constraint sentinels (seeded in new_checker per Go
+        // checker.go:1042-1043; typeofsymbol.rs's constraint family reads
+        // them as the no-constraint/circular answers).
+        no_constraint_type => no_constraint_type,
+        circular_constraint_type => circular_constraint_type,
     }
 
     /// Go: the `booleanType` field — `getUnionType([false, true])`,
@@ -1817,6 +1847,17 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         global_callable_function_type: None,
         global_newable_function_type: None,
         global_regexp_type: None,
+        // M6 S2 (typeofsymbol.rs) state.
+        enum_literal_types: FxHashMap::default(),
+        enum_nan_literal_types: FxHashMap::default(),
+        undefined_properties: FxHashMap::default(),
+        cached_types: FxHashMap::default(),
+        no_constraint_type: None,
+        circular_constraint_type: None,
+        contextual_binding_patterns: Vec::new(),
+        pattern_for_type: FxHashMap::default(),
+        this_expando_kinds: FxHashMap::default(),
+        this_expando_locations: FxHashMap::default(),
     };
 
     // Go: countGlobalSymbols sizes the globals table — a capacity hint; the
@@ -1940,6 +1981,12 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     // TODO(port M6): emptyObjectType family (newAnonymousType), marker
     // type parameters (newTypeParameter), noTypePredicate, anySignature
     // family (newSignature).
+    // Go (checker.go:1042-1043): the constraint marker types — anonymous
+    // empty types right between anyFunctionType and the marker type
+    // parameters; the constraint family (typeofsymbol.rs) reads them as
+    // the no-constraint/circular-constraint sentinels.
+    c.no_constraint_type = Some(c.new_anonymous_type(None, &[]));
+    c.circular_constraint_type = Some(c.new_anonymous_type(None, &[]));
     let number_type = c.number_type.expect("just created");
     let string_type = c.string_type.expect("just created");
     let any_type = c.any_type.expect("just created");

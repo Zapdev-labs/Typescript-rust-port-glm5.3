@@ -293,19 +293,20 @@ impl Checker {
 
     /// Go: `func (c *Checker) GetDeclaredTypeOfSymbol(symbol *ast.Symbol) *Type`
     /// → `c.getDeclaredTypeOfSymbol(symbol)` (checker.go — S2's declared-type
-    /// family).
+    /// family). PORT (M6 S2): the W1 error-type stub flipped to the real
+    /// family (typeofsymbol.rs's tryGetDeclaredTypeOfSymbol chain).
     pub fn get_declared_type_of_symbol(&mut self, symbol: SymbolId) -> TypeId {
-        // TODO(port M6 S2): getDeclaredTypeOfClassOrInterface & family.
-        let _ = symbol;
-        self.error_type()
+        self.try_get_declared_type_of_symbol(symbol)
+            .unwrap_or_else(|| self.error_type())
     }
 
     /// Go: `func (c *Checker) GetConstraintOfTypeParameter(typeParameter *Type) *Type`
     /// → `c.getConstraintOfTypeParameter(typeParameter)` (checker.go — S2).
-    pub fn get_constraint_of_type_parameter(&self, type_parameter: TypeId) -> Option<TypeId> {
-        // TODO(port M6 S2): the constraint family (nil when unconstrained).
-        let _ = type_parameter;
-        None
+    /// PORT (M6 S2): the W1 nil stub flipped to the real constraint family
+    /// (typeofsymbol.rs — the noConstraintType sentinel reads as None, Go's
+    /// Go-API answer for an unconstrained parameter).
+    pub fn get_constraint_of_type_parameter(&mut self, type_parameter: TypeId) -> Option<TypeId> {
+        self.get_constraint_of_type_parameter_impl(type_parameter)
     }
 
     /// Go: `func (c *Checker) GetTrueTypeOfConditionalType(t *Type) *Type` →
@@ -564,12 +565,12 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) GetBaseConstructorTypeOfClass(t *Type) *Type` →
-    /// `c.getBaseConstructorTypeOfClass(t)` (checker.go — S2; Go resolves
-    /// non-class `t` to errorType, so errorType is the stub value).
+    /// `c.getBaseConstructorTypeOfClass(t)` (checker.go — S2). PORT (M6 S2):
+    /// the W1 error-type stub flipped to the real base-constructor resolution
+    /// (typeofsymbol.rs — the ResolvedBaseConstructorType resolution-stack
+    /// axis + the circularity diagnostics).
     pub fn get_base_constructor_type_of_class(&mut self, t: TypeId) -> TypeId {
-        // TODO(port M6 S2): resolvedBaseConstructorType.
-        let _ = t;
-        self.error_type()
+        self.get_base_constructor_type_of_class_impl(t)
     }
 
     /// Go: `func (c *Checker) GetMemberOverrideModifierStatus(node *ast.Node, member *ast.Node, memberSymbol *ast.Symbol) MemberOverrideStatus`

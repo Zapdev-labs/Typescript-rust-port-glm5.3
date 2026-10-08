@@ -21,15 +21,90 @@ use tsc_ast::{NodeId, SymbolFlags};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TypeMapperId(pub u32);
 
-/// Go: `evaluator.Result` (tsc/internal/evaluator — not yet ported). The field
-/// type of `EnumMemberLinks.value` (types.go). The `tsc-evaluator` crate port
-/// replaces this alias.
-pub type EvaluatorResult = ();
+/// Go: `evaluator.Result` (tsc/internal/evaluator — not yet ported).
+///
+/// PORT (M6 S2): the field type of `EnumMemberLinks.value` (types.go) was a
+/// `()` alias until the S2 enum machinery landed; enum member typing needs
+/// the value payload, so this carries the minimal shape S2 reads — the four
+/// result fields (value + the three boolean provenance flags). The
+/// `tsc-evaluator` crate port replaces the `evaluate` seam that POPULATES
+/// it (typeofsymbol.rs's `evaluate_stub` covers exactly the syntactic
+/// literals until then).
+#[derive(Clone, Debug, Default)]
+pub struct EvaluatorResult {
+    /// The computed constant value (nil = not a constant).
+    pub value: Option<EvaluatorValue>,
+    /// True if the value came from a syntactically string form.
+    pub is_syntactically_string: bool,
+    /// True if the value required resolving across files.
+    pub resolved_other_files: bool,
+    /// True if the value required resolving external references.
+    pub has_external_references: bool,
+}
+
+impl EvaluatorResult {
+    /// Go: `evaluator.NewResult(nil, false, false, false)`.
+    pub fn new_none() -> Self {
+        EvaluatorResult {
+            value: None,
+            is_syntactically_string: false,
+            resolved_other_files: false,
+            has_external_references: false,
+        }
+    }
+}
+
+/// Go: `evaluator.Result.Value any` — the value payload (jsnum.Number |
+/// string for the enum path S2 reads; PseudoBigInt rides the evaluator wave).
+#[derive(Clone, Debug, PartialEq)]
+pub enum EvaluatorValue {
+    Number(tsc_jsnum::Number),
+    String(String),
+}
 
 /// Go: `evaluator.Evaluator` (checker field `evaluate`) — a function table the
 /// checker installs for constant-expression evaluation. M6/evaluator wave.
 #[derive(Debug)]
 pub struct Evaluator;
+
+/// Go: `type CachedTypeKind int32` (checker.go:118) — the kind axis of the
+/// `cachedTypes` key (iota order, checker.go:121–142).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(i32)]
+pub enum CachedTypeKind {
+    LiteralUnionBaseType = 0,
+    IndexType = 1,
+    StringIndexType = 2,
+    EquivalentBaseType = 3,
+    ApparentType = 4,
+    AwaitedType = 5,
+    EvolvingArrayType = 6,
+    ArrayLiteralType = 7,
+    PermissiveInstantiation = 8,
+    RestrictiveInstantiation = 9,
+    RestrictiveTypeParameter = 10,
+    IndexedAccessForReading = 11,
+    IndexedAccessForWriting = 12,
+    Widened = 13,
+    RegularObjectLiteral = 14,
+    PromisedTypeOfPromise = 15,
+    DefaultOnlyType = 16,
+    SyntheticType = 17,
+    DecoratorContext = 18,
+    DecoratorContextStatic = 19,
+    DecoratorContextPrivate = 20,
+    DecoratorContextPrivateStatic = 21,
+}
+
+/// Go: `type CachedTypeKey struct { kind CachedTypeKind; typeId TypeId }`
+/// (checker.go:158) — the `cachedTypes map[CachedTypeKey]*Type` key.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct CachedTypeKey {
+    pub kind: CachedTypeKind,
+    /// PORT: `TypeId` is `Copy`/`Eq`/`Hash` (a plain (u32) newtype); the
+    /// field keeps Go's name snake_cased.
+    pub type_id: u32,
+}
 
 /// Go: `*ast.DiagnosticsCollection` — the ast crate's diagnostic.go port
 /// currently carries only the `Diagnostic` struct (its header notes the

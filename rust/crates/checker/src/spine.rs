@@ -2861,10 +2861,10 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getDeclaredTypeOfSymbol(symbol) *Type` — the
-    /// S2 spine. Permissive errorType until S2.
+    /// S2 spine. PORT (M6 S2): flipped from the permissive errorType stub to
+    /// the real family (typeofsymbol.rs, via the exports.rs Get* twin).
     fn get_declared_type_of_symbol_stub(&mut self, symbol: SymbolId) -> TypeId {
-        let _ = symbol;
-        self.error_type()
+        self.get_declared_type_of_symbol(symbol)
     }
 
     /// Go: `func getGlobalTypeDeclaration(symbol) *ast.Declaration`

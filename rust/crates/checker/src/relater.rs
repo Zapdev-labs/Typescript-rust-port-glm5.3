@@ -271,7 +271,11 @@ pub(crate) fn ternary_not_false(t: Ternary) -> bool {
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Go: `type keyBuilder struct` — 192-byte inline buffer + overflow spill.
-struct KeyBuilder {
+/// PORT (M6 S2): the builder landed private with the W2 relation cache; the
+/// S2 cache-key family (typeofsymbol.rs — getTypeListKey & siblings) is its
+/// second load-bearing consumer, so the struct + writers are `pub(crate)`
+/// (same-crate visibility only; no API surface change).
+pub(crate) struct KeyBuilder {
     inline_length: usize,
     overflow_buffer: Vec<u8>,
     inline_buffer: [u8; 192],
@@ -279,7 +283,7 @@ struct KeyBuilder {
 
 #[allow(dead_code)] // TODO(port M6 W2): the key-builder's writers serve the mapper/inference waves.
 impl KeyBuilder {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         KeyBuilder {
             inline_length: 0,
             overflow_buffer: Vec::new(),
@@ -293,7 +297,7 @@ impl KeyBuilder {
     /// collision-free, session-internal — holds: relation/instantiation keys
     /// are never serialized into baselines, only used for map identity, so a
     /// different fixed hash preserves all observable behavior).
-    fn hash(&self) -> crate::todo_shapes::CacheHashKey {
+    pub(crate) fn hash(&self) -> crate::todo_shapes::CacheHashKey {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for &b in &self.overflow_buffer {
             h ^= b as u64;
@@ -312,7 +316,7 @@ impl KeyBuilder {
         self.inline_length = 0;
     }
 
-    fn write_byte(&mut self, c: u8) {
+    pub(crate) fn write_byte(&mut self, c: u8) {
         if self.inline_length == self.inline_buffer.len() {
             self.spill();
         }
@@ -320,7 +324,7 @@ impl KeyBuilder {
         self.inline_length += 1;
     }
 
-    fn write_string(&mut self, s: &str) {
+    pub(crate) fn write_string(&mut self, s: &str) {
         if self.inline_length + s.len() > self.inline_buffer.len() {
             self.spill();
             if s.len() > self.inline_buffer.len() {
@@ -333,7 +337,7 @@ impl KeyBuilder {
         self.inline_length += s.len();
     }
 
-    fn write_uint32(&mut self, v: u32) {
+    pub(crate) fn write_uint32(&mut self, v: u32) {
         if self.inline_length + 4 > self.inline_buffer.len() {
             self.spill();
         }
@@ -342,7 +346,7 @@ impl KeyBuilder {
         self.inline_length += 4;
     }
 
-    fn write_uint64(&mut self, v: u64) {
+    pub(crate) fn write_uint64(&mut self, v: u64) {
         if self.inline_length + 8 > self.inline_buffer.len() {
             self.spill();
         }
@@ -351,26 +355,37 @@ impl KeyBuilder {
         self.inline_length += 8;
     }
 
-    fn write_int(&mut self, value: i64) {
+    pub(crate) fn write_int(&mut self, value: i64) {
         self.write_uint64(value as u64);
     }
 
-    fn write_symbol(&mut self, s: SymbolId) {
+    pub(crate) fn write_symbol(&mut self, s: SymbolId) {
         self.write_uint64(s.0 as u64);
     }
 
-    fn write_type(&mut self, t: TypeId) {
+    pub(crate) fn write_type(&mut self, t: TypeId) {
         self.write_uint32(t.0);
     }
 
-    fn write_types(&mut self, types: &[TypeId]) {
+    pub(crate) fn write_types(&mut self, types: &[TypeId]) {
         self.write_int(types.len() as i64);
         for &t in types {
             self.write_type(t);
         }
     }
 
-    fn write_alias(&mut self, alias: Option<&crate::types::TypeAlias>) {
+    /// Go: `writeNode(node *ast.Node)` / `writeNodeId` — Go writes
+    /// `uint64(node.ID())` when the node is non-nil, byte 0 otherwise
+    /// (checker.go's keyBuilder.writeNode). PORT: the §5.1 node identity is
+    /// the NodeId (packed file id + index), so the id IS the key.
+    pub(crate) fn write_node_id(&mut self, node: Option<NodeId>) {
+        match node {
+            Some(node) => self.write_uint64(node.0 as u64),
+            None => self.write_byte(0),
+        }
+    }
+
+    pub(crate) fn write_alias(&mut self, alias: Option<&crate::types::TypeAlias>) {
         if let Some(alias) = alias {
             self.write_byte(1);
             self.write_symbol(alias.symbol.expect("alias symbol"));
@@ -3100,11 +3115,21 @@ fn is_type_any(c: &Checker, t: TypeId) -> bool {
 }
 
 // The TypeFacts bits the relater reads (Go checker.go TypeFacts — the full
-// facts wave is S10; only the two the signature ladder uses are carried).
+// facts wave is S10; the bits are Go's exact values so the S2 binding-element
+// and S10 facts workers share one lattice).
 define_flags!(TypeFacts, u32);
 impl TypeFacts {
-    pub const IS_UNDEFINED_OR_NULL: TypeFacts = TypeFacts(1 << 3);
-    pub const NE_UNDEFINED: TypeFacts = TypeFacts(1 << 4);
+    /// Go: `TypeFactsEQUndefined TypeFacts = 1 << 16`.
+    pub const EQ_UNDEFINED: TypeFacts = TypeFacts(1 << 16);
+    /// Go: `TypeFactsNEUndefined TypeFacts = 1 << 19`.
+    pub const NE_UNDEFINED: TypeFacts = TypeFacts(1 << 19);
+    /// Go: `TypeFactsIsUndefined TypeFacts = 1 << 24`.
+    pub const IS_UNDEFINED: TypeFacts = TypeFacts(1 << 24);
+    /// Go: `TypeFactsIsNull TypeFacts = 1 << 25`.
+    pub const IS_NULL: TypeFacts = TypeFacts(1 << 25);
+    /// Go: `TypeFactsIsUndefinedOrNull = TypeFactsIsUndefined | TypeFactsIsNull`.
+    pub const IS_UNDEFINED_OR_NULL: TypeFacts =
+        TypeFacts(Self::IS_UNDEFINED.0 | Self::IS_NULL.0);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -8602,11 +8627,11 @@ pub(crate) fn get_return_type_of_signature(c: &mut Checker, sig: crate::types::S
     c.get_return_type_of_signature(sig)
 }
 
-/// Go: `func (c *Checker) getDeclaredTypeOfSymbol(symbol) *Type` — S2 stub.
+/// Go: `func (c *Checker) getDeclaredTypeOfSymbol(symbol) *Type`.
+/// PORT (M6 S2): the W2 error-type stub flipped to the real family
+/// (typeofsymbol.rs, via the exports.rs Get* twin).
 pub(crate) fn get_declared_type_of_symbol(c: &mut Checker, symbol: SymbolId) -> TypeId {
-    // TODO(port M6 S2): the declared-type resolution.
-    let _ = symbol;
-    c.error_type()
+    c.get_declared_type_of_symbol(symbol)
 }
 
 /// Go: `func (c *Checker) getTypeOfParameter(p) *Type` — the parameter symbol
