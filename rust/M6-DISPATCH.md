@@ -30,6 +30,26 @@ Parallelism rule: waves on the SAME crate go sequential (todo_shapes.rs and
 checker.rs are shared edit surfaces); waves on DISJOINT crates (runner,
 binder/ast cleanups) can ride along.
 
+## Conformance-climb gaps surfaced by the runner (close en route; 81 of 384
+divergent twin records on the 300-case slice, all program-layer, none
+runner-structural — see rust/CONFORMANCE.md)
+
+1. **Removed-option diagnostics (TS5102/TS5108, ~78 records)** —
+   `verifyCompilerOptions`'s removed-option arm needs the AST-config-node
+   diagnostic machinery (`CreateDiagnosticForNodeInSourceFile`: option
+   diagnostics carry config-node positions). Owner: the tsoptions/compiler
+   surface — a small wave on those crates, or rides the AST-config work.
+2. **TS8009 `'async' modifier … in a .js unit` (1 record)** — Go emits these
+   from the CHECKER; scope them there (the S1/S3 waves).
+3. **Include-reason matched-spec arms** — `GetMatchedFileSpec`'s
+   "Part of 'files' list …" reasons need the same AST-config surface as (1).
+
+First green slice: PASS at the runner milestone (213/385 = 55.3% Rust vs
+143/385 Go at parse+bind depth, fixture twin byte-identical local+rig; the
+Rust side matches MORE because Go's removed-option diagnostics render with
+config-node positions the reference baselines don't carry at this depth).
+The >=90% M6-done gate re-measures after each checker wave lands.
+
 ## Cycles (contained, deliberate)
 
 - S1 ↔ all leaves: by design — leaves are todo_shapes stubs after S1.
