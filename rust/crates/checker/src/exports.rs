@@ -803,9 +803,24 @@ mod tests {
         // Error-type stubs.
         assert_eq!(c.get_union_type(&[t]), c.error_type());
         assert_eq!(c.get_union_type_ex(&[t], UnionReduction::Literal), c.error_type());
+        // M6 S2 flipped the declared-type twin to the real family
+        // (typeofsymbol.rs): the unknown symbol has no declared-type meaning,
+        // so GetDeclaredTypeOfSymbol still resolves to errorType (Go's nil
+        // arm) — the pin survives the flip.
         assert_eq!(c.get_declared_type_of_symbol(sym), c.error_type());
         assert_eq!(c.get_return_type_of_signature(SignatureId(0)), c.error_type());
-        assert_eq!(c.get_base_constructor_type_of_class(t), c.error_type());
+        // The W1 `get_base_constructor_type_of_class == errorType` pin is
+        // SUPERSEDED (M6 S2): the real base-constructor resolution asserts
+        // InterfaceType data — Go's `t.AsInterfaceType()` nil-deref on a
+        // non-class — so the pin now asserts the panic (contract parity with
+        // Go's debug assert rather than the stub's errorType).
+        {
+            let mut c2 = new_checker();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                c2.get_base_constructor_type_of_class(t)
+            }));
+            assert!(result.is_err());
+        }
         // Empty/None/false stubs.
         assert_eq!(c.get_type_from_type_node(node), c.error_type());
         assert!(c.get_properties_of_type(t).is_empty());
@@ -816,6 +831,10 @@ mod tests {
         assert!(c.get_type_predicate_of_signature(SignatureId(0)).is_none());
         assert_eq!(c.get_true_type_of_conditional_type(t), None);
         assert_eq!(c.get_false_type_of_conditional_type(t), None);
+        // M6 S2 flipped the constraint twin to the real family
+        // (typeofsymbol.rs): the family is only ever called on type
+        // parameters by contract (Go nil-derefs otherwise); the port's
+        // flags guard keeps the non-type-parameter answer None.
         assert_eq!(c.get_constraint_of_type_parameter(t), None);
         assert_eq!(c.get_base_constraint_of_type(t), None);
         assert_eq!(c.get_symbol_of_node(node), None);

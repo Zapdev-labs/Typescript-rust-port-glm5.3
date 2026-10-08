@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use tsc_ast::{
-    CheckFlags, Kind, ModifierFlags, Node, NodeFlags, NodeId, NodeStore, Symbol, SymbolFlags,
+    CheckFlags, ModifierFlags, NodeFlags, NodeId, NodeStore, Symbol, SymbolFlags,
     SymbolId, SymbolTable,
 };
 use tsc_ast::nodeflags::NodeFlags as NF;
@@ -38,7 +38,6 @@ use tsc_core::linkstore::LinkStore;
 use tsc_core::options_generated::ScriptTarget;
 use tsc_jsnum::{Number, PseudoBigInt};
 
-use crate::ast_shims;
 use crate::links::{NodeLinkStore, SymbolArenaLinkStore};
 use crate::mapper::TypeMapperData;
 use crate::todo_shapes::{
@@ -54,7 +53,6 @@ use crate::types::{
     TypeData, TypeFlags, TypeId, TypeNodeLinks, TypePredicate, TypePredicateKind, ValueSymbolLinks,
     VarianceFlags, VarianceLinks,
 };
-use crate::utilities as u;
 
 // ────────────────────────────────────────────────────────────────────────────
 // CheckMode (Go checker.go — `type CheckMode uint32`)

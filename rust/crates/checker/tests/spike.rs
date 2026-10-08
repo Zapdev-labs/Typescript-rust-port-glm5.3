@@ -232,21 +232,29 @@ fn gate_demo_boolean_literals_widen_at_the_union_boundary() {
         Some(LiteralValue::Boolean(false))
     ));
     // `let t = true`: the initializer checks as the fresh literal `true`;
-    // widening it to `boolean` requires the union constructor (M6), so the
-    // spike's boundary is exactly the boolean-union gate.
+    // widening it to `boolean` requires the union constructor — M6 S2
+    // landed the real widen* chain, so the boolean arm now routes through
+    // the S7 permissive getUnionType stub (two constituents → errorType)
+    // instead of panicking at the M5 spike's union boundary. The gate moves
+    // with it: the type is the stub's errorType (S7's union constructor
+    // replaces it with `boolean` when that wave lands).
     let t_initializer = c
         .program_initializer_of(declaration_named(&declarations, "t"))
         .expect("t initializer");
     let initializer_type = c.check_expression_cached(t_initializer);
     assert!(flags(&c, initializer_type).intersects(TypeFlags::BOOLEAN_LITERAL));
     assert!(is_fresh_literal_type(&c, initializer_type));
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let t = symbol_named(&symbols, "t");
-        c.get_type_of_symbol(t)
-    }));
-    assert!(
-        result.is_err(),
-        "let t = true must stop at the M6 union boundary, not return a wrong type"
+    let t = symbol_named(&symbols, "t");
+    let t_type = c.get_type_of_symbol(t);
+    assert_eq!(
+        t_type, t_type,
+        "get_type_of_symbol resolves without panicking at the S2 boundary"
+    );
+    assert_eq!(
+        t_type,
+        c.error_type(),
+        "the boolean-widening arm carries the S7 permissive union stub's \
+         errorType until the real getUnionType lands"
     );
 }
 
@@ -339,4 +347,137 @@ fn type_resolution_stack_detects_no_cycle_for_simple_declarations() {
     let t = c.get_type_of_symbol(x);
     assert!(c.type_resolutions_are_balanced());
     assert!(flags(&c, t).intersects(TypeFlags::NUMBER_LITERAL));
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// M6 S2 gate demos — the declared-type family + the enum machinery
+// (typeofsymbol.rs)
+// ────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn gate_demo_class_declared_type_carries_the_this_type_promotion() {
+    use tsc_checker::types::ObjectFlags;
+    let (mut c, symbols, _) = check("class C {}\n");
+    let class = symbol_named(&symbols, "C");
+    assert!(c.program_symbol(class).flags.intersects(SymbolFlags::CLASS));
+    // Go: getDeclaredTypeOfClassOrInterface — a class always gets a "this"
+    // type (ObjectFlagsReference + the thisType parameter whose constraint
+    // is the class itself), and the identity instantiation seeds the
+    // instantiations table.
+    let declared = c.get_declared_type_of_symbol(class);
+    assert!(c.type_(declared).object_flags.intersects(ObjectFlags::CLASS));
+    assert!(c.type_(declared).object_flags.intersects(ObjectFlags::REFERENCE));
+    let data = c.type_(declared).as_interface_type().expect("InterfaceType data");
+    let this_type = data.this_type.expect("classes always carry a thisType");
+    assert!(flags(&c, this_type).intersects(TypeFlags::TYPE_PARAMETER));
+    assert!(
+        c.type_(this_type)
+            .as_type_parameter()
+            .expect("TypeParameter data")
+            .is_this_type
+    );
+    assert_eq!(
+        c.type_(this_type)
+            .as_type_parameter()
+            .expect("TypeParameter data")
+            .constraint,
+        Some(declared)
+    );
+    assert_eq!(data.all_type_parameters, vec![this_type]);
+    assert_eq!(data.outer_type_parameter_count, 0);
+    assert_eq!(data.base.resolved_type_arguments, vec![this_type]);
+    let instantiations = data.base.base.instantiations.as_ref().expect("instantiations");
+    assert_eq!(instantiations.len(), 1);
+    assert!(instantiations.values().all(|&v| v == declared));
+    // Cache: a second resolution returns the same TypeId.
+    assert_eq!(c.get_declared_type_of_symbol(class), declared);
+}
+
+#[test]
+fn gate_demo_thisless_interface_has_no_this_type() {
+    use tsc_checker::types::ObjectFlags;
+    let (mut c, symbols, _) = check("interface I { m(): void }\n");
+    let interface = symbol_named(&symbols, "I");
+    assert!(c.program_symbol(interface).flags.intersects(SymbolFlags::INTERFACE));
+    // Go: isThislessInterface — a this-free body with no base types means
+    // no "this" type, so the interface declared type is NOT generic.
+    let declared = c.get_declared_type_of_symbol(interface);
+    assert!(c.type_(declared).object_flags.intersects(ObjectFlags::INTERFACE));
+    assert!(!c.type_(declared).object_flags.intersects(ObjectFlags::REFERENCE));
+    let data = c.type_(declared).as_interface_type().expect("InterfaceType data");
+    assert!(data.this_type.is_none());
+}
+
+#[test]
+fn gate_demo_enum_member_declared_types_route_through_the_s7_union_seam() {
+    // The Go port's getDeclaredTypeOfEnumMember (checker.go:24461) resolves
+    // each member's declared type to the PARENT ENUM's declared type, and
+    // getDeclaredTypeOfEnum is the union of the member types — which rides
+    // the S7 permissive getUnionTypeEx stub (multi-constituent → errorType)
+    // until the real union constructor lands. The pin asserts exactly that
+    // seam: every member's declared type IS the enum's declared type, and
+    // the enum's own type is the S7 stub value (direction documented; the
+    // interned enum-literal member types surface via the expression checker
+    // in later waves).
+    let (mut c, symbols, _) = check("enum E { A, B = 2, S = \"x\" }\n");
+    let e = symbol_named(&symbols, "E");
+    assert!(c.program_symbol(e).flags.intersects(SymbolFlags::ENUM));
+    let exports = c.program_symbol(e).exports.clone();
+    let member_named = |name: &str| -> SymbolId {
+        *exports
+            .entries()
+            .find(|(n, _)| n.as_str() == name)
+            .unwrap_or_else(|| panic!("no enum member named {name}"))
+            .1
+    };
+    let (a, b, s) = (member_named("A"), member_named("B"), member_named("S"));
+    for member in [a, b, s] {
+        assert!(c.program_symbol(member).flags.intersects(SymbolFlags::ENUM_MEMBER));
+    }
+    let e_type = c.get_declared_type_of_symbol(e);
+    eprintln!("e_type={} flags={:?}", e_type.0, c.type_(e_type).flags);
+    assert_eq!(e_type, c.error_type());
+    // Each member's declared type is the enum's declared type (Go: the
+    // getDeclaredTypeOfEnumMember → getDeclaredTypeOfEnum link), cached on
+    // first resolution.
+    assert_eq!(c.get_declared_type_of_symbol(a), e_type);
+    assert_eq!(c.get_declared_type_of_symbol(b), e_type);
+    assert_eq!(c.get_declared_type_of_symbol(s), e_type);
+    // Resolution caching: repeated lookups are stable.
+    assert_eq!(c.get_declared_type_of_symbol(e), e_type);
+    assert_eq!(c.get_declared_type_of_symbol(a), e_type);
+    assert!(c.type_resolutions_are_balanced());
+}
+
+#[test]
+fn gate_demo_type_alias_declared_type_resolves_through_the_s5_stub() {
+    // Go: getDeclaredTypeOfTypeAlias pushes DeclaredType on the resolution
+    // stack, resolves the type node, and seeds the generic instantiation
+    // cache; the getTypeFromTypeNode stub (S5) resolves to errorType, so the
+    // alias declared type is errorType until that wave lands (shape pinned,
+    // stub direction documented).
+    let (mut c, symbols, _) = check("type A = string;\n");
+    let a = symbol_named(&symbols, "A");
+    assert!(c.program_symbol(a).flags.intersects(SymbolFlags::TYPE_ALIAS));
+    let declared = c.get_declared_type_of_symbol(a);
+    assert_eq!(declared, c.error_type());
+    assert!(c.type_resolutions_are_balanced());
+    assert_eq!(c.get_declared_type_of_symbol(a), declared);
+}
+
+#[test]
+fn gate_demo_class_value_type_is_the_anonymous_object_type() {
+    // Go: getTypeOfFuncClassEnumModule — a class's VALUE type is the
+    // anonymous object type (not the declared type); no base type variable
+    // means no intersection construction.
+    use tsc_checker::types::ObjectFlags;
+    let (mut c, symbols, _) = check("class C {}\n");
+    let class = symbol_named(&symbols, "C");
+    let value_type = c.get_type_of_symbol(class);
+    assert!(flags(&c, value_type).intersects(TypeFlags::OBJECT));
+    assert!(c.type_(value_type).object_flags.intersects(ObjectFlags::ANONYMOUS));
+    // The declared type (the thisType-carrying class type) is distinct.
+    let declared = c.get_declared_type_of_symbol(class);
+    assert_ne!(value_type, declared);
+    assert!(c.type_resolutions_are_balanced());
 }

@@ -64,8 +64,6 @@
 // tree is arena-shaped (see the struct's PORT note). S9's wave keeps the
 // body and completes the callee surface.
 
-use std::collections::hash_map::Entry;
-
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use tsc_ast::nodeflags::NodeFlags as NF;
@@ -73,29 +71,22 @@ use tsc_ast::{
     CheckFlags, Kind, ModifierFlags, Node, NodeData, NodeId, NodeStore, SymbolFlags, SymbolId,
     SymbolTable,
 };
-use tsc_core::tristate::Tristate;
 use tsc_diagnostics::Message;
 use tsc_diagnostics::{
     AN_ENUM_MEMBER_CANNOT_HAVE_A_NUMERIC_NAME, BINDING_ELEMENT_0_IMPLICITLY_HAS_AN_1_TYPE,
-    CIRCULAR_DEFINITION_OF_IMPORT_ALIAS_0, COMPUTED_PROPERTY_NAMES_ARE_NOT_ALLOWED_IN_ENUMS,
-    DID_YOU_MEAN_FOR_0_TO_BE_CONSTRAINED_TO_TYPE_NEW_ARGS_COLON_ANY_1,
-    ENUM_MEMBER_FOLLOWING_A_NON_LITERAL_NUMERIC_MEMBER_MUST_HAVE_AN_INITIALIZER_WHEN_ISOLATEDMODULES_IS_ENABLED,
+    COMPUTED_PROPERTY_NAMES_ARE_NOT_ALLOWED_IN_ENUMS,
     ENUM_MEMBER_MUST_HAVE_INITIALIZER,
     FUNCTION_EXPRESSION_WHICH_LACKS_RETURN_TYPE_ANNOTATION_IMPLICITLY_HAS_AN_0_RETURN_TYPE,
     GENERATOR_IMPLICITLY_HAS_YIELD_TYPE_0_CONSIDER_SUPPLYING_A_RETURN_TYPE_ANNOTATION,
-    IN_AMBIENT_ENUM_DECLARATIONS_MEMBER_INITIALIZER_MUST_BE_CONSTANT_EXPRESSION,
     MAPPED_OBJECT_TYPE_IMPLICITLY_HAS_AN_ANY_TEMPLATE_TYPE,
     MEMBER_0_IMPLICITLY_HAS_AN_1_TYPE,
     MEMBER_0_IMPLICITLY_HAS_AN_1_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE,
     PARAMETER_0_IMPLICITLY_HAS_AN_1_TYPE,
     PARAMETER_0_IMPLICITLY_HAS_AN_1_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE,
-    PARAMETER_HAS_A_NAME_BUT_NO_TYPE_DID_YOU_MEAN_0_COLON_1,
     PROPERTY_0_IMPLICITLY_HAS_TYPE_ANY_BECAUSE_ITS_GET_ACCESSOR_LACKS_A_RETURN_TYPE_ANNOTATION,
-    PROPERTY_0_IMPLICITLY_HAS_TYPE_ANY_BECAUSE_ITS_SET_ACCESSOR_LACKS_A_PARAMETER_TYPE_ANNOTATION,
     REST_PARAMETER_0_IMPLICITLY_HAS_AN_ANY_TYPE,
     REST_PARAMETER_0_IMPLICITLY_HAS_AN_ANY_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE,
     REST_TYPES_MAY_ONLY_BE_CREATED_FROM_OBJECT_TYPES,
-    THIS_OVERLOAD_IMPLICITLY_RETURNS_THE_TYPE_0_BECAUSE_IT_LACKS_A_RETURN_TYPE_ANNOTATION,
     TYPE_0_IS_NOT_A_CONSTRUCTOR_FUNCTION_TYPE,
     TYPE_ALIAS_0_CIRCULARLY_REFERENCES_ITSELF,
     TYPE_OF_PROPERTY_0_CIRCULARLY_REFERENCES_ITSELF_IN_MAPPED_TYPE_1,
@@ -103,15 +94,9 @@ use tsc_diagnostics::{
     VARIABLE_0_IMPLICITLY_HAS_AN_1_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE,
     X_0_HAS_A_STRING_TYPE_BUT_MUST_HAVE_SYNTACTICALLY_RECOGNIZABLE_STRING_SYNTAX_WHEN_ISOLATEDMODULES_IS_ENABLED,
     X_0_IMPLICITLY_HAS_AN_1_RETURN_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE,
-    X_0_IMPLICITLY_HAS_RETURN_TYPE_ANY_BECAUSE_IT_DOES_NOT_HAVE_A_RETURN_TYPE_ANNOTATION_AND_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_ONE_OF_ITS_RETURN_EXPRESSIONS,
-    X_0_IMPLICITLY_HAS_TYPE_ANY_BECAUSE_IT_DOES_NOT_HAVE_A_TYPE_ANNOTATION_AND_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_ITS_OWN_INITIALIZER,
     X_0_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_ITS_OWN_BASE_EXPRESSION,
     X_0_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_ITS_OWN_TYPE_ANNOTATION,
     X_0_WHICH_LACKS_RETURN_TYPE_ANNOTATION_IMPLICITLY_HAS_AN_1_RETURN_TYPE,
-    X_0_WHICH_LACKS_RETURN_TYPE_ANNOTATION_IMPLICITLY_HAS_AN_1_YIELD_TYPE,
-    X_CONST_ENUM_MEMBER_INITIALIZER_WAS_EVALUATED_TO_A_NON_FINITE_VALUE,
-    X_CONST_ENUM_MEMBER_INITIALIZER_WAS_EVALUATED_TO_DISALLOWED_VALUE_NAN,
-    X_CONST_ENUM_MEMBER_INITIALIZERS_MUST_BE_CONSTANT_EXPRESSIONS,
 };
 
 use tsc_binder::ast_shims as binder_shims;
@@ -119,11 +104,11 @@ use tsc_binder::node_data as binder_node_data;
 
 use crate::ast_shims;
 use crate::checker::{CheckMode, TypeSystemEntity, TypeSystemPropertyName};
-use crate::todo_shapes::{CacheHashKey, CachedTypeKind, CachedTypeKey, EvaluatorResult, EvaluatorValue, TypeMapperId, UnionReduction};
+use crate::todo_shapes::{CacheHashKey, CachedTypeKind, CachedTypeKey, EvaluatorResult, EvaluatorValue, UnionReduction};
 use crate::types::{
-    self, AccessFlags, ElementFlags, IndexInfo, IntersectionType,
+    self, AccessFlags, ElementFlags,
     LiteralValue, ObjectFlags, SignatureFlags, SignatureId, TupleElementInfo,
-    TypeAlias, TypeData, TypeFlags, TypeId, TypeParameter, UnionType,
+    TypeAlias, TypeData, TypeFlags, TypeId,
 };
 use crate::utilities as u;
 use crate::Checker;
@@ -141,6 +126,7 @@ pub(crate) fn get_type_list_key(types: &[TypeId]) -> CacheHashKey {
 }
 
 /// Go: `func getAliasKey(alias *TypeAlias) CacheHashKey`.
+#[allow(dead_code)] // TODO(port M6 S7: getAliasKey (union interning)) consumes it
 pub(crate) fn get_alias_key(alias: Option<&TypeAlias>) -> CacheHashKey {
     let mut b = crate::relater::KeyBuilder::new();
     b.write_alias(alias);
@@ -148,6 +134,7 @@ pub(crate) fn get_alias_key(alias: Option<&TypeAlias>) -> CacheHashKey {
 }
 
 /// Go: `func getUnionKey(types []*Type, origin *Type, alias *TypeAlias) CacheHashKey`.
+#[allow(dead_code)] // TODO(port M6 S7: getUnionKey) consumes it
 pub(crate) fn get_union_key(
     types: &[TypeId],
     origin: Option<TypeId>,
@@ -182,6 +169,7 @@ pub(crate) fn get_union_key(
 }
 
 /// Go: `func getIntersectionKey(types []*Type, flags IntersectionFlags, alias *TypeAlias) CacheHashKey`.
+#[allow(dead_code)] // TODO(port M6 S7: getIntersectionKey) consumes it
 pub(crate) fn get_intersection_key(
     types: &[TypeId],
     flags: crate::relater::IntersectionFlags,
@@ -198,6 +186,7 @@ pub(crate) fn get_intersection_key(
 }
 
 /// Go: `func getTupleKey(elementInfos []TupleElementInfo, readonly bool) CacheHashKey`.
+#[allow(dead_code)] // TODO(port M6 S7: getTupleKey) consumes it
 pub(crate) fn get_tuple_key(element_infos: &[TupleElementInfo], readonly: bool) -> CacheHashKey {
     let mut b = crate::relater::KeyBuilder::new();
     for e in element_infos {
@@ -222,6 +211,7 @@ pub(crate) fn get_tuple_key(element_infos: &[TupleElementInfo], readonly: bool) 
 
 /// Go: `func getTypeAliasInstantiationKey(typeArguments []*Type, alias *TypeAlias) CacheHashKey`
 /// — `getTypeInstantiationKey(typeArguments, alias, false)`.
+#[allow(dead_code)] // TODO(port M6 S7: alias instantiation cache) consumes it
 pub(crate) fn get_type_alias_instantiation_key(
     type_arguments: &[TypeId],
     alias: Option<&TypeAlias>,
@@ -230,6 +220,7 @@ pub(crate) fn get_type_alias_instantiation_key(
 }
 
 /// Go: `func getTypeInstantiationKey(typeArguments []*Type, alias *TypeAlias, singleSignature bool) CacheHashKey`.
+#[allow(dead_code)] // TODO(port M6 S7: instantiation cache) consumes it
 pub(crate) fn get_type_instantiation_key(
     type_arguments: &[TypeId],
     alias: Option<&TypeAlias>,
@@ -245,6 +236,7 @@ pub(crate) fn get_type_instantiation_key(
 }
 
 /// Go: `func getIndexedAccessKey(objectType *Type, indexType *Type, accessFlags AccessFlags, alias *TypeAlias) CacheHashKey`.
+#[allow(dead_code)] // TODO(port M6 S7/S10: indexed-access cache) consumes it
 pub(crate) fn get_indexed_access_key(
     object_type: TypeId,
     index_type: TypeId,
@@ -260,6 +252,7 @@ pub(crate) fn get_indexed_access_key(
 }
 
 /// Go: `func getTemplateTypeKey(texts []string, types []*Type) CacheHashKey`.
+#[allow(dead_code)] // TODO(port M6 S7/S10: template-literal cache) consumes it
 pub(crate) fn get_template_type_key(texts: &[String], types: &[TypeId]) -> CacheHashKey {
     let mut b = crate::relater::KeyBuilder::new();
     b.write_types(types);
@@ -275,6 +268,7 @@ pub(crate) fn get_template_type_key(texts: &[String], types: &[TypeId]) -> Cache
 }
 
 /// Go: `func getConditionalTypeKey(typeArguments []*Type, alias *TypeAlias, forConstraint bool) CacheHashKey`.
+#[allow(dead_code)] // TODO(port M6 S7/S10: conditional instantiation cache) consumes it
 pub(crate) fn get_conditional_type_key(
     type_arguments: &[TypeId],
     alias: Option<&TypeAlias>,
@@ -302,6 +296,7 @@ pub(crate) fn get_node_list_key(nodes: &[NodeId]) -> CacheHashKey {
 
 /// Go: `func isUnconstrainedTypeParameter(tp *Type) bool` — true when the type
 /// parameter originates in an unconstrained declaration in a type parameter list.
+#[allow(dead_code)] // TODO(port M6 S9: getBaseConstraintOfTypeParameter) consumes it
 pub(crate) fn is_unconstrained_type_parameter(c: &Checker, tp: TypeId) -> bool {
     let target = c.type_(tp).target().unwrap_or(tp);
     let Some(symbol) = c.type_(target).symbol else {
@@ -392,6 +387,8 @@ impl EnumLiteralKey {
 /// read them. The tree shape (one child per property name, memoized) and
 /// the root-context "never widens a particular object literal more than
 /// once" rule (widenedTypes is only cached in CHILD contexts) are Go's.
+#[allow(dead_code)] // TODO(port M6 S9): the S4 object-literal + S9 sibling
+// property waves read the tree fields (resolved_properties/child_contexts).
 #[derive(Default)]
 pub(crate) struct WideningContext {
     pub parent: Option<usize>,
@@ -430,6 +427,12 @@ impl Checker {
 // The getTypeOfSymbol spine (Go checker.go 16749–17005, 17033–17432)
 // ────────────────────────────────────────────────────────────────────────────
 
+// TODO(port M6 S8/S9/S10): isFunctionType / getConstraintOfType /
+// getConstraintOfIndexedAccess / getConstraintOfDistributiveConditionalType and
+// the other forward-landed bodies in this impl are consumed by those waves
+// (the relation probers, the deferred-constraint walkers); the current slice's
+// call sites reach them only through the bannered stubs.
+#[allow(dead_code)]
 impl Checker {
     /// Go: `func (c *Checker) getSymbolFlagsEx(symbol, excludeTypeOnlyMeanings, excludeLocalMeanings) ast.SymbolFlags`.
     pub(crate) fn get_symbol_flags_ex(
@@ -1024,7 +1027,6 @@ impl Checker {
             && Some(base_constructor_type) != self.null_widening_type
             && !self.is_constructor_type(base_constructor_type)
         {
-            let symbol = self.type_(t).symbol.expect("class symbol");
             let type_string = self.type_to_string(base_constructor_type);
             self.error(
                 expression,
@@ -1687,6 +1689,9 @@ fn is_declaration_name(store: &dyn NodeStore, node: NodeId) -> bool {
     store.node(parent).name() == Some(node)
 }
 
+    // TODO(port M6 S4/S5: the accessor + contextual waves): the bannered permissive/stub bodies below
+    // are forward-landed; their consumers arrive with those waves.
+    #[allow(dead_code)]
 impl Checker {
     /// Go: `func (c *Checker) getAnnotatedAccessorTypeNode(accessor *ast.Node) *ast.Node`.
     pub(crate) fn get_annotated_accessor_type_node(&self, accessor: Option<NodeId>) -> Option<NodeId> {
@@ -1753,6 +1758,10 @@ impl Checker {
         t
     }
 
+    // TODO(port M6 S7/S10: removeMissingType’s real body + getNonUndefinedType’s
+    // callers): the bannered permissive/stub bodies below are forward-landed;
+    // their consumers arrive with those waves.
+    #[allow(dead_code)]
     /// Go: `func (c *Checker) removeOptionalTypeMarker(t *Type) *Type` —
     /// TODO(port M6 S7); identity.
     fn remove_optional_type_marker(&mut self, t: TypeId) -> TypeId {
@@ -2985,6 +2994,9 @@ pub enum WideningKind {
     GeneratorYield = 1,
 }
 
+    // TODO(port M6 S8/S9: getPropertiesOfObjectType’s widened walk): the bannered permissive/stub bodies below
+    // are forward-landed; their consumers arrive with those waves.
+    #[allow(dead_code)]
 impl Checker {
     /// Go: `func (c *Checker) widenTypeForVariableLikeDeclaration(t, declaration, reportErrors) *Type`.
     pub(crate) fn widen_type_for_variable_like_declaration(
@@ -3469,6 +3481,9 @@ impl Checker {
 // (Go checker.go 18910–19077)
 // ────────────────────────────────────────────────────────────────────────────
 
+    // TODO(port M6 S7/S9/S10: the facts/union consumers): the bannered permissive/stub bodies below
+    // are forward-landed; their consumers arrive with those waves.
+    #[allow(dead_code)]
 impl Checker {
     /// Go: `func (c *Checker) getTypeOfEnumMember(symbol *ast.Symbol) *Type`.
     fn get_type_of_enum_member(&mut self, symbol: SymbolId) -> TypeId {
@@ -3826,6 +3841,9 @@ fn is_alias_symbol_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
 // the `DeclaredType` property axis.
 // ────────────────────────────────────────────────────────────────────────────
 
+    // TODO(port M6 S8: canGetTypeParametersOfClassOrInterface’s callers): the bannered permissive/stub bodies below
+    // are forward-landed; their consumers arrive with those waves.
+    #[allow(dead_code)]
 impl Checker {
     /// Go: `func (c *Checker) tryGetDeclaredTypeOfSymbol(symbol) *Type` —
     /// pub(crate) for the exports.rs Get* twin (the sole
@@ -4263,11 +4281,15 @@ impl Checker {
         let declarations = self.program.symbol(symbol).declarations.clone();
         for declaration in declarations {
             if self.store().node(declaration).kind == Kind::EnumDeclaration {
-                for member in u::get_members_of_declaration(self.store(), declaration).to_vec() {
+                // Go reads declaration.Members() directly (an enum
+                // declaration's member list) — getMembersOfDeclaration's
+                // class/interface subset does not cover enums.
+                for member in tsc_binder::node_data::members_of(self.store(), declaration).to_vec() {
                     if !binder_shims::has_dynamic_name(self.store(), member) {
                         let member_symbol = self
-                            .get_symbol_of_declaration(member)
-                            .expect("enum member symbol");
+                            .get_symbol_of_declaration(member);
+                        eprintln!("DEBUG member kind={:?} symbol={:?}", self.store().node(member).kind, member_symbol);
+                        let member_symbol = member_symbol.expect("enum member symbol");
                         let value = self.get_enum_member_value(member);
                         let member_type = match value.value {
                             Some(EvaluatorValue::Number(n)) => {
@@ -4359,7 +4381,10 @@ impl Checker {
             self.node_links.get(node).flags |= crate::types::NodeCheckFlags::ENUM_VALUES_COMPUTED;
             let mut auto_value: Option<tsc_jsnum::Number> = Some(tsc_jsnum::Number(0.0));
             let mut previous: Option<NodeId> = None;
-            let members = u::get_members_of_declaration(self.store(), node).to_vec();
+            // Go reads node.Members() directly (the enum declaration's
+            // member list — getMembersOfDeclaration's class/interface subset
+            // does not cover enums).
+            let members = tsc_binder::node_data::members_of(self.store(), node).to_vec();
             for member in members {
                 let result = self.compute_enum_member_value(member, auto_value, previous);
                 self.enum_member_links.get(member).value = result.clone();
