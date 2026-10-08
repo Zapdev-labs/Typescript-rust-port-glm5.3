@@ -51,6 +51,23 @@ is never a generation input, only the parity baseline for tests. When
 options.ts changes upstream, re-run the extraction script and
 `cargo run -p gen-options`.
 
+## `parity-check-declarations.mjs`
+
+The Go output is never a generation input — this script is the parity
+verification for the declarations tables: it parses the option blocks of
+`tsc/internal/tsoptions/declarations_generated.go` (commonOptionsWithBuild /
+optionsForCompiler / typeAcquisitionDecls / OptionsForBuild) and of
+`rust/crates/tsoptions/src/declarations_generated.rs` and compares them
+field-for-field (names normalized camelCase↔snake_case, diagnostics refs,
+kinds, path kinds, default value descriptions; `elementOptions` is excluded
+because the port builds those maps lazily). Run it after regenerating:
+
+```
+node rust/tools/gen-options/data/parity-check-declarations.mjs
+```
+
+Output: `PARITY OK` or a per-option diff list.
+
 ## Re-verification
 
 The Go output (`tsc/internal/core/options_generated.go`) is never a

@@ -4,7 +4,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use tsc_ast::Diagnostic;
-use tsc_core::compileroptions::{CompilerOptions, ResolutionMode};
+use tsc_core::compileroptions::ResolutionMode;
+use tsc_core::options_generated::CompilerOptions;
 use tsc_tspath::{
     EXTENSION_JSON, SUPPORTED_DECLARATION_EXTENSIONS, SUPPORTED_JS_EXTENSIONS_FLAT,
     SUPPORTED_TS_IMPLEMENTATION_EXTENSIONS, PathKey, RootedDirectoryPath, RootedFilePath,
@@ -154,6 +155,13 @@ impl std::ops::BitAnd for NodeResolutionFeatures {
     }
 }
 
+impl std::ops::BitAndAssign for NodeResolutionFeatures {
+    #[inline]
+    fn bitand_assign(&mut self, rhs: Self) {
+        self.0 &= rhs.0;
+    }
+}
+
 impl std::ops::BitOr for NodeResolutionFeatures {
     type Output = Self;
     #[inline]
@@ -292,6 +300,13 @@ impl std::ops::BitAnd for Extensions {
     #[inline]
     fn bitand(self, rhs: Self) -> Self {
         Self(self.0 & rhs.0)
+    }
+}
+
+impl std::ops::BitAndAssign for Extensions {
+    #[inline]
+    fn bitand_assign(&mut self, rhs: Self) {
+        self.0 &= rhs.0;
     }
 }
 

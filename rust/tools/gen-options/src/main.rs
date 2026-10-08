@@ -934,9 +934,14 @@ fn main() -> ExitCode {
     let mut ok = true;
     for (output, formatted) in &outputs {
         let file_name = output
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
+            .strip_prefix(manifest_dir.join("../.."))
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| {
+                output
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
         if check {
             let current = std::fs::read_to_string(output).ok();
             match current {

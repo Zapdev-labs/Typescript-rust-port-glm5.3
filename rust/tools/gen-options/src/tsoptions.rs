@@ -330,6 +330,47 @@ fn option_kind(ty: &str) -> &'static str {
     }
 }
 
+/// The Go field type the core struct uses for `opt` — the model carries
+/// `type: "string"` for path-typed fields and separates them by `pathKind`
+/// (Go's core struct has typed path fields).
+fn effective_go_type(opt: &FullOption) -> String {
+    match (opt.ty.as_str(), opt.path_kind.as_deref()) {
+        ("string", Some("file")) => "tspath.RootedFilePath".to_string(),
+        ("string", Some("directory")) => "tspath.RootedDirectoryPath".to_string(),
+        ("string", Some("fileOrDirectory")) => "tspath.RootedPath".to_string(),
+        ("string", Some("sourceMapLocation")) => "tspath.SourceMapLocation".to_string(),
+        ("[]string", Some("directory")) => "[]tspath.RootedDirectoryPath".to_string(),
+        _ => opt.ty.clone(),
+    }
+}
+
+/// The zero member of a core enum (Go's numeric literal `0` in generated code).
+fn enum_zero_member(ty: &str) -> &'static str {
+    let name = enum_name_of_type(ty);
+    match name {
+        "ModuleDetectionKind" | "ModuleKind" | "NewLineKind" | "ScriptTarget" | "JsxEmit" => "None",
+        "ModuleResolutionKind" => "Unknown",
+        other => panic!("gen-options: no zero member for enum {other}"),
+    }
+}
+
+/// `.clone()` only when the Rust field type is not `Copy`
+/// (clippy::clone_on_copy would fire on Tristate/enums/ints).
+fn clone_suffix(ty: &str) -> &'static str {
+    match ty {
+        "Tristate" | "*int" => "",
+        "string" | "[]string" | "[]PluginImport" | "[]tspath.RootedDirectoryPath"
+        | "*collections.OrderedMap[string, []string]" => ".clone()",
+        _ => {
+            if ty.starts_with("tspath.") {
+                ".clone()"
+            } else {
+                "" // core enums are Copy
+            }
+        }
+    }
+}
+
 /// The zero-value expression for a CompilerOptions field (generate-options.ts
 /// zeroValue(), applied to the Go field type).
 fn zero_expr(ty: &str) -> String {
@@ -341,7 +382,7 @@ fn zero_expr(ty: &str) -> String {
         "*collections.OrderedMap[string, []string]" => "None".to_string(),
         "tspath.RootedFilePath" | "tspath.RootedDirectoryPath" | "tspath.RootedPath"
         | "tspath.SourceMapLocation" => format!("{}::default()", rust_type(ty)),
-        other => format!("{}::default()", enum_name_of_type(other)),
+        other => format!("{}::{}", enum_name_of_type(other), enum_zero_member(other)),
     }
 }
 
@@ -357,7 +398,11 @@ fn not_zero(field: &str, ty: &str) -> String {
         "*collections.OrderedMap[string, []string]" => format!("{field}.is_some()"),
         "tspath.RootedFilePath" | "tspath.RootedDirectoryPath" | "tspath.RootedPath"
         | "tspath.SourceMapLocation" => format!("!{field}.is_empty()"),
-        other => format!("{field} != {}::default()", enum_name_of_type(other)),
+        other => format!(
+            "{field} != {}::{}",
+            enum_name_of_type(other),
+            enum_zero_member(other)
+        ),
     }
 }
 
@@ -497,12 +542,16 @@ fn declaration_literal(
     let mut fields = vec![
         format!("name: {}", quote(name)),
         format!("kind: CommandLineOptionKind::{kind}"),
+        format!(
+            "short_name: {}",
+            short_name.map_or("\"\"".to_string(), |sn| quote(sn))
+        ),
     ];
-    if let Some(sn) = short_name {
-        fields.push(format!("short_name: {}", quote(sn)));
-    }
-    if let Some(pk) = path_kind {
-        let variant = match pk {
+    // Rust struct literals in `static`s cannot omit fields (no FRU in const
+    // position), so — unlike Go's sparse literals — every field is emitted,
+    // with the zero value where options.ts leaves it unset.
+    let path_variant = match path_kind {
+        Some(pk) => match pk {
             "file" => "File",
             "directory" => "Directory",
             "fileOrDirectory" => "FileOrDirectory",
@@ -512,55 +561,61 @@ fn declaration_literal(
             "resolvedPathPattern" => "ResolvedPathPattern",
             "configLocator" => "ConfigLocator",
             other => panic!("gen-options: unknown pathKind {other}"),
-        };
-        fields.push(format!("path_kind: CommandLineOptionPathKind::{variant}"));
-    }
-    if is_file_path == Some(true) {
-        fields.push("is_file_path: true".to_string());
-    }
-    if is_tsconfig_only == Some(true) {
-        fields.push("is_tsconfig_only: true".to_string());
-    }
-    if is_command_line_only == Some(true) {
-        fields.push("is_command_line_only: true".to_string());
-    }
-    if let Some(desc) = description {
-        fields.push(format!("description: Some({})", diag_expr(desc)));
-    }
-    if let Some(dvd) = default_value_description {
-        fields.push(format!(
+        },
+        None => "None",
+    };
+    fields.push(format!("path_kind: CommandLineOptionPathKind::{path_variant}"));
+    fields.push(format!("is_file_path: {}", is_file_path.unwrap_or(false)));
+    fields.push(format!(
+        "is_tsconfig_only: {}",
+        is_tsconfig_only.unwrap_or(false)
+    ));
+    fields.push(format!(
+        "is_command_line_only: {}",
+        is_command_line_only.unwrap_or(false)
+    ));
+    fields.push(match description {
+        Some(desc) => format!("description: Some({})", diag_expr(desc)),
+        None => "description: None".to_string(),
+    });
+    fields.push(match default_value_description {
+        Some(dvd) => format!(
             "default_value_description: Some({})",
             default_value_description_expr(dvd)
-        ));
-    }
-    if show_in_simplified_help_view == Some(true) {
-        fields.push("show_in_simplified_help_view: true".to_string());
-    }
-    if let Some(cat) = category {
-        fields.push(format!("category: Some({})", diag_expr(cat)));
-    }
-    if let Some(ev) = extra_validation {
-        assert_eq!(ev, "locale", "gen-options: unknown extraValidation {ev}");
-        fields.push("extra_validation: ExtraValidation::Locale".to_string());
-    }
-    if let Some(min) = min_value {
-        fields.push(format!("min_value: {min}"));
-    }
-    if list_preserve_falsy_values == Some(true) {
-        fields.push("list_preserve_falsy_values: true".to_string());
-    }
-    if let Some(eo) = element_options {
-        let variant = match eo {
+        ),
+        None => "default_value_description: None".to_string(),
+    });
+    fields.push(format!(
+        "show_in_simplified_help_view: {}",
+        show_in_simplified_help_view.unwrap_or(false)
+    ));
+    fields.push(match category {
+        Some(cat) => format!("category: Some({})", diag_expr(cat)),
+        None => "category: None".to_string(),
+    });
+    fields.push(match extra_validation {
+        Some(ev) => {
+            assert_eq!(ev, "locale", "gen-options: unknown extraValidation {ev}");
+            "extra_validation: ExtraValidation::Locale".to_string()
+        }
+        None => "extra_validation: ExtraValidation::None".to_string(),
+    });
+    fields.push(format!("min_value: {}", min_value.unwrap_or(0)));
+    fields.push(format!(
+        "list_preserve_falsy_values: {}",
+        list_preserve_falsy_values.unwrap_or(false)
+    ));
+    let element_variant = match element_options {
+        Some(eo) => match eo {
             "compilerOptions" => "CompilerOptions",
             "typeAcquisition" => "TypeAcquisition",
             "extends" => "Extends",
             "tsconfigRoot" => "TsconfigRoot",
             other => panic!("gen-options: unknown elementOptions {other}"),
-        };
-        fields.push(format!(
-            "element_options: Some(ElementOptionsKind::{variant})"
-        ));
-    }
+        },
+        None => "None",
+    };
+    fields.push(format!("element_options: ElementOptionsKind::{element_variant}"));
     let mut out = String::new();
     let _ = writeln!(out, "CommandLineOption {{");
     for field in fields {
@@ -613,6 +668,49 @@ fn raw_declaration_literal(decl: &RawDeclaration, element_options: Option<&str>)
         decl.list_preserve_falsy_values,
         element_options,
     )
+}
+
+/// A `&CommandLineOption {...},` slice element, properly indented
+/// (`declaration_literal` emits at base indentation).
+///
+/// The trailing comma is load-bearing: without it the elements parse as a
+/// `expr & expr` bitwise-and chain instead of a list.
+fn slice_element(lit: &str) -> String {
+    let mut out = String::new();
+    for line in lit.trim_end().lines() {
+        if line == "}" {
+            out.push_str("    },\n");
+        } else if let Some(rest) = line.strip_prefix("CommandLineOption {") {
+            out.push_str("    &CommandLineOption {");
+            out.push_str(rest);
+            out.push('\n');
+        } else {
+            out.push_str("        ");
+            out.push_str(line.trim_start());
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// A `pub static NAME: CommandLineOption = CommandLineOption {...};` body
+/// (fields at 4 spaces, closing brace at column 0).
+fn static_body(lit: &str) -> String {
+    let mut out = String::new();
+    for line in lit.trim_end().lines() {
+        if line == "}" {
+            out.push_str("}\n");
+        } else if let Some(rest) = line.strip_prefix("CommandLineOption {") {
+            out.push_str("CommandLineOption {");
+            out.push_str(rest);
+            out.push('\n');
+        } else {
+            out.push_str("    ");
+            out.push_str(line.trim_start());
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// compilerDeclarations(): flatten compilerOptions with declarations into
@@ -950,8 +1048,9 @@ pub fn for_each_compiler_option_affecting_build_info(
             continue;
         }
         let field = snake_case_field(&opt.name, opt.go_name.as_ref());
-        let cond = not_zero(&format!("options.{field}"), &opt.ty);
-        let value = value_variant(&opt.ty, &format!("options.{field}"));
+        let ty = effective_go_type(opt);
+        let cond = not_zero(&format!("options.{field}"), &ty);
+        let value = value_variant(&ty, &format!("options.{field}"));
         let _ = writeln!(
             out,
             r#"    if {cond} {{
@@ -977,21 +1076,23 @@ fn emit_merge_compiler_option_fields(out: &mut String, model: &TsoptionsModel) {
 pub fn merge_compiler_option_fields(
     target_options: &mut CompilerOptions,
     source_options: &CompilerOptions,
-    explicit_null_fields: &collections::Set<String>,
+    explicit_null_fields: &Set<String>,
 ) {{"#
     );
     for opt in &model.compiler_options {
         let field = snake_case_field(&opt.name, opt.go_name.as_ref());
-        let zero = zero_expr(&opt.ty);
-        let nonzero = not_zero(&format!("source_options.{field}"), &opt.ty);
+        let ty = effective_go_type(opt);
+        let zero = zero_expr(&ty);
+        let nonzero = not_zero(&format!("source_options.{field}"), &ty);
         let _ = writeln!(
             out,
             r#"    if explicit_null_fields.has({name}) {{
         target_options.{field} = {zero};
     }} else if {nonzero} {{
-        target_options.{field} = source_options.{field}.clone();
+        target_options.{field} = source_options.{field}{clone};
     }}"#,
-            name = quote(&opt.name)
+            name = quote(&opt.name),
+            clone = clone_suffix(&ty)
         );
     }
     let _ = writeln!(out, "}}\n");
@@ -1127,13 +1228,13 @@ pub fn serialize_compiler_options(
                 let _ = writeln!(
                     out,
                     r#"    if {} {{
-        let value = serialize_compiler_option_enum({});
+        let value = serialize_compiler_option_enum(&{});
         if !value.is_empty() {{
             result.set({name}, CompilerOptionsValue::Str(value));
         }}
     }}"#,
-                    not_zero(&format!("options.{field}"), &opt.ty),
-                    value_variant(&opt.ty, &format!("options.{field}"))
+                    not_zero(&format!("options.{field}"), &effective_go_type(opt)),
+                    value_variant(&effective_go_type(opt), &format!("options.{field}"))
                 );
             }
             "Boolean" => {
@@ -1172,6 +1273,16 @@ pub fn serialize_compiler_options(
                 case_sensitivity,
             )),
         );
+    }}"#
+                    );
+                }
+                Some("sourceMapLocation") => {
+                    // Go: `result.Set("mapRoot", options.MapRoot)` — the raw
+                    // location string, not a serialized path.
+                    let _ = writeln!(
+                        out,
+                        r#"    if !options.{field}.is_empty() {{
+        result.set({name}, CompilerOptionsValue::Str(options.{field}.as_string().to_owned()));
     }}"#
                     );
                 }
@@ -1393,6 +1504,9 @@ pub fn emit_declarations_generated(model: &TsoptionsModel) -> String {
 // PORT notes (vs declarations_generated.go):
 //   - Go's `var X = []*CommandLineOption{...}` slices become `static`
 //     slices of `&CommandLineOption` (all fields are const-constructible).
+//     Rust literals are FULLY explicit (const literals cannot omit fields,
+//     and there is no field-update syntax in const position) — fields Go
+//     leaves unset carry their zero value here.
 //   - Go's map literals (commandLineOptionElements/EnumMap/Deprecated/
 //     targetToLibMap) become `match`-based lookup functions over statics —
 //     same entries, same membership semantics; Go map iteration order is
@@ -1410,7 +1524,6 @@ use tsc_core::options_generated::{
     JsxEmit, ModuleDetectionKind, ModuleKind, ModuleResolutionKind, NewLineKind, ScriptTarget,
 };
 use tsc_core::tristate::Tristate;
-use tsc_diagnostics::Message;
 
 use crate::commandlineoption::{
     CommandLineOption, CommandLineOptionKind, CommandLineOptionPathKind, CompilerOptionsValue,
@@ -1435,7 +1548,7 @@ use crate::commandlineoption::{
             "/// Go: `var {group} = []*CommandLineOption{{...}}`.\npub static {static_name}: &[&CommandLineOption] = &["
         );
         for lit in literals {
-            let _ = writeln!(out, "    &{}", lit.trim_end());
+            let _ = write!(out, "{}", slice_element(lit));
         }
         let _ = writeln!(out, "];\n");
     }
@@ -1446,7 +1559,7 @@ use crate::commandlineoption::{
         "/// Go: `var typeAcquisitionDecls = []*CommandLineOption{{...}}`.\npub static TYPE_ACQUISITION_DECLS: &[&CommandLineOption] = &["
     );
     for decl in &model.type_acquisition {
-        let _ = writeln!(out, "    &{}", raw_declaration_literal(decl, None).trim_end());
+        let _ = write!(out, "{}", slice_element(&raw_declaration_literal(decl, None)));
     }
     let _ = writeln!(out, "];\n");
 
@@ -1473,8 +1586,8 @@ pub fn build_opts() -> Vec<&'static CommandLineOption> {{
         let static_name = element_static_name(name);
         let _ = writeln!(
             out,
-            "/// Go: `commandLineOptionElements[{key}]`.\nstatic {static_name}: CommandLineOption = {}",
-            raw_declaration_literal(decl, None).trim_end(),
+            "/// Go: `commandLineOptionElements[{key}]`.\nstatic {static_name}: CommandLineOption = {};",
+            static_body(&raw_declaration_literal(decl, None)),
             key = quote(name),
         );
     }
@@ -1497,7 +1610,7 @@ pub fn build_opts() -> Vec<&'static CommandLineOption> {{
     let _ = writeln!(
         out,
         "/// Go: `var TscBuildOption = CommandLineOption{{...}}`.\npub static TSC_BUILD_OPTION: CommandLineOption = {};",
-        raw_declaration_literal(build, None).trim_end()
+        static_body(&raw_declaration_literal(build, None))
     );
     let _ = writeln!(
         out,
@@ -1505,7 +1618,7 @@ pub fn build_opts() -> Vec<&'static CommandLineOption> {{
     );
     let _ = writeln!(out, "    &TSC_BUILD_OPTION,");
     for decl in &model.build_options[1..] {
-        let _ = writeln!(out, "    &{}", raw_declaration_literal(decl, None).trim_end());
+        let _ = write!(out, "{}", slice_element(&raw_declaration_literal(decl, None)));
     }
     let _ = writeln!(out, "];\n");
 
@@ -1520,15 +1633,15 @@ pub fn build_opts() -> Vec<&'static CommandLineOption> {{
         };
         let _ = writeln!(
             out,
-            "/// Go: `var {variable} = &CommandLineOption{{...}}`.\npub static {}: CommandLineOption = {}",
+            "/// Go: `var {variable} = &CommandLineOption{{...}}`.\npub static {}: CommandLineOption = {};",
             upper_static_name(variable),
-            raw_declaration_literal(decl, element_options).trim_end()
+            static_body(&raw_declaration_literal(decl, element_options))
         );
     }
     // tsconfigRootOptionsMap
     let _ = writeln!(
         out,
-        "/// Go: `var tsconfigRootOptionsMap = &CommandLineOption{{ Name: \"undefined\", ... }}` —\n/// the element options list is built lazily from the root declarations in namemap.rs.\npub static TSCONFIG_ROOT_OPTIONS_MAP: CommandLineOption = CommandLineOption {{\n    name: \"undefined\",\n    kind: CommandLineOptionKind::Object,\n    element_options: Some(ElementOptionsKind::TsconfigRoot),\n}};\n"
+        "/// Go: `var tsconfigRootOptionsMap = &CommandLineOption{{ Name: \"undefined\", ... }}` —\n/// the element options list is built lazily from the root declarations in namemap.rs.\npub static TSCONFIG_ROOT_OPTIONS_MAP: CommandLineOption = CommandLineOption {{\n    name: \"undefined\",\n    kind: CommandLineOptionKind::Object,\n    short_name: \"\",\n    path_kind: CommandLineOptionPathKind::None,\n    is_file_path: false,\n    is_tsconfig_only: false,\n    is_command_line_only: false,\n    description: None,\n    default_value_description: None,\n    show_in_simplified_help_view: false,\n    category: None,\n    extra_validation: ExtraValidation::None,\n    min_value: 0,\n    list_preserve_falsy_values: false,\n    element_options: ElementOptionsKind::TsconfigRoot,\n}};\n"
     );
 
     // enum option maps (LibMap etc.) — OnceLock-built OrderedMaps

@@ -60,21 +60,24 @@ pub fn is_implicit_glob(last_path_component: &str) -> bool {
     !last_path_component.contains(['.', '*', '?'])
 }
 
-fn get_include_base_path(absolute: &str) -> &str {
+fn get_include_base_path<'a>(absolute: &'a str) -> std::borrow::Cow<'a, str> {
     let wildcard_offset = absolute.find(['*', '?']);
     let Some(wildcard_offset) = wildcard_offset else {
         // No "*" or "?" in the path
         if !has_extension(absolute) {
-            return absolute;
+            return std::borrow::Cow::Borrowed(absolute);
         }
-        return remove_trailing_directory_separator(get_directory_path(absolute).as_ref());
+        let directory_path = get_directory_path(absolute);
+        return std::borrow::Cow::Owned(
+            remove_trailing_directory_separator(&directory_path).into_owned(),
+        );
     };
     let root_length = get_root_length(absolute) as i64;
     let last_index = absolute[..wildcard_offset]
         .rfind(DIRECTORY_SEPARATOR)
         .map(|i| i as i64)
         .unwrap_or(-1);
-    &absolute[..last_index.max(root_length) as usize]
+    std::borrow::Cow::Borrowed(&absolute[..last_index.max(root_length) as usize])
 }
 
 // getBasePaths computes the unique non-wildcard base paths amongst the
@@ -101,10 +104,8 @@ fn get_base_paths(
                 normalize_path(&combine_paths(path.as_string(), &[include.as_str()])).into_owned()
             };
             // Append the literal and canonical candidate base paths.
-            include_base_paths.push(to_rooted_directory_path(
-                get_include_base_path(&absolute),
-                path,
-            ));
+            let base = get_include_base_path(&absolute);
+            include_base_paths.push(to_rooted_directory_path(&base, path));
         }
 
         // Sort the offsets array using either the literal or canonical path
@@ -524,10 +525,11 @@ impl GlobPattern {
             if seg.kind != SegmentKind::Literal {
                 continue;
             }
-            let mut lit = seg.literal.as_str();
-            if self.case_sensitivity.is_case_insensitive() {
-                lit = &lit.to_lowercase();
-            }
+            let lit = if self.case_sensitivity.is_case_insensitive() {
+                seg.literal.to_lowercase()
+            } else {
+                seg.literal.clone()
+            };
             if lit.contains(".min.js") || lit.contains(".min.") {
                 return true;
             }

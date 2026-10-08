@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::sync::OnceLock;
 
 use tsc_ast::SourceFile;
-use tsc_core::compileroptions::{CompilerOptions, JsxEmit};
+use tsc_core::options_generated::{CompilerOptions, JsxEmit};
 use tsc_diagnostics::Message;
 use tsc_semver::{Version, must_parse, try_parse_version_range};
 use tsc_tspath::{
@@ -21,7 +21,7 @@ use crate::types::ResolvedModule;
 // already ported in tsc-core, so no in-crate shim is needed).
 fn type_script_version() -> &'static Version {
     static TYPE_SCRIPT_VERSION: OnceLock<Version> = OnceLock::new();
-    TYPE_SCRIPT_VERSION.get_or_init(|| must_parse(tsc_core::version()))
+    TYPE_SCRIPT_VERSION.get_or_init(|| must_parse(tsc_core::version::version()))
 }
 
 #[allow(non_upper_case_globals)]

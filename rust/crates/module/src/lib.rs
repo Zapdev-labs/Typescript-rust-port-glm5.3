@@ -28,29 +28,29 @@ pub mod util;
 pub mod vfsmatch;
 
 pub use cache::{
-    ModeAwareCache, ModeAwareCacheKey, ResolutionData, get_redirect_config_name,
-    new_resolution_data,
+    ResolutionData, get_redirect_config_name, new_resolution_data,
 };
 pub use resolver::{
     DefaultResolver, DiagAndArgs, Ending, ParsedPatterns, ResolvedEntrypoint, ResolverOptions,
     get_automatic_type_directive_names, get_compiler_options_with_redirect, get_conditions,
-    match_pattern_or_exact, new_resolver, new_resolver_with_options, resolve_config,
-    try_parse_patterns,
+    get_node_resolution_features, match_pattern_or_exact, new_resolver,
+    new_resolver_with_options, resolve_config, try_parse_patterns,
 };
 pub use staticresolver::{
     NewStaticResolutionsResult, StaticResolutionEntry, StaticResolutions, StaticResolver,
     new_static_resolver, new_static_resolutions,
 };
 pub use types::{
-    NodeResolutionFeatures, PackageId, ResolvedModule, ResolvedProjectReference, ResolvedTypeReferenceDirective,
-    ResolutionHost, Resolver,
+    ModeAwareCache, ModeAwareCacheKey, NodeResolutionFeatures, PackageId, ResolveModuleNameResult,
+    ResolveTypeReferenceDirectiveResult, ResolvedModule, ResolvedProjectReference,
+    ResolvedTypeReferenceDirective, ResolutionHost, Resolver,
 };
 pub use util::{
-    ComparePatternKeys as compare_pattern_keys, GetPackageNameFromTypesPackageName,
-    GetResolutionDiagnostic, GetTypesPackageName, InferredTypesContainingFile,
-    IsApplicableVersionedTypesKey, MangleScopedPackageName, NodeModulePackageRootForDirectory,
-    NodeModulePackageRootForFile, ParsePackageName, TryGetJSExtensionForFile,
-    TryGetJSExtensionForFileName, UnmangleScopedPackageName,
+    InferredTypesContainingFile, compare_pattern_keys, get_package_name_from_types_package_name,
+    get_resolution_diagnostic, get_types_package_name, is_applicable_versioned_types_key,
+    mangle_scoped_package_name, node_module_package_root_for_directory,
+    node_module_package_root_for_file, parse_package_name, try_get_js_extension_for_file,
+    try_get_js_extension_for_file_name, unmangle_scoped_package_name,
 };
 
 #[cfg(test)]

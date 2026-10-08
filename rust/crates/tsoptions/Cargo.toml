@@ -1,0 +1,23 @@
+[package]
+name = "tsc-tsoptions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rustc-hash = { workspace = true }
+
+tsc-ast = { path = "../ast" }
+tsc-collections = { path = "../collections" }
+tsc-core = { path = "../core" }
+tsc-diagnostics = { path = "../diagnostics" }
+tsc-glob = { path = "../glob" }
+tsc-json = { path = "../json" }
+tsc-locale = { path = "../locale" }
+tsc-scanner = { path = "../scanner" }
+tsc-tspath = { path = "../tspath" }
+tsc-vfs = { path = "../vfs" }

@@ -259,8 +259,12 @@ fn index_corpus(dir: &str) -> Result<(Vec<BenchFile>, i64), String> {
     walk(&abs, &abs, &mut paths, &mut read_errs)?;
 
     // WalkDir is depth-first lexical per directory; sort globally by path so
-    // both drivers walk the identical order (contract CLI rule).
-    paths.sort();
+    // both drivers walk the identical order (contract CLI rule). Go sorts the
+    // raw path STRINGS (`sort.Strings`): a file `declarations.ts` sorts
+    // before the directory `declarations/` ('.' 0x2E < '/' 0x2F), where
+    // PathBuf's component-wise Ord puts the directory first — compare the
+    // encoded path bytes (OsStr) to mirror the string sort exactly.
+    paths.sort_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
 
     let mut files = Vec::with_capacity(paths.len());
     for path in paths {
@@ -744,6 +748,84 @@ mod tests {
     // ── (b) corpus walk skip/sort/extension logic over a tempdir fixture ──
     #[test]
     fn corpus_walk_skip_sort_extension() {
+        let root = temp_fixture("walk");
+        write(&root.join("b.tsx"), "let x = 1;\n");
+        write(&root.join("a.ts"), "let a = 1;\n");
+        write(&root.join("c.mts"), "");
+        write(&root.join("d.cts"), "");
+        write(&root.join("e.d.ts"), "declare const e: number;\n");
+        write(&root.join("UP.TS"), ""); // Go lowercases: indexed
+        write(&root.join("skip.js"), ""); // wrong extension
+        write(&root.join("noext"), "");
+        write(&root.join("x.txt"), "");
+        for skip in SKIP_DIRS {
+            let dir = root.join(skip);
+            std::fs::create_dir_all(&dir).unwrap();
+            write(&dir.join("inside.ts"), "SHOULD NOT BE INDEXED");
+        }
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        write(&sub.join("z.ts"), "");
+
+        let (files, read_errs) = index_corpus(root.to_str().unwrap()).unwrap();
+        let names: Vec<&str> = files.iter().map(|f| f.file_name.base_name()).collect();
+        // Sorted by path, skip dirs excluded, .d.ts/.TS indexed, others not.
+        assert_eq!(
+            names,
+            vec!["UP.TS", "a.ts", "b.tsx", "c.mts", "d.cts", "e.d.ts", "z.ts"]
+        );
+        assert_eq!(read_errs, 0);
+        // Bytes come from the raw file content (UTF-8 passthrough):
+        // b.tsx "let x = 1;\n" (11) + a.ts "let a = 1;\n" (11)
+        // + e.d.ts "declare const e: number;\n" (25); the rest are empty.
+        assert_eq!(files.iter().map(|f| f.bytes).sum::<i64>(), 47);
+        // Precomputed parse inputs (contract rule 4): FileName + PathKey.
+        for f in &files {
+            assert_eq!(f.path_key.as_string(), f.file_name.as_string());
+            assert_ne!(f.file_name.as_string(), "");
+        }
+        let tsx = files.iter().find(|f| f.file_name.base_name() == "b.tsx").unwrap();
+        assert_eq!(tsx.script_kind, ScriptKind::TSX);
+        let ts = files.iter().find(|f| f.file_name.base_name() == "a.ts").unwrap();
+        assert_eq!(ts.script_kind, ScriptKind::TS);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // ── (b') file/dir prefix collision: the global sort is Go's raw-path
+    // STRING sort, not PathBuf's component-wise Ord — `declarations.ts`
+    // ('.' 0x2E) sorts before `declarations/` ('/' 0x2F). Found by the
+    // full-corpus dump diff (tsc/testdata fixtures/compiler/transformers).
+    // Aggregates are commutative sums, so parse parity held regardless —
+    // the dump's per-file slot order exposed it. ──
+    #[test]
+    fn corpus_walk_sorts_by_raw_path_bytes_not_components() {
+        let root = temp_fixture("walk-collision");
+        std::fs::create_dir_all(root.join("declarations")).unwrap();
+        write(&root.join("declarations").join("diagnostics.ts"), "");
+        write(&root.join("declarations.ts"), "");
+        write(&root.join("declarations2.ts"), ""); // control: normal order
+
+        let (files, read_errs) = index_corpus(root.to_str().unwrap()).unwrap();
+        let rels: Vec<String> = files
+            .iter()
+            .map(|f| {
+                f.file_name
+                    .as_string()
+                    .strip_prefix(root.to_str().unwrap())
+                    .unwrap()
+                    .trim_start_matches('/')
+                    .to_string()
+            })
+            .collect();
+        // Go `sort.Strings` on raw paths: `declarations.ts` < `declarations/`
+        // < `declarations2.ts`; PathBuf's component Ord would put the
+        // directory first.
+        assert_eq!(rels, vec!["declarations.ts", "declarations/diagnostics.ts", "declarations2.ts"]);
+        assert_eq!(read_errs, 0);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
         let root = temp_fixture("walk");
         write(&root.join("b.tsx"), "let x = 1;\n");
         write(&root.join("a.ts"), "let a = 1;\n");

@@ -52,9 +52,13 @@ pub fn new_static_resolutions(
     current_directory: RootedDirectoryPath,
     case_sensitivity: CaseSensitivity,
 ) -> NewStaticResolutionsResult {
+    let entries_count = entries.len();
+    let mut entries: FxHashMap<StaticResolutionKey, Option<Arc<ResolvedModule>>> =
+        FxHashMap::default();
+    entries.reserve(entries_count);
     let mut resolutions = StaticResolutions {
         fallback_to_resolver,
-        entries: FxHashMap::with_capacity(entries.len()),
+        entries,
         current_directory,
         case_sensitivity,
     };

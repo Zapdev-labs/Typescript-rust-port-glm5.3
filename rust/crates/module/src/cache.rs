@@ -3,12 +3,13 @@
 use std::sync::Arc;
 
 use tsc_collections::{OrderedMap, SyncMap};
-use tsc_core::compileroptions::{CompilerOptions, ResolutionMode};
+use tsc_core::compileroptions::ResolutionMode;
+use tsc_core::options_generated::CompilerOptions;
 use tsc_packagejson::{InfoCache, InfoCacheEntry, new_info_cache};
 use tsc_tspath::{CaseSensitivity, PathKey, RootedDirectoryPath, RootedFilePath};
 
-use crate::resolver::{ParsedPatterns, ResolvedModule, ResolvedTypeReferenceDirective, try_parse_patterns};
-use crate::types::{ResolvedProjectReference, ResolverOptions};
+use crate::resolver::{ParsedPatterns, ResolverOptions, try_parse_patterns};
+use crate::types::{ResolvedModule, ResolvedProjectReference, ResolvedTypeReferenceDirective};
 
 // moduleResolutionCacheKey is the cache key for a module name resolution.
 //
@@ -208,7 +209,7 @@ impl ResolutionData {
     }
 }
 
-pub(crate) fn new_resolution_data(opts: &ResolverOptions) -> Arc<ResolutionData> {
+pub fn new_resolution_data(opts: &ResolverOptions) -> Arc<ResolutionData> {
     let package_json_info_cache = match &opts.package_json_cache {
         Some(cache) => Arc::new(cache.clone()),
         None => Arc::new(new_info_cache(opts.host.fs().case_sensitivity())),

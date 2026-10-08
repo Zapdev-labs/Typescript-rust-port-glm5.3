@@ -1,0 +1,17 @@
+[package]
+name = "tsc-contentmapper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tsc-ast = { path = "../ast" }
+tsc-collections = { path = "../collections" }
+tsc-core = { path = "../core" }
+tsc-diagnostics = { path = "../diagnostics" }
+tsc-json = { path = "../json" }
+tsc-tspath = { path = "../tspath" }
