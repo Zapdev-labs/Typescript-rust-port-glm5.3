@@ -182,7 +182,7 @@ fn extension_replacement_preserves_empty_and_dot_stems() {
         let mut state = state_for(
             &resolver,
             CompilerOptions {
-                module_suffixes: vec![".native".to_string(), String::new()],
+                module_suffixes: Some(vec![".native".to_string(), String::new()]),
                 ..Default::default()
             },
         );

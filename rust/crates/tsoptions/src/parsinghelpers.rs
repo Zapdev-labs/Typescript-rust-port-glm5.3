@@ -94,6 +94,19 @@ pub fn parse_string_array(value: &CompilerOptionsValue) -> Vec<String> {
     }
 }
 
+/// Go: `ParseStringArray` — a non-array value (including nil) yields Go nil,
+/// so this returns `None` there and `Some` for any array (including an
+/// explicit empty one). Feeds the core `Option<Vec<_>>` slice fields, keeping
+/// `"types": []` (Go non-nil empty) distinct from an absent key (Go nil).
+pub fn parse_string_array_option(value: &CompilerOptionsValue) -> Option<Vec<String>> {
+    match value {
+        CompilerOptionsValue::StrArray(_) | CompilerOptionsValue::Array(_) => {
+            Some(parse_string_array(value))
+        }
+        _ => None,
+    }
+}
+
 /// Go: `func parseStringMap(value any) *collections.OrderedMap[string, []string]`.
 pub fn parse_string_map(value: &CompilerOptionsValue) -> Option<OrderedMap<String, Vec<String>>> {
     match value {
@@ -156,6 +169,27 @@ pub fn parse_directory_names(value: &CompilerOptionsValue) -> Vec<RootedDirector
             }
         })
         .collect()
+}
+
+/// Go: `parseDirectoryNames` = `core.Map(ParseStringArray(value), ...)` —
+/// `core.Map` of a nil slice is nil, so a non-array value yields `None`
+/// (mirroring Go nil); any array yields `Some` (possibly empty, never nil,
+/// exactly as Go's Map allocates).
+pub fn parse_directory_names_option(
+    value: &CompilerOptionsValue,
+) -> Option<Vec<RootedDirectoryPath>> {
+    parse_string_array_option(value).map(|paths| {
+        paths
+            .into_iter()
+            .map(|path| {
+                if path.is_empty() {
+                    RootedDirectoryPath::default()
+                } else {
+                    rooted_directory_path_from_normalized(&path)
+                }
+            })
+            .collect()
+    })
 }
 
 /// Go: `func toSourceMapLocation` — tspath.ToSourceMapLocation(ParseString(value)).

@@ -1418,13 +1418,11 @@ impl ResolutionState<'_> {
     // fails, for declaration file lookups. Returns nil if typeRoots is not
     // configured or if no matching module is found in any typeRoot directory.
     fn resolve_from_type_root(&mut self) -> Option<Resolved> {
-        // Go: `if r.compilerOptions.TypeRoots == nil` — an explicitly empty
-        // `typeRoots` array still resolves (loop body never runs); only an
-        // absent key returns early.
-        if self.compiler_options.type_roots.is_none() {
-            return None;
-        }
-        for type_root in self.compiler_options.type_roots.clone().unwrap() {
+        // Go: `if r.compilerOptions.TypeRoots == nil { return nil }` — an
+        // explicitly empty `typeRoots` array still resolves (loop body never
+        // runs); only an absent key returns early.
+        let type_roots = self.compiler_options.type_roots.clone()?;
+        for type_root in type_roots {
             let candidate = self.get_candidate_from_type_root(&type_root);
             let directory_exists = self.resolver.fs.directory_exists(&type_root);
             if !directory_exists {
@@ -4228,7 +4226,9 @@ pub fn get_automatic_type_directive_names(
     fs: &dyn Fs,
 ) -> Vec<String> {
     if !options.uses_wildcard_types() {
-        return options.types.clone();
+        // Go returns the nil-able Types slice; callers only iterate, so None
+        // (Go nil) presents as empty here.
+        return options.types.clone().unwrap_or_default();
     }
 
     // Walk the primary type lookup locations
@@ -4262,7 +4262,7 @@ pub fn get_automatic_type_directive_names(
     // Order potentially matters in program construction, so substitute
     // in the wildcard in the position it was specified in the types array
     let mut result: Vec<String> = Vec::new();
-    for t in &options.types {
+    for t in options.types.iter().flatten() {
         if t == "*" {
             result.extend(wildcard_matches.iter().cloned());
         } else {

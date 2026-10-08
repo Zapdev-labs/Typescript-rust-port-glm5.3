@@ -46,7 +46,7 @@ fn test_command_line_parse_result() {
     assert!(parsed.errors.is_empty(), "errors: {:?}", parsed.errors.len());
     assert_eq!(
         parsed.compiler_options().lib,
-        vec!["lib.es2015.d.ts".to_string()]
+        Some(vec!["lib.es2015.d.ts".to_string()])
     );
     assert_eq!(parsed.root_file_names_for_diagnostics, vec!["0.ts"]);
 
@@ -55,10 +55,10 @@ fn test_command_line_parse_result() {
     assert!(parsed.errors.is_empty());
     assert_eq!(
         parsed.compiler_options().lib,
-        vec![
+        Some(vec![
             "lib.es5.d.ts".to_string(),
             "lib.es2015.symbol.wellknown.d.ts".to_string()
-        ]
+        ])
     );
 
     // Parse invalid option of library flags — an error is produced, the
@@ -67,7 +67,7 @@ fn test_command_line_parse_result() {
     assert_eq!(parsed.errors.len(), 1);
     assert_eq!(
         parsed.compiler_options().lib,
-        vec!["lib.es5.d.ts".to_string()]
+        Some(vec!["lib.es5.d.ts".to_string()])
     );
 
     // Parse empty options of --jsx (last argument, enum kind).
@@ -78,15 +78,15 @@ fn test_command_line_parse_result() {
     let parsed = parse(&["0.ts", "--module"]);
     assert!(!parsed.errors.is_empty());
 
-    // Parse empty options of --lib: sets the empty list, one type error.
+    // Parse empty options of --lib: sets the empty (non-nil) list, one type error.
     let parsed = parse(&["0.ts", "--lib"]);
-    assert!(parsed.compiler_options().lib.is_empty());
+    assert_eq!(parsed.compiler_options().lib, Some(Vec::new()));
     assert_eq!(parsed.errors.len(), 1);
 
     // Parse immediately following command line argument of --lib: the
     // "-sourcemap"-prefixed next argument is not consumed as a lib value.
     let parsed = parse(&["0.ts", "--lib", "--sourcemap"]);
-    assert!(parsed.compiler_options().lib.is_empty());
+    assert_eq!(parsed.compiler_options().lib, Some(Vec::new()));
 
     // Parse explicit boolean flag value.
     let parsed = parse(&["--strictNullChecks", "false", "0.ts"]);
@@ -219,7 +219,7 @@ fn test_parse_command_line_type_roots_relative_path() {
         fs.as_ref(),
         &current_directory,
     );
-    let type_roots = &parsed.compiler_options().type_roots;
+    let type_roots = parsed.compiler_options().type_roots.as_deref().unwrap();
     assert_eq!(type_roots.len(), 1);
     assert_eq!(type_roots[0].as_string(), "/home/project/t");
 }
@@ -230,7 +230,9 @@ fn test_parse_command_line_type_roots_relative_path() {
 fn test_custom_conditions_null_override() {
     let parsed = parse(&["--customConditions", "a,b", "--customConditions", "null"]);
     assert!(parsed.errors.is_empty(), "errors: {}", parsed.errors.len());
-    assert!(parsed.compiler_options().custom_conditions.is_empty());
+    // Go: the null override leaves CustomConditions nil — None here, NOT an
+    // explicitly-empty list.
+    assert!(parsed.compiler_options().custom_conditions.is_none());
     assert!(parsed.raw.get("customConditions").is_some());
     assert!(matches!(
         parsed.raw.get("customConditions"),

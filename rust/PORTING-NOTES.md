@@ -778,3 +778,87 @@ the root `node_modules/`+`dist` ignores so the tree actually commits).
   changes. Gate:
   `GOTOOLCHAIN=auto go run ./rust/bench/go-driver <cmd> --corpus <root>` vs
   `CARGO_TARGET_DIR=/tmp/tsrs-gates cargo run -p bench-harness -- <cmd> --corpus <root>`.
+
+## M4 Wave D+1 — core nil-vs-empty slice fields (gen-options + core + tsoptions + contentmapper + module)
+
+Closes the "Known divergence surfaced and deliberately left (tsc-core
+scope)" above: the full-repo showconfig corpus flagged exactly one file,
+`tsc/testdata/fixtures/compiler/tsconfig.json` (`"types": []` — Go emits
+`"types": [],`; the port dropped the key). Root cause: Go's slice-typed
+CompilerOptions fields distinguish nil (key absent) from non-nil empty
+(the JSON decode of an explicit `[]`); the port collapsed both into a
+plain `Vec` and its generated serializer tested `!is_empty()`.
+
+**Shape chosen: `Option<Vec<_>>`** (None = Go nil, `Some(empty)` = Go
+non-nil empty slice). It is the only faithful mapping because Go's
+machinery tests the fields three ways — `ParseStringArray(value)` returns
+nil for any non-array value (null/absent) and a non-nil slice for any
+array (even empty); `mergeCompilerOptionFields`'s explicit-null branch
+writes nil while its copy branch tests `!= nil`; and
+`serializeCompilerOptions` emits iff `!= nil`. `Option` reproduces all
+three exactly, and `a != b` on `Option<Vec<_>>` is literally Go's
+`(a == nil) != (b == nil) || !slices.Equal(a, b)` in Equals.
+
+**Field inventory (9 list fields, one generator `rust_type` change)**:
+CompilerOptions `custom_conditions`, `lib`, `module_suffixes`, `plugins`,
+`root_dirs`, `type_roots`, `types` + TypeAcquisition `include`/`exclude`
+(paths was already `Option<OrderedMap>` = Go's pointer). Go slices:
+`[]string`, `[]PluginImport`, `[]tspath.RootedDirectoryPath`.
+
+**gen-options changes** (generator + regen, no hand-edits of generated
+files; `cargo run -p gen-options -- --check` all four outputs current):
+- main.rs: `rust_type` maps the three slice types to `Option<Vec<...>>`;
+  PORT notes updated (header + Equals doc); the clone/equals parity test
+  now pins nil-vs-empty distinct and Some(empty)==Some(empty).
+- tsoptions.rs: `zero_expr` slices → `None` (Go's explicit-null writes
+  nil); `not_zero` slices → `.is_some()` (Go `!= nil`); `value_variant`
+  slices → `.clone().unwrap()` (guarded by is_some); `parser_assignment`
+  routes `[]string` → `parse_string_array_option` / `[]string`+directory →
+  `parse_directory_names_option` (see parsinghelpers below), lib/plugins
+  arms wrapped in `Some`; `emit_show_config` List arms test `.is_some()`
+  and emit `[]` for `Some(empty)` (Go: `if options.X != nil { Set }`);
+  configDir `[]string` arm (currently dead) rewritten for Option.
+- contentmapper emission: `string_array`/`plugin_imports`/
+  `rooted_directory_array` calls pass `options.X.as_deref()`. PORT note
+  fixed: Go's `reflect.Value.IsZero()` is false for a non-nil empty slice,
+  so `Some(empty)` marshals `[]` — the old "skip empty" was a divergence.
+
+**parsinghelpers.rs**: new `parse_string_array_option` /
+`parse_directory_names_option` — Go `ParseStringArray` returns nil for
+every non-`[]any` value (so null → None) and a non-nil slice for arrays;
+`parseDirectoryNames` = `core.Map(ParseStringArray(...))` and `core.Map`
+of nil is nil. The Vec-valued originals stay (paths-map values,
+rawcompileroptions finalize, the unresolvedPaths block).
+
+**contentmapper field_json.rs**: `string_array`/`plugin_imports`/
+`rooted_directory_array` take `Option<&[T]>` (None skip, Some(empty) →
+`[]`); `paths_map` drops its empty-map skip (Go IsZero tests the
+*pointer* — a non-nil empty map marshals `{}`).
+
+**Mechanical fallout (construction/read sites, all PORT-noted in
+source)**: core/compileroptions.rs (`get_effective_type_roots` now
+`.is_some()` = Go `TypeRoots != nil`; `uses_wildcard_types` over
+`as_deref().is_some_and`; `get_effective_root_dirs` returns
+`as_deref().unwrap_or(&[])` — Go returns the nil-able slice, callers only
+iterate; tests Some-wrapped); module/resolver.rs (`resolve_from_type_root`
+early-returns on None = Go `TypeRoots == nil`; `try_file` uses
+`is_none_or(is_empty)` = Go `len(...) == 0`; conditions capacity
+`map_or(0, Vec::len)` = Go `len(nil)`; `get_automatic_type_directive_names`
+`clone().unwrap_or_default()` for the nil-able return +
+`iter().flatten()`); module test literals `Some(vec![...])`;
+tsoptions tests now assert Go's exact semantics (`--lib` empty →
+`Some(Vec::new())`, `--customConditions null` → None — Go's
+TestCustomConditionsNullOverride asserts nil).
+
+- Validation: `cargo check --workspace` green;
+  `cargo test -p tsc-core -p tsc-tsoptions -p tsc-contentmapper -p
+  tsc-module -p bench-harness -p tsc-binder` all green (0 failed);
+  clippy zero warnings on all touched crates; `cargo run -p gen-options
+  -- --check` four outputs current; the dump twin re-verified
+  byte-identical (parse is a benchmark, driver-header/timings only).
+- Twin proof: known case `--tsconfig tsc/testdata/fixtures/compiler/
+  tsconfig.json` now byte-identical, Go's `"types": [],` emitted;
+  five twin parity runs byte-identical (showconfig tsconfig-matrix +
+  resolver-matrix, resolvereact resolver-matrix + tsconfig-matrix,
+  showconfig packages/typescript/tsconfig.json); whole-repo sweep
+  `showconfig --corpus .` (28 configs) — ZERO divergences (was 1).

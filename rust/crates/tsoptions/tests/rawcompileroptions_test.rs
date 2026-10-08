@@ -37,6 +37,7 @@ fn test_raw_compiler_options_finalize_paths() {
         options
             .root_dirs
             .iter()
+            .flatten()
             .map(|d| d.as_string())
             .collect::<Vec<_>>(),
         vec!["/project/src", "/project/generated"]
@@ -89,5 +90,5 @@ fn test_raw_compiler_options_round_trip_order() {
     let (options, _) = raw2.finalize(&rooted_directory_path_from_absolute("/project"));
     assert!(options.strict.is_true());
     assert_eq!(options.out_dir.as_string(), "/project/x");
-    assert_eq!(options.types, vec!["node".to_string()]);
+    assert_eq!(options.types, Some(vec!["node".to_string()]));
 }

@@ -439,9 +439,10 @@ fn parser_assignment(opt: &FullOption, target: &str) -> String {
         Some("file") => return format!("{target} = parse_file_name(value);"),
         Some("directory") => {
             return if opt.ty == "[]string" {
-                // PORT: Go parseDirectoryNames returns a non-nil slice; the
-                // Option<Vec> field wraps it in Some (Go nil only when unset).
-                format!("{target} = Some(parse_directory_names(value));")
+                // Go: parseDirectoryNames = core.Map(ParseStringArray(v), ...);
+                // core.Map of nil is nil, so the Option helper mirrors Go's
+                // nil-vs-non-nil slice exactly.
+                format!("{target} = parse_directory_names_option(value);")
             } else {
                 format!("{target} = parse_directory_name(value);")
             };
@@ -457,7 +458,7 @@ fn parser_assignment(opt: &FullOption, target: &str) -> String {
     match opt.name.as_str() {
         "lib" => {
             return format!(
-                "if let CompilerOptionsValue::StrArray(libs) = value {{ {target} = Some(libs.clone()); }} else {{ {target} = Some(parse_string_array(value)); }}"
+                "if let CompilerOptionsValue::StrArray(libs) = value {{ {target} = Some(libs.clone()); }} else {{ {target} = parse_string_array_option(value); }}"
             );
         }
         "plugins" => {
@@ -471,10 +472,11 @@ fn parser_assignment(opt: &FullOption, target: &str) -> String {
         "Tristate" => "parse_tristate(value)".to_string(),
         "string" => "parse_string(value)".to_string(),
         "*int" => "parse_number(value)".to_string(),
-        // PORT: Go's parser assigns the (non-nil) slice the JSON decode
-        // produced; `Some(...)` marks the field as explicitly set — including
-        // an explicit empty `[]`, which must not collapse into unset.
-        "[]string" => "Some(parse_string_array(value))".to_string(),
+        // Go: `ParseStringArray(value)` — nil in (a null/absent/non-array
+        // value) gives Go nil, an array gives a non-nil slice (even when
+        // empty). The Option helper mirrors that exactly on the core
+        // `Option<Vec<_>>` fields.
+        "[]string" => "parse_string_array_option(value)".to_string(),
         "*collections.OrderedMap[string, []string]" => "parse_string_map(value)".to_string(),
         "[]PluginImport" => panic!("gen-options: Plugin options require the plugin parser"),
         other => format!(
@@ -1467,9 +1469,9 @@ use crate::commandlineoption::{CommandLineOption, CommandLineOptionKind, Compile
 use crate::namemap::{build_name_map, command_line_compiler_options_map};
 use crate::parsinghelpers::{
     get_substituted_path_with_config_dir_template, get_substituted_string_array_with_config_dir_template,
-    parse_directory_name, parse_directory_names, parse_file_name, parse_file_or_directory_name,
-    parse_number, parse_string, parse_string_array, parse_string_map, parse_tristate,
-    to_source_map_location,
+    parse_directory_name, parse_directory_names_option, parse_file_name, parse_file_or_directory_name,
+    parse_number, parse_string, parse_string_array, parse_string_array_option, parse_string_map,
+    parse_tristate, to_source_map_location,
 };
 use crate::showconfig::{serialize_compiler_option_enum_list, serialize_compiler_option_path};
 use crate::tsconfigparsing::ParsedCompilerOptions;

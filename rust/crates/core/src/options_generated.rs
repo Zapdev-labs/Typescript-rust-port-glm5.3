@@ -8,9 +8,11 @@
 // PORT notes (vs options_generated.go):
 //   - Go's `noCopy` embed and json tags have no Rust counterpart; dropped.
 //   - Go `*int` -> `Option<i64>` (Go int is 64-bit here).
-//   - Go's slice nil-vs-empty distinction collapses: nil -> empty Vec, and
-//     the generated Equals compares Vec values (Go's
-//     `(a == nil) != (b == nil) || !slices.Equal(a, b)` reduces to `a != b`).
+//   - Go slice fields keep their nil-vs-empty distinction: `[]T` ->
+//     `Option<Vec<T>>` (None = Go nil, Some(empty) = Go non-nil empty
+//     slice, e.g. an explicit `"types": []` in a tsconfig). The generated
+//     Equals compares `Option`s, which is exactly Go's
+//     `(a == nil) != (b == nil) || !slices.Equal(a, b)`.
 //   - `Clone` (Go's generated method) -> `#[derive(Clone)]` (same shallow,
 //     field-by-field copy semantics).
 //   - Value-alias enum members (`ScriptTargetLatest` = `ScriptTargetESNext`)
@@ -45,7 +47,7 @@ pub struct CompilerOptions {
     pub allow_unused_labels: Tristate,
     pub assume_changes_only_affect_direct_dependencies: Tristate,
     pub check_js: Tristate,
-    pub custom_conditions: Vec<String>,
+    pub custom_conditions: Option<Vec<String>>,
     pub composite: Tristate,
     pub emit_declaration_only: Tristate,
     pub emit_bom: Tristate,
@@ -75,13 +77,13 @@ pub struct CompilerOptions {
     pub jsx_factory: String,
     pub jsx_fragment_factory: String,
     pub jsx_import_source: String,
-    pub lib: Vec<String>,
+    pub lib: Option<Vec<String>>,
     pub lib_replacement: Tristate,
     pub locale: String,
     pub map_root: SourceMapLocation,
     pub module: ModuleKind,
     pub module_resolution: ModuleResolutionKind,
-    pub module_suffixes: Vec<String>,
+    pub module_suffixes: Option<Vec<String>>,
     pub module_detection: ModuleDetectionKind,
     pub new_line: NewLineKind,
     pub no_emit: Tristate,
@@ -104,7 +106,7 @@ pub struct CompilerOptions {
     pub out_dir: RootedDirectoryPath,
     pub paths: Option<OrderedMap<String, Vec<String>>>,
     /// Plugins are parsed only so tools can report that native TypeScript does not support them.
-    pub plugins: Vec<PluginImport>,
+    pub plugins: Option<Vec<PluginImport>>,
     pub preserve_const_enums: Tristate,
     pub preserve_symlinks: Tristate,
     pub project: RootedPath,
@@ -115,7 +117,7 @@ pub struct CompilerOptions {
     pub rewrite_relative_import_extensions: Tristate,
     pub react_namespace: String,
     pub root_dir: RootedDirectoryPath,
-    pub root_dirs: Vec<RootedDirectoryPath>,
+    pub root_dirs: Option<Vec<RootedDirectoryPath>>,
     pub skip_lib_check: Tristate,
     pub stable_type_ordering: Tristate,
     pub strict: Tristate,
@@ -132,8 +134,8 @@ pub struct CompilerOptions {
     pub target: ScriptTarget,
     pub trace_resolution: Tristate,
     pub ts_build_info_file: RootedFilePath,
-    pub type_roots: Vec<RootedDirectoryPath>,
-    pub types: Vec<String>,
+    pub type_roots: Option<Vec<RootedDirectoryPath>>,
+    pub types: Option<Vec<String>>,
     pub use_define_for_class_fields: Tristate,
     pub use_unknown_in_catch_variables: Tristate,
     pub verbatim_module_syntax: Tristate,
@@ -186,10 +188,11 @@ impl CompilerOptions {
     /// Paths are compared by ordered entries, ignoring backing-storage allocation.
     ///
     /// PORT: Go's generated `Equals` is mirrored field-for-field in declaration
-    /// order. The Go slice nil-vs-empty distinction collapses (fields are
-    /// plain `Vec`s, so `(a == nil) != (b == nil) || !slices.Equal(a, b)`
-    /// reduces to `a != b`); the `*int` and `Paths` nil handling is exact via
-    /// `Option`. Go's `options == other` pointer shortcut has no counterpart.
+    /// order. Slice fields are `Option<Vec<_>>`, so `a != b` is exactly Go's
+    /// `(a == nil) != (b == nil) || !slices.Equal(a, b)` (nil and explicitly-
+    /// empty are distinct, as in Go); the `*int` and `Paths` nil handling is
+    /// exact via `Option`. Go's `options == other` pointer shortcut has no
+    /// counterpart.
     pub fn equals(&self, other: &CompilerOptions) -> bool {
         if self.allow_js != other.allow_js {
             return false;
@@ -858,8 +861,8 @@ impl fmt::Display for JsxEmit {
 #[derive(Clone, Debug, Default)]
 pub struct TypeAcquisition {
     pub enable: Tristate,
-    pub include: Vec<String>,
-    pub exclude: Vec<String>,
+    pub include: Option<Vec<String>>,
+    pub exclude: Option<Vec<String>>,
     pub disable_filename_based_type_acquisition: Tristate,
 }
 
@@ -1066,7 +1069,7 @@ mod options_generated_test {
         let options = CompilerOptions {
             allow_js: Tristate::TSTrue,
             target: ScriptTarget::ES2020,
-            lib: vec!["lib.es2015.d.ts".to_string()],
+            lib: Some(vec!["lib.es2015.d.ts".to_string()]),
             max_node_module_js_depth: Some(2),
             ..CompilerOptions::default()
         };
@@ -1083,9 +1086,20 @@ mod options_generated_test {
         other.max_node_module_js_depth = None;
         assert!(!options.equals(&other));
 
+        // Go: nil and explicitly-empty slices are distinct (Equals'
+        // `(a == nil) != (b == nil)` arm)...
         let mut other = clone.clone();
-        other.lib = Vec::new();
+        other.lib = None;
         assert!(!options.equals(&other));
+        let mut other = clone.clone();
+        other.lib = Some(Vec::new());
+        assert!(!options.equals(&other));
+        // ...and two equal non-nil slices (empty or not) are equal.
+        let mut a = clone.clone();
+        let mut b = clone.clone();
+        a.lib = Some(Vec::new());
+        b.lib = Some(Vec::new());
+        assert!(a.equals(&b));
 
         let mut other = clone.clone();
         let mut paths = OrderedMap::new();

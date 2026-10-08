@@ -8,8 +8,9 @@
 // PORT notes (vs options_generated.go):
 //   - Go's `any` option values become `CompilerOptionsValue` (commandlineoption.rs),
 //     which models exactly the dynamic types that flow through the option maps.
-//   - Go's nil-vs-empty slice distinction collapses to empty Vec (same as the
-//     core options_generated.rs PORT note).
+//   - Go's nil-vs-empty slice distinction is exact via the core fields'
+//     `Option<Vec<_>>` (None = Go nil; `Some(parse_string_array(value))`
+//     keeps an explicit `[]` distinct from unset, as Go's JSON decode does).
 //   - `floatOrInt32ToFlag[T]` becomes the per-enum `as_<T>_flag()` value accessors.
 //   - Typed path values passed to ForEachCompilerOptionAffectingBuildInfo are
 //     carried as their JSON (string) form — identical once marshaled.
@@ -31,8 +32,9 @@ use crate::namemap::{build_name_map, command_line_compiler_options_map};
 use crate::parsinghelpers::{
     get_substituted_path_with_config_dir_template,
     get_substituted_string_array_with_config_dir_template, parse_directory_name,
-    parse_directory_names, parse_file_name, parse_file_or_directory_name, parse_number,
-    parse_string, parse_string_array, parse_string_map, parse_tristate, to_source_map_location,
+    parse_directory_names_option, parse_file_name, parse_file_or_directory_name, parse_number,
+    parse_string, parse_string_array, parse_string_array_option, parse_string_map, parse_tristate,
+    to_source_map_location,
 };
 use crate::showconfig::{serialize_compiler_option_enum_list, serialize_compiler_option_path};
 use crate::tsconfigparsing::ParsedCompilerOptions;
@@ -76,7 +78,7 @@ pub fn parse_compiler_options(
             all_options.check_js = parse_tristate(value);
         }
         "customConditions" => {
-            all_options.custom_conditions = parse_string_array(value);
+            all_options.custom_conditions = parse_string_array_option(value);
         }
         "composite" => {
             all_options.composite = parse_tristate(value);
@@ -167,9 +169,9 @@ pub fn parse_compiler_options(
         }
         "lib" => {
             if let CompilerOptionsValue::StrArray(libs) = value {
-                all_options.lib = libs.clone();
+                all_options.lib = Some(libs.clone());
             } else {
-                all_options.lib = parse_string_array(value);
+                all_options.lib = parse_string_array_option(value);
             }
         }
         "libReplacement" => {
@@ -188,7 +190,7 @@ pub fn parse_compiler_options(
             all_options.module_resolution = value.as_module_resolution_kind_flag();
         }
         "moduleSuffixes" => {
-            all_options.module_suffixes = parse_string_array(value);
+            all_options.module_suffixes = parse_string_array_option(value);
         }
         "moduleDetection" | "moduleDetectionKind" => {
             all_options.module_detection = value.as_module_detection_kind_flag();
@@ -255,17 +257,19 @@ pub fn parse_compiler_options(
         }
         "plugins" => {
             if let CompilerOptionsValue::Array(plugins) = value {
-                all_options.plugins = plugins
-                    .iter()
-                    .map(|plugin| match plugin {
-                        CompilerOptionsValue::Object(plugin_map) => PluginImport {
-                            name: parse_string(&plugin_map.get_or_zero("name")),
-                        },
-                        _ => PluginImport {
-                            name: String::new(),
-                        },
-                    })
-                    .collect();
+                all_options.plugins = Some(
+                    plugins
+                        .iter()
+                        .map(|plugin| match plugin {
+                            CompilerOptionsValue::Object(plugin_map) => PluginImport {
+                                name: parse_string(&plugin_map.get_or_zero("name")),
+                            },
+                            _ => PluginImport {
+                                name: String::new(),
+                            },
+                        })
+                        .collect(),
+                );
             }
         }
         "preserveConstEnums" => {
@@ -299,7 +303,7 @@ pub fn parse_compiler_options(
             all_options.root_dir = parse_directory_name(value);
         }
         "rootDirs" => {
-            all_options.root_dirs = parse_directory_names(value);
+            all_options.root_dirs = parse_directory_names_option(value);
         }
         "skipLibCheck" => {
             all_options.skip_lib_check = parse_tristate(value);
@@ -350,10 +354,10 @@ pub fn parse_compiler_options(
             all_options.ts_build_info_file = parse_file_name(value);
         }
         "typeRoots" => {
-            all_options.type_roots = parse_directory_names(value);
+            all_options.type_roots = parse_directory_names_option(value);
         }
         "types" => {
-            all_options.types = parse_string_array(value);
+            all_options.types = parse_string_array_option(value);
         }
         "useDefineForClassFields" => {
             all_options.use_define_for_class_fields = parse_tristate(value);
@@ -506,10 +510,10 @@ pub fn parse_type_acquisition(
             all_options.enable = parse_tristate(value);
         }
         "include" => {
-            all_options.include = parse_string_array(value);
+            all_options.include = parse_string_array_option(value);
         }
         "exclude" => {
-            all_options.exclude = parse_string_array(value);
+            all_options.exclude = parse_string_array_option(value);
         }
         "disableFilenameBasedTypeAcquisition" => {
             all_options.disable_filename_based_type_acquisition = parse_tristate(value);
@@ -1215,9 +1219,9 @@ pub fn for_each_compiler_option_affecting_build_info(
 
 /// Go: `func mergeCompilerOptionFields(targetOptions, sourceOptions *core.CompilerOptions, explicitNullFields collections.Set[string])`.
 ///
-/// PORT: Go's slice nil-vs-empty distinction collapses to empty Vec (same as
-/// the core options_generated.rs PORT note); explicit-null writes the zero
-/// value exactly as Go writes nil/""/0.
+/// PORT: Go's slice nil-vs-empty distinction is exact via the core fields'
+/// `Option<Vec<_>>` (None = Go nil); explicit-null writes the zero value
+/// exactly as Go writes nil/""/0.
 pub fn merge_compiler_option_fields(
     target_options: &mut CompilerOptions,
     source_options: &CompilerOptions,
@@ -1270,8 +1274,8 @@ pub fn merge_compiler_option_fields(
         target_options.check_js = source_options.check_js;
     }
     if explicit_null_fields.has("customConditions") {
-        target_options.custom_conditions = Vec::new();
-    } else if !source_options.custom_conditions.is_empty() {
+        target_options.custom_conditions = None;
+    } else if source_options.custom_conditions.is_some() {
         target_options.custom_conditions = source_options.custom_conditions.clone();
     }
     if explicit_null_fields.has("composite") {
@@ -1423,8 +1427,8 @@ pub fn merge_compiler_option_fields(
         target_options.jsx_import_source = source_options.jsx_import_source.clone();
     }
     if explicit_null_fields.has("lib") {
-        target_options.lib = Vec::new();
-    } else if !source_options.lib.is_empty() {
+        target_options.lib = None;
+    } else if source_options.lib.is_some() {
         target_options.lib = source_options.lib.clone();
     }
     if explicit_null_fields.has("libReplacement") {
@@ -1453,8 +1457,8 @@ pub fn merge_compiler_option_fields(
         target_options.module_resolution = source_options.module_resolution;
     }
     if explicit_null_fields.has("moduleSuffixes") {
-        target_options.module_suffixes = Vec::new();
-    } else if !source_options.module_suffixes.is_empty() {
+        target_options.module_suffixes = None;
+    } else if source_options.module_suffixes.is_some() {
         target_options.module_suffixes = source_options.module_suffixes.clone();
     }
     if explicit_null_fields.has("moduleDetection") {
@@ -1566,8 +1570,8 @@ pub fn merge_compiler_option_fields(
         target_options.paths = source_options.paths.clone();
     }
     if explicit_null_fields.has("plugins") {
-        target_options.plugins = Vec::new();
-    } else if !source_options.plugins.is_empty() {
+        target_options.plugins = None;
+    } else if source_options.plugins.is_some() {
         target_options.plugins = source_options.plugins.clone();
     }
     if explicit_null_fields.has("preserveConstEnums") {
@@ -1622,8 +1626,8 @@ pub fn merge_compiler_option_fields(
         target_options.root_dir = source_options.root_dir.clone();
     }
     if explicit_null_fields.has("rootDirs") {
-        target_options.root_dirs = Vec::new();
-    } else if !source_options.root_dirs.is_empty() {
+        target_options.root_dirs = None;
+    } else if source_options.root_dirs.is_some() {
         target_options.root_dirs = source_options.root_dirs.clone();
     }
     if explicit_null_fields.has("skipLibCheck") {
@@ -1709,13 +1713,13 @@ pub fn merge_compiler_option_fields(
         target_options.ts_build_info_file = source_options.ts_build_info_file.clone();
     }
     if explicit_null_fields.has("typeRoots") {
-        target_options.type_roots = Vec::new();
-    } else if !source_options.type_roots.is_empty() {
+        target_options.type_roots = None;
+    } else if source_options.type_roots.is_some() {
         target_options.type_roots = source_options.type_roots.clone();
     }
     if explicit_null_fields.has("types") {
-        target_options.types = Vec::new();
-    } else if !source_options.types.is_empty() {
+        target_options.types = None;
+    } else if source_options.types.is_some() {
         target_options.types = source_options.types.clone();
     }
     if explicit_null_fields.has("useDefineForClassFields") {
@@ -2015,10 +2019,10 @@ pub fn serialize_compiler_options(
             CompilerOptionsValue::Bool(options.check_js == Tristate::TSTrue),
         );
     }
-    if !options.custom_conditions.is_empty() {
+    if options.custom_conditions.is_some() {
         result.set(
             "customConditions".to_string(),
-            CompilerOptionsValue::StrArray(options.custom_conditions.clone()),
+            CompilerOptionsValue::StrArray(options.custom_conditions.clone().unwrap()),
         );
     }
     if options.composite == Tristate::TSTrue || options.composite == Tristate::TSFalse {
@@ -2218,11 +2222,11 @@ pub fn serialize_compiler_options(
             CompilerOptionsValue::Str(options.jsx_import_source.clone()),
         );
     }
-    if !options.lib.is_empty() {
+    if options.lib.is_some() {
         result.set(
             "lib".to_string(),
             CompilerOptionsValue::StrArray(serialize_compiler_option_enum_list(
-                &options.lib,
+                options.lib.as_deref().unwrap(),
                 crate::declarations_generated::lib_map(),
             )),
         );
@@ -2257,10 +2261,10 @@ pub fn serialize_compiler_options(
             );
         }
     }
-    if !options.module_suffixes.is_empty() {
+    if options.module_suffixes.is_some() {
         result.set(
             "moduleSuffixes".to_string(),
-            CompilerOptionsValue::StrArray(options.module_suffixes.clone()),
+            CompilerOptionsValue::StrArray(options.module_suffixes.clone().unwrap()),
         );
     }
     if options.module_detection != ModuleDetectionKind::None {
@@ -2414,10 +2418,10 @@ pub fn serialize_compiler_options(
             CompilerOptionsValue::PathsMap(options.paths.clone().unwrap()),
         );
     }
-    if !options.plugins.is_empty() {
+    if options.plugins.is_some() {
         result.set(
             "plugins".to_string(),
-            CompilerOptionsValue::PluginImports(options.plugins.clone()),
+            CompilerOptionsValue::PluginImports(options.plugins.clone().unwrap()),
         );
     }
     if options.preserve_const_enums == Tristate::TSTrue
@@ -2492,13 +2496,14 @@ pub fn serialize_compiler_options(
             )),
         );
     }
-    if !options.root_dirs.is_empty() {
+    if options.root_dirs.is_some() {
         result.set(
             "rootDirs".to_string(),
             CompilerOptionsValue::StrArray(
                 options
                     .root_dirs
                     .iter()
+                    .flatten()
                     .map(|value| {
                         if value.is_empty() {
                             return String::new();
@@ -2623,13 +2628,14 @@ pub fn serialize_compiler_options(
             )),
         );
     }
-    if !options.type_roots.is_empty() {
+    if options.type_roots.is_some() {
         result.set(
             "typeRoots".to_string(),
             CompilerOptionsValue::StrArray(
                 options
                     .type_roots
                     .iter()
+                    .flatten()
                     .map(|value| {
                         if value.is_empty() {
                             return String::new();
@@ -2644,10 +2650,10 @@ pub fn serialize_compiler_options(
             ),
         );
     }
-    if !options.types.is_empty() {
+    if options.types.is_some() {
         result.set(
             "types".to_string(),
-            CompilerOptionsValue::StrArray(options.types.clone()),
+            CompilerOptionsValue::StrArray(options.types.clone().unwrap()),
         );
     }
     if options.use_define_for_class_fields == Tristate::TSTrue

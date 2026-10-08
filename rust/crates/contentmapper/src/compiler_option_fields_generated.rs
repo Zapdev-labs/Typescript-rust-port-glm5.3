@@ -7,9 +7,9 @@
 //
 // PORT notes (vs contentmapper.go):
 //   - Go skips a field when `reflect.Value.IsZero()` is true; the port mirrors
-//     per type (Tristate unknown / "" / nil / 0 / empty vec). Go's nil-vs-empty
-//     slice distinction collapses: an explicitly empty (but non-nil) slice
-//     marshals as `[]` in Go and is skipped here (documented in PORTING-NOTES).
+//     per type (Tristate unknown / "" / nil / 0). Slice fields are
+//     `Option<Vec<_>>`, matching Go's IsZero on slices (nil ⇒ skip, non-nil
+//     empty ⇒ marshal `[]`, exactly as Go's reflect does).
 //   - Go marshals typed paths (RootedDirectoryPath etc.) via their json
 //     MarshalJSON (a string); the port marshals `as_string()`.
 //   - Go marshals enum fields as their raw int32 values; same here.
@@ -34,7 +34,7 @@ pub fn marshal_compiler_option_field(options: &CompilerOptions, name: &str) -> O
             field_json::tristate(options.assume_changes_only_affect_direct_dependencies)
         }
         "checkJs" => field_json::tristate(options.check_js),
-        "customConditions" => field_json::string_array(&options.custom_conditions),
+        "customConditions" => field_json::string_array(options.custom_conditions.as_deref()),
         "composite" => field_json::tristate(options.composite),
         "emitDeclarationOnly" => field_json::tristate(options.emit_declaration_only),
         "emitBOM" => field_json::tristate(options.emit_bom),
@@ -70,13 +70,13 @@ pub fn marshal_compiler_option_field(options: &CompilerOptions, name: &str) -> O
         "jsxFactory" => field_json::string_value(&options.jsx_factory),
         "jsxFragmentFactory" => field_json::string_value(&options.jsx_fragment_factory),
         "jsxImportSource" => field_json::string_value(&options.jsx_import_source),
-        "lib" => field_json::string_array(&options.lib),
+        "lib" => field_json::string_array(options.lib.as_deref()),
         "libReplacement" => field_json::tristate(options.lib_replacement),
         "locale" => field_json::string_value(&options.locale),
         "mapRoot" => field_json::rooted_string(&options.map_root),
         "module" => field_json::module_kind(options.module),
         "moduleResolution" => field_json::module_resolution_kind(options.module_resolution),
-        "moduleSuffixes" => field_json::string_array(&options.module_suffixes),
+        "moduleSuffixes" => field_json::string_array(options.module_suffixes.as_deref()),
         "moduleDetection" => field_json::module_detection_kind(options.module_detection),
         "newLine" => field_json::new_line_kind(options.new_line),
         "noEmit" => field_json::tristate(options.no_emit),
@@ -104,7 +104,7 @@ pub fn marshal_compiler_option_field(options: &CompilerOptions, name: &str) -> O
         }
         "outDir" => field_json::rooted_string(&options.out_dir),
         "paths" => field_json::paths_map(options.paths.as_ref()),
-        "plugins" => field_json::plugin_imports(&options.plugins),
+        "plugins" => field_json::plugin_imports(options.plugins.as_deref()),
         "preserveConstEnums" => field_json::tristate(options.preserve_const_enums),
         "preserveSymlinks" => field_json::tristate(options.preserve_symlinks),
         "project" => field_json::rooted_string(&options.project),
@@ -117,7 +117,7 @@ pub fn marshal_compiler_option_field(options: &CompilerOptions, name: &str) -> O
         }
         "reactNamespace" => field_json::string_value(&options.react_namespace),
         "rootDir" => field_json::rooted_string(&options.root_dir),
-        "rootDirs" => field_json::rooted_directory_array(&options.root_dirs),
+        "rootDirs" => field_json::rooted_directory_array(options.root_dirs.as_deref()),
         "skipLibCheck" => field_json::tristate(options.skip_lib_check),
         "stableTypeOrdering" => field_json::tristate(options.stable_type_ordering),
         "strict" => field_json::tristate(options.strict),
@@ -138,8 +138,8 @@ pub fn marshal_compiler_option_field(options: &CompilerOptions, name: &str) -> O
         "target" => field_json::script_target(options.target),
         "traceResolution" => field_json::tristate(options.trace_resolution),
         "tsBuildInfoFile" => field_json::rooted_string(&options.ts_build_info_file),
-        "typeRoots" => field_json::rooted_directory_array(&options.type_roots),
-        "types" => field_json::string_array(&options.types),
+        "typeRoots" => field_json::rooted_directory_array(options.type_roots.as_deref()),
+        "types" => field_json::string_array(options.types.as_deref()),
         "useDefineForClassFields" => field_json::tristate(options.use_define_for_class_fields),
         "useUnknownInCatchVariables" => {
             field_json::tristate(options.use_unknown_in_catch_variables)

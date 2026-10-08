@@ -574,10 +574,10 @@ fn resolve_dynamic_module_name_using_root_dirs() {
         ]);
         let host = test_host(fs, "^/~ts-uri~/custom/ts-nul-authority/");
         let opts = CompilerOptions {
-            root_dirs: vec![
+            root_dirs: Some(vec![
                 RootedDirectoryPath::from("^/~ts-uri~/custom/ts-nul-authority/src"),
                 RootedDirectoryPath::from(test.target_root),
-            ],
+            ]),
             ..bundler_opts(ModuleKind::ESNext)
         };
         let resolver = new_test_resolver(host, opts);
@@ -606,10 +606,10 @@ fn root_dirs_preserves_exceptional_dynamic_segments() {
     ]);
     let host = test_host(fs, "^/~ts-uri~/custom/ts-nul-authority/");
     let opts = CompilerOptions {
-        root_dirs: vec![
+        root_dirs: Some(vec![
             RootedDirectoryPath::from("^/~ts-uri~/custom/ts-nul-authority/src"),
             RootedDirectoryPath::from("^/~ts-uri~/custom/ts-nul-authority/generated"),
-        ],
+        ]),
         ..bundler_opts(ModuleKind::ESNext)
     };
     let resolver = new_test_resolver(host, opts);
@@ -637,10 +637,10 @@ fn root_dirs_rejects_unrepresentable_disk_segments() {
         let fs = test_fs(&[(source_file, ""), ("c:/dep.ts", "export const wrong = 1;")]);
         let host = test_host(fs, "^/~ts-uri~/custom/ts-nul-authority/");
         let opts = CompilerOptions {
-            root_dirs: vec![
+            root_dirs: Some(vec![
                 RootedDirectoryPath::from("^/~ts-uri~/custom/ts-nul-authority/src"),
                 RootedDirectoryPath::from("c:/generated"),
-            ],
+            ]),
             ..bundler_opts(ModuleKind::ESNext)
         };
         let resolver = new_test_resolver(host, opts);
@@ -682,10 +682,10 @@ fn root_dirs_escapes_root_like_dynamic_segments() {
         ]);
         let host = test_host(fs, "^/~ts-uri~/custom/ts-nul-authority/");
         let opts = CompilerOptions {
-            root_dirs: vec![
+            root_dirs: Some(vec![
                 RootedDirectoryPath::from("^/~ts-uri~/custom/ts-nul-authority/src"),
                 RootedDirectoryPath::from("^/~ts-uri~/custom/ts-nul-authority/generated"),
-            ],
+            ]),
             ..bundler_opts(ModuleKind::ESNext)
         };
         let resolver = new_test_resolver(host, opts);
@@ -732,10 +732,10 @@ fn root_dirs_preserves_relative_disk_suffixes() {
         ]);
         let host = test_host(fs, "c:/");
         let opts = CompilerOptions {
-            root_dirs: vec![
+            root_dirs: Some(vec![
                 RootedDirectoryPath::from("c:/src"),
                 RootedDirectoryPath::from(test.target_root),
-            ],
+            ]),
             ..bundler_opts(ModuleKind::ESNext)
         };
         let resolver = new_test_resolver(host, opts);
@@ -779,10 +779,10 @@ fn root_dirs_preserves_relative_directory_intent() {
         ]);
         let host = test_host(fs, "c:/");
         let opts = CompilerOptions {
-            root_dirs: vec![
+            root_dirs: Some(vec![
                 RootedDirectoryPath::from(test.source_root),
                 RootedDirectoryPath::from(test.target_root),
-            ],
+            ]),
             ..bundler_opts(ModuleKind::CommonJS)
         };
 
