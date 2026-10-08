@@ -61,9 +61,26 @@ All corpus `.ts`/`.tsx` (excl. `node_modules`, `dist`), both drivers, same
 file list, threads measured at 1 and 16. Gate: ≤1.30× Go at first green,
 hardening target ≤1.00×, stretch ≤0.80×; peak RSS ≤1.0× Go.
 
+**2026-10-07 22:00 — Go baseline locked (go-bench validated; no Rust side yet).**
+Driver contract verified empirically on the rig: shape_hash identical across
+runs and thread counts (`--threads 4`), run totals scale exactly with
+`--iterations` (881,067 → 2,643,201 nodes at K=3). Corpus per driver walk:
+679 files / 8,309,945 bytes (contract extensions incl. `.d.ts`; the earlier
+676-file rig record used a coarser glob).
+
+| side | threads | iterations | wall ms | MB/s | nodes | errors | shape_hash |
+|---|---|---|---|---|---|---|---|
+| go | 1 | 1 | 254.5 / 280.9 | 31.1 / 28.2 | 881,067 | 0 | 487377d6e977e9ef |
+| go | 4 | 1 | 131.5 | 60.3 | 881,067 | 0 | 487377d6e977e9ef |
+| go | 8 | 3 | 402.1 | 59.1 | 2,643,201 | 0 | b429b96dcd34a87a |
+
+**The Rust parser must reproduce nodes=881,067, errors=0, shape_hash
+487377d6e977e9ef exactly at threads=1/K=1. Go's cost is ~289 ns/node;
+the ≤1.30× gate is 330.9 ms (~376 ns/node).**
+
 | date | git (rust) | threads | wall median (rust) | wall median (go) | rust/go | RSS rust/go | MB/s rust | shape_hash |
 |---|---|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — | — | — |
+| 2026-10-07 | (pre-M3) | 1 | — | 254.5 | — | — | — | 487377d6e977e9ef (go) |
 
 ## Phase B — program race (M4/M5 gates)
 
