@@ -71,3 +71,17 @@ it exists to race ported Rust code against the Go originals using identical
 inputs. The Go driver (`rust/bench/go-driver`) is a new Go module added to the
 root `go.work` (fork-level config, one line); it imports `tsc/internal/...`
 but never modifies them.
+
+## 2026-10-07 tspath — `as_path()` clone is a Go-string-semantics divergence (measured)
+Go strings are (ptr, len) headers: `RootedFilePath.AsPath()` copies 16 bytes,
+zero heap traffic. The Rust port backs these types with `String`, so the
+borrowed `as_path(&self) -> RootedPath` clones the bytes. Owned conversions
+(`From<RootedFilePath> for RootedPath`) already move and are zero-copy.
+Phase 0 measured the cost: `RootedFilePathToPathKey/AlreadyRooted` runs at
+0.83x vs Go (the worst tspath ratio; siblings are 0.52-0.64x) because the
+per-call `as_path()` alloc dominates the tiny op.
+NOT fixed now: a `repr(transparent)` pointer transmute would make the borrow
+conversion zero-cost but introduces unsafe into a green M1 crate mid-flight.
+Revisit if Phase B program-level profiling shows `path_key` on a hot path —
+then prefer restructuring the bench/real callers to use owned conversions or
+a view type over unsafe punning. Raw outputs: ~/bench-results/phase0 (rig).
