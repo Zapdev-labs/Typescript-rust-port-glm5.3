@@ -16,7 +16,8 @@ use tsc_ast::{Kind, NodeId, NodeStore, SourceFile, Symbol, SymbolFlags, SymbolId
 use tsc_binder::{bind_source_file, BindResult};
 use tsc_checker::types::{LiteralValue, TypeFlags, TypeId};
 use tsc_checker::{is_fresh_literal_type, new_checker, Checker, Program};
-use tsc_core::compileroptions::CompilerOptions;
+use tsc_core::options_generated::CompilerOptions;
+use tsc_core::tristate::Tristate;
 use tsc_core::scriptkind::ScriptKind;
 use tsc_parser::parse_source_file;
 
@@ -49,29 +50,36 @@ impl Program for TestProgram {
         &self.source_file
     }
     fn symbol(&self, id: SymbolId) -> &Symbol {
-        if (id.0 as u32) < self.binder_symbol_count {
+        if id.0 < self.binder_symbol_count {
             &self.bind.symbols[id.0 as usize]
         } else {
-            &self.checker_symbols[(id.0 as u32 - self.binder_symbol_count) as usize]
+            &self.checker_symbols[(id.0 - self.binder_symbol_count) as usize]
         }
     }
     fn symbol_mut(&mut self, id: SymbolId) -> &mut Symbol {
-        if (id.0 as u32) < self.binder_symbol_count {
+        if id.0 < self.binder_symbol_count {
             &mut self.bind.symbols[id.0 as usize]
         } else {
-            let index = (id.0 as u32 - self.binder_symbol_count) as usize;
-            &mut self.checker_symbols[index]
+            &mut self.checker_symbols[(id.0 - self.binder_symbol_count) as usize]
         }
     }
     fn alloc_symbol(&mut self, symbol: Symbol) -> SymbolId {
         self.checker_symbols.push(symbol);
-        SymbolId((self.binder_symbol_count + self.checker_symbols.len() as u32 - 1) as usize)
+        SymbolId(self.binder_symbol_count + self.checker_symbols.len() as u32 - 1)
     }
 }
 
 /// Parses + binds + checkers `src`; returns the checker plus the name→symbol
 /// and name→declaration maps for the top-level variables.
-fn check(src: &str) -> (Checker, Vec<(String, SymbolId)>, Vec<(String, NodeId)>) {
+type Check = (Checker, Vec<(String, SymbolId)>, Vec<(String, NodeId)>);
+
+fn check(src: &str) -> Check {
+    check_with_options(src, CompilerOptions::default())
+}
+
+/// The same, with explicit options (Go's `NewChecker` derives the strict*
+/// booleans through `GetStrictOptionValue`).
+fn check_with_options(src: &str, options: CompilerOptions) -> Check {
     let mut sf = parse_source_file(Default::default(), src, ScriptKind::TS);
     let bind = bind_source_file(&mut sf).expect("bind produced a result");
 
@@ -109,7 +117,7 @@ fn check(src: &str) -> (Checker, Vec<(String, SymbolId)>, Vec<(String, NodeId)>)
 
     let binder_symbol_count = bind.symbol_count as u32;
     let program = TestProgram {
-        options: CompilerOptions::default(),
+        options,
         source_file: sf,
         bind,
         binder_symbol_count,
@@ -255,7 +263,7 @@ fn new_checker_seeds_intrinsic_types_in_go_order() {
     assert!(flags(&c, c.never_type()).intersects(TypeFlags::NEVER));
     assert!(flags(&c, c.null_type()).intersects(TypeFlags::NULL));
     assert!(flags(&c, c.undefined_type()).intersects(TypeFlags::UNDEFINED));
-    assert!(flags(&c, c.es_symbol_type()).intersects(TypeFlags::ES_SYMBOL));
+    assert!(flags(&c, c.es_symbol_type()).intersects(TypeFlags::ESSYMBOL));
     assert!(flags(&c, c.non_primitive_type()).intersects(TypeFlags::NON_PRIMITIVE));
     assert!(flags(&c, c.error_type()).intersects(TypeFlags::ANY));
     assert_eq!(
@@ -269,10 +277,13 @@ fn new_checker_seeds_intrinsic_types_in_go_order() {
     // zeroType / emptyStringType are interned literal types.
     assert!(flags(&c, c.zero_type()).intersects(TypeFlags::NUMBER_LITERAL));
     assert!(flags(&c, c.empty_string_type()).intersects(TypeFlags::STRING_LITERAL));
-    // The widening pair behaves per Go: without strictNullChecks
-    // createWideningType produces a distinct widening type.
-    assert_ne!(c.undefined_type(), c.undefined_widening_type());
-    assert_ne!(c.null_type(), c.null_widening_type());
+    // The widening pair under DEFAULT options: StrictNullChecks is
+    // TSUnknown and GetStrictOptionValue falls back to Strict (!= TSFalse),
+    // which is also TSUnknown — so strictNullChecks is TRUE and
+    // createWideningType returns the SAME type (Go parity with
+    // `&CompilerOptions{}`).
+    assert_eq!(c.undefined_type(), c.undefined_widening_type());
+    assert_eq!(c.null_type(), c.null_widening_type());
     // Ids are 1-based creation counters (Go: TypeId(TypeCount)) and NewChecker
     // creates them in Go's exact order (any, auto, wildcard, blockedString...).
     assert_eq!(c.any_type().0, 1);
@@ -280,6 +291,27 @@ fn new_checker_seeds_intrinsic_types_in_go_order() {
     assert_eq!(c.wildcard_type().0, 3);
     assert_eq!(c.blocked_string_type().0, 4);
     assert_eq!(c.error_type().0, 5);
+    // The distinct-widening branch lives in its own test (options with
+    // Strict = TSFalse).
+}
+
+#[test]
+fn widening_pairs_are_distinct_without_strict_null_checks() {
+    // Go: createWideningType returns nonWideningType unchanged under
+    // strictNullChecks; otherwise it mints a fresh intrinsic type carrying
+    // ObjectFlagsContainsWideningType.
+    let options = CompilerOptions {
+        strict: Tristate::TSFalse,
+        ..CompilerOptions::default()
+    };
+    let (c, _symbols, _declarations) = check_with_options("", options);
+    assert_ne!(c.undefined_type(), c.undefined_widening_type());
+    assert_ne!(c.null_type(), c.null_widening_type());
+    use tsc_checker::types::ObjectFlags;
+    assert!(c
+        .type_(c.undefined_widening_type())
+        .object_flags
+        .intersects(ObjectFlags::CONTAINS_WIDENING_TYPE));
 }
 
 #[test]

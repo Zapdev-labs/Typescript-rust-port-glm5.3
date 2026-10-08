@@ -1006,3 +1006,95 @@ byte-identical on `reachabilityChecksNoCrash1.ts` (the required
 cold-parse file), `tsc/testdata/fixtures` (82 files), and the full
 `tsc/testdata/tests/cases/compiler` sweep (6,890 files) — the reparse
 wiring does not disturb the cold-parse path.
+
+## 2026-10-08 crates/checker — the M5 checker spike (types.go + utilities.go + checker.go slices)
+The SPEC §8 M5 gate crate: `crates/checker` proves §5.4 (checker-eradication)
+and §5.5 (store ownership) with the arena-backed `Type`/`TypeData` layer, the
+full `checker/types.go` port, the full `checker/utilities.go` port, and the
+checker.go slices that make `getTypeOfSymbol` infer the literal `1` from
+`const x = 1` (and, per Go widening semantics, `number` from `let x = 1` —
+see the gate-semantics note below).
+
+- **§5.4 (`Type.checker` eradication), worked as designed**: `Type` carries
+  `checker_shard: u16` (identity only, types.rs); every Go `t.checker` read
+  becomes an explicit `&Checker`/`&mut Checker` parameter
+  (`compare_types(c: &Checker, t1: TypeId, t2: TypeId)` is the worked
+  example — panics on cross-shard compares exactly like Go's
+  `t1.checker != t2.checker` guard); `*Type` becomes `TypeId` (the arena
+  Vec slot-0 dummy makes id == index), and Go's pointer writes on types go
+  through `Checker::type_mut`.
+- **§5.5 (store ownership), worked as designed**: one program-level symbol
+  arena behind the checker-local `Program` trait
+  (`options/source_files/bind_source_files/node_store/symbol/symbol_mut/
+  alloc_symbol`); `new_symbol` allocates from the same `SymbolId` space the
+  binder used (no rebasing at merge — `checker_created_symbols_share_the_
+  program_id_space` pins it), and the per-checker link tables stay keyed by
+  `SymbolId` in the checker's link stores (links.rs: NodeLinkStore
+  direct-in-page + SymbolArenaLinkStore `Option<u32>` pages into a Vec
+  arena, Go's two laziness shapes with unit tests).
+- **Gate-semantics divergence (SPEC wording vs Go)**: SPEC §8 says the gate
+  is "`getTypeOfSymbol` on `let x = 1` infers `1`", but Go/TS semantics
+  widen `let` to `number` and keep the fresh literal only for `const`
+  (`getWidenedLiteralTypeForInitializer` → `getWidenedLiteralType`, and
+  literal widening stops at the union constructor for booleans —
+  `booleanType = getUnionType([false, true])`, an M6 banner in the spike).
+  The demo test proves BOTH paths exactly per Go: `const x = 1` → fresh
+  literal `1` (Number value 1.0, fresh/regular pair wired), `let y = 1` →
+  the initializer still CHECKS as the fresh literal `1` (cached in
+  TypeNodeLinks), and `getTypeOfSymbol` widens to the `number` intrinsic
+  without asserting the SPEC's stale wording. Booleans stop at the M6
+  union boundary (asserted via catch_unwind).
+- **`number_key` canonicalization (judgment call)**: Go's literal-type
+  interning keys `float64` map entries (IEEE 754 equality: -0.0 == 0.0,
+  NaN != NaN); the port keys `FxHashMap<u64, TypeId>` by bits with -0.0
+  canonicalized to 0.0 bits and NaN cached separately (mirrors Go's map
+  behavior with exact dedupe parity, `-0.0/NaN intern tests`).
+- **Default-options strictNullChecks (Go parity, verified against
+  tristate.go)**: Go's `TSUnknown = iota` (0) is the zero value, so
+  `&CompilerOptions{}` gives `GetStrictOptionValue(StrictNullChecks) ==
+  strict != TSFalse == true` — `createWideningType` returns the SAME type
+  under default options and a distinct `ContainsWideningType` type only
+  with `Strict = TSFalse` (both pinned by tests; the naive
+  "default = not strict" assumption is wrong for Go's zero values).
+- **Bannered seams (M6)**: `getAliasedSymbol`, `getPackagesMap`,
+  `CreateModuleNotFoundChain`/`CreateModeMismatchDetails`, boolean/union
+  and anonymous-type constructors in `new_checker`, `getWidenedType`
+  (getContextualType/union machinery), every non-literal
+  `checkExpressionWorker` arm, `getTypeOfSymbol`'s non-variable arms,
+  GetErrorRangeForNode (deep scanner machinery — the diagnostic range
+  computation in `new_diagnostic_for_node`), and `printer.EscapeString`
+  (inlined as `escape_string` in utilities.rs) — all `TODO(port M6)`
+  panics at Go's line positions.
+- **Files**: `src/types.rs` (complete types.go port, ~2560 lines incl.
+  Go-parity unit tests), `src/utilities.rs` (complete utilities.go port,
+  ~3400 lines; FeatureMapEntry table rebuilt via a `feature_entries(&[..])`
+  data helper — identical table data), `src/checker.rs` (the Checker
+  struct + Program trait + new_checker intrinsic-creation slice +
+  getTypeOfSymbol chain + literal intern machinery + resolution-cycle
+  detector + unit tests), `src/links.rs` (links.go), `src/ast_shims.rs`
+  (Go ast.go helpers not yet exported by tsc-ast: the generated
+  `Initializer()`/`Expression()` store-carrying dispatchers,
+  QuestionToken/PostfixToken, outer-expression kinds, entity-name/text),
+  `src/todo_shapes.rs` (M6/M7 placeholders: TypeMapperId, Tracer, FlowState,
+  ...), `tests/spike.rs` (the gate demos + §5.4/§5.5 proofs).
+- **Go-parity judgment calls inside utilities.rs**: `isReservedMemberName`/
+  `isLateBoundName` use the crate's `\u{FE}`-code-point sentinel convention
+  (tsc_ast::symbol) instead of Go's raw-0xFE byte checks (invalid UTF-8 in
+  Rust strs); `getDeclarationNodeFlagsFromSymbol` reads uncached (Go's
+  single-entry memo stays &mut-only in
+  `get_combined_node_flags_cached`) so the utilities family can take
+  `&Checker`; `getEnclosingContainer` inlines the parent walk (the
+  container-flags table needs the `NodeId`, while `find_ancestor`'s
+  visitor sees `&Node`); the `forEachYieldExpression` child walk is a
+  hand-rolled payload enumeration shim (`collect_children_shim`, M7
+  banner) pending the generated ForEachChild table.
+- **Validation** (local, CARGO_TARGET_DIR=$HOME/.cargo-target/m5c,
+  CARGO_INCREMENTAL=0 + `-C debuginfo=0`): `cargo test -p tsc-checker`
+  green — 25 lib tests (types/links/checker/utilities Go-parity pins) +
+  7 spike tests (the two literal gates, boolean union boundary, intrinsic
+  seeding order 1..5 + widening pairs, §5.5 id-space proof, cycle-detector
+  balance); `cargo clippy -p tsc-checker --all-targets` zero warnings;
+  `cargo check --workspace --exclude tsc-compiler` green (tsc-compiler is
+  being written concurrently by the sibling M5-compiler worker — its
+  untracked src files were changing seconds-by-second during this wave);
+  `cargo test -p tsc-ast -p tsc-binder` green (60 + 15, no regressions).

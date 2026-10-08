@@ -4,7 +4,7 @@
 // ast/utilities.go wholesale wave).
 
 use tsc_ast::{
-    is_binding_element, is_identifier, is_parenthesized_expression, is_qualified_name, Kind,
+    is_binding_element, is_parenthesized_expression, is_qualified_name, Kind,
     ModifierFlags, Node, NodeId, NodeFlags, NodeStore,
 };
 
@@ -242,7 +242,7 @@ pub fn walk_up_binding_elements_and_patterns(store: &dyn NodeStore, binding: Nod
 /// (JSDoc type assertions, assignment/comma tokens) that Go reads through
 /// pointers.
 pub mod outer {
-    use tsc_ast::{Kind, Node, NodeId, NodeStore};
+    use tsc_ast::{Kind, NodeId, NodeStore};
 
     pub type OuterExpressionKinds = u16;
 
@@ -443,7 +443,7 @@ pub fn type_of_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
         tsc_ast::NodeData::VariableDeclaration(d) => d.type_,
         tsc_ast::NodeData::ParameterDeclaration(d) => d.type_,
         tsc_ast::NodeData::PropertyDeclaration(d) => d.type_,
-        tsc_ast::NodeData::PropertySignatureDeclaration(d) => d.type_,
+        tsc_ast::NodeData::PropertySignatureDeclaration(d) => Some(d.type_),
         tsc_ast::NodeData::FunctionDeclaration(d) => d.type_,
         tsc_ast::NodeData::FunctionExpression(d) => d.type_,
         tsc_ast::NodeData::ArrowFunction(d) => d.type_,
@@ -451,11 +451,11 @@ pub fn type_of_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
         tsc_ast::NodeData::MethodSignatureDeclaration(d) => d.type_,
         tsc_ast::NodeData::GetAccessorDeclaration(d) => d.type_,
         tsc_ast::NodeData::SetAccessorDeclaration(d) => d.type_,
-        tsc_ast::NodeData::TypeAliasDeclaration(d) => d.type_,
+        tsc_ast::NodeData::TypeAliasDeclaration(d) => Some(d.type_),
         tsc_ast::NodeData::CallSignatureDeclaration(d) => d.type_,
         tsc_ast::NodeData::ConstructSignatureDeclaration(d) => d.type_,
         tsc_ast::NodeData::IndexSignatureDeclaration(d) => d.type_,
-        tsc_ast::NodeData::JSDocTypeExpression(d) => d.type_,
+        tsc_ast::NodeData::JSDocTypeExpression(d) => Some(d.type_),
         _ => None,
     }
 }

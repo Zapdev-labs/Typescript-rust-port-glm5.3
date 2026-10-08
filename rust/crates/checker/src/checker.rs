@@ -45,10 +45,10 @@ use crate::types::{
     AliasSymbolLinks, ArrayLiteralLinks, AssertionLinks, ComputedNameNodeLinks,
     ContainingSymbolLinks, DeclaredTypeLinks, DeferredSymbolLinks, EnumMemberLinks, ExportTypeLinks,
     IndexInfo, IntrinsicType, LateBoundLinks, LiteralType, LiteralValue, MarkedAssignmentSymbolLinks,
-    MembersAndExportsLinks, MappedSymbolLinks, ModuleSymbolLinks, NodeCheckFlags, NodeLinks,
+    MembersAndExportsLinks, MappedSymbolLinks, ModuleSymbolLinks, NodeLinks,
     ObjectFlags, ReverseMappedSymbolLinks, Signature, SourceFileLinks, SpreadLinks,
     SwitchStatementLinks, SymbolNodeLinks, SymbolReferenceLinks, Type, TypeAliasLinks, TypeData,
-    TypeFlags, TypeId, TypeNodeLinks, ValueSymbolLinks, VarianceFlags,
+    TypeFlags, TypeId, TypeNodeLinks, ValueSymbolLinks, VarianceFlags, VarianceLinks,
 };
 use crate::utilities as u;
 
@@ -166,6 +166,10 @@ static NEXT_CHECKER_ID: AtomicU32 = AtomicU32::new(0);
 /// `anyArrayType`, `autoArrayType`, `uniqueLiteralMapper`, the marker types
 /// and the signatures — all constructed through union/anonymous-type/mapper
 /// machinery that is M6).
+// dead_code: the M6-spike fields (id, deferred intrinsic slots, caches) are
+// carried for Go-shape parity and constructed in new_checker; their readers
+// land with the M6 waves. Remove with the first full-wave port.
+#[allow(dead_code)]
 pub struct Checker {
     pub(crate) id: u32,
     /// PORT (§5.4): replaces the Go ↔ `Type.checker` identity — types carry
@@ -504,6 +508,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getRegularTypeOfLiteralType(t *Type) *Type`.
+    #[allow(dead_code)] // exercised by the spike tests; in-lib callers land in M6
     pub(crate) fn get_regular_type_of_literal_type(&mut self, t: TypeId) -> TypeId {
         if self.type_(t).flags.intersects(TypeFlags::FRESHABLE) {
             return self
@@ -620,9 +625,11 @@ impl Checker {
     /// Go: `func (c *Checker) newSymbol(flags ast.SymbolFlags, name string) *ast.Symbol`.
     pub(crate) fn new_symbol(&mut self, flags: SymbolFlags, name: &str) -> SymbolId {
         self.symbol_count += 1;
-        let mut symbol = Symbol::default();
-        symbol.flags = flags | SymbolFlags::TRANSIENT;
-        symbol.name = name.to_string();
+        let symbol = Symbol {
+            flags: flags | SymbolFlags::TRANSIENT,
+            name: name.to_string(),
+            ..Default::default()
+        };
         self.program.alloc_symbol(symbol)
     }
 
@@ -989,7 +996,7 @@ impl Checker {
         }
         // Use the type of the initializer expression if one is present and
         // the declaration is not a parameter of a contextually typed function
-        if let Some(initializer) = initializer {
+        if initializer.is_some() {
             let t = self.check_declaration_initializer(declaration, check_mode);
             let t = self.widen_type_inferred_from_initializer(declaration, t);
             return Some(self.add_optionality_ex(t, is_property, is_optional));
@@ -1300,12 +1307,13 @@ impl Checker {
     ) -> Option<usize> {
         let mut i = self.type_resolutions.len() as isize - 1;
         while i >= self.resolution_start as isize {
-            let has_property = self.type_resolution_has_property(&self.type_resolutions[i as usize]);
-            if has_property {
+            // Go holds *TypeResolution while calling the mutating Get; the
+            // port snapshots the entry (small, Copy) before each mutation.
+            let resolution = self.type_resolutions[i as usize];
+            if self.type_resolution_has_property(&resolution) {
                 return None;
             }
-            let resolution = &self.type_resolutions[i as usize];
-            if &resolution.target == target && resolution.property_name == property_name {
+            if resolution.target == *target && resolution.property_name == property_name {
                 return Some(i as usize);
             }
             i -= 1;
@@ -1314,7 +1322,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) typeResolutionHasProperty(r *TypeResolution) bool`.
-    fn type_resolution_has_property(&self, r: &TypeResolution) -> bool {
+    fn type_resolution_has_property(&mut self, r: &TypeResolution) -> bool {
         match r.property_name {
             TypeSystemPropertyName::Type => match r.target {
                 TypeSystemEntity::Symbol(symbol) => {
@@ -1442,6 +1450,7 @@ impl Checker {
     /// Go: `func (c *Checker) error(node *ast.Node, message, args...)` —
     /// diagnostic creation; the plumbing lands with the M5 compiler crate
     /// (`ast.Diagnostic` collection on the program).
+    #[allow(dead_code)] // diagnostics-collection seam: wired in the M5 compiler wave
     pub(crate) fn error(&mut self, _node: NodeId, _message: &'static tsc_diagnostics::Message) {
         // TODO(port M5 compiler): diagnostics collection seam.
     }
@@ -1562,19 +1571,15 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         symbol_container_links: LinkStore::new(),
         source_file_links: LinkStore::new(),
         // Arena slot 0 is the dummy (see the field PORT note).
-        types: {
-            let mut v = Vec::new();
-            v.push(Type {
-                flags: TypeFlags::NONE,
-                object_flags: ObjectFlags::NONE,
-                id: TypeId(0),
-                symbol: None,
-                alias: None,
-                checker_shard: 0,
-                data: TypeData::Intrinsic(Box::default()),
-            });
-            v
-        },
+        types: vec![Type {
+            flags: TypeFlags::NONE,
+            object_flags: ObjectFlags::NONE,
+            id: TypeId(0),
+            symbol: None,
+            alias: None,
+            checker_shard: 0,
+            data: TypeData::Intrinsic(Box::default()),
+        }],
         signatures: Vec::new(),
         index_infos: Vec::new(),
         any_type: None,
@@ -1800,34 +1805,33 @@ mod tests {
         fn symbol(&self, id: SymbolId) -> &Symbol {
             let bind = self.bind.as_ref().expect("bound");
             let base = bind.symbol_count as u32;
-            if (id.0 as u32) < base {
+            if id.0 < base {
                 &bind.symbols[id.0 as usize]
             } else {
-                &self.symbols[(id.0 as u32 - base) as usize]
+                &self.symbols[(id.0 - base) as usize]
             }
         }
         fn symbol_mut(&mut self, id: SymbolId) -> &mut Symbol {
             let base = self.bind.as_ref().expect("bound").symbol_count as u32;
-            if (id.0 as u32) < base {
+            if id.0 < base {
                 &mut self.bind.as_mut().expect("bound").symbols[id.0 as usize]
             } else {
-                let index = (id.0 as u32 - base) as usize;
-                &mut self.symbols[index]
+                &mut self.symbols[(id.0 - base) as usize]
             }
         }
         fn alloc_symbol(&mut self, symbol: Symbol) -> SymbolId {
             self.symbols.push(symbol);
             let base = self.bind.as_ref().expect("bound").symbol_count as u32;
-            SymbolId((base + self.symbols.len() as u32 - 1) as usize)
+            SymbolId(base + self.symbols.len() as u32 - 1)
         }
     }
 
+    fn tsc_parser_empty_source_file() -> tsc_ast::SourceFile {
+        tsc_parser::parse_source_file(Default::default(), "", tsc_core::scriptkind::ScriptKind::TS)
+    }
+
     fn empty_checker() -> Checker {
-        let mut file = tsc_parser::parse_source_file(
-            Default::default(),
-            "",
-            tsc_core::scriptkind::ScriptKind::TS,
-        );
+        let mut file = tsc_parser_empty_source_file();
         let bind = tsc_binder::bind_source_file(&mut file);
         new_checker(Box::new(EmptyProgram {
             options: CompilerOptions::default(),
@@ -1835,10 +1839,6 @@ mod tests {
             bind,
             symbols: Vec::new(),
         }))
-    }
-
-    fn tsc_parser_empty_source_file() -> tsc_ast::SourceFile {
-        tsc_parser::parse_source_file(Default::default(), "", tsc_core::scriptkind::ScriptKind::TS)
     }
 
     #[test]
@@ -1849,10 +1849,10 @@ mod tests {
         // First push succeeds.
         assert!(c.push_type_resolution(target, TypeSystemPropertyName::Type));
         // Re-entrant push for the same (target, property) finds the cycle:
-        // false, and the in-flight resolution is poisoned.
+        // false — Go marks the IN-FLIGHT entry's result false without
+        // pushing a new one.
         assert!(!c.push_type_resolution(target, TypeSystemPropertyName::Type));
-        assert!(!c.pop_type_resolution(), "inner resolution is marked circular");
-        assert!(!c.pop_type_resolution(), "outer resolution is poisoned by the cycle");
+        assert!(!c.pop_type_resolution(), "in-flight resolution is poisoned");
         assert!(c.type_resolutions_are_balanced());
         // After the stack drains, the same resolution can start again.
         assert!(c.push_type_resolution(target, TypeSystemPropertyName::Type));

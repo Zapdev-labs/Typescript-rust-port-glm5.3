@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use rustc_hash::FxHashMap;
 use tsc_ast::{
-    is_access_expression, is_binary_expression, is_binding_element, is_element_access_expression,
+    is_access_expression, is_binary_expression, is_element_access_expression,
     is_identifier, is_parenthesized_expression, is_property_access_expression, is_qualified_name,
     is_type_reference_node, Kind, ModifierFlags, Node, NodeId, NodeList, NodeStore, Symbol,
     SymbolFlags, SymbolId, SymbolTable, has_syntactic_modifier, INTERNAL_SYMBOL_NAME_EXPORT_EQUALS,
@@ -19,7 +19,7 @@ use tsc_ast::{
 };
 use tsc_ast::nodeflags::NodeFlags;
 use tsc_ast::utilities::{
-    is_access_expression as ast_is_access_expression, is_in_js_file,
+    is_in_js_file,
 };
 use tsc_binder::ast_shims as binder_shims;
 use tsc_core::text::{TextPos, TextRange};
@@ -158,7 +158,7 @@ pub fn is_empty_object_literal(store: &dyn NodeStore, expression: NodeId) -> boo
         return false;
     }
     n.as_object_literal_expression()
-        .map(|d| d.properties.as_ref().map_or(true, |p| p.nodes.is_empty()))
+        .map(|d| d.properties.as_ref().is_none_or(|p| p.nodes.is_empty()))
         .unwrap_or(true)
 }
 
@@ -412,7 +412,7 @@ pub fn get_containing_qualified_name_node(store: &dyn NodeStore, node: NodeId) -
 pub fn is_side_effect_import(store: &dyn NodeStore, node: NodeId) -> bool {
     let ancestor = find_ancestor(store, node, &mut |n| n.kind == Kind::ImportDeclaration);
     match ancestor {
-        Some(a) => store.node(a).as_import_declaration().map_or(true, |d| d.import_clause.is_none()),
+        Some(a) => store.node(a).as_import_declaration().is_none_or(|d| d.import_clause.is_none()),
         None => false,
     }
 }
@@ -545,7 +545,7 @@ pub fn is_optional_declaration(store: &dyn NodeStore, declaration: NodeId) -> bo
 /// Go: `func (c *Checker) isOptionalParameter(node *ast.Node) bool` — the
 /// first two checks are exact; the signature/arity paths need
 /// `getSignatureFromDeclaration` (TODO(port M6)).
-pub fn is_optional_parameter(c: &Checker, store: &dyn NodeStore, node: NodeId) -> bool {
+pub fn is_optional_parameter(_c: &Checker, store: &dyn NodeStore, node: NodeId) -> bool {
     // !!! TODO: JSDoc support
     if store.node(node).kind == Kind::Parameter
         && ast_shims::question_token_of(store, node).is_some()
@@ -873,11 +873,7 @@ pub fn compare_types(c: &Checker, t1: TypeId, t2: TypeId) -> std::cmp::Ordering 
         let o2 = t2r.as_union_type().and_then(|d| d.origin);
         match (o1, o2) {
             (None, None) => {
-                let cl = compare_type_lists(
-                    c,
-                    &t1r.types(),
-                    &t2r.types(),
-                );
+                let cl = compare_type_lists(c, t1r.types(), t2r.types());
                 if cl != Ordering::Equal {
                     return cl;
                 }
@@ -893,7 +889,7 @@ pub fn compare_types(c: &Checker, t1: TypeId, t2: TypeId) -> std::cmp::Ordering 
         }
     } else if t1r.flags.intersects(TypeFlags::INTERSECTION) {
         // Intersections are ordered by their constituent type lists.
-        let cl = compare_type_lists(c, &t1r.types(), &t2r.types());
+        let cl = compare_type_lists(c, t1r.types(), t2r.types());
         if cl != Ordering::Equal {
             return cl;
         }
@@ -1199,7 +1195,6 @@ pub fn compare_tuple_types(
 /// store for name text; the TupleType arm above documents the M6 seam.
 ///
 /// TODO(port M6): store-carrying compare_element_labels.
-
 /// Go: `func compareTypeLists(s1, s2 []*Type) int`.
 pub fn compare_type_lists(c: &Checker, s1: &[TypeId], s2: &[TypeId]) -> std::cmp::Ordering {
     let cl = s1.len().cmp(&s2.len());
@@ -1573,16 +1568,17 @@ pub fn is_valid_big_int_string(s: &str, round_trip_only: bool) -> bool {
     if s.is_empty() {
         return false;
     }
-    let mut success = true;
+    // Go: SetOnError flips `success`; the port's scanner keeps the callback
+    // and text borrowed for its whole lifetime ('a), so both outlive the
+    // scans and the success flag rides in a Cell (interior mutability).
+    let success_cell = std::cell::Cell::new(true);
+    let text = s.to_string() + "n";
     let mut scanner = tsc_scanner::Scanner::new();
     scanner.set_skip_trivia(false);
-    // Go: SetOnError flips `success` — the port's callback has no args to carry
-    // state, so the flag is checked via the same closure shape the scanner
-    // exposes (TODO(port M7): scanner.SetOnError arg plumbing).
-    scanner.set_on_error(&mut |_diagnostic, _start, _length, _args: &[String]| {
-        success = false;
+    scanner.set_on_error(|_diagnostic, _start, _length, _args: &[String]| {
+        success_cell.set(false);
     });
-    scanner.set_text(&(s.to_string() + "n"));
+    scanner.set_text(&text);
     let mut result = scanner.scan();
     let negative = result == Kind::MinusToken;
     if negative {
@@ -1596,13 +1592,14 @@ pub fn is_valid_big_int_string(s: &str, round_trip_only: bool) -> bool {
     //   beyond the augmented input length)
     // * it does not contain a numeric separator (the `BigInt` constructor
     //   does not accept a numeric separator in its input)
+    let success = success_cell.get();
     success
         && result == Kind::BigIntLiteral
-        && scanner.token_end() as usize == s.len() + 1
+        && scanner.token_end() == s.len() + 1
         && !flags.intersects(tsc_ast::TokenFlags::CONTAINS_SEPARATOR)
         && (!round_trip_only
             || s == pseudo_big_int_to_string(&jsnum::new_pseudo_big_int(
-                &jsnum::parse_pseudo_big_int(&scanner.token_value()),
+                &jsnum::parse_pseudo_big_int(std::str::from_utf8(scanner.token_value()).expect("scanner token value is UTF-8")),
                 negative,
             )))
 }
@@ -1641,10 +1638,14 @@ pub fn is_private_identifier_symbol(symbol: Option<&Symbol>) -> bool {
     symbol.is_some_and(|s| s.name.starts_with(&format!("{}#", tsc_ast::INTERNAL_SYMBOL_NAME_PREFIX)))
 }
 
-/// Go: `func isLateBoundName(name string) bool`.
+/// Go: `func isLateBoundName(name string) bool` — `len >= 2 && name[0] ==
+/// '\xFE' && name[1] == '@'`. PORT: Go's 0xFE is an invalid-UTF-8 sentinel
+/// byte; the landed Rust convention (tsc_ast::symbol, INTERNAL_SYMBOL_NAME_PREFIX)
+/// carries it as the code point `'\u{FE}'`, so the byte-index checks become
+/// char checks on the same shape.
 pub fn is_late_bound_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == b'@'
+    let mut chars = name.chars();
+    chars.next() == Some('\u{FE}') && chars.next() == Some('@')
 }
 
 /// Go: `func getContainingClassExcludingClassDecorators(node *ast.Node) *ast.ClassLikeDeclaration`.
@@ -2255,22 +2256,11 @@ fn for_each_child_stopping(
 ) -> bool {
     let n = store.node(node);
     let mut children: Vec<NodeId> = Vec::new();
-    collect_children_shim(store, node, n, &mut children);
+    collect_children_shim(n, &mut children);
     for child in children {
-        if traverse_child(store, child, visitor) {
+        if visitor(child) {
             return true;
         }
-    }
-    false
-}
-
-fn traverse_child(
-    store: &dyn NodeStore,
-    child: NodeId,
-    visitor: &mut dyn FnMut(NodeId) -> bool,
-) -> bool {
-    if visitor(child) {
-        return true;
     }
     let _ = store;
     false
@@ -2278,12 +2268,9 @@ fn traverse_child(
 
 /// Child enumeration for the kinds `forEachYieldExpression` can encounter.
 /// TODO(port M7): replace with the generated ForEachChild table.
-fn collect_children_shim(
-    store: &dyn NodeStore,
-    node: NodeId,
-    n: &Node,
-    children: &mut Vec<NodeId>,
-) {
+fn collect_children_shim(n: &Node, children: &mut Vec<NodeId>) {
+    // TODO(port M7): the generated ForEachChild table replaces this shim
+    // wholesale (payload-driven enumeration of the kinds the walker meets).
     use tsc_ast::NodeData as D;
     match &n.data {
         D::Block(d) => {
@@ -2328,9 +2315,7 @@ fn collect_children_shim(
             if let Some(i) = d.incrementor {
                 children.push(i);
             }
-            if let Some(s) = d.statement {
-                children.push(s);
-            }
+            children.push(d.statement);
         }
         D::ForInOrOfStatement(d) => {
             children.push(d.initializer);
@@ -2356,9 +2341,7 @@ fn collect_children_shim(
             }
         }
         D::CaseOrDefaultClause(d) => {
-            if let Some(e) = d.expression {
-                children.push(e);
-            }
+            children.push(d.expression);
             if let Some(statements) = &d.statements {
                 children.extend(statements.nodes.iter().copied())
             }
@@ -2369,9 +2352,7 @@ fn collect_children_shim(
         }
         D::ThrowStatement(d) => children.push(d.expression),
         D::TryStatement(d) => {
-            if let Some(b) = d.try_block {
-                children.push(b);
-            }
+            children.push(d.try_block);
             if let Some(c) = d.catch_clause {
                 children.push(c);
             }
@@ -2408,9 +2389,7 @@ fn collect_children_shim(
         }
         D::PropertyAssignment(d) => children.push(d.initializer),
         D::SpreadAssignment(d) => {
-            if let Some(e) = d.expression {
-                children.push(e);
-            }
+            children.push(d.expression);
         }
         D::ParenthesizedExpression(d) => children.push(d.expression),
         D::CallExpression(d) => {
@@ -2451,18 +2430,14 @@ fn collect_children_shim(
         D::DeleteExpression(d) => children.push(d.expression),
         D::TypeOfExpression(d) => children.push(d.expression),
         D::VoidExpression(d) => children.push(d.expression),
-        D::AwaitExpression(d) => children.push(d.expression),
         D::AsExpression(d) => children.push(d.expression),
         D::SatisfiesExpression(d) => children.push(d.expression),
         D::TypeAssertion(d) => children.push(d.expression),
         D::SpreadElement(d) => children.push(d.expression),
         D::PartiallyEmittedExpression(d) => {
-            if let Some(e) = d.expression {
-                children.push(e);
-            }
+            children.push(d.expression);
         }
         _ => {
-            let _ = node;
             // TODO(port M7): the remaining kinds are unreachable from
             // forEachYieldExpression's statement/expression traversal; the
             // generated ForEachChild table replaces this shim wholesale.
@@ -2474,15 +2449,22 @@ fn collect_children_shim(
 // Containers, signatures, features
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Go: `func getEnclosingContainer(node *ast.Node) *ast.Node`.
+/// Go: `func getEnclosingContainer(node *ast.Node) *ast.Node` —
+/// `FindAncestor(node.Parent, GetContainerFlags(n)&IsContainer != 0)`.
+/// PORT: `find_ancestor`'s visitor receives `&Node` (Go `*Node`), but the
+/// container-flags table needs the `NodeId`, so the parent walk is inlined
+/// (same traversal shape as `find_ancestor`'s simple-predicate form).
 pub fn get_enclosing_container(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
-    let parent = store.node(node).parent.get();
-    if parent.is_none() {
-        return None;
+    let mut current = store.node(node).parent.get();
+    while !current.is_none() {
+        if tsc_binder::binder::get_container_flags(store, current)
+            .intersects(tsc_binder::binder::ContainerFlags::IS_CONTAINER)
+        {
+            return Some(current);
+        }
+        current = store.node(current).parent.get();
     }
-    find_ancestor(store, parent, &mut |n| {
-        tsc_binder::binder::get_container_flags(n).intersects(tsc_binder::binder::ContainerFlags::IS_CONTAINER)
-    })
+    None
 }
 
 /// Go: `func getDeclarationsOfKind(symbol *ast.Symbol, kind ast.Kind) []*ast.Node`.
@@ -3024,10 +3006,12 @@ pub fn get_any_import_syntax(store: &dyn NodeStore, node: NodeId) -> Option<Node
 
 /// Go: `func isReservedMemberName(name string) bool` — a reserved member name
 /// consists of the byte 0xFE followed by one or more characters where the
-/// first character is not '@' or '#'.
+/// first character is not '@' or '#'. PORT: same '\u{FE}'-code-point
+/// convention as [`is_late_bound_name`].
 pub fn is_reserved_member_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] != b'@' && bytes[1] != b'#'
+    let mut chars = name.chars();
+    chars.next() == Some('\u{FE}')
+        && !matches!(chars.next(), None | Some('@') | Some('#'))
 }
 
 /// Go: `func introducesArgumentsExoticObject(node *ast.Node) bool`.

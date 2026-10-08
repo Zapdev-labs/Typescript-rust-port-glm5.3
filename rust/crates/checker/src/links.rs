@@ -11,7 +11,7 @@
 // carry Go's lazily-assigned ids for its own link stores; they are not needed
 // here.
 
-use tsc_ast::{NodeId, Symbol, SymbolId};
+use tsc_ast::{NodeId, SymbolId};
 use tsc_core::linkstore::PagedLinkStore;
 
 /// Go: `type nodeLinkStore[V any] struct` — a links store keyed by node
@@ -95,7 +95,7 @@ impl<V: Default> SymbolArenaLinkStore<V> {
 
     /// Go: `func (s *symbolArenaLinkStore[V]) TryGet(symbol *ast.Symbol) *V`.
     pub fn try_get(&mut self, symbol: SymbolId) -> Option<&mut V> {
-        let index = *self.store.try_get(symbol.0 as u64)?;
+        let index = *self.store.try_get(symbol.0 as u64)?.as_ref()?;
         Some(&mut self.arena[index as usize])
     }
 }
@@ -109,6 +109,7 @@ impl<V: Default> SymbolArenaLinkStore<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tsc_ast::Symbol;
 
     #[test]
     fn node_link_store_lazy_alloc() {

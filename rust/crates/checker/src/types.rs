@@ -22,7 +22,7 @@
 use std::fmt::Write as _;
 
 use rustc_hash::FxHashMap;
-use tsc_ast::{CheckFlags, Kind, ModifierFlags, NodeId, SymbolFlags, SymbolId, SymbolTable};
+use tsc_ast::{NodeId, SymbolFlags, SymbolId, SymbolTable};
 use tsc_collections::OrderedSet;
 use tsc_core::options_generated::ScriptTarget;
 use tsc_core::tristate::Tristate;
@@ -1269,10 +1269,10 @@ impl Type {
     pub fn as_constrained_type(&self) -> Option<&ConstrainedType> {
         match &self.data {
             TypeData::Intrinsic(_) | TypeData::Literal(_) | TypeData::UniqueESSymbol(_) => None,
-            TypeData::Object(d) => Some(&d.base),
-            TypeData::TypeReference(d) => Some(&d.base.base),
-            TypeData::Interface(d) => Some(&d.base.base.base),
-            TypeData::Tuple(d) => Some(&d.base.base.base.base),
+            TypeData::Object(d) => Some(&d.base.base),
+            TypeData::TypeReference(d) => Some(&d.base.base.base),
+            TypeData::Interface(d) => Some(&d.base.base.base.base),
+            TypeData::Tuple(d) => Some(&d.base.base.base.base.base),
             TypeData::InstantiationExpression(d) => Some(&d.base.base.base),
             TypeData::Mapped(d) => Some(&d.base.base.base),
             TypeData::ReverseMapped(d) => Some(&d.base.base.base),
@@ -2277,9 +2277,10 @@ pub struct CompositeSignature {
 }
 
 /// Go: `type TypePredicateKind int32` + consts (iota order preserved).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[repr(i32)]
 pub enum TypePredicateKind {
+    #[default]
     This = 0,
     Identifier = 1,
     AssertsThis = 2,
@@ -2461,8 +2462,10 @@ mod tests {
             TypeFlags::UNIT,
             TypeFlags::ENUM | TypeFlags::LITERAL | TypeFlags::UNIQUE_ESSYMBOL | TypeFlags::NULLABLE
         );
-        // getSortOrderFlags's special case keys off Enum|EnumLiteral without Union.
-        assert!(TypeFlags::ENUM_LITERAL.intersects(TypeFlags::ENUM));
+        // Go: EnumLiteral is a plain bit (1<<15) — always COMBINED with
+        // StringLiteral/NumberLiteral/Union by construction, never containing
+        // Enum itself (getSortOrderFlags keys off Enum|EnumLiteral as a value).
+        assert!(!TypeFlags::ENUM_LITERAL.intersects(TypeFlags::ENUM));
     }
 
     #[test]
@@ -2494,9 +2497,10 @@ mod tests {
     fn format_type_flags_mirrors_go() {
         assert_eq!(format_type_flags(TypeFlags::NONE), vec!["None"]);
         assert_eq!(format_type_flags(TypeFlags::ANY), vec!["Any"]);
+        // FRESHABLE = Enum|Literal, so the literal-kind bits all print.
         assert_eq!(
             format_type_flags(TypeFlags::NUMBER_LITERAL | TypeFlags::FRESHABLE),
-            vec!["Enum", "NumberLiteral"]
+            vec!["StringLiteral", "NumberLiteral", "BigIntLiteral", "BooleanLiteral", "Enum"]
         );
         assert_eq!(TypeFlags(TypeFlags::STRING.0 | TypeFlags::NUMBER.0).to_string(), "String|Number");
         assert_eq!(TypeFlags::NONE.to_string(), "None");
@@ -2510,8 +2514,10 @@ mod tests {
         assert_eq!(VarianceFlags::CONTRAVARIANT.to_string(), "in");
         assert_eq!(VarianceFlags::COVARIANT.to_string(), "out");
         assert_eq!(VarianceFlags::INDEPENDENT.to_string(), "[independent]");
-        assert_eq!(VarianceFlags::UNMEASURABLE.to_string(), " (unmeasurable)");
-        assert_eq!(VarianceFlags::UNRELIABLE.to_string(), " (unreliable)");
+        // Go: Unmeasurable is a bare bit (1<<3); the variance mask reads
+        // Invariant (0) → "in out" plus the suffix.
+        assert_eq!(VarianceFlags::UNMEASURABLE.to_string(), "in out (unmeasurable)");
+        assert_eq!(VarianceFlags::UNRELIABLE.to_string(), "in out (unreliable)");
         assert_eq!(
             (VarianceFlags::UNRELIABLE | VarianceFlags::COVARIANT).to_string(),
             "out (unreliable)"
