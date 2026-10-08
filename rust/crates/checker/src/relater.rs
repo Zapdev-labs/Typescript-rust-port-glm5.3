@@ -1177,7 +1177,9 @@ fn report_diagnostic(
     let Some(diagnostic) = diagnostic else { return };
     match diagnostic_output {
         Some(out) => out.push(diagnostic),
-        None => c.add_diagnostic(diagnostic),
+        None => {
+            c.add_diagnostic(diagnostic);
+        }
     }
 }
 

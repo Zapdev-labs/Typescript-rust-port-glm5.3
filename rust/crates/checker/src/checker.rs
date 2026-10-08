@@ -49,9 +49,10 @@ use crate::types::{
     ContainingSymbolLinks, DeclaredTypeLinks, DeferredSymbolLinks, EnumMemberLinks, ExportTypeLinks,
     IndexInfo, IntrinsicType, LateBoundLinks, LiteralType, LiteralValue, MarkedAssignmentSymbolLinks,
     MembersAndExportsLinks, MappedSymbolLinks, ModuleSymbolLinks, NodeLinks,
-    ObjectFlags, ReverseMappedSymbolLinks, Signature, SourceFileLinks, SpreadLinks,
-    SwitchStatementLinks, SymbolNodeLinks, SymbolReferenceLinks, Type, TypeAliasLinks, TypeData,
-    TypeFlags, TypeId, TypeNodeLinks, ValueSymbolLinks, VarianceFlags, VarianceLinks,
+    ObjectFlags, ReverseMappedSymbolLinks, Signature, SignatureFlags, SignatureId, SourceFileLinks,
+    SpreadLinks, SwitchStatementLinks, SymbolNodeLinks, SymbolReferenceLinks, Type, TypeAliasLinks,
+    TypeData, TypeFlags, TypeId, TypeNodeLinks, TypePredicate, TypePredicateKind, ValueSymbolLinks,
+    VarianceFlags, VarianceLinks,
 };
 use crate::utilities as u;
 
@@ -400,6 +401,78 @@ pub struct Checker {
     /// UnionType has no mutation seam for the map), keyed by the union id —
     /// same lifetime semantics (unions are interned per checker).
     pub(crate) key_property_names: FxHashMap<TypeId, Option<String>>,
+    // ── M6 S1 (spine.rs): the entry/expression-spine state (Go checker.go) ──
+    /// Go: the `ctx`-derived cancellation flag (utilities.go:1712;
+    /// `c.checkNotCanceled` panics on use-after-cancel through
+    /// `was_canceled` below). PORT: no context plumbing — a host-set flag.
+    pub(crate) canceled: bool,
+    /// Go: `files []*ast.SourceFile` — the program's files (the §5.1
+    /// NodeId identity), iterated by initializeChecker.
+    pub(crate) files: Vec<NodeId>,
+    /// Go: `withinUnreachableCode bool` (checker.go:2266).
+    pub(crate) within_unreachable_code: bool,
+    /// Go: `reportedUnreachableNodes map[*ast.Node]struct{}`.
+    pub(crate) reported_unreachable_nodes: FxHashSet<NodeId>,
+    /// Go: `deferredDiagnosticCallbacks []func()` (checker.go:14312) — the
+    /// closure payloads as an enum (spine.rs).
+    pub(crate) deferred_diagnostic_callbacks: Vec<crate::spine::DeferredDiagnosticCallback>,
+    /// Go: `contextualTypes []ContextualInfo` (checker.go:78-84).
+    pub(crate) contextual_infos: Vec<crate::spine::ContextualInfo>,
+    /// Go: `inferenceContexts []InferenceContextInfo` (checker.go:86-89).
+    pub(crate) inference_context_infos: Vec<crate::spine::InferenceContextInfo>,
+    /// Go: `flowTypeCache map[*ast.Node]*Type` — keyed by the node id (§5.1).
+    pub(crate) flow_type_cache: FxHashMap<NodeId, TypeId>,
+    /// Go: `flowLoopStack []*FlowLoop` — the flow engine is W3; the
+    /// save/restore shape carries through todo_shapes' placeholder.
+    pub(crate) flow_loop_stack: Vec<crate::todo_shapes::FlowLoopInfo>,
+    /// Go: `flowInvocationCount uint32`.
+    pub(crate) flow_invocation_count: usize,
+    /// Go: `contextFreeTypes map[*ast.Node]*Type`.
+    pub(crate) context_free_types: FxHashMap<NodeId, TypeId>,
+    /// Go: `renamedBindingElementsInTypes []*ast.Node`.
+    pub(crate) renamed_binding_elements_in_types: Vec<NodeId>,
+    /// Go: `skipDirectInferenceNodes *collections.OrderedSet`.
+    pub(crate) skip_direct_inference_nodes: tsc_collections::OrderedSet<NodeId>,
+    /// Go: `serializationLevel uint32` (checker.go:14263).
+    pub(crate) serialization_level: u32,
+    /// Go: `diagnostics` / `suggestionDiagnostics` (ast/diagnostic.go's
+    /// DiagnosticsCollection — spine.rs's port).
+    pub(crate) diagnostics: crate::spine::DiagnosticsCollection,
+    pub(crate) suggestion_diagnostics: crate::spine::DiagnosticsCollection,
+    /// Go: `patternAmbientModules []PatternAmbientModule`.
+    pub(crate) pattern_ambient_modules: Vec<tsc_ast::PatternAmbientModule>,
+    /// Go: the getGlobal* resolver func-fields (checker.go's globalResolvers
+    /// struct; memoized per resolver id in spine.rs).
+    pub(crate) global_resolvers: crate::spine::GlobalResolvers,
+    // The NewChecker tail spine.rs's initializeChecker seeds (Go checker.go
+    // 1340-1470): the anonymous-object/signature/marker-for-check family.
+    pub(crate) empty_object_type: Option<TypeId>,
+    pub(crate) empty_generic_type: Option<TypeId>,
+    pub(crate) any_function_type: Option<TypeId>,
+    pub(crate) any_signature: Option<SignatureId>,
+    pub(crate) unknown_signature: Option<SignatureId>,
+    pub(crate) resolving_signature: Option<SignatureId>,
+    pub(crate) silent_never_signature: Option<SignatureId>,
+    /// Go: `noTypePredicate *TypePredicate{parameterName: "<<unresolved>>",
+    /// t: c.anyType}`.
+    pub(crate) no_type_predicate: Option<TypePredicate>,
+    /// Go: `markerSubTypeForCheck`/`markerSuperTypeForCheck` — the relation
+    /// pair used by isTypeRelatedTo's for-check marker probes.
+    pub(crate) marker_sub_type_for_check: Option<TypeId>,
+    pub(crate) marker_super_type_for_check: Option<TypeId>,
+    /// Go: `autoArrayType` (createArrayType(autoType)) — Option until S7's
+    /// real createArrayType (the empty-object marker stand-in).
+    pub(crate) auto_array_type: Option<TypeId>,
+    /// Go: `anyReadonlyArrayType`.
+    pub(crate) any_readonly_array_type: Option<TypeId>,
+    /// Go: `globalThisType`.
+    pub(crate) global_this_type: Option<TypeId>,
+    /// Go: `globalCallableFunctionType`/`globalNewableFunctionType` (the
+    /// getGlobalStrictFunctionType pair).
+    pub(crate) global_callable_function_type: Option<TypeId>,
+    pub(crate) global_newable_function_type: Option<TypeId>,
+    /// Go: `globalRegexpType`.
+    pub(crate) global_regexp_type: Option<TypeId>,
 }
 
 /// Go: `func createFileIndexMap(files []*ast.SourceFile) map[*ast.SourceFile]int`.
@@ -1204,152 +1277,8 @@ impl Checker {
         None
     }
 
-    /// Go: `func (c *Checker) getQuickTypeOfExpression(node *ast.Node) *Type` —
-    /// quick types are a pure optimization; the spike ports only the literal
-    /// arm (the await/call/new/assertion arms need signature machinery (M6)
-    /// and skipping them only costs time, never a different type).
-    pub(crate) fn get_quick_type_of_expression(&mut self, node: NodeId) -> Option<TypeId> {
-        let is_literal = {
-            let n = self.store().node(node);
-            binder_shims::is_literal_expression(n) || binder_shims::is_boolean_literal(n)
-        };
-        if is_literal {
-            return Some(self.check_expression(node));
-        }
-        None
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // Expression checking (Go checker.go 7715+ — literal arms only)
-    // ────────────────────────────────────────────────────────────────────────
-
-    /// Go: `func (c *Checker) checkExpressionCached(node *ast.Node) *Type`.
-    pub fn check_expression_cached(&mut self, node: NodeId) -> TypeId {
-        self.check_expression_cached_ex(node, CheckMode::CHECK_MODE_NORMAL)
-    }
-
-    /// Go: `func (c *Checker) checkExpressionCachedEx(node, checkMode) *Type`.
-    pub fn check_expression_cached_ex(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
-        if check_mode != CheckMode::CHECK_MODE_NORMAL {
-            return self.check_expression_ex(node, check_mode);
-        }
-        if self.type_node_links.get(node).resolved_type.is_none() {
-            // When computing a type that we're going to cache, we need to
-            // ignore any ongoing control flow analysis — the flow caches
-            // (flowLoopStack / flowTypeCache) are M6 (todo_shapes::FlowState),
-            // so there is nothing to save/restore in the spike.
-            let t = self.check_expression_ex(node, check_mode);
-            self.type_node_links.get(node).resolved_type = Some(t);
-        }
-        self.type_node_links
-            .get(node)
-            .resolved_type
-            .expect("just cached")
-    }
-
-    /// Go: `func (c *Checker) checkExpression(node *ast.Node) *Type`.
-    pub fn check_expression(&mut self, node: NodeId) -> TypeId {
-        self.check_expression_ex(node, CheckMode::CHECK_MODE_NORMAL)
-    }
-
-    /// Go: `func (c *Checker) checkExpressionEx(node, checkMode) *Type`.
-    pub fn check_expression_ex(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
-        // Go: tracer push/pop — todo_shapes::Tracer (M6).
-        let save_current_node = self.current_node.replace(node);
-        self.instantiation_count = 0;
-        let uninstantiated_type = self.check_expression_worker(node, check_mode);
-        // Go: instantiateTypeWithSingleGenericCallSignature — diverges only
-        // for type references with a single generic call signature (M6);
-        // identity in the spike. TODO(port M6).
-        let t = uninstantiated_type;
-        // Go: isConstEnumObjectType → checkConstEnumAccess — const enums are M6.
-        self.current_node = save_current_node;
-        t
-    }
-
-    /// Go: `func (c *Checker) checkExpressionWorker(node, checkMode) *Type` —
-    /// literal/keyword arms; every other arm's Go callee is named in its
-    /// TODO(port M6) banner.
-    fn check_expression_worker(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
-        let kind = self.store().node(node).kind;
-        match kind {
-            Kind::Identifier => panic!("TODO(port M6): checkIdentifier (flow types)"),
-            Kind::PrivateIdentifier => panic!("TODO(port M6): checkPrivateIdentifierExpression"),
-            Kind::ThisKeyword => panic!("TODO(port M6): checkThisExpression"),
-            Kind::SuperKeyword => panic!("TODO(port M6): checkSuperExpression"),
-            Kind::NullKeyword => self.null_widening_type(),
-            Kind::StringLiteral | Kind::NoSubstitutionTemplateLiteral => {
-                // Go: isSkipDirectInferenceNode (skipDirectInferenceNodes)
-                // is the JSDoc satisfies-attributes set — M6; the spike has
-                // no skip set. TODO(port M6).
-                let text = tsc_ast::node_text(self.store(), node).to_string();
-                let t = self.get_string_literal_type(&text);
-                self.get_fresh_type_of_literal_type(t)
-            }
-            Kind::NumericLiteral => {
-                // Go: checkGrammarNumericLiteral — grammar-check diagnostics
-                // seam (M5 compiler crate); the numeric-literal grammar check
-                // is a diagnostic-only pass.
-                let text = tsc_ast::node_text(self.store(), node).to_string();
-                let t = self.get_number_literal_type(tsc_jsnum::from_string(&text));
-                self.get_fresh_type_of_literal_type(t)
-            }
-            Kind::BigIntLiteral => {
-                // Go: checkGrammarBigIntLiteral — same diagnostics seam.
-                let text = tsc_ast::node_text(self.store(), node).to_string();
-                let t = self.get_big_int_literal_type(tsc_jsnum::new_pseudo_big_int(
-                    &tsc_jsnum::parse_pseudo_big_int(&text),
-                    false, /*negative*/
-                ));
-                self.get_fresh_type_of_literal_type(t)
-            }
-            Kind::TrueKeyword => self.true_type(),
-            Kind::FalseKeyword => self.false_type(),
-            Kind::TemplateExpression => panic!("TODO(port M6): checkTemplateExpression"),
-            Kind::RegularExpressionLiteral => panic!("TODO(port M6): checkRegularExpressionLiteral"),
-            Kind::ArrayLiteralExpression => panic!("TODO(port M6): checkArrayLiteral"),
-            Kind::ObjectLiteralExpression => panic!("TODO(port M6): checkObjectLiteral"),
-            Kind::PropertyAccessExpression => panic!("TODO(port M6): checkPropertyAccessExpression"),
-            Kind::QualifiedName => panic!("TODO(port M6): checkQualifiedName"),
-            Kind::ElementAccessExpression => panic!("TODO(port M6): checkIndexedAccess"),
-            Kind::CallExpression | Kind::NewExpression => {
-                panic!("TODO(port M6): checkCallExpression")
-            }
-            Kind::TaggedTemplateExpression => panic!("TODO(port M6): checkTaggedTemplateExpression"),
-            Kind::ParenthesizedExpression => panic!("TODO(port M6): checkParenthesizedExpression"),
-            Kind::ClassExpression => panic!("TODO(port M6): checkClassExpression"),
-            Kind::FunctionExpression | Kind::ArrowFunction => {
-                panic!("TODO(port M6): checkFunctionExpressionOrObjectLiteralMethod")
-            }
-            Kind::TypeAssertionExpression | Kind::AsExpression => {
-                panic!("TODO(port M6): checkAssertion")
-            }
-            Kind::TypeOfExpression => panic!("TODO(port M6): checkTypeOfExpression"),
-            Kind::NonNullExpression => panic!("TODO(port M6): checkNonNullAssertion"),
-            Kind::ExpressionWithTypeArguments => panic!("TODO(port M6): checkExpressionWithTypeArguments"),
-            Kind::SatisfiesExpression => panic!("TODO(port M6): checkSatisfiesExpression"),
-            Kind::MetaProperty => panic!("TODO(port M6): checkMetaProperty"),
-            Kind::DeleteExpression => panic!("TODO(port M6): checkDeleteExpression"),
-            Kind::VoidExpression => panic!("TODO(port M6): checkVoidExpression"),
-            Kind::AwaitExpression => panic!("TODO(port M6): checkAwaitExpression"),
-            Kind::PrefixUnaryExpression => panic!("TODO(port M6): checkPrefixUnaryExpression"),
-            Kind::PostfixUnaryExpression => panic!("TODO(port M6): checkPostfixUnaryExpression"),
-            Kind::BinaryExpression => panic!("TODO(port M6): checkBinaryExpression"),
-            Kind::ConditionalExpression => panic!("TODO(port M6): checkConditionalExpression"),
-            Kind::SpreadElement => panic!("TODO(port M6): checkSpreadExpression"),
-            Kind::OmittedExpression => self.undefined_widening_type(),
-            Kind::YieldExpression => panic!("TODO(port M6): checkYieldExpression"),
-            Kind::SyntheticExpression => panic!("TODO(port M6): checkSyntheticExpression"),
-            Kind::JsxExpression => panic!("TODO(port M6): checkJsxExpression"),
-            Kind::JsxElement => panic!("TODO(port M6): checkJsxElement"),
-            Kind::JsxSelfClosingElement => panic!("TODO(port M6): checkJsxSelfClosingElement"),
-            Kind::JsxFragment => panic!("TODO(port M6): checkJsxFragment"),
-            Kind::JsxAttributes => panic!("TODO(port M6): checkJsxAttributes"),
-            Kind::JsxOpeningElement => panic!("Should never directly check a JsxOpeningElement"),
-            _ => self.error_type(),
-        }
-        .tap_check_mode(check_mode)
-    }
+    // (The spike's getQuickTypeOfExpression + checkExpression family stubs
+    // here are superseded by the full S1 spine.rs ports.)
 
     // ────────────────────────────────────────────────────────────────────────
     // Type-resolution cycle detection (Go checker.go 19165+)
@@ -1541,52 +1470,10 @@ impl Checker {
     // W1 callee stubs + early landings (Go checker.go functions the W1
     // periphery files — mapper.go / jsdoc.go / exports.go — need; the S-waves
     // replace the stub bodies and absorb the early landings).
-    //
-    // W1: until the S-waves land, this whole section is reached only through
-    // the test-driven mapper/jsdoc/exports surface — the spike's dead-code
-    // silencing convention applies (drop the allows as the waves arrive).
     // ────────────────────────────────────────────────────────────────────────
-
-    /// Go: `func (c *Checker) error(node *ast.Node, message, args...)` —
-    /// diagnostic creation; the plumbing lands with the M5 compiler crate
-    /// (`ast.Diagnostic` collection on the program). Go's variadic args
-    /// port as a slice.
-    #[allow(dead_code)] // wired by the M5 compiler wave's diagnostics collection
-    pub(crate) fn error(
-        &mut self,
-        _node: NodeId,
-        _message: &'static tsc_diagnostics::Message,
-        _args: &[String],
-    ) {
-        // TODO(port M5 compiler): diagnostics collection seam.
-    }
-
-    /// Go: `func (c *Checker) errorOrSuggestion(isSuggestion bool, node *ast.Node, message *diagnostics.Message, args...)`
-    /// — same collection seam as `error`. Permissive W1 stub (no-op); the
-    /// M5 compiler wave wires both.
-    #[allow(dead_code)] // wired by the M5 compiler wave's diagnostics collection
-    pub(crate) fn error_or_suggestion(
-        &mut self,
-        _is_suggestion: bool,
-        _node: NodeId,
-        _message: &'static tsc_diagnostics::Message,
-        _args: &[String],
-    ) {
-        // TODO(port M5 compiler): diagnostics collection seam.
-    }
-
-    /// Go: `func (c *Checker) addDiagnostic(diagnostic *ast.Diagnostic)` —
-    /// the same M5 compiler collection seam as `error` (permissive no-op).
-    #[allow(dead_code)] // wired by the M5 compiler wave's diagnostics collection
-    pub(crate) fn add_diagnostic(&mut self, _diagnostic: tsc_ast::Diagnostic) {
-        // TODO(port M5 compiler): diagnostics collection seam.
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // W1 callee stubs + early landings (Go checker.go functions the W1
-    // periphery files — mapper.go / jsdoc.go / exports.go — need; the S-waves
-    // replace the stub bodies and absorb the early landings).
-    // ────────────────────────────────────────────────────────────────────────
+    // S1 NOTE: the error/errorOrSuggestion/addDiagnostic W1 stubs that lived
+    // here are superseded by the real bodies in spine.rs (Go checker.go
+    // 14222-14310).
 
     /// Go: `func getNonDistributedTypeParameter(t *Type) *Type`
     /// (checker.go:23533). EARLY LANDING (mapper.go calls it; the body is
@@ -1896,6 +1783,40 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         global_boolean_type: None,
         empty_type_literal_type: None,
         key_property_names: FxHashMap::default(),
+        canceled: false,
+        files: Vec::new(),
+        within_unreachable_code: false,
+        reported_unreachable_nodes: FxHashSet::default(),
+        deferred_diagnostic_callbacks: Vec::new(),
+        contextual_infos: Vec::new(),
+        inference_context_infos: Vec::new(),
+        flow_type_cache: FxHashMap::default(),
+        flow_loop_stack: Vec::new(),
+        flow_invocation_count: 0,
+        context_free_types: FxHashMap::default(),
+        renamed_binding_elements_in_types: Vec::new(),
+        skip_direct_inference_nodes: tsc_collections::OrderedSet::new(),
+        serialization_level: 0,
+        diagnostics: crate::spine::DiagnosticsCollection::default(),
+        suggestion_diagnostics: crate::spine::DiagnosticsCollection::default(),
+        pattern_ambient_modules: Vec::new(),
+        global_resolvers: Checker::new_global_resolvers(),
+        empty_object_type: None,
+        empty_generic_type: None,
+        any_function_type: None,
+        any_signature: None,
+        unknown_signature: None,
+        resolving_signature: None,
+        silent_never_signature: None,
+        no_type_predicate: None,
+        marker_sub_type_for_check: None,
+        marker_super_type_for_check: None,
+        auto_array_type: None,
+        any_readonly_array_type: None,
+        global_this_type: None,
+        global_callable_function_type: None,
+        global_newable_function_type: None,
+        global_regexp_type: None,
     };
 
     // Go: countGlobalSymbols sizes the globals table — a capacity hint; the
@@ -2055,27 +1976,95 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     c.marker_types.insert(marker_super_type);
     c.marker_types.insert(marker_sub_type);
     c.marker_types.insert(marker_other_type);
+
+    // ── The NewChecker tail (Go checker.go:1338-1470) — spine.rs's slice ──
+    // Go creates these AFTER the marker type parameters (the exact
+    // creation order preserves the spike's type-id pin).
+    // Go: c.noTypePredicate = &TypePredicate{parameterName: "<<unresolved>>", t: c.anyType}
+    c.no_type_predicate = Some(TypePredicate {
+        kind: TypePredicateKind::default(),
+        parameter_index: -1,
+        parameter_name: "<<unresolved>>".to_string(),
+        t: Some(c.any_type.expect("just created")),
+    });
+    // Go: newSignature arena slot 0 is the dummy (id == arena index, like
+    // the types arena — see the signatures field note).
+    c.signatures.push(Signature {
+        id: SignatureId(0),
+        flags: SignatureFlags::NONE,
+        min_argument_count: -1,
+        resolved_min_argument_count: -1,
+        declaration: None,
+        type_parameters: Vec::new(),
+        parameters: Vec::new(),
+        this_parameter: None,
+        resolved_return_type: None,
+        resolved_type_predicate: None,
+        target: None,
+        mapper: None,
+        isolated_signature_type: None,
+        composite: None,
+        no_type_predicate: false,
+    });
+    // Go: c.emptyObjectType = newAnonymousType(nil, emptySymbols, emptyMembers, ...)
+    //      c.emptyGenericType  = newAnonymousType(...) (the 1-type-param placeholder)
+    //      c.anyFunctionType   = newAnonymousType(nil, emptyMembers, ..., ObjectFlagsNonInferrable)
+    // (spine.rs's new_anonymous_type — the S7/S8 members-resolution seam
+    // note lives there).
+    c.empty_object_type = Some(c.new_anonymous_type(None, &[]));
+    c.empty_generic_type = Some(c.new_anonymous_type(None, &[]));
+    c.any_function_type = Some(c.new_anonymous_type_ex(
+        None,
+        &[],
+        ObjectFlags::NON_INFERRABLE_TYPE,
+    ));
+    // Go: anySignature/unknownSignature/resolvingSignature/silentNeverSignature
+    // (checker.go 1040-1050 — spine.rs's new_signature; the Go arg shape is
+    // flags, declaration, typeParameters, thisParameter, parameters,
+    // resolvedReturnType, resolvedTypePredicate, minArgumentCount).
+    let any_type = c.any_type.expect("just created");
+    let error_type = c.error_type.expect("just created");
+    let silent_never_type = c.silent_never_type.expect("just created");
+    c.any_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(any_type), -1));
+    c.unknown_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(error_type), -1));
+    c.resolving_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(error_type), -1));
+    c.silent_never_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(silent_never_type), -1));
+    // Go: getVariancesMap's markerSubTypeForCheck/markerSuperTypeForCheck
+    // (relater.go's relation pair — same construction as the markers above).
+    let marker_super_for_check = c.new_type(
+        TypeFlags::TYPE_PARAMETER,
+        ObjectFlags::NONE,
+        TypeData::TypeParameter(Box::default()),
+    );
+    let marker_sub_for_check = c.new_type(
+        TypeFlags::TYPE_PARAMETER,
+        ObjectFlags::NONE,
+        TypeData::TypeParameter(Box::default()),
+    );
+    c.type_mut(marker_sub_for_check)
+        .as_type_parameter_mut()
+        .expect("TypeParameter data")
+        .constraint = Some(marker_super_for_check);
+    c.marker_super_type_for_check = Some(marker_super_for_check);
+    c.marker_sub_type_for_check = Some(marker_sub_for_check);
+
     // Go (checker.go 1372): `c.anyArrayType = c.createArrayType(c.anyType)`.
     // TODO(port M6 S7): createArrayType constructs the type reference; until
     // that wave the field holds anyType (see the field PORT note).
     c.any_array_type = c.any_type.expect("just created");
+    // Go: initializeChecker (checker.go:1309) — the spine.rs port over the
+    // program's files (globals merge + the deferred seeding + the special
+    // global types).
+    c.files = c
+        .program
+        .source_files()
+        .iter()
+        .map(|f| f.as_node_id())
+        .collect();
+    c.initialize_checker();
     // TODO(port M6): typeofType = getUnionType(...typeofNEFacts), the flow
-    // caches, the Relations, the getGlobal* resolvers,
-    // initializeClosures/initializeIterationResolvers/initializeChecker.
+    // caches, the Relations, initializeClosures/initializeIterationResolvers.
     c
-}
-
-// A tiny internal helper used by check_expression_worker to consume the
-// checkMode value that Go passes to every callee (kept in the signature so
-// the port's call shape matches Go's even where the arm is bannered).
-trait TapCheckMode {
-    fn tap_check_mode(self, _check_mode: CheckMode) -> TypeId;
-}
-
-impl TapCheckMode for TypeId {
-    fn tap_check_mode(self, _check_mode: CheckMode) -> TypeId {
-        self
-    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

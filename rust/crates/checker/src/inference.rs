@@ -2909,7 +2909,7 @@ impl Checker {
     /// is the JSDoc satisfies-attributes registration (the field lives on
     /// the Checker, activated by S1's spine port).
     pub(crate) fn is_skip_direct_inference_node(&self, node: tsc_ast::NodeId) -> bool {
-        self.skip_direct_inference_nodes.contains(&node)
+        self.skip_direct_inference_nodes.has(&node)
     }
 
     /// Go: `func (c *Checker) isFromInferenceBlockedSource(t *Type) bool`
@@ -3099,11 +3099,6 @@ impl Checker {
     /// Go: `func (c *Checker) getApplicableIndexInfo(t, keyType) *IndexInfo`.
     fn get_applicable_index_info(&mut self, t: TypeId, key_type: TypeId) -> Option<crate::types::IndexInfoId> {
         get_applicable_index_info(self, t, key_type)
-    }
-
-    /// Go: `func (c *Checker) isFromInferenceBlockedSource(t) bool`.
-    fn is_from_inference_blocked_source(&self, t: TypeId) -> bool {
-        is_from_inference_blocked_source(self, t)
     }
 
     /// Go: `func (c *Checker) isSkipDirectInferenceNode(node) bool` — the

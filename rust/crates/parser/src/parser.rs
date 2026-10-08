@@ -6714,9 +6714,17 @@ impl<'a, 'f> Parser<'a, 'f> {
                             n.kind == Kind::Decorator,
                         )
                     };
+                    // PORT (M6 S1, conformance gap 2 / TS8009): Go's
+                    // condition is `ast.ModifierToFlag(kind)&
+                    // ast.ModifierFlagsJavaScript == 0` — the modifiers LEGAL
+                    // in .js (export/static/accessor/async/default) are
+                    // EXEMPT; only the TS-only modifiers error. The earlier
+                    // port had the condition inverted (erroring on the
+                    // JS-legal set), which produced the 4 extra TS8009s in
+                    // the asyncArrowFunction_allowJs conformance slice.
                     if !modifier_flags
                         && !modifier_is_decorator
-                        && tsc_ast::visitor::modifier_to_flag(modifier_kind)
+                        && !tsc_ast::visitor::modifier_to_flag(modifier_kind)
                             .intersects(tsc_ast::ModifierFlags::JAVASCRIPT)
                     {
                         self.js_error_at_range(
@@ -6738,9 +6746,12 @@ impl<'a, 'f> Parser<'a, 'f> {
                         let n = s.node(modifier);
                         (n.flags.intersects(NodeFlags::REPARSED), n.kind, n.loc)
                     };
+                    // PORT (M6 S1, conformance gap 2 / TS8009): same inverted-
+                    // condition fix as the class/method arm above — Go errors
+                    // only for modifiers OUTSIDE the JS-legal set.
                     if !is_reparsed
                         && modifier_kind != Kind::Decorator
-                        && tsc_ast::visitor::modifier_to_flag(modifier_kind)
+                        && !tsc_ast::visitor::modifier_to_flag(modifier_kind)
                             .intersects(tsc_ast::ModifierFlags::JAVASCRIPT)
                     {
                         self.js_error_at_range(

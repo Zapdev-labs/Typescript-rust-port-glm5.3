@@ -124,6 +124,7 @@ pub mod jsdoc;
 pub mod links;
 pub mod mapper;
 pub mod relater;
+pub mod spine;
 pub mod stringer_generated;
 pub mod symboltracker;
 pub mod todo_shapes;

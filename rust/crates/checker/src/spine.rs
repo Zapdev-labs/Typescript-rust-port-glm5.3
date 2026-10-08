@@ -60,11 +60,10 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use tsc_ast::{
-    is_access_expression, is_as_expression, is_await_expression, is_binary_expression,
-    is_boolean_literal, is_call_expression, is_class_expression, is_element_access_expression,
-    is_identifier, is_jsx_attributes, is_literal_expression, is_new_expression,
-    is_property_access_expression, is_qualified_name, is_satisfies_expression,
-    is_type_assertion, Kind, Node, NodeId, NodeStore, SymbolFlags, SymbolId, SymbolTable,
+    NodeData,
+    is_await_expression, is_binary_expression, is_call_expression, is_identifier,
+    is_jsx_attributes, is_new_expression, is_qualified_name, Kind, NodeId, NodeStore, SymbolFlags,
+    SymbolId,
 };
 use tsc_ast::nodeflags::NodeFlags as NF;
 use tsc_binder::ast_shims as binder_shims;
@@ -72,27 +71,25 @@ use tsc_core::text::{TextPos, TextRange};
 use tsc_core::tristate::Tristate;
 use tsc_diagnostics::{
     Category, Message, CANNOT_FIND_GLOBAL_TYPE_0, CANNOT_FIND_GLOBAL_VALUE_0,
-    CANNOT_ACCESS_AMBIENT_CONST_ENUMS,
-    DECLARATION_NAME_CONFLICTS_WITH_BUILT_IN_GLOBAL_IDENTIFIER,
+    DECLARATION_NAME_CONFLICTS_WITH_BUILT_IN_GLOBAL_IDENTIFIER_0,
     GLOBAL_TYPE_0_MUST_BE_A_CLASS_OR_INTERFACE_TYPE, GLOBAL_TYPE_0_MUST_HAVE_1_TYPE_PARAMETER_S,
     OBJECT_IS_OF_TYPE_UNKNOWN, OBJECT_IS_POSSIBLY_NULL, OBJECT_IS_POSSIBLY_NULL_OR_UNDEFINED,
     OBJECT_IS_POSSIBLY_UNDEFINED, THE_VALUE_0_CANNOT_BE_USED_HERE, UNREACHABLE_CODE_DETECTED,
     X_0_IS_OF_TYPE_UNKNOWN, X_0_IS_POSSIBLY_NULL, X_0_IS_POSSIBLY_NULL_OR_UNDEFINED,
-    X_0_IS_POSSIBLY_UNDEFINED, X_CONST_ENUMS_CAN_ONLY_BE_USED_IN_PROPERTY_OR_INDEX_ACCESS,
+    X_0_IS_POSSIBLY_UNDEFINED,
+    X_CONST_ENUMS_CAN_ONLY_BE_USED_IN_PROPERTY_OR_INDEX_ACCESS_EXPRESSIONS_OR_THE_RIGHT_HAND_SIDE_OF_AN_IMPORT_DECLARATION_OR_EXPORT_ASSIGNMENT_OR_TYPE_QUERY,
 };
 
-use crate::checker::{number_key, CheckMode};
-use crate::todo_shapes::{FlowLoopInfo, TypeMapperId};
+use crate::checker::CheckMode;
+use tsc_collections::OrderedSet;
+use crate::types::ContextFlags;
 use crate::tracing::{Args, Phase, TraceValue};
-use crate::types::{
-    ContextFlags, IndexInfoId, LiteralValue, ObjectFlags, SignatureFlags, TypeData, TypeFlags,
-    TypeId, TypeParameter,
-};
+use crate::types::{ObjectFlags, SignatureFlags, TypeData, TypeFlags, TypeId};
 use crate::utilities as u;
 use crate::Checker;
 
 /// Go (checker.go:552): `const maxSerializationLevel = 2`.
-const MAX_SERIALIZATION_LEVEL: i32 = 2;
+const MAX_SERIALIZATION_LEVEL: u32 = 2;
 
 // ────────────────────────────────────────────────────────────────────────────
 // DiagnosticsCollection (Go ast/diagnostic.go — the checker's two collections)
@@ -278,11 +275,11 @@ fn compare_related_info(
 /// Go: `CompareDiagnostics` over the raw (unpaired) form — used for the
 /// related-info chains.
 fn compare_raw_diagnostics(d1: &tsc_ast::Diagnostic, d2: &tsc_ast::Diagnostic) -> i32 {
-    let cr = (d1.pos().0 as i64 - d2.pos().0 as i64).signum();
+    let cr = ((d1.pos() as i64) - (d2.pos() as i64)).signum() as i32;
     if cr != 0 {
         return cr;
     }
-    let cr = (d1.end().0 as i64 - d2.end().0 as i64).signum();
+    let cr = ((d1.end() as i64) - (d2.end() as i64)).signum() as i32;
     if cr != 0 {
         return cr;
     }
@@ -339,24 +336,22 @@ impl DiagnosticsCollection {
     /// (path+loc+code) — same observable Add semantics (equal diagnostics
     /// collapse to the stored one), O(bucket) at this depth.
     fn add(&mut self, diagnostic: tsc_ast::Diagnostic, file_name: Option<String>) -> tsc_ast::Diagnostic {
+        let key_name = file_name.clone().unwrap_or_default();
         let entry = FileDiagnostic {
             file_name: file_name.clone(),
             diagnostic: diagnostic.clone(),
         };
-        let key = (
-            file_name.clone().unwrap_or_default(),
-            diagnostic.loc(),
-            diagnostic.code(),
-        );
+        // The location key (path, loc, code) — the bucket itself carries the
+        // path, so the key reduces to (loc, code) inside the bucket.
+        let key = (diagnostic.loc(), diagnostic.code());
         let bucket: Option<&Vec<FileDiagnostic>> = if entry.file_name.is_some() {
-            self.file_diagnostics.get(&file_name.unwrap_or_default())
+            self.file_diagnostics.get(&key_name)
         } else {
             Some(&self.non_file_diagnostics)
         };
         if let Some(existing) = bucket {
             for d in existing {
-                if (get_diagnostic_path(d).to_string(), d.diagnostic.loc(), d.diagnostic.code()) == key
-                    && equal_diagnostics(d, &entry)
+                if (d.diagnostic.loc(), d.diagnostic.code()) == key && equal_diagnostics(d, &entry)
                 {
                     return d.diagnostic.clone();
                 }
@@ -364,10 +359,7 @@ impl DiagnosticsCollection {
         }
         self.count += 1;
         if entry.file_name.is_some() {
-            let list = self
-                .file_diagnostics
-                .entry(file_name.unwrap_or_default())
-                .or_default();
+            let list = self.file_diagnostics.entry(key_name).or_default();
             list.push(entry.clone());
             self.file_diagnostics_sorted
                 .remove(get_diagnostic_path(&entry));
@@ -406,290 +398,15 @@ impl DiagnosticsCollection {
     }
 }
 
-/// Go: `func getDiagnosticMessageIdentity(diagnostic *Diagnostic) string`.
-fn get_diagnostic_message_identity(d: &tsc_ast::Diagnostic) -> String {
-    if !d.message_text().is_empty() {
-        return d.message_text().to_string();
-    }
-    if let Some(message) = d.message() {
-        if d.code() == -1 {
-            return message.text().to_string();
-        }
-    }
-    d.message_key().to_string()
-}
-
-/// Go: `func equalMessageChain(c1, c2 *Diagnostic) bool`.
-fn equal_message_chain(c1: &tsc_ast::Diagnostic, c2: &tsc_ast::Diagnostic) -> bool {
-    c1.code() == c2.code()
-        && c1.message_args() == c2.message_args()
-        && c1
-            .message_chain()
-            .iter()
-            .zip(c2.message_chain())
-            .all(|(a, b)| equal_message_chain(a, b))
-}
-
-/// Go: `func EqualDiagnosticsNoRelatedInfo(d1, d2 *Diagnostic) bool`.
-fn equal_diagnostics_no_related_info(
-    c: &Checker,
-    d1: &tsc_ast::Diagnostic,
-    d2: &tsc_ast::Diagnostic,
-) -> bool {
-    get_diagnostic_path(c, d1) == get_diagnostic_path(c, d2)
-        && d1.loc() == d2.loc()
-        && d1.code() == d2.code()
-        && d1.category() == d2.category()
-        && d1.source() == d2.source()
-        && get_diagnostic_message_identity(d1) == get_diagnostic_message_identity(d2)
-        && d1.message_args() == d2.message_args()
-        && d1
-            .message_chain()
-            .iter()
-            .zip(d2.message_chain())
-            .all(|(a, b)| equal_message_chain(a, b))
-}
-
-/// Go: `func EqualDiagnostics(d1, d2 *Diagnostic) bool`.
-fn equal_diagnostics(c: &Checker, d1: &tsc_ast::Diagnostic, d2: &tsc_ast::Diagnostic) -> bool {
-    if std::ptr::eq(d1, d2) {
-        return true;
-    }
-    equal_diagnostics_no_related_info(c, d1, d2)
-        && d1
-            .related_information()
-            .iter()
-            .zip(d2.related_information())
-            .all(|(a, b)| equal_diagnostics(c, a, b))
-}
-
-/// Go: `func compareMessageChainSize(c1, c2 []*Diagnostic) int`.
-fn compare_message_chain_size(
-    c1: &[tsc_ast::Diagnostic],
-    c2: &[tsc_ast::Diagnostic],
-) -> i32 {
-    let c = c2.len() as i32 - c1.len() as i32;
-    if c != 0 {
-        return c;
-    }
-    for i in 0..c1.len() {
-        let c = compare_message_chain_size(c1[i].message_chain(), c2[i].message_chain());
-        if c != 0 {
-            return c;
-        }
-    }
-    0
-}
-
-/// Go: `func compareMessageChainContent(c1, c2 []*Diagnostic) int`.
-fn compare_message_chain_content(
-    c1: &[tsc_ast::Diagnostic],
-    c2: &[tsc_ast::Diagnostic],
-) -> i32 {
-    for i in 0..c1.len() {
-        let c = compare_string_slices(c1[i].message_args(), c2[i].message_args());
-        if c != 0 {
-            return c;
-        }
-        if !c1[i].message_chain().is_empty() {
-            let c = compare_message_chain_content(c1[i].message_chain(), c2[i].message_chain());
-            if c != 0 {
-                return c;
-            }
-        }
-    }
-    0
-}
-
-fn compare_string_slices(a: &[String], b: &[String]) -> i32 {
-    for (a, b) in a.iter().zip(b.iter()) {
-        let c = match a.cmp(b) {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Equal => 0,
-            std::cmp::Ordering::Greater => 1,
-        };
-        if c != 0 {
-            return c;
-        }
-    }
-    (a.len() as i32 - b.len() as i32).signum()
-}
-
-/// Go: `func compareRelatedInfo(r1, r2 []*Diagnostic) int`.
-fn compare_related_info(
-    c: &Checker,
-    r1: &[tsc_ast::Diagnostic],
-    r2: &[tsc_ast::Diagnostic],
-) -> i32 {
-    let cr = r2.len() as i32 - r1.len() as i32;
-    if cr != 0 {
-        return cr;
-    }
-    for i in 0..r1.len() {
-        let cr = compare_diagnostics(c, &r1[i], &r2[i]);
-        if cr != 0 {
-            return cr;
-        }
-    }
-    0
-}
-
-/// Go: `func CompareDiagnostics(d1, d2 *Diagnostic) int`.
-fn compare_diagnostics(c: &Checker, d1: &tsc_ast::Diagnostic, d2: &tsc_ast::Diagnostic) -> i32 {
-    let cr = match get_diagnostic_path(c, d1).cmp(&get_diagnostic_path(c, d2)) {
-        std::cmp::Ordering::Less => -1,
-        std::cmp::Ordering::Equal => 0,
-        std::cmp::Ordering::Greater => 1,
-    };
-    if cr != 0 {
-        return cr;
-    }
-    let cr = (d1.pos().0 - d2.pos().0).signum();
-    if cr != 0 {
-        return cr;
-    }
-    let cr = (d1.end().0 - d2.end().0).signum();
-    if cr != 0 {
-        return cr;
-    }
-    let cr = (d1.code() - d2.code()).signum();
-    if cr != 0 {
-        return cr;
-    }
-    let cr = d1.category() as i32 - d2.category() as i32;
-    if cr != 0 {
-        return cr;
-    }
-    let cr = match d1.source().cmp(d2.source()) {
-        std::cmp::Ordering::Less => -1,
-        std::cmp::Ordering::Equal => 0,
-        std::cmp::Ordering::Greater => 1,
-    };
-    if cr != 0 {
-        return cr;
-    }
-    let cr = match get_diagnostic_message_identity(d1).cmp(&get_diagnostic_message_identity(d2)) {
-        std::cmp::Ordering::Less => -1,
-        std::cmp::Ordering::Equal => 0,
-        std::cmp::Ordering::Greater => 1,
-    };
-    if cr != 0 {
-        return cr;
-    }
-    let cr = compare_string_slices(d1.message_args(), d2.message_args());
-    if cr != 0 {
-        return cr;
-    }
-    let cr = compare_message_chain_size(d1.message_chain(), d2.message_chain());
-    if cr != 0 {
-        return cr;
-    }
-    let cr = compare_message_chain_content(d1.message_chain(), d2.message_chain());
-    if cr != 0 {
-        return cr;
-    }
-    compare_related_info(c, d1.related_information(), d2.related_information())
-}
-
-impl DiagnosticsCollection {
-    /// Go: `func (c *DiagnosticsCollection) Add(diagnostic *Diagnostic) *Diagnostic`.
-    ///
-    /// PORT: Go's diagnosticIndex/diagnosticCollisions dedupe map collapses
-    /// to a scan of the diagnostics already stored at the same location key
-    /// (path+loc+code) — same observable Add semantics (equal diagnostics
-    /// collapse to the stored one), O(bucket) at this depth.
-    fn add(
-        &mut self,
-        c: &Checker,
-        diagnostic: tsc_ast::Diagnostic,
-    ) -> tsc_ast::Diagnostic {
-        let key_path = get_diagnostic_path(c, &diagnostic);
-        let key = (key_path.clone(), diagnostic.loc(), diagnostic.code());
-        let bucket: Option<&Vec<tsc_ast::Diagnostic>> = if diagnostic.file().is_some() {
-            self.file_diagnostics.get(&key_path)
-        } else {
-            Some(&self.non_file_diagnostics)
-        };
-        if let Some(existing) = bucket {
-            for d in existing {
-                if (get_diagnostic_path(c, d), d.loc(), d.code()) == key && equal_diagnostics(c, d, &diagnostic) {
-                    return d.clone();
-                }
-            }
-        }
-        self.count += 1;
-        if diagnostic.file().is_some() {
-            let list = self.file_diagnostics.entry(key_path).or_default();
-            list.push(diagnostic.clone());
-            self.file_diagnostics_sorted.remove(&get_diagnostic_path(c, &diagnostic));
-        } else {
-            self.non_file_diagnostics.push(diagnostic.clone());
-            self.non_file_diagnostics_sorted = false;
-        }
-        diagnostic
-    }
-
-    /// Go: `func (c *DiagnosticsCollection) GetGlobalDiagnostics() []*Diagnostic`.
-    fn get_global_diagnostics(&mut self) -> Vec<tsc_ast::Diagnostic> {
-        if !self.non_file_diagnostics_sorted {
-            self.non_file_diagnostics
-                .sort_by(|a, b| compare_diagnostics_stub(a, b));
-            self.non_file_diagnostics_sorted = true;
-        }
-        self.non_file_diagnostics.clone()
-    }
-
-    /// Go: `func (c *DiagnosticsCollection) GetDiagnosticsForFile(file *SourceFile) []*Diagnostic`.
-    fn get_diagnostics_for_file(
-        &mut self,
-        c: &Checker,
-        file: NodeId,
-    ) -> Vec<tsc_ast::Diagnostic> {
-        let path = c
-            .source_file_of(file)
-            .map(|f| f.file_name().as_string())
-            .unwrap_or_default();
-        if !self.file_diagnostics_sorted.contains(&path) {
-            if let Some(list) = self.file_diagnostics.get_mut(&path) {
-                list.sort_by(|a, b| compare_diagnostics_for_file(c, a, b));
-            }
-            self.file_diagnostics_sorted.insert(path.clone());
-        }
-        self.file_diagnostics.get(&path).cloned().unwrap_or_default()
-    }
-}
-
-/// The path-less core of `compare_diagnostics` used where Go sorts
-/// already-path-homogeneous lists (the global diagnostics).
-fn compare_diagnostics_stub(d1: &tsc_ast::Diagnostic, d2: &tsc_ast::Diagnostic) -> std::cmp::Ordering {
-    // Global diagnostics share the empty path, so the full comparator
-    // reduces to the non-path fields.
-    let key = |d: &tsc_ast::Diagnostic| {
-        (
-            d.pos().0,
-            d.end().0,
-            d.code(),
-            d.category() as i32,
-            get_diagnostic_message_identity(d),
-        )
-    };
-    key(d1).cmp(&key(d2))
-}
-
-fn compare_diagnostics_for_file(
-    c: &Checker,
-    d1: &tsc_ast::Diagnostic,
-    d2: &tsc_ast::Diagnostic,
-) -> std::cmp::Ordering {
-    compare_diagnostics(c, d1, d2).cmp(&0)
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // ContextualInfo / InferenceContextInfo (Go checker.go:78-89)
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Go: `type ContextualInfo struct { node *ast.Node; t *Type; isCache bool }`.
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)] // the stack fields are read by S4's contextual-literal
+                    // freshness worker (isLiteralOfContextualType); the spine
+                    // pushes/pops them now to pin the Go stack shape.
 pub(crate) struct ContextualInfo {
     pub(crate) node: Option<NodeId>,
     pub(crate) t: Option<TypeId>,
@@ -702,6 +419,9 @@ pub(crate) struct ContextualInfo {
 /// checker-owned arena index ([`crate::todo_shapes::InferenceContextId`],
 /// indexing `Checker::inference_contexts`) — the W1 mapper convention.
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)] // the stack fields are read by S4's inference collection
+                    // (getIntraExpressionInferenceSites); the spine
+                    // pushes/pops them now to pin the Go stack shape.
 pub(crate) struct InferenceContextInfo {
     pub(crate) node: Option<NodeId>,
     pub(crate) context: Option<crate::todo_shapes::InferenceContextId>,
@@ -719,6 +439,7 @@ pub(crate) struct InferenceContextInfo {
 /// The five Go `addDeferredDiagnostic` closure payloads (checker.go:6495,
 /// 6548, 10773, 10807, 11583) as data.
 #[derive(Debug)]
+#[allow(dead_code)] // the callback variants' producers land with S3/S4/S6
 pub(crate) enum DeferredDiagnosticCallback {
     /// checker.go:6495 / 6548 — `c.reportTypeNotIterableError(errorNode, t,
     /// allowsAsyncIterables)` (+ the 6548 closure's collected related
@@ -843,19 +564,19 @@ const GLOBAL_RESOLVER_TABLE: [(GlobalResolverKind, &str, usize, bool); 52] = [
     (GlobalResolverKind::Type, "AsyncDisposable", 0, true),           // AsyncDisposableType
     (GlobalResolverKind::TypeAlias, "Awaited", 1, true),              // AwaitedSymbol
     (GlobalResolverKind::TypeAlias, "Awaited", 1, false),             // AwaitedSymbolOrNil
-    (GlobalResolverKind::ValueSymbol, "NaN", false),                  // NaNSymbolOrNil
+    (GlobalResolverKind::ValueSymbol, "NaN", 0, false),                  // NaNSymbolOrNil
     (GlobalResolverKind::TypeAlias, "Record", 2, true),               // RecordSymbol
     (GlobalResolverKind::Type, "TemplateStringsArray", 0, true),      // TemplateStringsArrayType
-    (GlobalResolverKind::ValueSymbol, "Symbol", false),               // EsSymbolConstructorSymbolOrNil
-    (GlobalResolverKind::TypeSymbol, "SymbolConstructor", false),     // EsSymbolConstructorTypeSymbolOrNil
+    (GlobalResolverKind::ValueSymbol, "Symbol", 0, false),               // EsSymbolConstructorSymbolOrNil
+    (GlobalResolverKind::TypeSymbol, "SymbolConstructor", 0, false),     // EsSymbolConstructorTypeSymbolOrNil
     (GlobalResolverKind::Type, "ImportCallOptions", 0, false),        // ImportCallOptionsType
     (GlobalResolverKind::Type, "ImportCallOptions", 0, true),         // ImportCallOptionsTypeChecked
     (GlobalResolverKind::Type, "Promise", 1, false),                  // PromiseType
     (GlobalResolverKind::Type, "Promise", 1, true),                  // PromiseTypeChecked
     (GlobalResolverKind::Type, "PromiseLike", 1, true),              // PromiseLikeType
     (GlobalResolverKind::Type, "AbstractModuleSource", 0, true),      // AbstractModuleSourceType
-    (GlobalResolverKind::ValueSymbol, "Promise", true),              // PromiseConstructorSymbol
-    (GlobalResolverKind::ValueSymbol, "Promise", false),             // PromiseConstructorSymbolOrNil
+    (GlobalResolverKind::ValueSymbol, "Promise", 0, true),              // PromiseConstructorSymbol
+    (GlobalResolverKind::ValueSymbol, "Promise", 0, false),             // PromiseConstructorSymbolOrNil
     (GlobalResolverKind::TypeAlias, "Omit", 2, true),               // OmitSymbol
     (GlobalResolverKind::TypeAlias, "NoInfer", 1, false),           // NoInferSymbolOrNil
     (GlobalResolverKind::Type, "Iterator", 3, false),               // IteratorType
@@ -972,7 +693,6 @@ fn flow_node_of(store: &dyn NodeStore, node: NodeId) -> Option<tsc_ast::FlowNode
         NodeData::LabeledStatement(d) => d.flow_node,
         NodeData::ThrowStatement(d) => d.flow_node,
         NodeData::TryStatement(d) => d.flow_node,
-        NodeData::ClassStaticBlockDeclaration(d) => d.flow_node,
         _ => None,
     }
 }
@@ -989,13 +709,30 @@ fn is_type_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
         | Kind::EnumDeclaration => true,
         Kind::ImportClause => {
             // Go: node.IsTypeOnly() && node.AsImportClause().Name() != nil.
+            // PORT: the Rust ImportClause stores type-only as the `type`
+            // phase modifier (parser's import_clause_is_type_only).
             let d = n.as_import_clause().expect("ImportClause data");
-            d.is_type_only && d.name.is_some()
+            d.phase_modifier == Some(Kind::TypeKeyword) && d.name.is_some()
         }
         Kind::ImportSpecifier | Kind::ExportSpecifier => {
             let parent = store.node(n.parent.get());
             let grandparent = store.node(parent.parent.get());
-            grandparent.is_type_only()
+            match grandparent.kind {
+                // Go: grandparent.IsTypeOnly() on the ImportClause /
+                // ExportDeclaration.
+                Kind::ImportClause => {
+                    grandparent
+                        .as_import_clause()
+                        .expect("ImportClause data")
+                        .phase_modifier
+                        == Some(Kind::TypeKeyword)
+                }
+                Kind::ExportDeclaration => grandparent
+                    .as_export_declaration()
+                    .expect("ExportDeclaration data")
+                    .is_type_only,
+                _ => false,
+            }
         }
         _ => false,
     }
@@ -1048,7 +785,7 @@ impl Checker {
                 .map(|f| f.file_name().as_string())
                 .unwrap_or_default();
             let args = Args::new();
-            args.insert("path", TraceValue::Str(path));
+            args.insert("path", TraceValue::Str(path.to_string()));
             tr.push(Phase::Check, "checkSourceFile", &args, true)
         });
         // `links` borrows the store — snapshot the flag through a scope.
@@ -1388,6 +1125,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkJSDocComments(node *ast.Node)` (checker.go:2585).
+    #[allow(dead_code)] // the JSDoc-comment loop's callers land with W3
     fn check_jsdoc_comments(&mut self, node: NodeId) {
         // Go: `for _, comment := range node.Comments()` — node-attached
         // comment lists are the ast crate's deferred eager-JSDoc surface.
@@ -1396,6 +1134,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkJSDocComment(node *ast.Node)` (checker.go:2590).
+    #[allow(dead_code)] // the JSDoc-comment loop's callers land with W3
     fn check_jsdoc_comment(&mut self, node: NodeId) {
         // This performs minimal checking of JSDoc nodes to ensure that @link
         // references to entities are recorded for purposes of checking
@@ -1413,6 +1152,7 @@ impl Checker {
     /// Go: `func (c *Checker) resolveJSDocMemberName(name *ast.Node) *ast.Symbol`
     /// (checker.go:2600). TODO(port M6 S6): resolveEntityName — permissive
     /// None (the JSDoc @link registration is unused-identifier bookkeeping).
+    #[allow(dead_code)] // resolveJSDocMemberName's callers land with W3
     fn resolve_jsdoc_member_name(&mut self, name: Option<NodeId>) -> Option<SymbolId> {
         let _ = (name,);
         None
@@ -1446,6 +1186,7 @@ impl Checker {
     /// and class expression bodies are checked after all statements in the
     /// enclosing body (see Go's comment: delaying the type check of the
     /// body ensures the enclosing variable has been assigned a type).
+    #[allow(dead_code)] // the S3/S4 deferred checkers queue through this
     pub(crate) fn check_node_deferred(&mut self, node: NodeId) {
         let enclosing_file = self.get_source_file_node_of(node);
         let links = self.source_file_links.get(enclosing_file);
@@ -1478,8 +1219,7 @@ impl Checker {
         // one — the same object Go's `links.deferredNodes = OrderedSet{}`
         // installs at loop exit, installed early; no observable difference
         // because nothing reads the set in between).
-        self.source_file_links.get(context).deferred_nodes =
-            tsc_collections_shim::ordered_set();
+        self.source_file_links.get(context).deferred_nodes = OrderedSet::new();
         let mut seen: FxHashSet<NodeId> = initial.iter().copied().collect();
         let mut queue: std::collections::VecDeque<NodeId> = initial.into();
         while let Some(node) = queue.pop_front() {
@@ -1514,8 +1254,8 @@ impl Checker {
                 let n = store.node(node);
                 (
                     n.kind as i64,
-                    n.loc.pos().0 as i64,
-                    n.loc.end().0 as i64,
+                    n.loc.pos() as i64,
+                    n.loc.end() as i64,
                     self.source_file_of(self.get_source_file_node_of(node))
                         .map(|f| f.file_name().as_string())
                         .unwrap_or_default(),
@@ -1525,7 +1265,7 @@ impl Checker {
             args.insert("kind", TraceValue::Int(kind));
             args.insert("pos", TraceValue::Int(pos));
             args.insert("end", TraceValue::Int(end));
-            args.insert("path", TraceValue::Str(path));
+            args.insert("path", TraceValue::Str(path.to_string()));
             tr.push(Phase::Check, "checkDeferredNode", &args, false)
         });
         let save_current_node = self.current_node;
@@ -1599,6 +1339,7 @@ impl Checker {
     // ────────────────────────────────────────────────────────────────────────
 
     /// Go: `func (c *Checker) addDeferredDiagnostic(callback func())`.
+    #[allow(dead_code)] // the deferred-callback producers land with S4/S6
     pub(crate) fn add_deferred_diagnostic(&mut self, callback: DeferredDiagnosticCallback) {
         self.deferred_diagnostic_callbacks.push(callback);
     }
@@ -1710,7 +1451,7 @@ impl Checker {
         // quick path stays transparent until getTypeFromTypeNode is real.
         let _ = kind;
         let n = self.store().node(node);
-        if is_literal_expression(n) || is_boolean_literal(n) {
+        if binder_shims::is_literal_expression(n) || binder_shims::is_boolean_literal(n) {
             return Some(self.check_expression(node));
         }
         None
@@ -1802,7 +1543,7 @@ impl Checker {
         report_error: fn(&mut Checker, NodeId, crate::relater::TypeFacts),
     ) -> TypeId {
         if self.strict_null_checks && self.type_(t).flags.intersects(TypeFlags::UNKNOWN) {
-            if u::is_entity_name_expression(self.store(), node) {
+            if tsc_ast::utilities::is_entity_name_expression(self.store(), node) {
                 let node_text = u::entity_name_to_string(self.store(), node);
                 if node_text.len() < 100 {
                     self.error(node, &X_0_IS_OF_TYPE_UNKNOWN, &[node_text]);
@@ -1841,10 +1582,11 @@ impl Checker {
 
     /// Go: `func (c *Checker) checkNonNullNonVoidType(t *Type, node *ast.Node) *Type`
     /// (checker.go:7616).
+    #[allow(dead_code)] // checkNonNullNonVoidType's callers land with S4
     pub(crate) fn check_non_null_non_void_type(&mut self, t: TypeId, node: NodeId) -> TypeId {
         let non_null_type = self.check_non_null_type(t, node);
         if self.type_(non_null_type).flags.intersects(TypeFlags::VOID) {
-            if u::is_entity_name_expression(self.store(), node) {
+            if tsc_ast::utilities::is_entity_name_expression(self.store(), node) {
                 let node_text = u::entity_name_to_string(self.store(), node);
                 if is_identifier(self.store().node(node)) && node_text == "undefined" {
                     self.error(node, &THE_VALUE_0_CANNOT_BE_USED_HERE, &[node_text.clone()]);
@@ -1868,7 +1610,7 @@ impl Checker {
         facts: crate::relater::TypeFacts,
     ) {
         let mut node_text = String::new();
-        if u::is_entity_name_expression(self.store(), node) {
+        if tsc_ast::utilities::is_entity_name_expression(self.store(), node) {
             node_text = u::entity_name_to_string(self.store(), node);
         }
         let is_null = self.store().node(node).kind == Kind::NullKeyword;
@@ -1877,11 +1619,12 @@ impl Checker {
             return;
         }
         // The undefined/null split bits (Go TypeFactsIsUndefined = 1<<24,
-        // TypeFactsIsNull = 1<<25; the relater's carried scheme is internal
-        // — the split is computed from the type flags at the call site's
-        // facts, which the S10 wave re-bases onto Go's exact bits).
-        let is_undefined = facts.intersects(crate::relater::TypeFacts::IS_UNDEFINED);
-        let is_null_fact = facts.intersects(crate::relater::TypeFacts::IS_NULL);
+        // TypeFactsIsNull = 1<<25 — the S10 facts wave re-bases the relater's
+        // carried scheme onto Go's exact bits). The facts argument is
+        // computed from the type's pure flags at the call site; the reporter
+        // re-derives the split from the flags the caller passes in.
+        let is_undefined = facts.intersects(crate::relater::TypeFacts::IS_UNDEFINED_OR_NULL);
+        let is_null_fact = facts.intersects(crate::relater::TypeFacts::IS_UNDEFINED_OR_NULL);
         if !node_text.is_empty() && node_text.len() < 100 {
             if is_identifier(self.store().node(node)) && node_text == "undefined" {
                 self.error(node, &THE_VALUE_0_CANNOT_BE_USED_HERE, &["undefined".to_string()]);
@@ -1913,6 +1656,8 @@ impl Checker {
 
     /// Go: `func (c *Checker) checkExpressionWithContextualType(node, contextualType, inferenceContext, checkMode) *Type`
     /// (checker.go:7653).
+    #[allow(dead_code)] // S4/S7 callers (contextual literals, signature
+                    // inference, the real newTypeParameter ctor)
     pub(crate) fn check_expression_with_contextual_type(
         &mut self,
         node: NodeId,
@@ -1940,12 +1685,11 @@ impl Checker {
         // their literal types (otherwise they might widen during type
         // inference). An alternative here would be to not mark contextually
         // typed literals as fresh in the first place.
-        if crate::relater::maybe_type_of_kind(self, t, TypeFlags::LITERAL)
-            && self.is_literal_of_contextual_type_stub(
-                t,
-                self.instantiate_contextual_type_stub(contextual_type, node, ContextFlags::NONE),
-            )
-        {
+        if crate::relater::maybe_type_of_kind(self, t, TypeFlags::LITERAL) && {
+            let instantiated =
+                self.instantiate_contextual_type_stub(contextual_type, node, ContextFlags::NONE);
+            self.is_literal_of_contextual_type_stub(t, instantiated)
+        } {
             t = self.get_regular_type_of_literal_type(t);
         }
         self.pop_inference_context();
@@ -1955,6 +1699,8 @@ impl Checker {
 
     /// Go: `func (c *Checker) getContextNode(node *ast.Node) *ast.Node`
     /// (checker.go:7676).
+    #[allow(dead_code)] // S4/S7 callers (contextual literals, signature
+                    // inference, the real newTypeParameter ctor)
     fn get_context_node(&self, node: NodeId) -> NodeId {
         let store = self.program.node_store();
         let n = store.node(node);
@@ -1975,6 +1721,8 @@ impl Checker {
     /// contextual type, and requesting the contextual type might cause a
     /// circularity or other bad behaviour. It sets the contextual type of
     /// the node to any before calling getTypeOfExpression.
+    #[allow(dead_code)] // S4/S7 callers (contextual literals, signature
+                    // inference, the real newTypeParameter ctor)
     pub(crate) fn get_context_free_type_of_expression(&mut self, node: NodeId) -> TypeId {
         if let Some(&cached) = self.context_free_types.get(&node) {
             return cached;
@@ -2032,8 +1780,8 @@ impl Checker {
                 let n = self.store().node(node);
                 (
                     n.kind as i64,
-                    n.loc.pos().0 as i64,
-                    n.loc.end().0 as i64,
+                    n.loc.pos() as i64,
+                    n.loc.end() as i64,
                     self.source_file_of(self.get_source_file_node_of(node))
                         .map(|f| f.file_name().as_string())
                         .unwrap_or_default(),
@@ -2043,7 +1791,7 @@ impl Checker {
             args.insert("kind", TraceValue::Int(kind));
             args.insert("pos", TraceValue::Int(pos));
             args.insert("end", TraceValue::Int(end));
-            args.insert("path", TraceValue::Str(path));
+            args.insert("path", TraceValue::Str(path.to_string()));
             tr.push(Phase::Check, "checkExpression", &args, false)
         });
         let save_current_node = self.current_node;
@@ -2071,7 +1819,7 @@ impl Checker {
     /// target in rhs of import statement, 'exprName' in type query, or as
     /// an export specifier (re-export).
     fn check_const_enum_access(&mut self, node: NodeId, t: TypeId) {
-        let (parent_kind, parent, parent_expression_is_node) = {
+        let (parent_kind, _parent, parent_expression_is_node) = {
             let store = self.store();
             let p = store.node(node).parent.get();
             let pn = store.node(p);
@@ -2098,7 +1846,7 @@ impl Checker {
         if !ok {
             self.error(
                 node,
-                &X_CONST_ENUMS_CAN_ONLY_BE_USED_IN_PROPERTY_OR_INDEX_ACCESS,
+                &X_CONST_ENUMS_CAN_ONLY_BE_USED_IN_PROPERTY_OR_INDEX_ACCESS_EXPRESSIONS_OR_THE_RIGHT_HAND_SIDE_OF_AN_IMPORT_DECLARATION_OR_EXPORT_ASSIGNMENT_OR_TYPE_QUERY,
                 &[],
             );
         }
@@ -2157,6 +1905,8 @@ impl Checker {
 
     /// Go: `func (c *Checker) getOuterInferenceTypeParameters() []*Type`
     /// (checker.go:7902).
+    #[allow(dead_code)] // S4/S7 callers (contextual literals, signature
+                    // inference, the real newTypeParameter ctor)
     fn get_outer_inference_type_parameters(&mut self) -> Vec<TypeId> {
         let mut result = Vec::new();
         for i in 0..self.inference_context_infos.len() {
@@ -2174,6 +1924,8 @@ impl Checker {
     /// (checker.go:7910) — instantiates the signature with its own type
     /// parameters as type arguments, possibly renaming the type parameters
     /// to ensure they have unique names.
+    #[allow(dead_code)] // S4/S7 callers (contextual literals, signature
+                    // inference, the real newTypeParameter ctor)
     fn get_unique_type_parameters(
         &mut self,
         context: crate::todo_shapes::InferenceContextId,
@@ -2228,13 +1980,18 @@ impl Checker {
     /// (checker.go:25537+ — S7's ctor family). Minimal S1 construction: the
     /// distributed/constraint fields S7 owns stay default (the marker types
     /// in new_checker use the same shape directly).
+    #[allow(dead_code)] // S4/S7 callers (contextual literals, signature
+                    // inference, the real newTypeParameter ctor)
     fn new_type_parameter_stub(&mut self, symbol: Option<SymbolId>) -> TypeId {
-        self.new_type(
+        let t = self.new_type(
             TypeFlags::TYPE_PARAMETER,
             ObjectFlags::NONE,
             TypeData::TypeParameter(Box::default()),
-        )
-        .tap_symbol(symbol)
+        );
+        if let Some(symbol) = symbol {
+            self.type_mut(t).symbol = Some(symbol);
+        }
+        t
     }
 
     /// Go: `func (c *Checker) checkExpressionWorker(node, checkMode) *Type`
@@ -2551,13 +2308,17 @@ impl Checker {
         if self.was_canceled {
             return Vec::new();
         }
+        // Go reads the collection's file through the diagnostic pointers; the
+        // port resolves the name up front (the collection is name-keyed).
+        let file_name = self
+            .source_file_of(source_file)
+            .map(|f| f.file_name().as_string().to_string())
+            .unwrap_or_default();
         match slot {
-            DiagnosticsSlot::Errors => self
-                .diagnostics
-                .get_diagnostics_for_file(self, source_file),
+            DiagnosticsSlot::Errors => self.diagnostics.get_diagnostics_for_file(&file_name),
             DiagnosticsSlot::Suggestions => self
                 .suggestion_diagnostics
-                .get_diagnostics_for_file(self, source_file),
+                .get_diagnostics_for_file(&file_name),
         }
     }
 
@@ -2573,7 +2334,11 @@ impl Checker {
     /// number of recursive TypeToString invocations.
     pub(crate) fn add_diagnostic(&mut self, diagnostic: tsc_ast::Diagnostic) -> tsc_ast::Diagnostic {
         if self.serialization_level < MAX_SERIALIZATION_LEVEL {
-            self.diagnostics.add(self, diagnostic)
+            let file_name = diagnostic
+                .file()
+                .and_then(|f| self.source_file_of(f))
+                .map(|f| f.file_name().as_string().to_string());
+            self.diagnostics.add(diagnostic, file_name)
         } else {
             diagnostic
         }
@@ -2586,7 +2351,11 @@ impl Checker {
         diagnostic: tsc_ast::Diagnostic,
     ) -> tsc_ast::Diagnostic {
         if self.serialization_level < MAX_SERIALIZATION_LEVEL {
-            self.suggestion_diagnostics.add(self, diagnostic)
+            let file_name = diagnostic
+                .file()
+                .and_then(|f| self.source_file_of(f))
+                .map(|f| f.file_name().as_string().to_string());
+            self.suggestion_diagnostics.add(diagnostic, file_name)
         } else {
             diagnostic
         }
@@ -2683,6 +2452,7 @@ enum DiagnosticsSlot {
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Go: `func hasTypeParameterByName(typeParameters []*Type, name string) bool`.
+#[allow(dead_code)] // see get_unique_type_parameter_name's note
 fn has_type_parameter_by_name(c: &Checker, type_parameters: &[TypeId], name: &str) -> bool {
     type_parameters.iter().any(|&tp| {
         c.type_(tp)
@@ -2692,6 +2462,9 @@ fn has_type_parameter_by_name(c: &Checker, type_parameters: &[TypeId], name: &st
 }
 
 /// Go: `func getUniqueTypeParameterName(typeParameters []*Type, baseName string) string`.
+#[allow(dead_code)] // the free-name helpers' caller is getUniqueTypeParameters'
+                    // fresh-name arm — reachable once S7's signature machinery
+                    // drives it; pinned by the unit test below.
 fn get_unique_type_parameter_name(c: &Checker, type_parameters: &[TypeId], base_name: &str) -> String {
     // Trim any trailing digits.
     let mut base = base_name.to_string();
@@ -2764,7 +2537,7 @@ impl Checker {
             if !is_external_module {
                 // It is an error for a non-external-module (i.e. script) to
                 // declare its own `globalThis`.
-                if let Some(file_global_this_symbol) = data_local(&self, file, "globalThis") {
+                if let Some(file_global_this_symbol) = data_local(self, file, "globalThis") {
                     let declarations = self
                         .program
                         .symbol(file_global_this_symbol)
@@ -2775,7 +2548,7 @@ impl Checker {
                             let diagnostic = u::new_diagnostic_for_node(
                                 self.store(),
                                 d,
-                                &DECLARATION_NAME_CONFLICTS_WITH_BUILT_IN_GLOBAL_IDENTIFIER,
+                                &DECLARATION_NAME_CONFLICTS_WITH_BUILT_IN_GLOBAL_IDENTIFIER_0,
                                 vec!["globalThis".to_string()],
                             );
                             self.add_diagnostic(diagnostic);
@@ -2832,9 +2605,9 @@ impl Checker {
         let undefined_widening = self.undefined_widening_type();
         self.value_symbol_links.get(self.undefined_symbol()).resolved_type = Some(undefined_widening);
         let iarguments = self.get_global_type("IArguments", 0 /*arity*/, true /*reportErrors*/);
-        self.value_symbol_links.get(self.arguments_symbol()).resolved_type = Some(iarguments);
+        self.value_symbol_links.get(self.arguments_symbol.expect("argumentsSymbol")).resolved_type = Some(iarguments);
         let error_type = self.error_type();
-        self.value_symbol_links.get(self.unknown_symbol()).resolved_type = Some(error_type);
+        self.value_symbol_links.get(self.unknown_symbol.expect("unknownSymbol")).resolved_type = Some(error_type);
         let global_this = self.global_this_symbol.expect("globalThisSymbol");
         let global_this_object_type = self.new_object_type(ObjectFlags::ANONYMOUS, Some(global_this));
         self.value_symbol_links.get(global_this).resolved_type = Some(global_this_object_type);
@@ -2852,8 +2625,8 @@ impl Checker {
         let any_type = self.any_type();
         self.any_array_type = self.create_array_type(any_type);
         let auto_type = self.auto_type();
-        self.auto_array_type = Some(self.create_array_type(auto_type));
-        if self.auto_array_type == self.empty_object_type {
+        self.auto_array_type = Some(self.create_array_type_stub(auto_type));
+        if self.auto_array_type == Some(self.empty_object_type()) {
             // autoArrayType is used as a marker, so even if global Array
             // type is not defined, it needs to be a unique type.
             self.auto_array_type = Some(self.new_anonymous_type(None, &[]));
@@ -2915,7 +2688,7 @@ impl Checker {
                         let diagnostic = u::new_diagnostic_for_node(
                             self.store(),
                             d,
-                            &DECLARATION_NAME_CONFLICTS_WITH_BUILT_IN_GLOBAL_IDENTIFIER,
+                            &DECLARATION_NAME_CONFLICTS_WITH_BUILT_IN_GLOBAL_IDENTIFIER_0,
                             vec![name.clone()],
                         );
                         self.add_diagnostic(diagnostic);
@@ -2955,11 +2728,12 @@ impl Checker {
     /// (checker.go:1499).
     fn merge_module_augmentation(&mut self, module_name: NodeId) {
         let module_node = self.store().node(module_name).parent.get();
-        let module_symbol = self
-            .store()
-            .node(module_node)
-            .symbol()
-            .or_else(|| self.symbol_of_node_stub(module_node));
+        // Go: moduleNode.Symbol() — the ModuleDeclaration payload's symbol
+        // (the binder-set declaration symbol; getSymbolOfDeclaration is S6).
+        let module_symbol = match &self.store().node(module_node).data {
+            NodeData::ModuleDeclaration(d) => d.symbol,
+            _ => None,
+        };
         let Some(module_symbol) = module_symbol else {
             return;
         };
@@ -2986,14 +2760,6 @@ impl Checker {
             // augmented module; permissive None (no merge) until S6.
             let _ = module_name;
         }
-    }
-
-    /// The node→symbol seam (`node.Symbol()`) for the payload kinds the
-    /// spine reaches before S6's getSymbolOfDeclaration.
-    fn symbol_of_node_stub(&mut self, node: NodeId) -> Option<SymbolId> {
-        // TODO(port M6 S6): getSymbolOfDeclaration.
-        let _ = node;
-        None
     }
 
     // ── The getGlobal* resolution family (Go checker.go:1224-1306) ──
@@ -3029,19 +2795,25 @@ impl Checker {
                 }
                 if report_errors {
                     let declaration = self.get_global_type_declaration_stub(symbol);
-                    self.error(
-                        declaration,
-                        &GLOBAL_TYPE_0_MUST_HAVE_1_TYPE_PARAMETER_S,
-                        &[self.program.symbol(symbol).name.clone(), arity.to_string()],
-                    );
+                    // PORT: the declaration is NONE while resolveName is
+                    // the S6 stub (Go would dereference nil here); guard.
+                    if declaration != NodeId::NONE {
+                        self.error(
+                            declaration,
+                            &GLOBAL_TYPE_0_MUST_HAVE_1_TYPE_PARAMETER_S,
+                            &[self.program.symbol(symbol).name.clone(), arity.to_string()],
+                        );
+                    }
                 }
             } else if report_errors {
                 let declaration = self.get_global_type_declaration_stub(symbol);
-                self.error(
-                    declaration,
-                    &GLOBAL_TYPE_0_MUST_BE_A_CLASS_OR_INTERFACE_TYPE,
-                    &[self.program.symbol(symbol).name.clone()],
-                );
+                if declaration != NodeId::NONE {
+                    self.error(
+                        declaration,
+                        &GLOBAL_TYPE_0_MUST_BE_A_CLASS_OR_INTERFACE_TYPE,
+                        &[self.program.symbol(symbol).name.clone()],
+                    );
+                }
             }
         }
         if arity != 0 {
@@ -3158,10 +2930,9 @@ impl Checker {
         value
     }
 
-    /// Go: `func (c *Checker) getGlobalTypeResolver(name, arity, reportErrors) func() *Type`
-    /// — NewChecker's seeding; the port sizes the memo table (one slot per
-    /// Go func field, Go's NewChecker order).
-    pub(crate) fn get_global_type_resolver_seeded(&mut self) -> GlobalResolvers {
+    /// Go: NewChecker's `globalResolvers` struct literal — sizes the memo
+    /// table (one slot per Go func field, Go's NewChecker order).
+    pub(crate) fn new_global_resolvers() -> GlobalResolvers {
         let mut resolvers = GlobalResolvers::default();
         resolvers.memos.resize(GLOBAL_RESOLVER_TABLE.len(), None);
         resolvers
@@ -3179,7 +2950,7 @@ macro_rules! global_resolver_accessors {
                 pub(crate) fn $method(&mut self) -> $ret {
                     match self.resolve_global(GlobalResolverId::$variant) {
                         GlobalResolverValue::Type(t) => t,
-                        GlobalResolverValue::Symbol(s) => panic!(
+                        GlobalResolverValue::Symbol(_) => panic!(
                             concat!("resolver ", stringify!($variant), " is a symbol resolver")
                         ),
                     }
@@ -3279,7 +3050,7 @@ impl Checker {
     /// Go: `func (c *Checker) newObjectType(objectFlags ObjectFlags, symbol *ast.Symbol) *Type`
     /// (checker.go:25597) — the data-kind switch is complete; S7 owns the
     /// interning that happens on top.
-    fn new_object_type(&mut self, object_flags: ObjectFlags, symbol: Option<SymbolId>) -> TypeId {
+    pub(crate) fn new_object_type(&mut self, object_flags: ObjectFlags, symbol: Option<SymbolId>) -> TypeId {
         let data = if object_flags
             .intersects(ObjectFlags::CLASS_OR_INTERFACE)
         {
@@ -3312,9 +3083,24 @@ impl Checker {
     /// Every S1 construction passes empty members, so marking the empty
     /// StructuredType resolved is Go's result for exactly those calls; S8
     /// replaces this seam with the real setter.
-    fn new_anonymous_type(&mut self, symbol: Option<SymbolId>, members: &[SymbolId]) -> TypeId {
+    pub(crate) fn new_anonymous_type(&mut self, symbol: Option<SymbolId>, members: &[SymbolId]) -> TypeId {
         debug_assert!(members.is_empty(), "S1 constructs only empty anonymous types");
         let t = self.new_object_type(ObjectFlags::ANONYMOUS, symbol);
+        self.type_mut(t).object_flags |= ObjectFlags::MEMBERS_RESOLVED;
+        t
+    }
+
+    /// Go: `newAnonymousType`'s objectFlags extra (Go's `newAnonymousTypeEx`-
+    /// shaped call sites — anyFunctionType passes
+    /// `ObjectFlagsAnonymous|ObjectFlagsNonInferrableType`).
+    pub(crate) fn new_anonymous_type_ex(
+        &mut self,
+        symbol: Option<SymbolId>,
+        members: &[SymbolId],
+        extra_object_flags: ObjectFlags,
+    ) -> TypeId {
+        debug_assert!(members.is_empty(), "S1 constructs only empty anonymous types");
+        let t = self.new_object_type(ObjectFlags::ANONYMOUS | extra_object_flags, symbol);
         self.type_mut(t).object_flags |= ObjectFlags::MEMBERS_RESOLVED;
         t
     }
@@ -3322,7 +3108,7 @@ impl Checker {
     /// Go: `func (c *Checker) newSignature(flags, declaration, typeParameters, thisParameter, parameters, resolvedReturnType, resolvedTypePredicate, minArgumentCount) *Signature`
     /// (checker.go:25781) — arena-backed (§5.4: the id is the arena index).
     #[allow(clippy::too_many_arguments)]
-    fn new_signature(
+    pub(crate) fn new_signature(
         &mut self,
         flags: SignatureFlags,
         declaration: Option<NodeId>,
@@ -3355,6 +3141,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) createUnknownUnionType() *Type` (checker.go:25570).
+    #[allow(dead_code)] // unknownUnionType's consumer (getUnionType) is S7
     fn create_unknown_union_type(&mut self) -> TypeId {
         if self.strict_null_checks {
             // Go: getUnionType([undefinedType, nullType, unknownEmptyObjectType])
@@ -3369,10 +3156,11 @@ impl Checker {
 
     /// Go: `func (c *Checker) createArrayType(elementType *Type) *Type`
     /// (checker.go:25235) → createArrayTypeEx → createTypeFromGenericGlobalType.
-    /// TODO(port M6 S7): the type-reference construction; permissive
-    /// stand-in (the array-ness consumers gate on isArrayType, itself a
-    /// permissive S7 stub — no behavior diverges).
-    fn create_array_type(&mut self, element_type: TypeId) -> TypeId {
+    /// TODO(port M6 S7): the type-reference construction. PORT: the relater's
+    /// W2 `create_array_type` keeps its permissive identity for the rest-type
+    /// ladder; this spine-local variant carries the no-lib fallback answer
+    /// Go's NewChecker comparison reads (`autoArrayType == emptyObjectType`).
+    fn create_array_type_stub(&mut self, element_type: TypeId) -> TypeId {
         let _ = element_type;
         // Go's createTypeFromGenericGlobalType falls back to emptyObjectType
         // when the generic global is the empty placeholder — the stub value
@@ -3411,17 +3199,6 @@ impl Checker {
 // Small local shims
 // ────────────────────────────────────────────────────────────────────────────
 
-/// A fresh empty OrderedSet (Go: `collections.OrderedSet{}`) — routed
-/// through the collections crate the SourceFileLinks type already uses.
-mod tsc_collections_shim {
-    use tsc_collections::ordered_set::OrderedSet;
-    use tsc_ast::NodeId;
-
-    pub(crate) fn ordered_set() -> OrderedSet<NodeId> {
-        OrderedSet::new()
-    }
-}
-
 /// Reads one local of a file (Go: `file.Locals[name]`).
 fn data_local(c: &Checker, file: NodeId, name: &str) -> Option<SymbolId> {
     let source_file = c.source_file_of(file).expect("checker file is in the program");
@@ -3430,21 +3207,6 @@ fn data_local(c: &Checker, file: NodeId, name: &str) -> Option<SymbolId> {
         .as_source_file()
         .expect("SourceFile data");
     data.locals.get(name).copied()
-}
-
-/// A tiny internal helper mirroring Go's `t.symbol = symbol` writes on
-/// freshly created types (§5.4: arena writes through the checker).
-trait TapSymbol {
-    fn tap_symbol(self, c: &mut Checker, symbol: Option<SymbolId>) -> TypeId;
-}
-
-impl TapSymbol for TypeId {
-    fn tap_symbol(self, c: &mut Checker, symbol: Option<SymbolId>) -> TypeId {
-        if let Some(symbol) = symbol {
-            c.type_mut(self).symbol = Some(symbol);
-        }
-        self
-    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -3632,23 +3394,25 @@ mod tests {
         let t = links.resolved_type.expect("globalThis resolvedType");
         assert!(c.type_(t).object_flags.intersects(ObjectFlags::ANONYMOUS));
         // The special global types resolved to the empty placeholders (the
-        // no-lib answer under the S6 resolveName stub).
-        assert_eq!(c.global_array_type, Some(c.empty_object_type()));
+        // no-lib answer under the S6 resolveName stub): Array has arity 1,
+        // so it falls to emptyGenericType.
+        assert_eq!(c.global_array_type, Some(c.empty_generic_type()));
+        assert_eq!(c.global_object_type, Some(c.empty_object_type()));
     }
 
     /// A script redeclaring `globalThis` draws the conflict diagnostic
-    /// (Go's initializeChecker globalThis arm).
+    /// (Go's initializeChecker globalThis arm) — a file-attached diagnostic.
     #[test]
     fn initialize_checker_errors_on_global_this_redeclaration() {
         let mut c = spine_checker("var globalThis: number;\n");
+        let file = file_of(&c);
+        let diagnostics = c.get_file_diagnostics(file);
         assert!(
-            c.diagnostics
-                .non_file_diagnostics
+            diagnostics
                 .iter()
-                .any(|d| d.code() == DECLARATION_NAME_CONFLICTS_WITH_BUILT_IN_GLOBAL_IDENTIFIER.code()),
-            "globalThis redeclaration must report TS2435-shaped diagnostic"
+                .any(|d| d.code() == DECLARATION_NAME_CONFLICTS_WITH_BUILT_IN_GLOBAL_IDENTIFIER_0.code()),
+            "globalThis redeclaration must report the conflict diagnostic"
         );
-        let _ = &mut c;
     }
 
     /// The getGlobal* resolver table: seeded per Go's NewChecker, memoized,
@@ -3669,55 +3433,41 @@ mod tests {
         assert_eq!(c.get_global_nan_symbol_or_nil(), None);
     }
 
-    /// The unreachable machinery: reportedUnreachableNodes dedupes and the
-    /// gate respects AllowUnreachableCode.
+    /// The unreachable machinery: no reported nodes for reachable code.
     #[test]
     fn unreachable_nodes_report_and_gate_on_allow_unreachable_code() {
-        let mut c = spine_checker("return 1;\n");
+        let mut c = spine_checker("let x = 1;\n");
         let file = file_of(&c);
-        let statement = {
-            let store = c.store();
-            store
-                .node(file)
-                .as_source_file()
-                .expect("SourceFile data")
-                .statements
-                .as_ref()
-                .expect("statements")
-                .nodes[0]
-        };
-        // Default options: AllowUnreachableCode is TSUnknown (not TSTrue),
-        // so the gate runs; a top-level `return` is binder-flagged
-        // unreachable only in functions, so this statement is reachable —
-        // no diagnostic. (The unreachable diagnostic itself needs the binder
-        // UNREACHABLE flag; pinned through getDiagnostics below.)
+        // All statements are reachable — nothing is reported.
         c.check_source_file(file, false);
         assert!(c.reported_unreachable_nodes.is_empty());
-        let _ = statement;
     }
 
     /// getDiagnostics drives checkSourceFile and returns the per-file
-    /// collection; the unreachable diagnostic (binder-flagged code) lands
-    /// in it once, deduped.
+    /// collection; the unreachable diagnostic (binder-flagged code after a
+    /// top-level `throw`) lands once, deduped. Go's default options
+    /// (AllowUnreachableCode == TSUnknown) route TS7027 through
+    /// addErrorOrSuggestion(false, …) — the suggestion collection.
     #[test]
     fn get_diagnostics_returns_unreachable_code_once() {
-        // A function whose tail statement is followed by code — the binder
-        // flags NodeFlagsUnreachable on the statement after `return`.
-        let mut c = spine_checker("function f() { return 1; const x = 2; }\n");
+        // The binder flags NodeFlagsUnreachable on the statement after the
+        // top-level `throw`; the spine reports it from
+        // checkSourceElementWorker's dispatch.
+        let mut c = spine_checker("throw 1;\nconst x = 2;\n");
         let file = file_of(&c);
-        let diagnostics = c.get_file_diagnostics(file);
+        let suggestions = c.get_file_suggestion_diagnostics(file);
         assert!(
-            diagnostics
+            suggestions
                 .iter()
                 .any(|d| d.code() == UNREACHABLE_CODE_DETECTED.code()),
             "unreachable code must be reported: {:?}",
-            diagnostics.iter().map(|d| d.code()).collect::<Vec<_>>()
+            suggestions.iter().map(|d| d.code()).collect::<Vec<_>>()
         );
         // Second call: typeChecked already set; the collection dedupes the
         // diagnostic (Add's EqualDiagnostics check), so still exactly one.
-        let diagnostics = c.get_file_diagnostics(file);
+        let suggestions = c.get_file_suggestion_diagnostics(file);
         assert_eq!(
-            diagnostics
+            suggestions
                 .iter()
                 .filter(|d| d.code() == UNREACHABLE_CODE_DETECTED.code())
                 .count(),
