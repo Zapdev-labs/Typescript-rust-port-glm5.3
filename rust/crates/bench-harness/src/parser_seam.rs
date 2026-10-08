@@ -36,18 +36,16 @@ use tsc_core::scriptkind::ScriptKind;
 use crate::parse::BenchFile;
 
 /// Parser seam — see the module docs for the exact signature the tsc-parser
-/// crate must provide. Panics until M3 Wave 3 lands; the driver machinery
-/// (corpus walk, threading, counting, shape_hash, JSON) is complete and is
-/// exercised end-to-end in `parse.rs`'s tests via an injected fake parser.
+/// crate must provide. M3 Wave 3 landed (commit 5c88631062); the seam now
+/// forwards to the real parser. The driver machinery (corpus walk,
+/// threading, counting, shape_hash, JSON) is unchanged and stays exercised
+/// end-to-end in `parse.rs`'s tests via the injected fake parser.
 pub fn parse_source_file(
     opts: SourceFileParseOptions,
     source_text: &str,
     script_kind: ScriptKind,
 ) -> SourceFile {
-    // Keep the signature pinned (no dead-code warnings while the parser is
-    // pending); the arguments ARE the contract.
-    let _ = (opts, source_text, script_kind);
-    panic!("tsc-parser pending M3 (see M3-DISPATCH.md)");
+    tsc_parser::parse_source_file(opts, source_text, script_kind)
 }
 
 /// The [`crate::parse::ParseFn`] adapter used by the real driver: builds the

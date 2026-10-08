@@ -797,18 +797,26 @@ mod tests {
     }
 
     #[test]
-    fn seam_parse_panics_pending_m3() {
+    fn seam_parse_runs_the_real_parser() {
+        // The parser landed (M3 Wave 3, commit 5c88631062): the seam now
+        // Parse `let x0 = 0;` and assert the tree the Go parser produces.
+        // The walk starts at the SourceFile node itself (contract rule 2),
+        // so the count includes it: SourceFile, EndOfFileToken,
+        // VariableStatement, VariableDeclarationList, VariableDeclaration,
+        // Identifier x0, NumericLiteral 0 — 7 nodes, no errors, one of each.
         let files = bench_files();
-        let result = std::panic::catch_unwind(|| {
-            let parse: ParseFn = crate::parser_seam::bench_parse;
-            parse_and_walk(&files[0], parse)
-        });
-        let Err(err) = result else { panic!("seam must panic while the parser is pending") };
-        let msg = err
-            .downcast_ref::<&'static str>()
-            .copied()
-            .or_else(|| err.downcast_ref::<String>().map(|s| s.as_str()));
-        assert_eq!(msg, Some("tsc-parser pending M3 (see M3-DISPATCH.md)"));
+        let parse: ParseFn = crate::parser_seam::bench_parse;
+        let stats = parse_and_walk(&files[0], parse);
+        assert_eq!(stats.errors, 0);
+        assert_eq!(stats.nodes, 7);
+        let k = |kind: Kind| stats.hist[kind as usize];
+        assert_eq!(k(Kind::SourceFile), 1);
+        assert_eq!(k(Kind::VariableStatement), 1);
+        assert_eq!(k(Kind::VariableDeclarationList), 1);
+        assert_eq!(k(Kind::VariableDeclaration), 1);
+        assert_eq!(k(Kind::Identifier), 1);
+        assert_eq!(k(Kind::NumericLiteral), 1);
+        assert_eq!(k(Kind::EndOfFile), 1);
     }
 
     // ── output formatting ──
