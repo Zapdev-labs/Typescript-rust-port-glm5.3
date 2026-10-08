@@ -1548,7 +1548,13 @@ fn for_each_child_lines(s: &Schema, key: &str) -> Option<Vec<String>> {
                     body.push("    }".into());
                     body.push("}".into());
                 } else {
-                    body.push(format!("if visit(self.{f}) {{"));
+                    // Go's ForEachChild emits every slot through the visit()
+                    // helper, which filters nil before calling the Visitor
+                    // (ast.go). Mandatory NodeId slots carry NodeId::NONE
+                    // for Go's nil (factory mapping), so mirror the filter.
+                    body.push(format!(
+                        "if self.{f} != NodeId::NONE && visit(self.{f}) {{"
+                    ));
                     body.push("    return true;".into());
                     body.push("}".into());
                 }
@@ -1882,11 +1888,11 @@ fn generate_ast(s: &Schema) -> String {
             //     visitNodeList(v, node.Comment)
             assert_eq!(key, "JSDocParameterOrPropertyTag");
             let _ = body;
-            o.line("        if visit(self.tag_name) {");
+            o.line("        if self.tag_name != NodeId::NONE && visit(self.tag_name) {");
             o.line("            return true;");
             o.line("        }");
             o.line("        if self.is_name_first {");
-            o.line("            if visit(self.name) {");
+            o.line("            if self.name != NodeId::NONE && visit(self.name) {");
             o.line("                return true;");
             o.line("            }");
             o.line("            if let Some(id) = self.type_expression {");
@@ -1900,7 +1906,7 @@ fn generate_ast(s: &Schema) -> String {
             o.line("                    return true;");
             o.line("                }");
             o.line("            }");
-            o.line("            if visit(self.name) {");
+            o.line("            if self.name != NodeId::NONE && visit(self.name) {");
             o.line("                return true;");
             o.line("            }");
             o.line("        }");

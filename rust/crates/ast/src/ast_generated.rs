@@ -2271,10 +2271,10 @@ pub struct JSDocParameterOrPropertyTag {
 
 impl QualifiedName {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.left) {
+        if self.left != NodeId::NONE && visit(self.left) {
             return true;
         }
-        if visit(self.right) {
+        if self.right != NodeId::NONE && visit(self.right) {
             return true;
         }
         false
@@ -2283,7 +2283,7 @@ impl QualifiedName {
 
 impl ComputedPropertyName {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -2292,7 +2292,7 @@ impl ComputedPropertyName {
 
 impl Decorator {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -2301,10 +2301,10 @@ impl Decorator {
 
 impl IfStatement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
-        if visit(self.then_statement) {
+        if self.then_statement != NodeId::NONE && visit(self.then_statement) {
             return true;
         }
         if let Some(id) = &self.else_statement {
@@ -2318,10 +2318,10 @@ impl IfStatement {
 
 impl DoStatement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.statement) {
+        if self.statement != NodeId::NONE && visit(self.statement) {
             return true;
         }
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -2330,10 +2330,10 @@ impl DoStatement {
 
 impl WhileStatement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
-        if visit(self.statement) {
+        if self.statement != NodeId::NONE && visit(self.statement) {
             return true;
         }
         false
@@ -2357,7 +2357,7 @@ impl ForStatement {
                 return true;
             }
         }
-        if visit(self.statement) {
+        if self.statement != NodeId::NONE && visit(self.statement) {
             return true;
         }
         false
@@ -2371,13 +2371,13 @@ impl ForInOrOfStatement {
                 return true;
             }
         }
-        if visit(self.initializer) {
+        if self.initializer != NodeId::NONE && visit(self.initializer) {
             return true;
         }
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
-        if visit(self.statement) {
+        if self.statement != NodeId::NONE && visit(self.statement) {
             return true;
         }
         false
@@ -2419,10 +2419,10 @@ impl ReturnStatement {
 
 impl WithStatement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
-        if visit(self.statement) {
+        if self.statement != NodeId::NONE && visit(self.statement) {
             return true;
         }
         false
@@ -2431,10 +2431,10 @@ impl WithStatement {
 
 impl SwitchStatement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
-        if visit(self.case_block) {
+        if self.case_block != NodeId::NONE && visit(self.case_block) {
             return true;
         }
         false
@@ -2456,7 +2456,7 @@ impl CaseBlock {
 
 impl CaseOrDefaultClause {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         if let Some(list) = &self.statements {
@@ -2472,7 +2472,7 @@ impl CaseOrDefaultClause {
 
 impl ThrowStatement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -2481,7 +2481,7 @@ impl ThrowStatement {
 
 impl TryStatement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.try_block) {
+        if self.try_block != NodeId::NONE && visit(self.try_block) {
             return true;
         }
         if let Some(id) = &self.catch_clause {
@@ -2505,7 +2505,7 @@ impl CatchClause {
                 return true;
             }
         }
-        if visit(self.block) {
+        if self.block != NodeId::NONE && visit(self.block) {
             return true;
         }
         false
@@ -2514,10 +2514,10 @@ impl CatchClause {
 
 impl LabeledStatement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.label) {
+        if self.label != NodeId::NONE && visit(self.label) {
             return true;
         }
-        if visit(self.statement) {
+        if self.statement != NodeId::NONE && visit(self.statement) {
             return true;
         }
         false
@@ -2526,7 +2526,7 @@ impl LabeledStatement {
 
 impl ExpressionStatement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -2555,7 +2555,7 @@ impl VariableStatement {
                 }
             }
         }
-        if visit(self.declaration_list) {
+        if self.declaration_list != NodeId::NONE && visit(self.declaration_list) {
             return true;
         }
         false
@@ -2564,7 +2564,7 @@ impl VariableStatement {
 
 impl VariableDeclaration {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.exclamation_token {
@@ -2626,7 +2626,7 @@ impl ParameterDeclaration {
                 return true;
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.question_token {
@@ -2839,7 +2839,7 @@ impl InterfaceDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(list) = &self.type_parameters {
@@ -2876,7 +2876,7 @@ impl TypeAliasDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(list) = &self.type_parameters {
@@ -2886,7 +2886,7 @@ impl TypeAliasDeclaration {
                 }
             }
         }
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -2895,7 +2895,7 @@ impl TypeAliasDeclaration {
 
 impl EnumMember {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.initializer {
@@ -2916,7 +2916,7 @@ impl EnumDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(list) = &self.members {
@@ -2957,7 +2957,7 @@ impl ImportDeclaration {
                 return true;
             }
         }
-        if visit(self.module_specifier) {
+        if self.module_specifier != NodeId::NONE && visit(self.module_specifier) {
             return true;
         }
         if let Some(id) = &self.attributes {
@@ -2971,7 +2971,7 @@ impl ImportDeclaration {
 
 impl ExternalModuleReference {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -2980,7 +2980,7 @@ impl ExternalModuleReference {
 
 impl NamespaceImport {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         false
@@ -3009,10 +3009,10 @@ impl ExportAssignment {
                 }
             }
         }
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -3028,7 +3028,7 @@ impl NamespaceExportDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         false
@@ -3037,7 +3037,7 @@ impl NamespaceExportDeclaration {
 
 impl NamespaceExport {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         false
@@ -3064,7 +3064,7 @@ impl ExportSpecifier {
                 return true;
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         false
@@ -3172,7 +3172,7 @@ impl GetAccessorDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(list) = &self.type_parameters {
@@ -3217,7 +3217,7 @@ impl SetAccessorDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(list) = &self.type_parameters {
@@ -3287,7 +3287,7 @@ impl MethodSignatureDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.postfix_token {
@@ -3332,7 +3332,7 @@ impl MethodDeclaration {
                 return true;
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.postfix_token {
@@ -3382,7 +3382,7 @@ impl PropertySignatureDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.postfix_token {
@@ -3390,10 +3390,10 @@ impl PropertySignatureDeclaration {
                 return true;
             }
         }
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
-        if visit(self.initializer) {
+        if self.initializer != NodeId::NONE && visit(self.initializer) {
             return true;
         }
         false
@@ -3409,7 +3409,7 @@ impl PropertyDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.postfix_token {
@@ -3440,7 +3440,7 @@ impl ClassStaticBlockDeclaration {
                 }
             }
         }
-        if visit(self.body) {
+        if self.body != NodeId::NONE && visit(self.body) {
             return true;
         }
         false
@@ -3456,7 +3456,7 @@ impl BinaryExpression {
                 }
             }
         }
-        if visit(self.left) {
+        if self.left != NodeId::NONE && visit(self.left) {
             return true;
         }
         if let Some(id) = &self.type_ {
@@ -3464,10 +3464,10 @@ impl BinaryExpression {
                 return true;
             }
         }
-        if visit(self.operator_token) {
+        if self.operator_token != NodeId::NONE && visit(self.operator_token) {
             return true;
         }
-        if visit(self.right) {
+        if self.right != NodeId::NONE && visit(self.right) {
             return true;
         }
         false
@@ -3476,7 +3476,7 @@ impl BinaryExpression {
 
 impl PrefixUnaryExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.operand) {
+        if self.operand != NodeId::NONE && visit(self.operand) {
             return true;
         }
         false
@@ -3485,7 +3485,7 @@ impl PrefixUnaryExpression {
 
 impl PostfixUnaryExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.operand) {
+        if self.operand != NodeId::NONE && visit(self.operand) {
             return true;
         }
         false
@@ -3541,7 +3541,7 @@ impl ArrowFunction {
                 return true;
             }
         }
-        if visit(self.equals_greater_than_token) {
+        if self.equals_greater_than_token != NodeId::NONE && visit(self.equals_greater_than_token) {
             return true;
         }
         if let Some(id) = &self.body {
@@ -3607,10 +3607,10 @@ impl FunctionExpression {
 
 impl AsExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -3619,10 +3619,10 @@ impl AsExpression {
 
 impl SatisfiesExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -3631,19 +3631,19 @@ impl SatisfiesExpression {
 
 impl ConditionalExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.condition) {
+        if self.condition != NodeId::NONE && visit(self.condition) {
             return true;
         }
-        if visit(self.question_token) {
+        if self.question_token != NodeId::NONE && visit(self.question_token) {
             return true;
         }
-        if visit(self.when_true) {
+        if self.when_true != NodeId::NONE && visit(self.when_true) {
             return true;
         }
-        if visit(self.colon_token) {
+        if self.colon_token != NodeId::NONE && visit(self.colon_token) {
             return true;
         }
-        if visit(self.when_false) {
+        if self.when_false != NodeId::NONE && visit(self.when_false) {
             return true;
         }
         false
@@ -3652,7 +3652,7 @@ impl ConditionalExpression {
 
 impl PropertyAccessExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         if let Some(id) = &self.question_dot_token {
@@ -3660,7 +3660,7 @@ impl PropertyAccessExpression {
                 return true;
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         false
@@ -3669,7 +3669,7 @@ impl PropertyAccessExpression {
 
 impl ElementAccessExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         if let Some(id) = &self.question_dot_token {
@@ -3677,7 +3677,7 @@ impl ElementAccessExpression {
                 return true;
             }
         }
-        if visit(self.argument_expression) {
+        if self.argument_expression != NodeId::NONE && visit(self.argument_expression) {
             return true;
         }
         false
@@ -3686,7 +3686,7 @@ impl ElementAccessExpression {
 
 impl CallExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         if let Some(id) = &self.question_dot_token {
@@ -3714,7 +3714,7 @@ impl CallExpression {
 
 impl NewExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         if let Some(list) = &self.type_arguments {
@@ -3737,7 +3737,7 @@ impl NewExpression {
 
 impl MetaProperty {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         false
@@ -3746,7 +3746,7 @@ impl MetaProperty {
 
 impl NonNullExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -3755,7 +3755,7 @@ impl NonNullExpression {
 
 impl SpreadElement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -3764,7 +3764,7 @@ impl SpreadElement {
 
 impl TemplateExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.head) {
+        if self.head != NodeId::NONE && visit(self.head) {
             return true;
         }
         if let Some(list) = &self.template_spans {
@@ -3780,10 +3780,10 @@ impl TemplateExpression {
 
 impl TemplateSpan {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
-        if visit(self.literal) {
+        if self.literal != NodeId::NONE && visit(self.literal) {
             return true;
         }
         false
@@ -3792,10 +3792,10 @@ impl TemplateSpan {
 
 impl TaggedTemplateExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag) {
+        if self.tag != NodeId::NONE && visit(self.tag) {
             return true;
         }
-        if visit(self.question_dot_token) {
+        if self.question_dot_token != NodeId::NONE && visit(self.question_dot_token) {
             return true;
         }
         if let Some(list) = &self.type_arguments {
@@ -3805,7 +3805,7 @@ impl TaggedTemplateExpression {
                 }
             }
         }
-        if visit(self.template) {
+        if self.template != NodeId::NONE && visit(self.template) {
             return true;
         }
         false
@@ -3814,7 +3814,7 @@ impl TaggedTemplateExpression {
 
 impl ParenthesizedExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -3849,7 +3849,7 @@ impl ObjectLiteralExpression {
 
 impl SpreadAssignment {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -3865,7 +3865,7 @@ impl PropertyAssignment {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.postfix_token {
@@ -3873,10 +3873,10 @@ impl PropertyAssignment {
                 return true;
             }
         }
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
-        if visit(self.initializer) {
+        if self.initializer != NodeId::NONE && visit(self.initializer) {
             return true;
         }
         false
@@ -3892,7 +3892,7 @@ impl ShorthandPropertyAssignment {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.postfix_token {
@@ -3900,7 +3900,7 @@ impl ShorthandPropertyAssignment {
                 return true;
             }
         }
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         if let Some(id) = &self.equals_token {
@@ -3919,7 +3919,7 @@ impl ShorthandPropertyAssignment {
 
 impl DeleteExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -3928,7 +3928,7 @@ impl DeleteExpression {
 
 impl TypeOfExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -3937,7 +3937,7 @@ impl TypeOfExpression {
 
 impl VoidExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -3946,7 +3946,7 @@ impl VoidExpression {
 
 impl AwaitExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -3955,10 +3955,10 @@ impl AwaitExpression {
 
 impl TypeAssertion {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -3993,16 +3993,16 @@ impl IntersectionTypeNode {
 
 impl ConditionalTypeNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.check_type) {
+        if self.check_type != NodeId::NONE && visit(self.check_type) {
             return true;
         }
-        if visit(self.extends_type) {
+        if self.extends_type != NodeId::NONE && visit(self.extends_type) {
             return true;
         }
-        if visit(self.true_type) {
+        if self.true_type != NodeId::NONE && visit(self.true_type) {
             return true;
         }
-        if visit(self.false_type) {
+        if self.false_type != NodeId::NONE && visit(self.false_type) {
             return true;
         }
         false
@@ -4011,7 +4011,7 @@ impl ConditionalTypeNode {
 
 impl TypeOperatorNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -4020,7 +4020,7 @@ impl TypeOperatorNode {
 
 impl InferTypeNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_parameter) {
+        if self.type_parameter != NodeId::NONE && visit(self.type_parameter) {
             return true;
         }
         false
@@ -4029,7 +4029,7 @@ impl InferTypeNode {
 
 impl ArrayTypeNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.element_type) {
+        if self.element_type != NodeId::NONE && visit(self.element_type) {
             return true;
         }
         false
@@ -4038,10 +4038,10 @@ impl ArrayTypeNode {
 
 impl IndexedAccessTypeNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.object_type) {
+        if self.object_type != NodeId::NONE && visit(self.object_type) {
             return true;
         }
-        if visit(self.index_type) {
+        if self.index_type != NodeId::NONE && visit(self.index_type) {
             return true;
         }
         false
@@ -4050,7 +4050,7 @@ impl IndexedAccessTypeNode {
 
 impl TypeReferenceNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_name) {
+        if self.type_name != NodeId::NONE && visit(self.type_name) {
             return true;
         }
         if let Some(list) = &self.type_arguments {
@@ -4066,7 +4066,7 @@ impl TypeReferenceNode {
 
 impl ExpressionWithTypeArguments {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         if let Some(list) = &self.type_arguments {
@@ -4082,7 +4082,7 @@ impl ExpressionWithTypeArguments {
 
 impl LiteralTypeNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.literal) {
+        if self.literal != NodeId::NONE && visit(self.literal) {
             return true;
         }
         false
@@ -4096,7 +4096,7 @@ impl TypePredicateNode {
                 return true;
             }
         }
-        if visit(self.parameter_name) {
+        if self.parameter_name != NodeId::NONE && visit(self.parameter_name) {
             return true;
         }
         if let Some(id) = &self.type_ {
@@ -4110,10 +4110,10 @@ impl TypePredicateNode {
 
 impl ImportAttribute {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
-        if visit(self.value) {
+        if self.value != NodeId::NONE && visit(self.value) {
             return true;
         }
         false
@@ -4135,7 +4135,7 @@ impl ImportAttributes {
 
 impl TypeQueryNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expr_name) {
+        if self.expr_name != NodeId::NONE && visit(self.expr_name) {
             return true;
         }
         if let Some(list) = &self.type_arguments {
@@ -4156,7 +4156,7 @@ impl MappedTypeNode {
                 return true;
             }
         }
-        if visit(self.type_parameter) {
+        if self.type_parameter != NodeId::NONE && visit(self.type_parameter) {
             return true;
         }
         if let Some(id) = &self.name_type {
@@ -4218,7 +4218,7 @@ impl NamedTupleMember {
                 return true;
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.question_token {
@@ -4226,7 +4226,7 @@ impl NamedTupleMember {
                 return true;
             }
         }
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -4235,7 +4235,7 @@ impl NamedTupleMember {
 
 impl OptionalTypeNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -4244,7 +4244,7 @@ impl OptionalTypeNode {
 
 impl RestTypeNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -4253,7 +4253,7 @@ impl RestTypeNode {
 
 impl ParenthesizedTypeNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -4319,7 +4319,7 @@ impl ConstructorTypeNode {
 
 impl TemplateLiteralTypeNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.head) {
+        if self.head != NodeId::NONE && visit(self.head) {
             return true;
         }
         if let Some(list) = &self.template_spans {
@@ -4335,10 +4335,10 @@ impl TemplateLiteralTypeNode {
 
 impl TemplateLiteralTypeSpan {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
-        if visit(self.literal) {
+        if self.literal != NodeId::NONE && visit(self.literal) {
             return true;
         }
         false
@@ -4358,7 +4358,7 @@ impl SyntheticExpression {
 
 impl PartiallyEmittedExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -4367,7 +4367,7 @@ impl PartiallyEmittedExpression {
 
 impl JsxElement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.opening_element) {
+        if self.opening_element != NodeId::NONE && visit(self.opening_element) {
             return true;
         }
         if let Some(list) = &self.children {
@@ -4377,7 +4377,7 @@ impl JsxElement {
                 }
             }
         }
-        if visit(self.closing_element) {
+        if self.closing_element != NodeId::NONE && visit(self.closing_element) {
             return true;
         }
         false
@@ -4399,10 +4399,10 @@ impl JsxAttributes {
 
 impl JsxNamespacedName {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.namespace) {
+        if self.namespace != NodeId::NONE && visit(self.namespace) {
             return true;
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         false
@@ -4411,7 +4411,7 @@ impl JsxNamespacedName {
 
 impl JsxOpeningElement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(list) = &self.type_arguments {
@@ -4421,7 +4421,7 @@ impl JsxOpeningElement {
                 }
             }
         }
-        if visit(self.attributes) {
+        if self.attributes != NodeId::NONE && visit(self.attributes) {
             return true;
         }
         false
@@ -4430,7 +4430,7 @@ impl JsxOpeningElement {
 
 impl JsxSelfClosingElement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(list) = &self.type_arguments {
@@ -4440,7 +4440,7 @@ impl JsxSelfClosingElement {
                 }
             }
         }
-        if visit(self.attributes) {
+        if self.attributes != NodeId::NONE && visit(self.attributes) {
             return true;
         }
         false
@@ -4449,7 +4449,7 @@ impl JsxSelfClosingElement {
 
 impl JsxFragment {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.opening_fragment) {
+        if self.opening_fragment != NodeId::NONE && visit(self.opening_fragment) {
             return true;
         }
         if let Some(list) = &self.children {
@@ -4459,7 +4459,7 @@ impl JsxFragment {
                 }
             }
         }
-        if visit(self.closing_fragment) {
+        if self.closing_fragment != NodeId::NONE && visit(self.closing_fragment) {
             return true;
         }
         false
@@ -4468,7 +4468,7 @@ impl JsxFragment {
 
 impl JsxAttribute {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.initializer {
@@ -4482,7 +4482,7 @@ impl JsxAttribute {
 
 impl JsxSpreadAttribute {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
         false
@@ -4491,7 +4491,7 @@ impl JsxSpreadAttribute {
 
 impl JsxClosingElement {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         false
@@ -4547,7 +4547,7 @@ impl JSDoc {
 
 impl JSDocTypeExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -4556,7 +4556,7 @@ impl JSDocTypeExpression {
 
 impl JSDocNonNullableType {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -4565,7 +4565,7 @@ impl JSDocNonNullableType {
 
 impl JSDocNullableType {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -4574,7 +4574,7 @@ impl JSDocNullableType {
 
 impl JSDocVariadicType {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -4583,7 +4583,7 @@ impl JSDocVariadicType {
 
 impl JSDocOptionalType {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.type_) {
+        if self.type_ != NodeId::NONE && visit(self.type_) {
             return true;
         }
         false
@@ -4592,10 +4592,10 @@ impl JSDocOptionalType {
 
 impl JSDocTypeTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
-        if visit(self.type_expression) {
+        if self.type_expression != NodeId::NONE && visit(self.type_expression) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4611,7 +4611,7 @@ impl JSDocTypeTag {
 
 impl JSDocUnknownTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4627,10 +4627,10 @@ impl JSDocUnknownTag {
 
 impl JSDocTemplateTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
-        if visit(self.constraint) {
+        if self.constraint != NodeId::NONE && visit(self.constraint) {
             return true;
         }
         if let Some(list) = &self.type_parameters {
@@ -4653,7 +4653,7 @@ impl JSDocTemplateTag {
 
 impl JSDocReturnTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(id) = &self.type_expression {
@@ -4674,7 +4674,7 @@ impl JSDocReturnTag {
 
 impl JSDocPublicTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4690,7 +4690,7 @@ impl JSDocPublicTag {
 
 impl JSDocPrivateTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4706,7 +4706,7 @@ impl JSDocPrivateTag {
 
 impl JSDocProtectedTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4722,7 +4722,7 @@ impl JSDocProtectedTag {
 
 impl JSDocReadonlyTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4738,7 +4738,7 @@ impl JSDocReadonlyTag {
 
 impl JSDocOverrideTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4754,7 +4754,7 @@ impl JSDocOverrideTag {
 
 impl JSDocDeprecatedTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4770,10 +4770,10 @@ impl JSDocDeprecatedTag {
 
 impl JSDocSeeTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
-        if visit(self.name_expression) {
+        if self.name_expression != NodeId::NONE && visit(self.name_expression) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4789,10 +4789,10 @@ impl JSDocSeeTag {
 
 impl JSDocImplementsTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
-        if visit(self.class_name) {
+        if self.class_name != NodeId::NONE && visit(self.class_name) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4808,10 +4808,10 @@ impl JSDocImplementsTag {
 
 impl JSDocAugmentsTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
-        if visit(self.class_name) {
+        if self.class_name != NodeId::NONE && visit(self.class_name) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4827,10 +4827,10 @@ impl JSDocAugmentsTag {
 
 impl JSDocSatisfiesTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
-        if visit(self.type_expression) {
+        if self.type_expression != NodeId::NONE && visit(self.type_expression) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4846,7 +4846,7 @@ impl JSDocSatisfiesTag {
 
 impl JSDocThrowsTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(id) = &self.type_expression {
@@ -4867,10 +4867,10 @@ impl JSDocThrowsTag {
 
 impl JSDocThisTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
-        if visit(self.type_expression) {
+        if self.type_expression != NodeId::NONE && visit(self.type_expression) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4886,7 +4886,7 @@ impl JSDocThisTag {
 
 impl JSDocImportTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(id) = &self.import_clause {
@@ -4894,7 +4894,7 @@ impl JSDocImportTag {
                 return true;
             }
         }
-        if visit(self.module_specifier) {
+        if self.module_specifier != NodeId::NONE && visit(self.module_specifier) {
             return true;
         }
         if let Some(id) = &self.attributes {
@@ -4915,10 +4915,10 @@ impl JSDocImportTag {
 
 impl JSDocCallbackTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
-        if visit(self.type_expression) {
+        if self.type_expression != NodeId::NONE && visit(self.type_expression) {
             return true;
         }
         if let Some(id) = &self.name {
@@ -4939,10 +4939,10 @@ impl JSDocCallbackTag {
 
 impl JSDocOverloadTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
-        if visit(self.type_expression) {
+        if self.type_expression != NodeId::NONE && visit(self.type_expression) {
             return true;
         }
         if let Some(list) = &self.comment {
@@ -4958,7 +4958,7 @@ impl JSDocOverloadTag {
 
 impl JSDocTypedefTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if let Some(id) = &self.type_expression {
@@ -5009,7 +5009,7 @@ impl JSDocSignature {
 
 impl JSDocNameReference {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         false
@@ -5025,7 +5025,7 @@ impl ModuleDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.attributes {
@@ -5051,10 +5051,10 @@ impl ImportEqualsDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
-        if visit(self.module_reference) {
+        if self.module_reference != NodeId::NONE && visit(self.module_reference) {
             return true;
         }
         false
@@ -5091,7 +5091,7 @@ impl ExportDeclaration {
 
 impl ImportTypeNode {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.argument) {
+        if self.argument != NodeId::NONE && visit(self.argument) {
             return true;
         }
         if let Some(id) = &self.attributes {
@@ -5138,7 +5138,7 @@ impl ImportSpecifier {
                 return true;
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         false
@@ -5187,7 +5187,7 @@ impl TypeParameterDeclaration {
                 }
             }
         }
-        if visit(self.name) {
+        if self.name != NodeId::NONE && visit(self.name) {
             return true;
         }
         if let Some(id) = &self.constraint {
@@ -5211,10 +5211,10 @@ impl TypeParameterDeclaration {
 
 impl SyntheticReferenceExpression {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.expression) {
+        if self.expression != NodeId::NONE && visit(self.expression) {
             return true;
         }
-        if visit(self.this_arg) {
+        if self.this_arg != NodeId::NONE && visit(self.this_arg) {
             return true;
         }
         false
@@ -5234,11 +5234,11 @@ impl JSDocTypeLiteral {
 
 impl JSDocParameterOrPropertyTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit(self.tag_name) {
+        if self.tag_name != NodeId::NONE && visit(self.tag_name) {
             return true;
         }
         if self.is_name_first {
-            if visit(self.name) {
+            if self.name != NodeId::NONE && visit(self.name) {
                 return true;
             }
             if let Some(id) = self.type_expression {
@@ -5252,7 +5252,7 @@ impl JSDocParameterOrPropertyTag {
                     return true;
                 }
             }
-            if visit(self.name) {
+            if self.name != NodeId::NONE && visit(self.name) {
                 return true;
             }
         }
