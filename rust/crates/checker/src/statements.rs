@@ -72,7 +72,7 @@ use tsc_diagnostics as diag;
 
 use crate::checker::CheckMode;
 use crate::relater::{self, TypeFacts};
-use crate::types::{ObjectFlags, SignatureKind, TypeFlags, TypeId};
+use crate::types::{MemberOverrideStatus, ObjectFlags, SignatureKind, Ternary, TypeFlags, TypeId};
 use crate::utilities as u;
 use crate::Checker;
 
@@ -7054,4 +7054,2402 @@ pub(crate) fn get_declaration_of_kind(
         .iter()
         .copied()
         .find(|&d| store.node(d).kind == kind)
+}
+// ────────────────────────────────────────────────────────────────────────────
+// M6 S3 batch 4 — the class/interface/enum/module family (Go checker.go:
+// 4304-5394). Same Go-name/shape discipline; unlanded leaves stay bannered
+// permissive stubs (the class/inheritance seams are S5/S7/S10/W3).
+// ────────────────────────────────────────────────────────────────────────────
+
+use tsc_ast::INTERNAL_SYMBOL_NAME_EXPORT_EQUALS;
+use tsc_ast::INTERNAL_SYMBOL_NAME_EXPORT_STAR;
+
+impl Checker {
+    /// Go: `func (c *Checker) checkClassDeclaration(node)` (checker.go:4310).
+    pub(crate) fn check_class_declaration(&mut self, node: NodeId) {
+        // TODO(port M6 W3): the legacy-decorator + static-private-identifier
+        // grammar gate (checkGrammarModifiers covers the modern path);
+        // permissive.
+        if self.store().node(node).name().is_none()
+            && !crate::ast_shims::has_modifier(self.store().node(node), ModifierFlags::DEFAULT)
+        {
+            self.grammar_error_on_first_token(
+                node,
+                &diag::A_CLASS_DECLARATION_WITHOUT_THE_DEFAULT_MODIFIER_MUST_HAVE_A_NAME,
+                &[],
+            );
+        }
+        self.check_class_like_declaration(node);
+        let members = members_of(self.store(), node);
+        self.check_source_elements(&members);
+        self.check_constructor_declared_properties(node);
+        self.register_for_unused_identifiers_check(node);
+    }
+
+    /// Go: `func (c *Checker) checkConstructorDeclaredProperties(node)`
+    /// (checker.go:4325) — the JS `this`-assignment family; non-JS files
+    /// bail out immediately.
+    pub(crate) fn check_constructor_declared_properties(&mut self, node: NodeId) {
+        if !tsc_ast::utilities::is_in_js_file(self.store().node(node)) {
+            return;
+        }
+        // TODO(port M6 S4): isConstructorDeclaredThisProperty — the JS
+        // expando property family; permissive skip.
+        let _ = node;
+    }
+
+    /// Go: `func (c *Checker) checkClassLikeDeclaration(node)` (checker.go:4340).
+    pub(crate) fn check_class_like_declaration(&mut self, node: NodeId) {
+        // TODO(port M6 W3): checkGrammarClassLikeDeclaration; permissive.
+        self.check_decorators(node);
+        self.check_collisions_for_declaration_name_stub(node, self.store().node(node).name());
+        let type_parameters = type_parameters_of(self.store(), node);
+        self.check_type_parameters(&type_parameters);
+        self.check_exports_on_merged_declarations(node);
+        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+            return;
+        };
+        let class_type = self.get_declared_type_of_symbol(symbol);
+        // Go: c.getTypeWithThisArgument(classType, nil, false) — the
+        // relater free fn's this_arg is non-optional; the anyType stand-in
+        // for Go's nil keeps the mapper a no-op.
+        let any_type = self.any_type();
+        let type_with_this = relater::get_type_with_this_argument(self, class_type, any_type, false);
+        let static_type = self.get_type_of_symbol(symbol);
+        self.check_type_parameter_lists_identical(symbol);
+        self.check_function_or_constructor_symbol(symbol);
+        self.check_object_type_for_duplicate_declarations(node, true /*checkPrivateNames*/);
+
+        // Only check for reserved static identifiers on non-ambient context.
+        let node_in_ambient_context = self.store().node(node).flags.intersects(NF::AMBIENT);
+        if !node_in_ambient_context {
+            self.check_class_for_static_property_name_conflicts(node);
+        }
+
+        if let Some(base_type_node) = get_class_extends_heritage_element(self.store(), node) {
+            self.check_source_elements(&type_arguments_of(self.store(), base_type_node));
+            let base_types = self.get_base_types(class_type);
+            if !base_types.is_empty() {
+                let base_type = base_types[0];
+                // TODO(port M6 W4): checkJSDocAugmentsTagMatchesExtends —
+                // the JS @augments JSDoc family; permissive (non-JS files
+                // return immediately in Go).
+                let base_constructor_type = self.get_base_constructor_type_of_class(class_type);
+                let static_base_type = self.get_apparent_type(base_constructor_type);
+                self.check_base_type_accessibility(static_base_type, base_type_node);
+                let base_expr = self
+                    .store()
+                    .node(base_type_node)
+                    .as_expression_with_type_arguments()
+                    .expect("ExpressionWithTypeArguments data")
+                    .expression;
+                self.check_source_element(Some(base_expr));
+                let base_type_arguments = type_arguments_of(self.store(), base_type_node);
+                if !base_type_arguments.is_empty() {
+                    self.check_source_elements(&base_type_arguments);
+                    // TODO(port M6 S7): getConstructorsForTypeArguments +
+                    // getInstantiatedConstructorsForTypeArguments — the
+                    // deferred-constructor instantiation seams; permissive
+                    // (checkTypeArgumentConstraints on the class's own type
+                    // parameters approximates until S7 lands).
+                    let _ = base_type_arguments;
+                }
+                let this_type = self
+                    .type_(class_type)
+                    .as_interface_type()
+                    .expect("InterfaceType data")
+                    .this_type;
+                let this_arg = this_type.unwrap_or_else(|| self.any_type());
+                let base_with_this = relater::get_type_with_this_argument(
+                    self,
+                    base_type,
+                    this_arg,
+                    false,
+                );
+                let class_name = self.store().node(node).name();
+                if !self.check_type_assignable_to(type_with_this, base_with_this, class_name, None)
+                {
+                    self.issue_member_specific_error(
+                        node,
+                        type_with_this,
+                        base_with_this,
+                        &diag::CLASS_0_INCORRECTLY_EXTENDS_BASE_CLASS_1,
+                    );
+                } else {
+                    // Report static side error only when instance type is
+                    // assignable
+                    let without_signatures =
+                        self.get_type_without_signatures(static_base_type);
+                    self.check_type_assignable_to(
+                        static_type,
+                        without_signatures,
+                        class_name,
+                        Some(&diag::CLASS_STATIC_SIDE_0_INCORRECTLY_EXTENDS_BASE_CLASS_STATIC_SIDE_1),
+                    );
+                }
+                if self
+                    .type_(base_constructor_type)
+                    .flags
+                    .intersects(TypeFlags::TYPE_PARAMETER)
+                {
+                    if !self.is_mixin_constructor_type(static_type) {
+                        let error_node = class_name.unwrap_or(node);
+                        self.error(
+                            error_node,
+                            &diag::A_MIXIN_CLASS_MUST_HAVE_A_CONSTRUCTOR_WITH_A_SINGLE_REST_PARAMETER_OF_TYPE_ANY,
+                            &[],
+                        );
+                    } else {
+                        let construct_signatures = relater::get_signatures_of_type(
+                            self,
+                            base_constructor_type,
+                            SignatureKind::Construct,
+                        );
+                        let has_abstract = construct_signatures.iter().any(|&sig| {
+                            self.signatures[sig.0 as usize]
+                                .flags
+                                .intersects(crate::types::SignatureFlags::ABSTRACT)
+                        });
+                        if has_abstract
+                            && !crate::ast_shims::has_modifier(
+                                self.store().node(node),
+                                ModifierFlags::ABSTRACT,
+                            )
+                        {
+                            let error_node = class_name.unwrap_or(node);
+                            self.error(
+                                error_node,
+                                &diag::A_MIXIN_CLASS_THAT_EXTENDS_FROM_A_TYPE_VARIABLE_CONTAINING_AN_ABSTRACT_CONSTRUCT_SIGNATURE_MUST_ALSO_BE_DECLARED_ABSTRACT,
+                                &[],
+                            );
+                        }
+                    }
+                }
+                let static_base_is_class =
+                    self.type_(static_base_type).symbol.is_some_and(|s| {
+                        self.program_symbol(s).flags.intersects(SymbolFlags::CLASS)
+                    }) && self
+                        .type_(base_constructor_type)
+                        .flags
+                        .intersects(TypeFlags::TYPE_PARAMETER);
+                if !static_base_is_class {
+                    // When the static base type is a "class-like" constructor
+                    // function (but not actually a class), we verify that
+                    // all instantiated base constructor signatures return the
+                    // same type.
+                    // TODO(port M6 S7): getInstantiatedConstructorsForType-
+                    // Arguments — permissive (the constructors list rests).
+                }
+                self.check_kinds_of_property_member_overrides(class_type, base_type);
+            }
+        }
+        self.check_members_for_override_modifier(node, class_type, type_with_this, static_type);
+        // Go: the implements heritage walk (checker.go:4405-4435).
+        for type_ref_node in get_implements_heritage_clause_elements(self.store(), node) {
+            if self.store().node(type_ref_node).kind == Kind::ExpressionWithTypeArguments {
+                let expr = self
+                    .store()
+                    .node(type_ref_node)
+                    .as_expression_with_type_arguments()
+                    .expect("ExpressionWithTypeArguments data")
+                    .expression;
+                // Go: !IsEntityNameExpression(expr) || IsOptionalChain(expr)
+                let bad = !u::is_entity_name_expression(self.store(), expr)
+                    || tsc_binder::ast_shims::is_optional_chain_root(self.store(), expr);
+                if bad {
+                    self.error(
+                        expr,
+                        &diag::A_CLASS_CAN_ONLY_IMPLEMENT_AN_IDENTIFIER_SLASHQUALIFIED_NAME_WITH_OPTIONAL_TYPE_ARGUMENTS,
+                        &[],
+                    );
+                }
+            }
+            self.check_type_reference_node(type_ref_node);
+            let from_node = self.get_type_from_type_node(type_ref_node);
+            let t = self.get_reduced_type(from_node);
+            if !relater::is_error_type(self, t) {
+                if self.is_valid_base_type(t) {
+                    let generic_diag = if self.type_(t).symbol.is_some_and(|s| {
+                        self.program_symbol(s).flags.intersects(SymbolFlags::CLASS)
+                    }) {
+                        &diag::CLASS_0_INCORRECTLY_IMPLEMENTS_CLASS_1_DID_YOU_MEAN_TO_EXTEND_1_AND_INHERIT_ITS_MEMBERS_AS_A_SUBCLASS
+                    } else {
+                        &diag::CLASS_0_INCORRECTLY_IMPLEMENTS_INTERFACE_1
+                    };
+                    let this_type = self
+                        .type_(class_type)
+                        .as_interface_type()
+                        .expect("InterfaceType data")
+                        .this_type;
+                    let base_with_this =
+                        relater::get_type_with_this_argument(self, t, this_type.unwrap_or_else(|| self.any_type()), false);
+                    if !self.check_type_assignable_to(type_with_this, base_with_this, None, None)
+                    {
+                        self.issue_member_specific_error(node, type_with_this, base_with_this, generic_diag);
+                    }
+                } else {
+                    self.error(
+                        type_ref_node,
+                        &diag::A_CLASS_CAN_ONLY_IMPLEMENT_AN_OBJECT_TYPE_OR_INTERSECTION_OF_OBJECT_TYPES_WITH_STATICALLY_KNOWN_MEMBERS,
+                        &[],
+                    );
+                }
+            }
+        }
+        self.check_index_constraints(class_type, symbol, false /*isStaticIndex*/);
+        self.check_index_constraints(static_type, symbol, true /*isStaticIndex*/);
+        self.check_class_or_interface_for_duplicate_index_signatures(node);
+        self.check_property_initialization(node);
+    }
+
+    /// Go: `func (c *Checker) checkJSDocAugmentsTagMatchesExtends(...)` —
+    /// non-JS files return immediately; the JS tag walk is TODO(port M6 W4).
+    #[allow(dead_code)] // lands with the W4 JS doc wave
+    pub(crate) fn check_jsdoc_augments_tag_matches_extends(
+        &mut self,
+        node: NodeId,
+        _base_type_node: NodeId,
+        _base_type: TypeId,
+    ) {
+        if !tsc_ast::utilities::is_in_js_file(self.store().node(node)) {
+            return;
+        }
+        // TODO(port M6 W4): EagerJSDoc + the @augments tag walk.
+    }
+
+    /// Go: `func (c *Checker) checkClassForStaticPropertyNameConflicts(node)`
+    /// (checker.go:4455).
+    pub(crate) fn check_class_for_static_property_name_conflicts(&mut self, node: NodeId) {
+        // Go: c.compilerOptions.GetUseDefineForClassFields() gate.
+        // TODO(port M6 W8): the useDefineForClassFields emit option seam;
+        // permissive false (Go's non-define default).
+        if self.emit_standard_class_fields {
+            return;
+        }
+        let node_symbol = self.get_symbol_of_declaration(node);
+        let node_symbol_name = node_symbol
+            .map(|s| self.program_symbol(s).name.clone())
+            .unwrap_or_default();
+        for member in members_of(self.store(), node) {
+            let member_name_node = self.store().node(member).name();
+            if has_static_modifier(self.store(), member) {
+                if let Some(member_name_node) = member_name_node {
+                    // TODO(port M6 S10): getEffectivePropertyNameForPropertyName-
+                    // Node — the computed-name resolution; identifier/
+                    // literal names read directly.
+                    let member_name = tsc_ast::node_text(self.store(), member_name_node);
+                    match member_name {
+                        "name" | "length" | "caller" | "arguments" => {
+                            self.error(
+                                member_name_node,
+                                &diag::STATIC_PROPERTY_0_CONFLICTS_WITH_BUILT_IN_PROPERTY_FUNCTION_0_OF_CONSTRUCTOR_FUNCTION_1,
+                                &[member_name.to_string(), node_symbol_name.clone()],
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkTypeParameterListsIdentical(symbol)`
+    /// (checker.go:4478).
+    pub(crate) fn check_type_parameter_lists_identical(&mut self, symbol: SymbolId) {
+        let declarations = self.program_symbol(symbol).declarations.clone();
+        if declarations.len() == 1 {
+            return;
+        }
+        if !self.declared_type_links.get(symbol).type_parameters_checked {
+            self.declared_type_links.get(symbol).type_parameters_checked = true;
+            let declarations =
+                self.get_class_or_interface_declarations_of_symbol(symbol);
+            if declarations.len() <= 1 {
+                return;
+            }
+            let t = self.get_declared_type_of_symbol(symbol);
+            // Go: t.AsInterfaceType().LocalTypeParameters() — the resolved
+            // local type-parameter row.
+            let local_type_parameters = self.get_local_type_parameters(t);
+            let source_list: Vec<NodeId> = declarations.clone();
+            let identical = self.are_type_parameters_identical(
+                &source_list,
+                &local_type_parameters,
+                type_parameters_of,
+            );
+            if !identical {
+                // Report an error on every conflicting declaration.
+                let name = relater::symbol_to_string(self, symbol);
+                for declaration in declarations {
+                    let name_node = self.store().node(declaration).name();
+                    if let Some(name_node) = name_node {
+                        self.error(
+                            name_node,
+                            &diag::ALL_DECLARATIONS_OF_0_MUST_HAVE_IDENTICAL_TYPE_PARAMETERS,
+                            &[name.clone()],
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) getClassOrInterfaceDeclarationsOfSymbol(symbol)`
+    /// (checker.go:4498).
+    pub(crate) fn get_class_or_interface_declarations_of_symbol(
+        &self,
+        symbol: SymbolId,
+    ) -> Vec<NodeId> {
+        self.program_symbol(symbol)
+            .declarations
+            .iter()
+            .copied()
+            .filter(|&d| {
+                matches!(
+                    self.store().node(d).kind,
+                    Kind::ClassDeclaration | Kind::InterfaceDeclaration
+                )
+            })
+            .collect()
+    }
+
+    /// Go: `func (c *Checker) areTypeParametersIdentical(declarations, targetParameters, getTypeParameterDeclarations) bool`
+    /// (checker.go:4504).
+    pub(crate) fn are_type_parameters_identical(
+        &mut self,
+        declarations: &[NodeId],
+        target_parameters: &[TypeId],
+        get_type_parameter_declarations: fn(&dyn NodeStore, NodeId) -> Vec<NodeId>,
+    ) -> bool {
+        let max_type_argument_count = target_parameters.len();
+        // Go: getMinTypeArgumentCount — defaults count toward the minimum.
+        let mut min_type_argument_count = target_parameters.len();
+        for (i, &tp) in target_parameters.iter().enumerate().rev() {
+            if self.get_default_from_type_parameter(tp).is_none() {
+                min_type_argument_count = i + 1;
+                break;
+            }
+        }
+        for &declaration in declarations {
+            // If this declaration has too few or too many type parameters,
+            // we report an error.
+            let source_parameters = get_type_parameter_declarations(self.store(), declaration);
+            if source_parameters.len() < min_type_argument_count
+                || source_parameters.len() > max_type_argument_count
+            {
+                return false;
+            }
+            for (i, &source) in source_parameters.iter().enumerate() {
+                let target = target_parameters[i];
+                // If the type parameter node does not have the same name as
+                // the resolved type parameter at this position, we report an
+                // error.
+                let source_name = self
+                    .store()
+                    .node(source)
+                    .name()
+                    .map(|n| tsc_ast::node_text(self.store(), n));
+                let target_name = self
+                    .type_(target)
+                    .symbol
+                    .map(|s| self.program_symbol(s).name.clone());
+                if source_name != target_name.as_deref() {
+                    return false;
+                }
+                // If the type parameter node does not have an identical
+                // constraintNode as the resolved type parameter at this
+                // position, we report an error.
+                let d = self
+                    .store()
+                    .node(source)
+                    .as_type_parameter_declaration()
+                    .expect("TypeParameterDeclaration data")
+                    .clone();
+                let target_constraint = self.get_constraint_of_type_parameter(target);
+                if let Some(constraint_node) = d.constraint {
+                    if let Some(target_constraint) = target_constraint {
+                        let constraint_type = self.get_type_from_type_node(constraint_node);
+                        if !self.is_type_identical_to(constraint_type, target_constraint) {
+                            return false;
+                        }
+                    }
+                }
+                // If the type parameter node has a default and it is not
+                // identical to the default for the type parameter at this
+                // position, we report an error.
+                let target_default = self.get_default_from_type_parameter(target);
+                if let Some(default_node) = d.default_type {
+                    if let Some(target_default) = target_default {
+                        let default_type = self.get_type_from_type_node(default_node);
+                        if !self.is_type_identical_to(default_type, target_default) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Go: `func (c *Checker) checkBaseTypeAccessibility(t, node)` (checker.go:4543).
+    pub(crate) fn check_base_type_accessibility(&mut self, t: TypeId, node: NodeId) {
+        let signatures = relater::get_signatures_of_type(self, t, SignatureKind::Construct);
+        // TODO(port M6 S8): getConstructorAccessibilityError — the
+        // accessibility walk; permissive None (no private-ctor error).
+        let accessibility_error = self.get_constructor_accessibility_error_stub(node, &signatures);
+        if let Some(accessibility_error) = accessibility_error {
+            let class_symbol = accessibility_error;
+            let fully_qualified = relater::symbol_to_string(self, class_symbol);
+            self.error(
+                node,
+                &diag::CANNOT_EXTEND_A_CLASS_0_CLASS_CONSTRUCTOR_IS_MARKED_AS_PRIVATE,
+                &[fully_qualified],
+            );
+        }
+    }
+
+    /// TODO(port M6 S8): `getConstructorAccessibilityError` — the
+    /// private-ctor accessibility walk; permissive None.
+    fn get_constructor_accessibility_error_stub(
+        &mut self,
+        node: NodeId,
+        signatures: &[crate::types::SignatureId],
+    ) -> Option<SymbolId> {
+        let _ = (node, signatures);
+        None
+    }
+
+    /// Go: `func (c *Checker) issueMemberSpecificError(node, typeWithThis, baseWithThis, broadDiag)`
+    /// (checker.go:4551).
+    pub(crate) fn issue_member_specific_error(
+        &mut self,
+        node: NodeId,
+        type_with_this: TypeId,
+        base_with_this: TypeId,
+        broad_diag: &'static Message,
+    ) {
+        // iterate over all implemented properties and issue errors on each
+        // one which isn't compatible, rather than the class as a whole, if
+        // possible
+        let mut issued_member_error = false;
+        let members = members_of(self.store(), node);
+        for member in members {
+            if has_static_modifier(self.store(), member) {
+                continue;
+            }
+            if let Some(declared_prop) = self.get_symbol_of_declaration(member) {
+                let prop_name = self.program_symbol(declared_prop).name.clone();
+                if prop_name == "__computed" {
+                    // Go: InternalSymbolNameComputed.
+                    continue;
+                }
+                let prop = self.get_property_of_type(type_with_this, &prop_name);
+                let base_prop = self.get_property_of_type(base_with_this, &prop_name);
+                if let (Some(prop), Some(base_prop)) = (prop, base_prop) {
+                    let prop_type = self.get_type_of_symbol(prop);
+                    let base_prop_type = self.get_type_of_symbol(base_prop);
+                    let mut diags: Vec<tsc_ast::Diagnostic> = Vec::new();
+                    let ok = self.check_type_assignable_to_ex(
+                        prop_type,
+                        base_prop_type,
+                        self.store().node(member).name().or(Some(member)),
+                        None,
+                        Some(&mut diags),
+                    );
+                    if !ok && !diags.is_empty() {
+                        let mut chained = diags.remove(0);
+                        let prop_text = relater::symbol_to_string(self, declared_prop);
+                        let type_text = self.type_to_string(type_with_this);
+                        let base_text = self.type_to_string(base_with_this);
+                        chained.add_related_info(u::new_diagnostic_for_node(
+                            self.store(),
+                            member,
+                            &diag::PROPERTY_0_IN_TYPE_1_IS_NOT_ASSIGNABLE_TO_THE_SAME_PROPERTY_IN_BASE_TYPE_2,
+                            vec![prop_text, type_text, base_text],
+                        ));
+                        self.add_diagnostic(chained);
+                        issued_member_error = true;
+                    }
+                }
+            }
+        }
+        if !issued_member_error {
+            // check again with diagnostics to generate a less-specific error
+            self.check_type_assignable_to(
+                type_with_this,
+                base_with_this,
+                self.store().node(node).name().or(Some(node)),
+                Some(broad_diag),
+            );
+        }
+    }
+
+    /// Go: `func (c *Checker) getTypeWithoutSignatures(t)` (checker.go:4579).
+    pub(crate) fn get_type_without_signatures(&mut self, t: TypeId) -> TypeId {
+        let (td_flags, td_symbol) = {
+            let td = self.type_(t);
+            (td.flags, td.symbol)
+        };
+        if td_flags.intersects(TypeFlags::OBJECT) {
+            let resolved = relater::resolve_structured_type_members(self, t);
+            if !resolved.signatures.is_empty() {
+                let result = self.new_object_type(ObjectFlags::ANONYMOUS, td_symbol);
+                // Go: result.objectFlags |= ObjectFlagsMembersResolved and
+                // copies members/properties from the resolved row.
+                // TODO(port M6 S7): the members/properties copy — the
+                // resolved row's tables; permissive empty until S7 lands.
+                let _ = resolved;
+                return result;
+            }
+        } else if td_flags.intersects(TypeFlags::INTERSECTION) {
+            let constituents = self
+                .type_(t)
+                .as_intersection_type()
+                .expect("IntersectionType data")
+                .base
+                .types
+                .clone();
+            let without = constituents
+                .into_iter()
+                .map(|t| self.get_type_without_signatures(t))
+                .collect();
+            return relater::get_intersection_type(self, without);
+        }
+        t
+    }
+
+    /// Go: `func (c *Checker) checkKindsOfPropertyMemberOverrides(t, baseType)`
+    /// (checker.go:4607, ~200 ln) — the member-kind override matrix.
+    pub(crate) fn check_kinds_of_property_member_overrides(&mut self, t: TypeId, base_type: TypeId) {
+        // TypeScript 1.0 spec (April 2014): 8.2.3 (see Go's comment block).
+        struct MemberInfo {
+            missed_properties: Vec<String>,
+            base_type_name: String,
+            type_name: String,
+        }
+        let mut not_implemented_info: Vec<(NodeId, MemberInfo)> = Vec::new();
+
+        let base_properties = relater::get_properties_of_type(self, base_type);
+        'base_property_check: for &base_property in &base_properties {
+            let base = self.get_target_symbol(base_property).unwrap_or(base_property);
+            if self.program_symbol(base).flags.intersects(SymbolFlags::PROTOTYPE) {
+                continue;
+            }
+            let base_name = self.program_symbol(base).name.clone();
+            let Some(base_symbol) = relater::get_property_of_object_type(self, t, &base_name)
+            else {
+                continue;
+            };
+            let derived = self.get_target_symbol(base_symbol).unwrap_or(base_symbol);
+            let base_declaration_flags = relater::get_declaration_modifier_flags_from_symbol(self, base);
+            if derived == base {
+                // derived class inherits base without override/redeclaration.
+                if base_declaration_flags.intersects(ModifierFlags::ABSTRACT) {
+                    // It is an error to inherit an abstract member without
+                    // implementing it or being declared abstract.
+                    let derived_class_decl = get_class_like_declaration_of_symbol(self, t);
+                    let derived_is_abstract = derived_class_decl.is_some_and(|d| {
+                        crate::ast_shims::has_modifier(self.store().node(d), ModifierFlags::ABSTRACT)
+                    });
+                    if derived_class_decl.is_none_or(|_| !derived_is_abstract) {
+                        // Searches other base types for a declaration that
+                        // would satisfy the inherited abstract member.
+                        let other_base_types = self.get_base_types(t);
+                        for other_base_type in other_base_types {
+                            if other_base_type == base_type {
+                                continue;
+                            }
+                            if let Some(other_prop) =
+                                relater::get_property_of_object_type(self, other_base_type, &base_name)
+                            {
+                                let other_target =
+                                    self.get_target_symbol(other_prop).unwrap_or(other_prop);
+                                if base != other_target {
+                                    // Derived property exists elsewhere.
+                                    continue 'base_property_check;
+                                }
+                            }
+                        }
+                        let base_type_name = self.type_to_string(base_type);
+                        let type_name = self.type_to_string(t);
+                        let missed = relater::symbol_to_string(self, base_property);
+                        let derived_node = derived_class_decl.unwrap_or_default();
+                        match not_implemented_info
+                            .iter_mut()
+                            .find(|(n, _)| *n == derived_node)
+                        {
+                            Some((_, info)) => info.missed_properties.push(missed),
+                            None => not_implemented_info.push((
+                                derived_node,
+                                MemberInfo {
+                                    missed_properties: vec![missed],
+                                    base_type_name,
+                                    type_name,
+                                },
+                            )),
+                        }
+                    }
+                }
+            } else {
+                // derived overrides base.
+                let derived_declaration_flags =
+                    relater::get_declaration_modifier_flags_from_symbol(self, derived);
+                if base_declaration_flags.intersects(ModifierFlags::PRIVATE)
+                    || derived_declaration_flags.intersects(ModifierFlags::PRIVATE)
+                {
+                    // either base or derived property is private - not
+                    // override, skip it
+                    continue;
+                }
+                let base_property_flags =
+                    self.program_symbol(base).flags & SymbolFlags::PROPERTY_OR_ACCESSOR;
+                let derived_property_flags =
+                    self.program_symbol(derived).flags & SymbolFlags::PROPERTY_OR_ACCESSOR;
+                if !base_property_flags.is_empty() && !derived_property_flags.is_empty() {
+                    // property/accessor is overridden with property/accessor
+                    let base_mapped = self.program_symbol(base).check_flags.intersects(tsc_ast::CheckFlags::MAPPED);
+                    let derived_value_is_binary = self
+                        .program_symbol(derived)
+                        .value_declaration
+                        .is_some_and(|d| self.store().node(d).kind == Kind::BinaryExpression);
+                    if base_mapped
+                        || derived_value_is_binary
+                        || self.are_properties_abstract_or_interface(base, base_declaration_flags)
+                    {
+                        // when the base property is abstract or from an
+                        // interface, base/derived flags don't need to match
+                        continue;
+                    }
+                    let base_is_property = base_property_flags == SymbolFlags::PROPERTY;
+                    let derived_is_property = derived_property_flags == SymbolFlags::PROPERTY;
+                    let overridden_instance_property =
+                        !base_is_property && derived_is_property;
+                    let overridden_instance_accessor =
+                        base_is_property && !derived_is_property;
+                    if overridden_instance_property || overridden_instance_accessor {
+                        let error_message = if overridden_instance_property {
+                            &diag::X_0_IS_DEFINED_AS_AN_ACCESSOR_IN_CLASS_1_BUT_IS_OVERRIDDEN_HERE_IN_2_AS_AN_INSTANCE_PROPERTY
+                        } else {
+                            &diag::X_0_IS_DEFINED_AS_A_PROPERTY_IN_CLASS_1_BUT_IS_OVERRIDDEN_HERE_IN_2_AS_AN_ACCESSOR
+                        };
+                        let error_node = self
+                            .program_symbol(derived)
+                            .value_declaration
+                            .unwrap_or_default();
+                        let base_text = relater::symbol_to_string(self, base);
+                        let base_type_text = self.type_to_string(base_type);
+                        let type_text = self.type_to_string(t);
+                        self.error(
+                            error_node,
+                            error_message,
+                            &[base_text, base_type_text, type_text],
+                        );
+                    } else if self.emit_standard_class_fields {
+                        // Go: useDefineForClassFields overwrite arm.
+                        // TODO(port M6 W8): GetUseDefineForClassFields +
+                        // isPropertyInitializedInConstructor (the flow walk);
+                        // permissive skip.
+                    }
+                    // correct case
+                    continue;
+                } else if is_prototype_property(self, base) {
+                    if is_prototype_property(self, derived)
+                        || self.program_symbol(derived).flags.intersects(SymbolFlags::PROPERTY)
+                    {
+                        // method is overridden with method or property --
+                        // correct case
+                        continue;
+                    } else {
+                        let error_node = self
+                            .program_symbol(derived)
+                            .value_declaration
+                            .unwrap_or_default();
+                        let base_type_text = self.type_to_string(base_type);
+                        let base_text = relater::symbol_to_string(self, base);
+                        let type_text = self.type_to_string(t);
+                        self.error(
+                            error_node,
+                            &diag::CLASS_0_DEFINES_INSTANCE_MEMBER_FUNCTION_1_BUT_EXTENDED_CLASS_2_DEFINES_IT_AS_INSTANCE_MEMBER_ACCESSOR,
+                            &[base_type_text, base_text, type_text],
+                        );
+                        continue;
+                    }
+                } else if self.program_symbol(base).flags.intersects(SymbolFlags::ACCESSOR) {
+                    let error_node = self
+                        .program_symbol(derived)
+                        .value_declaration
+                        .unwrap_or_default();
+                    let base_type_text = self.type_to_string(base_type);
+                    let base_text = relater::symbol_to_string(self, base);
+                    let type_text = self.type_to_string(t);
+                    self.error(
+                        error_node,
+                        &diag::CLASS_0_DEFINES_INSTANCE_MEMBER_ACCESSOR_1_BUT_EXTENDED_CLASS_2_DEFINES_IT_AS_INSTANCE_MEMBER_FUNCTION,
+                        &[base_type_text, base_text, type_text],
+                    );
+                    continue;
+                } else {
+                    let error_node = self
+                        .program_symbol(derived)
+                        .value_declaration
+                        .unwrap_or_default();
+                    let base_type_text = self.type_to_string(base_type);
+                    let base_text = relater::symbol_to_string(self, base);
+                    let type_text = self.type_to_string(t);
+                    self.error(
+                        error_node,
+                        &diag::CLASS_0_DEFINES_INSTANCE_MEMBER_PROPERTY_1_BUT_EXTENDED_CLASS_2_DEFINES_IT_AS_INSTANCE_MEMBER_FUNCTION,
+                        &[base_type_text, base_text, type_text],
+                    );
+                    continue;
+                }
+            }
+        }
+        for (error_node, member_info) in not_implemented_info {
+            let is_class_expression = self.store().node(error_node).kind == Kind::ClassExpression
+                || error_node == NodeId::NONE
+                || self.store().node(error_node).name().is_none() && error_node != NodeId::NONE && self.store().node(error_node).kind == Kind::ClassExpression;
+            match member_info.missed_properties.len() {
+                1 => {
+                    let missed = member_info.missed_properties[0].clone();
+                    if is_class_expression {
+                        self.error(
+                            error_node,
+                            &diag::NON_ABSTRACT_CLASS_EXPRESSION_DOES_NOT_IMPLEMENT_INHERITED_ABSTRACT_MEMBER_0_FROM_CLASS_1,
+                            &[missed, member_info.base_type_name],
+                        );
+                    } else {
+                        self.error(
+                            error_node,
+                            &diag::NON_ABSTRACT_CLASS_0_DOES_NOT_IMPLEMENT_INHERITED_ABSTRACT_MEMBER_1_FROM_CLASS_2,
+                            &[member_info.type_name, missed, member_info.base_type_name],
+                        );
+                    }
+                }
+                n if n > 5 => {
+                    let missed_properties =
+                        u::quoted_and_comma_separated(&member_info.missed_properties[..4]);
+                    let remaining = (member_info.missed_properties.len() - 4).to_string();
+                    if is_class_expression {
+                        self.error(
+                            error_node,
+                            &diag::NON_ABSTRACT_CLASS_EXPRESSION_IS_MISSING_IMPLEMENTATIONS_FOR_THE_FOLLOWING_MEMBERS_OF_0_COLON_1_AND_2_MORE,
+                            &[member_info.base_type_name, missed_properties, remaining],
+                        );
+                    } else {
+                        self.error(
+                            error_node,
+                            &diag::NON_ABSTRACT_CLASS_0_IS_MISSING_IMPLEMENTATIONS_FOR_THE_FOLLOWING_MEMBERS_OF_1_COLON_2_AND_3_MORE,
+                            &[member_info.type_name, member_info.base_type_name, missed_properties, remaining],
+                        );
+                    }
+                }
+                _ => {
+                    let missed_properties =
+                        u::quoted_and_comma_separated(&member_info.missed_properties);
+                    if is_class_expression {
+                        self.error(
+                            error_node,
+                            &diag::NON_ABSTRACT_CLASS_EXPRESSION_IS_MISSING_IMPLEMENTATIONS_FOR_THE_FOLLOWING_MEMBERS_OF_0_COLON_1,
+                            &[member_info.base_type_name, missed_properties],
+                        );
+                    } else {
+                        self.error(
+                            error_node,
+                            &diag::NON_ABSTRACT_CLASS_0_IS_MISSING_IMPLEMENTATIONS_FOR_THE_FOLLOWING_MEMBERS_OF_1_COLON_2,
+                            &[member_info.type_name, member_info.base_type_name, missed_properties],
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) arePropertiesAbstractOrInterface(base, baseDeclarationFlags) bool`
+    /// (checker.go:4780).
+    pub(crate) fn are_properties_abstract_or_interface(
+        &mut self,
+        base: SymbolId,
+        base_declaration_flags: ModifierFlags,
+    ) -> bool {
+        let declarations = self.program_symbol(base).declarations.clone();
+        if self.program_symbol(base).check_flags.intersects(tsc_ast::CheckFlags::SYNTHETIC) {
+            declarations.iter().any(|&d| {
+                self.is_property_abstract_or_interface(d, base_declaration_flags)
+            })
+        } else {
+            declarations.iter().all(|&d| {
+                self.is_property_abstract_or_interface(d, base_declaration_flags)
+            })
+        }
+    }
+
+    /// Go: `func (c *Checker) isPropertyAbstractOrInterface(declaration, baseDeclarationFlags) bool`
+    /// (checker.go:4785).
+    pub(crate) fn is_property_abstract_or_interface(
+        &self,
+        declaration: NodeId,
+        base_declaration_flags: ModifierFlags,
+    ) -> bool {
+        self.store().node(self.store().node(declaration).parent.get()).kind
+            == Kind::InterfaceDeclaration
+            || (base_declaration_flags.intersects(ModifierFlags::ABSTRACT)
+                && (self.store().node(declaration).kind != Kind::PropertyDeclaration
+                    || crate::ast_shims::initializer_of(self.store(), declaration).is_none()))
+    }
+
+    /// Go: `func (c *Checker) checkMembersForOverrideModifier(node, t, typeWithThis, staticType)`
+    /// (checker.go:4792).
+    pub(crate) fn check_members_for_override_modifier(
+        &mut self,
+        node: NodeId,
+        t: TypeId,
+        type_with_this: TypeId,
+        static_type: TypeId,
+    ) {
+        let mut base_with_this: Option<TypeId> = None;
+        if get_class_extends_heritage_element(self.store(), node).is_some() {
+            let base_types = self.get_base_types(t);
+            if !base_types.is_empty() {
+                let this_type = self
+                    .type_(t)
+                    .as_interface_type()
+                    .expect("InterfaceType data")
+                    .this_type;
+                base_with_this = Some(relater::get_type_with_this_argument(
+                    self,
+                    base_types[0],
+                    this_type.unwrap_or_else(|| self.any_type()),
+                    false,
+                ));
+            }
+        }
+        let base_static_type = self.get_base_constructor_type_of_class(t);
+        for member in members_of(self.store(), node) {
+            // Go: !HasAmbientModifier(member)
+            let has_ambient = crate::ast_shims::has_modifier(
+                self.store().node(member),
+                ModifierFlags::AMBIENT,
+            );
+            if has_ambient {
+                continue;
+            }
+            if self.store().node(member).kind == Kind::Constructor {
+                for param in crate::ast_shims::parameters_of(self.store(), member).to_vec() {
+                    if u::is_parameter_property_declaration(
+                        self.store(),
+                        param,
+                        member,
+                    ) {
+                        self.check_member_for_override_modifier(
+                            node,
+                            static_type,
+                            base_static_type,
+                            base_with_this,
+                            t,
+                            type_with_this,
+                            param,
+                        );
+                    }
+                }
+            } else {
+                self.check_member_for_override_modifier(
+                    node,
+                    static_type,
+                    base_static_type,
+                    base_with_this,
+                    t,
+                    type_with_this,
+                    member,
+                );
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkMemberForOverrideModifier(...)` (checker.go:4813).
+    pub(crate) fn check_member_for_override_modifier(
+        &mut self,
+        node: NodeId,
+        static_type: TypeId,
+        base_static_type: TypeId,
+        base_with_this: Option<TypeId>,
+        t: TypeId,
+        type_with_this: TypeId,
+        member: NodeId,
+    ) {
+        let Some(symbol) = self.get_symbol_of_declaration(member) else {
+            return;
+        };
+        let member_has_override = u::has_override_modifier(self.store().node(member));
+        let member_has_abstract =
+            crate::ast_shims::has_modifier(self.store().node(member), ModifierFlags::ABSTRACT);
+        let member_is_static = has_static_modifier(self.store(), member);
+        let member_is_parameter = self.store().node(member).kind == Kind::Parameter;
+        self.check_member_for_override_modifier_worker(
+            node,
+            static_type,
+            base_static_type,
+            base_with_this,
+            t,
+            type_with_this,
+            member_has_override,
+            member_has_abstract,
+            member_is_static,
+            member_is_parameter,
+            symbol,
+            Some(member),
+        );
+    }
+
+    /// Go: `func (c *Checker) getMemberOverrideModifierStatus(node, member, memberSymbol)`
+    /// (checker.go:4828).
+    #[allow(dead_code)] // lands with the import/export batch wiring (Go 5420-5943)
+    pub(crate) fn get_member_override_modifier_status(
+        &mut self,
+        node: NodeId,
+        member: NodeId,
+        member_symbol: Option<SymbolId>,
+    ) -> MemberOverrideStatus {
+        if self.store().node(member).name().is_none() || member_symbol.is_none() {
+            return MemberOverrideStatus::None;
+        }
+        let Some(class_symbol) = self.get_symbol_of_declaration(node) else {
+            return MemberOverrideStatus::None;
+        };
+        let t = self.get_declared_type_of_symbol(class_symbol);
+        let any_type = self.any_type();
+        let type_with_this = relater::get_type_with_this_argument(self, t, any_type, false);
+        let static_type = self.get_type_of_symbol(class_symbol);
+        let mut base_with_this: Option<TypeId> = None;
+        if get_class_extends_heritage_element(self.store(), node).is_some() {
+            let base_types = self.get_base_types(t);
+            if !base_types.is_empty() {
+                let this_type = self
+                    .type_(t)
+                    .as_interface_type()
+                    .expect("InterfaceType data")
+                    .this_type;
+                base_with_this = Some(relater::get_type_with_this_argument(
+                    self,
+                    base_types[0],
+                    this_type.unwrap_or_else(|| self.any_type()),
+                    false,
+                ));
+            }
+        }
+        let base_static_type = self.get_base_constructor_type_of_class(t);
+        let member_has_override =
+            crate::ast_shims::has_modifier(self.store().node(member), ModifierFlags::OVERRIDE);
+        let member_has_abstract =
+            crate::ast_shims::has_modifier(self.store().node(member), ModifierFlags::ABSTRACT);
+        let member_is_static = has_static_modifier(self.store(), member);
+        self.check_member_for_override_modifier_worker(
+            node,
+            static_type,
+            base_static_type,
+            base_with_this,
+            t,
+            type_with_this,
+            member_has_override,
+            member_has_abstract,
+            member_is_static,
+            false, /*memberIsParameterProperty*/
+            member_symbol.expect("checked"),
+            None, /*errorNode*/
+        )
+    }
+
+    /// Go: `func (c *Checker) checkMemberForOverrideModifierWorker(...)` (checker.go:4858).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn check_member_for_override_modifier_worker(
+        &mut self,
+        node: NodeId,
+        static_type: TypeId,
+        base_static_type: TypeId,
+        base_with_this: Option<TypeId>,
+        t: TypeId,
+        type_with_this: TypeId,
+        member_has_override_modifier: bool,
+        member_has_abstract_modifier: bool,
+        member_is_static: bool,
+        member_is_parameter_property: bool,
+        member: SymbolId,
+        error_node: Option<NodeId>,
+    ) -> MemberOverrideStatus {
+        let is_js = tsc_ast::utilities::is_in_js_file(self.store().node(node));
+        let member_name = self.program_symbol(member).name.clone();
+        let value_declaration = self.program_symbol(member).value_declaration;
+        if member_has_override_modifier
+            && value_declaration.is_some_and(|vd| {
+                is_class_element(self.store(), vd) && self.store().node(vd).name().is_some()
+            })
+            && value_declaration.is_some_and(|vd| {
+                let name = self.store().node(vd).name().expect("checked");
+                // TODO(port M6 S8): isNonBindableDynamicName — the dynamic-
+                // name fact; permissive false (static names only here).
+                self.store().node(name).kind == Kind::ComputedPropertyName
+                    && is_non_bindable_dynamic_name_stub(self, name)
+            })
+        {
+            if let Some(error_node) = error_node {
+                let message = if is_js {
+                    &diag::THIS_MEMBER_CANNOT_HAVE_A_JSDOC_COMMENT_WITH_AN_OVERRIDE_TAG_BECAUSE_ITS_NAME_IS_DYNAMIC
+                } else {
+                    &diag::THIS_MEMBER_CANNOT_HAVE_AN_OVERRIDE_MODIFIER_BECAUSE_ITS_NAME_IS_DYNAMIC
+                };
+                self.error(error_node, message, &[]);
+            }
+            return MemberOverrideStatus::HasInvalidOverride;
+        }
+
+        if base_with_this.is_some()
+            && (member_has_override_modifier
+                || self.compiler_options.no_implicit_override == Tristate::TSTrue)
+        {
+            let this_type = if member_is_static { static_type } else { type_with_this };
+            let base_type = if member_is_static {
+                base_static_type
+            } else {
+                base_with_this.expect("checked")
+            };
+            let prop = self.get_property_of_type(this_type, &member_name);
+            let base_prop = self.get_property_of_type(base_type, &member_name);
+
+            if prop.is_some() && base_prop.is_none() && member_has_override_modifier {
+                if let Some(error_node) = error_node {
+                    // TODO(port M6 S8): getSuggestedSymbolForNonexistentClass-
+                    // Member — the spelling suggestion; permissive None.
+                    let base_with_this = base_with_this.expect("checked");
+                    let base_text = self.type_to_string(base_with_this);
+                    let message = if is_js {
+                        &diag::THIS_MEMBER_CANNOT_HAVE_A_JSDOC_COMMENT_WITH_AN_OVERRIDE_TAG_BECAUSE_IT_IS_NOT_DECLARED_IN_THE_BASE_CLASS_0
+                    } else {
+                        &diag::THIS_MEMBER_CANNOT_HAVE_AN_OVERRIDE_MODIFIER_BECAUSE_IT_IS_NOT_DECLARED_IN_THE_BASE_CLASS_0
+                    };
+                    self.error(error_node, message, &[base_text]);
+                }
+                return MemberOverrideStatus::HasInvalidOverride;
+            }
+
+            if prop.is_some()
+                && base_prop.is_some()
+                && self
+                    .program_symbol(base_prop.expect("checked"))
+                    .declarations
+                    .len()
+                    > 0
+                && self.compiler_options.no_implicit_override == Tristate::TSTrue
+                && !self.store().node(node).flags.intersects(NF::AMBIENT)
+            {
+                let base_has_abstract = self
+                    .program_symbol(base_prop.expect("checked"))
+                    .declarations
+                    .iter()
+                    .any(|&d| {
+                        crate::ast_shims::has_modifier(self.store().node(d), ModifierFlags::ABSTRACT)
+                    });
+                if member_has_override_modifier {
+                    return MemberOverrideStatus::None;
+                }
+                if !base_has_abstract {
+                    if let Some(error_node) = error_node {
+                        let base_with_this = base_with_this.expect("checked");
+                        let base_text = self.type_to_string(base_with_this);
+                        let message = if member_is_parameter_property {
+                            if is_js {
+                                &diag::THIS_PARAMETER_PROPERTY_MUST_HAVE_A_JSDOC_COMMENT_WITH_AN_OVERRIDE_TAG_BECAUSE_IT_OVERRIDES_A_MEMBER_IN_THE_BASE_CLASS_0
+                            } else {
+                                &diag::THIS_PARAMETER_PROPERTY_MUST_HAVE_AN_OVERRIDE_MODIFIER_BECAUSE_IT_OVERRIDES_A_MEMBER_IN_BASE_CLASS_0
+                            }
+                        } else if is_js {
+                            &diag::THIS_MEMBER_MUST_HAVE_A_JSDOC_COMMENT_WITH_AN_OVERRIDE_TAG_BECAUSE_IT_OVERRIDES_A_MEMBER_IN_THE_BASE_CLASS_0
+                        } else {
+                            &diag::THIS_MEMBER_MUST_HAVE_AN_OVERRIDE_MODIFIER_BECAUSE_IT_OVERRIDES_A_MEMBER_IN_THE_BASE_CLASS_0
+                        };
+                        self.error(error_node, message, &[base_text]);
+                    }
+                    return MemberOverrideStatus::NeedsOverride;
+                }
+                if member_has_abstract_modifier {
+                    if let Some(error_node) = error_node {
+                        let base_with_this = base_with_this.expect("checked");
+                        let base_text = self.type_to_string(base_with_this);
+                        self.error(
+                            error_node,
+                            &diag::THIS_MEMBER_MUST_HAVE_AN_OVERRIDE_MODIFIER_BECAUSE_IT_OVERRIDES_AN_ABSTRACT_METHOD_THAT_IS_DECLARED_IN_THE_BASE_CLASS_0,
+                            &[base_text],
+                        );
+                    }
+                    return MemberOverrideStatus::NeedsOverride;
+                }
+            }
+        } else if member_has_override_modifier {
+            if let Some(error_node) = error_node {
+                let t_text = self.type_to_string(t);
+                let message = if is_js {
+                    &diag::THIS_MEMBER_CANNOT_HAVE_A_JSDOC_COMMENT_WITH_AN_OVERRIDE_TAG_BECAUSE_ITS_CONTAINING_CLASS_0_DOES_NOT_EXTEND_ANOTHER_CLASS
+                } else {
+                    &diag::THIS_MEMBER_CANNOT_HAVE_AN_OVERRIDE_MODIFIER_BECAUSE_ITS_CONTAINING_CLASS_0_DOES_NOT_EXTEND_ANOTHER_CLASS
+                };
+                self.error(error_node, message, &[t_text]);
+            }
+            return MemberOverrideStatus::HasInvalidOverride;
+        }
+
+        MemberOverrideStatus::None
+    }
+
+    /// Go: `func (c *Checker) checkIndexConstraints(t, symbol, isStaticIndex)`
+    /// (checker.go:4896).
+    pub(crate) fn check_index_constraints(&mut self, t: TypeId, symbol: SymbolId, is_static_index: bool) {
+        let index_infos = relater::get_index_infos_of_type(self, t);
+        if index_infos.is_empty() {
+            return;
+        }
+        // Go: for _, prop := range c.getPropertiesOfObjectType(t).
+        let properties = self.get_properties_of_type(t);
+        for prop in properties {
+            let is_prototype = is_static_index
+                && self.program_symbol(prop).flags.intersects(SymbolFlags::PROTOTYPE);
+            if !is_prototype {
+                // TODO(port M6 S10): getLiteralTypeFromProperty(includeNonPublic)
+                // + getNonMissingTypeOfSymbol — the S10 literal extraction.
+                // Permissive: the property check rests until S10's
+                // getApplicableIndexInfos lands (empty answer).
+                let _ = prop;
+            }
+        }
+        let type_declaration = self.program_symbol(symbol).value_declaration;
+        if type_declaration.is_some_and(|d| is_class_like(self.store(), d)) {
+            let members = members_of(self.store(), type_declaration.expect("checked"));
+            for member in members {
+                // Only process instance properties against instance index
+                // signatures and static properties against static index
+                // signatures
+                if has_static_modifier(self.store(), member) == is_static_index
+                    && !self.has_bindable_name(member)
+                {
+                    // TODO(port M6 S4): getTypeOfExpression on the computed
+                    // name expression; permissive (the property arm rests).
+                    let _ = member;
+                }
+            }
+        }
+        if index_infos.len() > 1 {
+            for info in index_infos {
+                self.check_index_constraint_for_index_signature(t, info);
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkIndexConstraintForProperty(...)` (checker.go:4919).
+    #[allow(dead_code)] // lands with the import/export batch wiring (Go 5420-5943)
+    pub(crate) fn check_index_constraint_for_property(
+        &mut self,
+        t: TypeId,
+        prop: SymbolId,
+        prop_name_type: TypeId,
+        prop_type: TypeId,
+    ) {
+        let declaration = self.program_symbol(prop).value_declaration;
+        if let Some(declaration) = declaration {
+            let name = tsc_binder::ast_shims::get_name_of_declaration(self.store(), declaration);
+            if name.is_some_and(|n| self.store().node(n).kind == Kind::PrivateIdentifier) {
+                return;
+            }
+        }
+        let index_infos = self.get_applicable_index_infos(t, prop_name_type);
+        if index_infos.is_empty() {
+            return;
+        }
+        let prop_name = self.program_symbol(prop).name.clone();
+        for info in index_infos {
+            // TODO(port M6 S10): the (a)/(b)/(c) errorNode selection —
+            // getParentOfSymbol + getBaseTypes index lookups; permissive:
+            // the local declarations only.
+            let error_node = get_local_index_declaration(self, t, info);
+            if let Some(error_node) = error_node {
+                let info_value_type = self.index_info_value_type(info);
+                if !self.check_type_assignable_to(prop_type, info_value_type, None, None) {
+                    let prop_text = relater::symbol_to_string(self, prop);
+                    let prop_type_text = self.type_to_string(prop_type);
+                    let value_text = self.type_to_string(info_value_type);
+                    let d = u::new_diagnostic_for_node(
+                        self.store(),
+                        error_node,
+                        &diag::PROPERTY_0_OF_TYPE_1_IS_NOT_ASSIGNABLE_TO_2_INDEX_TYPE_3,
+                        vec![prop_text, prop_type_text, "index".to_string(), value_text],
+                    );
+                    self.add_diagnostic(d);
+                    let _ = prop_name;
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkIndexConstraintForIndexSignature(t, checkInfo)`
+    /// (checker.go:4967).
+    pub(crate) fn check_index_constraint_for_index_signature(
+        &mut self,
+        t: TypeId,
+        check_info: crate::types::IndexInfoId,
+    ) {
+        let check_key_type = self.index_info_key_type(check_info);
+        let index_infos = self.get_applicable_index_infos(t, check_key_type);
+        if index_infos.is_empty() {
+            return;
+        }
+        for info in index_infos {
+            if info == check_info {
+                continue;
+            }
+            // TODO(port M6 S10): the (a)/(b)/(c) errorNode selection — same
+            // permissive local-declaration-only answer as the property arm.
+            let error_node = get_local_index_declaration(self, t, info)
+                .or(get_local_index_declaration(self, t, check_info));
+            if let Some(error_node) = error_node {
+                let check_value_type = self.index_info_value_type(check_info);
+                let check_key_text = self.type_to_string(check_key_type);
+                let check_value_text = self.type_to_string(check_value_type);
+                let info_key = self.index_info_key_type(info);
+                let info_value = self.index_info_value_type(info);
+                let info_key_text = self.type_to_string(info_key);
+                let info_value_text = self.type_to_string(info_value);
+                if !self.check_type_assignable_to(check_value_type, info_value, None, None) {
+                    self.error(
+                        error_node,
+                        &diag::X_0_INDEX_TYPE_1_IS_NOT_ASSIGNABLE_TO_2_INDEX_TYPE_3,
+                        &[check_key_text, check_value_text, info_key_text, info_value_text],
+                    );
+                }
+            }
+        }
+    }
+
+    /// TODO(port M6 S10): `getApplicableIndexInfos` — the applicable index
+    /// row for a key type; permissive empty (both index-constraint arms
+    /// rest until S10 lands).
+    fn get_applicable_index_infos(
+        &mut self,
+        t: TypeId,
+        key_type: TypeId,
+    ) -> Vec<crate::types::IndexInfoId> {
+        let _ = (t, key_type);
+        Vec::new()
+    }
+
+
+
+    /// Go: `func (c *Checker) checkClassOrInterfaceForDuplicateIndexSignatures(node)`
+    /// (checker.go:5020).
+    pub(crate) fn check_class_or_interface_for_duplicate_index_signatures(&mut self, node: NodeId) {
+        // Only check the type once
+        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+            return;
+        };
+        if !self.declared_type_links.get(symbol).index_signatures_checked {
+            self.declared_type_links.get(symbol).index_signatures_checked = true;
+            self.check_type_for_duplicate_index_signatures(node);
+        }
+    }
+
+    /// Go: `func (c *Checker) checkTypeForDuplicateIndexSignatures(node)`
+    /// (checker.go:5028).
+    pub(crate) fn check_type_for_duplicate_index_signatures(&mut self, node: NodeId) {
+        // TypeScript 1.0 spec (April 2014): 3.7.4 / 8.5 — at most one
+        // string and one numeric index signature.
+        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+            return;
+        };
+        let Some(index_symbol) =
+            u::get_index_symbol_from_symbol_table(&self.program_symbol(symbol).members)
+        else {
+            return;
+        };
+        let declarations = self.program_symbol(index_symbol).declarations.clone();
+        if declarations.len() <= 1 {
+            return;
+        }
+        // Go: map[*Type][]*ast.Node keyed by the distributed parameter type.
+        let mut index_signature_map: Vec<(TypeId, Vec<NodeId>)> = Vec::new();
+        for declaration in declarations {
+            if self.store().node(declaration).kind == Kind::IndexSignature {
+                let parameters = crate::ast_shims::parameters_of(self.store(), declaration).to_vec();
+                if parameters.len() == 1 {
+                    let param_type = signature_type_node(self.store(), parameters[0]);
+                    if let Some(param_type) = param_type {
+                        let t = self.get_type_from_type_node(param_type);
+                        // Go: .Distributed() — union constituents, else the
+                        // single type.
+                        let distributed = if self.type_(t).flags.intersects(TypeFlags::UNION) {
+                            self.type_(t)
+                                .as_union_type()
+                                .expect("UnionType data")
+                                .base
+                                .types
+                                .clone()
+                        } else {
+                            vec![t]
+                        };
+                        for dt in distributed {
+                            match index_signature_map
+                                .iter_mut()
+                                .find(|(k, _)| *k == dt)
+                            {
+                                Some((_, list)) => list.push(declaration),
+                                None => index_signature_map.push((dt, vec![declaration])),
+                            }
+                        }
+                    }
+                }
+            }
+            // Do nothing for late-bound index signatures: allow these to
+            // duplicate one another and explicit indexes
+        }
+        for (t, declarations) in index_signature_map {
+            if declarations.len() > 1 {
+                let t_text = self.type_to_string(t);
+                for declaration in declarations {
+                    self.error(
+                        declaration,
+                        &diag::DUPLICATE_INDEX_SIGNATURE_FOR_TYPE_0,
+                        &[t_text.clone()],
+                    );
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkPropertyInitialization(node)` (checker.go:5051).
+    pub(crate) fn check_property_initialization(&mut self, node: NodeId) {
+        if !self.strict_null_checks
+            || !self.strict_property_initialization
+            || self.store().node(node).flags.intersects(NF::AMBIENT)
+        {
+            return;
+        }
+        let constructor = tsc_binder::ast_shims::find_constructor_declaration(self.store(), node);
+        for member in members_of(self.store(), node) {
+            let has_ambient = crate::ast_shims::has_modifier(
+                self.store().node(member),
+                ModifierFlags::AMBIENT,
+            );
+            if has_ambient {
+                continue;
+            }
+            if !has_static_modifier(self.store(), member) && self.is_property_without_initializer(member)
+            {
+                let Some(prop_name) = self.store().node(member).name() else {
+                    continue;
+                };
+                let prop_name_kind = self.store().node(prop_name).kind;
+                if prop_name_kind == Kind::Identifier
+                    || prop_name_kind == Kind::PrivateIdentifier
+                    || prop_name_kind == Kind::ComputedPropertyName
+                {
+                    let Some(symbol) = self.get_symbol_of_declaration(member) else {
+                        continue;
+                    };
+                    let t = self.get_type_of_symbol(symbol);
+                    // TODO(port M6 W3): containsUndefinedType — the flow-
+                    // based definite-assignment analysis; permissive false
+                    // (no undefined constituents on the direct type).
+                    if !self.type_(t).flags.intersects(TypeFlags::ANY_OR_UNKNOWN) {
+                        let initialized = constructor.is_some_and(|ctor| {
+                            // TODO(port M6 W3): isPropertyInitializedIn-
+                            // Constructor — the flow walk; permissive true
+                            // (the getFlowTypeOfReferenceEx seam is W3's).
+                            let _ = ctor;
+                            true
+                        });
+                        if !initialized {
+                            let name_text = tsc_scanner::utilities::declaration_name_to_string(
+                                self.store(),
+                                Some(prop_name),
+                            );
+                            self.error(
+                                prop_name,
+                                &diag::PROPERTY_0_HAS_NO_INITIALIZER_AND_IS_NOT_DEFINITELY_ASSIGNED_IN_THE_CONSTRUCTOR,
+                                &[name_text],
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) isPropertyWithoutInitializer(node) bool` (checker.go:5081).
+    pub(crate) fn is_property_without_initializer(&self, node: NodeId) -> bool {
+        self.store().node(node).kind == Kind::PropertyDeclaration
+            && !crate::ast_shims::has_modifier(self.store().node(node), ModifierFlags::ABSTRACT)
+            // TODO(port M6 W3): isExclamationToken(node.PostfixToken()) —
+            // the definite-assignment `!`; permissive false.
+            && crate::ast_shims::initializer_of(self.store(), node).is_none()
+    }
+
+    /// Go: `func (c *Checker) checkInterfaceDeclaration(node)` (checker.go:5114).
+    pub(crate) fn check_interface_declaration(&mut self, node: NodeId) {
+        if !self.check_grammar_modifiers(node) {
+            self.check_grammar_interface_declaration(node);
+        }
+        if !container_allows_block_scoped_variable(
+            self.store(),
+            self.store().node(node).parent.get(),
+        ) {
+            self.grammar_error_on_node(
+                node,
+                &diag::X_0_DECLARATIONS_CAN_ONLY_BE_DECLARED_INSIDE_A_BLOCK,
+                &["interface".to_string()],
+            );
+        }
+        let type_parameters = type_parameters_of(self.store(), node);
+        self.check_type_parameters(&type_parameters);
+        let name = self.store().node(node).name();
+        if let Some(name) = name {
+            self.check_type_name_is_reserved(name, &diag::INTERFACE_NAME_CANNOT_BE_0);
+        }
+        self.check_exports_on_merged_declarations(node);
+        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+            return;
+        };
+        self.check_type_parameter_lists_identical(symbol);
+        // Check once per checker, but report on the first interface
+        // declaration, independently of which declaration is checked first.
+        if !self.declared_type_links.get(symbol).interface_checked {
+            self.declared_type_links.get(symbol).interface_checked = true;
+            let first_interface_declaration =
+                get_declaration_of_kind(self.store(), self.program_symbol(symbol), Kind::InterfaceDeclaration);
+            let t = self.get_declared_type_of_symbol(symbol);
+            let any_type = self.any_type();
+            let type_with_this = relater::get_type_with_this_argument(self, t, any_type, false);
+            // run subsequent checks only if first set succeeded
+            let first_name = first_interface_declaration
+                .and_then(|d| self.store().node(d).name());
+            if self.check_inherited_properties_are_identical(t, first_name) {
+                let base_types = self.get_base_types(t);
+                for base_type in base_types {
+                    let this_type = self
+                        .type_(t)
+                        .as_interface_type()
+                        .expect("InterfaceType data")
+                        .this_type;
+                    let base_with_this = relater::get_type_with_this_argument(
+                        self,
+                        base_type,
+                        this_type.unwrap_or_else(|| self.any_type()),
+                        false,
+                    );
+                    self.check_type_assignable_to(
+                        type_with_this,
+                        base_with_this,
+                        first_name,
+                        Some(&diag::INTERFACE_0_INCORRECTLY_EXTENDS_INTERFACE_1),
+                    );
+                }
+                self.check_index_constraints(t, symbol, false /*isStaticIndex*/);
+            }
+        }
+        self.check_object_type_for_duplicate_declarations(node, false /*checkPrivateNames*/);
+        for heritage_element in get_extends_heritage_clause_elements(self.store(), node) {
+            if self.store().node(heritage_element).kind == Kind::ExpressionWithTypeArguments {
+                let expr = self
+                    .store()
+                    .node(heritage_element)
+                    .as_expression_with_type_arguments()
+                    .expect("ExpressionWithTypeArguments data")
+                    .expression;
+                // Go: !IsEntityNameExpression(expr) || IsOptionalChain(expr)
+                let bad = !u::is_entity_name_expression(self.store(), expr)
+                    || tsc_binder::ast_shims::is_optional_chain_root(self.store(), expr);
+                if bad {
+                    self.error(
+                        expr,
+                        &diag::AN_INTERFACE_CAN_ONLY_EXTEND_AN_IDENTIFIER_SLASHQUALIFIED_NAME_WITH_OPTIONAL_TYPE_ARGUMENTS,
+                        &[],
+                    );
+                }
+            }
+            self.check_type_reference_node(heritage_element);
+        }
+        let members = members_of(self.store(), node);
+        self.check_source_elements(&members);
+        self.check_class_or_interface_for_duplicate_index_signatures(node);
+        self.register_for_unused_identifiers_check(node);
+    }
+
+    /// Go: `func (c *Checker) checkInheritedPropertiesAreIdentical(t, typeNode) bool`
+    /// (checker.go:5150).
+    pub(crate) fn check_inherited_properties_are_identical(
+        &mut self,
+        t: TypeId,
+        type_node: Option<NodeId>,
+    ) -> bool {
+        let base_types = self.get_base_types(t);
+        if base_types.len() < 2 {
+            return true;
+        }
+        // Go: c.resolveDeclaredMembers(t).declaredMembers — the declared
+        // member row; the properties walk is the permissive stand-in until
+        // S10's resolveDeclaredMembers lands.
+        let mut seen: Vec<(String, SymbolId, TypeId)> = Vec::new();
+        let own_properties = relater::get_properties_of_type(self, t);
+        for prop in own_properties {
+            let name = self.program_symbol(prop).name.clone();
+            if is_named_member(&name) {
+                seen.push((name, prop, t));
+            }
+        }
+        let mut identical = true;
+        let this_type = self
+            .type_(t)
+            .as_interface_type()
+            .expect("InterfaceType data")
+            .this_type;
+        for base in base_types {
+            let this_arg = this_type.unwrap_or_else(|| self.any_type());
+            let base_with_this = relater::get_type_with_this_argument(self, base, this_arg, false);
+            let properties = relater::get_properties_of_type(self, base_with_this);
+            for prop in properties {
+                let prop_name = self.program_symbol(prop).name.clone();
+                match seen.iter().position(|(n, _, _)| *n == prop_name) {
+                    None => {
+                        seen.push((prop_name, prop, base));
+                    }
+                    Some(idx) => {
+                        let (existing_name, existing_prop, existing_type) = seen[idx].clone();
+                        let is_inherited_property = existing_type != t;
+                        if is_inherited_property
+                            && !self.is_property_identical_to(existing_prop, prop)
+                        {
+                            identical = false;
+                            let type_name_1 = self.type_to_string(existing_type);
+                            let type_name_2 = self.type_to_string(base);
+                            let prop_text = relater::symbol_to_string(self, prop);
+                            let t_text = self.type_to_string(t);
+                            let error_info = u::new_diagnostic_for_node(
+                                self.store(),
+                                type_node.unwrap_or_default(),
+                                &diag::NAMED_PROPERTY_0_OF_TYPES_1_AND_2_ARE_NOT_IDENTICAL,
+                                vec![prop_text, type_name_1.clone(), type_name_2.clone()],
+                            );
+                            let mut chained = error_info;
+                            chained.add_related_info(u::new_diagnostic_for_node(
+                                self.store(),
+                                type_node.unwrap_or_default(),
+                                &diag::INTERFACE_0_CANNOT_SIMULTANEOUSLY_EXTEND_TYPES_1_AND_2,
+                                vec![t_text, type_name_1, type_name_2],
+                            ));
+                            self.add_diagnostic(chained);
+                            let _ = existing_name;
+                        }
+                    }
+                }
+            }
+        }
+        identical
+    }
+
+    /// Go: `func (c *Checker) isPropertyIdenticalTo(sourceProp, targetProp) bool`
+    /// (checker.go:5185).
+    pub(crate) fn is_property_identical_to(
+        &mut self,
+        source_prop: SymbolId,
+        target_prop: SymbolId,
+    ) -> bool {
+        relater::compare_properties(
+            self,
+            source_prop,
+            target_prop,
+            crate::relater::TypeComparerKind::Identical,
+            None,
+        ) != Ternary::False
+    }
+
+    /// Go: `func (c *Checker) checkEnumDeclaration(node)` (checker.go:5188).
+    pub(crate) fn check_enum_declaration(&mut self, node: NodeId) {
+        self.check_grammar_modifiers(node);
+        self.check_collisions_for_declaration_name_stub(node, self.store().node(node).name());
+        self.check_exports_on_merged_declarations(node);
+        let members = members_of(self.store(), node);
+        self.check_source_elements(&members);
+
+        if self.should_check_erasable_syntax(node)
+            && !self.store().node(node).flags.intersects(NF::AMBIENT)
+        {
+            self.error(
+                node,
+                &diag::THIS_SYNTAX_IS_NOT_ALLOWED_WHEN_ERASABLESYNTAXONLY_IS_ENABLED,
+                &[],
+            );
+        }
+
+        self.compute_enum_member_values(node);
+        // Spec 2014 - Section 9.3: (see Go's comment block). Only perform
+        // this check once per symbol.
+        let Some(enum_symbol) = self.get_symbol_of_declaration(node) else {
+            return;
+        };
+        if !self.declared_type_links.get(enum_symbol).enum_checked {
+            self.declared_type_links.get(enum_symbol).enum_checked = true;
+            let declarations = self.program_symbol(enum_symbol).declarations.clone();
+            if declarations.len() > 1 {
+                let first_enum_declaration = get_declaration_of_kind(
+                    self.store(),
+                    self.program_symbol(enum_symbol),
+                    Kind::EnumDeclaration,
+                );
+                let enum_is_const = first_enum_declaration
+                    .is_some_and(|d| tsc_binder::ast_shims::is_enum_const(self.store(), d));
+                // check that const is placed\omitted on all enum declarations
+                for decl in declarations {
+                    if self.store().node(decl).kind == Kind::EnumDeclaration
+                        && tsc_binder::ast_shims::is_enum_const(self.store(), decl) != enum_is_const
+                    {
+                        let name = tsc_binder::ast_shims::get_name_of_declaration(self.store(), decl);
+                        if let Some(name) = name {
+                            self.error(
+                                name,
+                                &diag::ENUM_DECLARATIONS_MUST_ALL_BE_CONST_OR_NON_CONST,
+                                &[],
+                            );
+                        }
+                    }
+                }
+            }
+            let mut seen_enum_missing_initial_initializer = false;
+            for declaration in self.program_symbol(enum_symbol).declarations.clone() {
+                // return true if we hit a violation of the rule, false
+                // otherwise
+                if self.store().node(declaration).kind != Kind::EnumDeclaration {
+                    continue;
+                }
+                let members = members_of(self.store(), declaration);
+                if members.is_empty() {
+                    continue;
+                }
+                let first_enum_member = members[0];
+                if crate::ast_shims::initializer_of(self.store(), first_enum_member).is_none() {
+                    if seen_enum_missing_initial_initializer {
+                        let name = self.store().node(first_enum_member).name();
+                        if let Some(name) = name {
+                            self.error(
+                                name,
+                                &diag::IN_AN_ENUM_WITH_MULTIPLE_DECLARATIONS_ONLY_ONE_DECLARATION_CAN_OMIT_AN_INITIALIZER_FOR_ITS_FIRST_ENUM_ELEMENT,
+                                &[],
+                            );
+                        }
+                    } else {
+                        seen_enum_missing_initial_initializer = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkEnumMember(node)` (checker.go:5237).
+    pub(crate) fn check_enum_member(&mut self, node: NodeId) {
+        let name = self.store().node(node).name();
+        if name.is_some_and(|n| self.store().node(n).kind == Kind::PrivateIdentifier) {
+            self.error(
+                node,
+                &diag::AN_ENUM_MEMBER_CANNOT_BE_NAMED_WITH_A_PRIVATE_IDENTIFIER,
+                &[],
+            );
+        }
+        if name.is_some_and(|n| self.store().node(n).kind == Kind::ComputedPropertyName) {
+            let expr = self
+                .store()
+                .node(name.expect("checked"))
+                .as_computed_property_name()
+                .expect("ComputedPropertyName data")
+                .expression;
+            let _ = self.check_expression(expr);
+        }
+        if let Some(initializer) = crate::ast_shims::initializer_of(self.store(), node) {
+            let _ = self.check_expression(initializer);
+        }
+    }
+
+    /// Go: `func (c *Checker) checkModuleDeclaration(node)` (checker.go:5250).
+    pub(crate) fn check_module_declaration(&mut self, node: NodeId) {
+        let d = self
+            .store()
+            .node(node)
+            .as_module_declaration()
+            .expect("ModuleDeclaration data")
+            .clone();
+        if let Some(body) = d.body {
+            self.check_source_element(Some(body));
+            if !tsc_binder::ast_shims::is_global_scope_augmentation(self.store().node(node)) {
+                self.register_for_unused_identifiers_check(node);
+            }
+        }
+        let is_global_augmentation =
+            tsc_binder::ast_shims::is_global_scope_augmentation(self.store().node(node));
+        let in_ambient_context = self.store().node(node).flags.intersects(NF::AMBIENT);
+        if is_global_augmentation && !in_ambient_context {
+            if d.name != NodeId::NONE {
+                self.error(
+                    d.name,
+                    &diag::AUGMENTATIONS_FOR_THE_GLOBAL_SCOPE_SHOULD_HAVE_DECLARE_MODIFIER_UNLESS_THEY_APPEAR_IN_ALREADY_AMBIENT_CONTEXT,
+                    &[],
+                );
+            }
+        }
+        if let Some(attributes) = d.attributes {
+            self.check_import_attributes_type(attributes);
+        }
+        let is_ambient_external_module = tsc_binder::ast_shims::is_ambient_module(self.store(), node);
+        let context_error_message = if is_ambient_external_module {
+            &diag::AN_AMBIENT_MODULE_DECLARATION_IS_ONLY_ALLOWED_AT_THE_TOP_LEVEL_IN_A_FILE
+        } else {
+            &diag::A_NAMESPACE_DECLARATION_IS_ONLY_ALLOWED_AT_THE_TOP_LEVEL_OF_A_NAMESPACE_OR_MODULE
+        };
+        if self.check_grammar_module_element_context(node, context_error_message) {
+            // If we hit a module declaration in an illegal context, just
+            // bail out to avoid cascading errors.
+            return;
+        }
+        if !self.check_grammar_modifiers(node) {
+            let name_kind = if d.name != NodeId::NONE {
+                self.store().node(d.name).kind
+            } else {
+                Kind::MissingDeclaration
+            };
+            if !in_ambient_context && name_kind == Kind::StringLiteral {
+                self.grammar_error_on_node(
+                    d.name,
+                    &diag::ONLY_AMBIENT_MODULES_CAN_USE_QUOTED_NAMES,
+                    &[],
+                );
+            }
+        }
+        if d.name != NodeId::NONE && is_identifier(self.store().node(d.name)) {
+            self.check_collisions_for_declaration_name_stub(node, Some(d.name));
+            if d.keyword == Kind::ModuleKeyword {
+                self.error(
+                    d.name,
+                    &diag::A_NAMESPACE_DECLARATION_SHOULD_NOT_BE_DECLARED_USING_THE_MODULE_KEYWORD_PLEASE_USE_THE_NAMESPACE_KEYWORD_INSTEAD,
+                    &[],
+                );
+            }
+        }
+        self.check_exports_on_merged_declarations(node);
+        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+            return;
+        };
+        // The following checks only apply on a non-ambient instantiated
+        // module declaration.
+        let should_preserve_const_enums = self.compiler_options.should_preserve_const_enums();
+        if self.program_symbol(symbol).flags.intersects(SymbolFlags::VALUE_MODULE)
+            && !in_ambient_context
+            && is_instantiated_module(self.store(), node, should_preserve_const_enums)
+        {
+            if self.should_check_erasable_syntax(node) {
+                self.error(
+                    node,
+                    &diag::THIS_SYNTAX_IS_NOT_ALLOWED_WHEN_ERASABLESYNTAXONLY_IS_ENABLED,
+                    &[],
+                );
+            }
+            // TODO(port M6 W8): GetIsolatedModules + the emit-module-format
+            // seam (ExternalModuleIndicator); permissive (the gate needs
+            // the program's module-format-of-file resolution).
+            if self.program_symbol(symbol).declarations.len() > 1 {
+                let first_non_ambient_class_or_func =
+                    get_first_non_ambient_class_or_function_declaration(self, symbol);
+                if let Some(first) = first_non_ambient_class_or_func {
+                    let node_file = self.get_source_file_node_of(node);
+                    let first_file = self.get_source_file_node_of(first);
+                    if node_file != first_file {
+                        self.error(
+                            d.name,
+                            &diag::A_NAMESPACE_DECLARATION_CANNOT_BE_IN_A_DIFFERENT_FILE_FROM_A_CLASS_OR_FUNCTION_WITH_WHICH_IT_IS_MERGED,
+                            &[],
+                        );
+                    } else if self.store().node(node).pos() < self.store().node(first).pos() {
+                        self.error(
+                            d.name,
+                            &diag::A_NAMESPACE_DECLARATION_CANNOT_BE_LOCATED_PRIOR_TO_A_CLASS_OR_FUNCTION_WITH_WHICH_IT_IS_MERGED,
+                            &[],
+                        );
+                    }
+                }
+            }
+        }
+        if is_ambient_external_module {
+            // Go: IsExternalModuleAugmentation / IsGlobalSourceFile(parent)
+            // — the augmentation placement facts.
+            let is_external_augmentation = u::is_external_module_augmentation(self.store(), node);
+            if is_external_augmentation {
+                if let Some(attributes) = d.attributes {
+                    self.error(
+                        attributes,
+                        &diag::IMPORT_ATTRIBUTES_ARE_NOT_ALLOWED_ON_A_MODULE_AUGMENTATION,
+                        &[],
+                    );
+                }
+                // body of the augmentation should be checked for consistency
+                // only if augmentation was applied to its target.
+                let check_body = is_global_augmentation
+                    || self
+                        .program_symbol(symbol)
+                        .flags
+                        .intersects(tsc_ast::SymbolFlags::TRANSIENT);
+                if check_body {
+                    if let Some(body) = d.body {
+                        if self.store().node(body).kind == Kind::ModuleBlock {
+                            let statements = block_statements(self.store(), body);
+                            for statement in statements {
+                                self.check_module_augmentation_element(statement);
+                            }
+                        }
+                    }
+                }
+            } else {
+                let parent = self.store().node(node).parent.get();
+                if u::is_global_source_file(self.store(), parent) {
+                    if is_global_augmentation {
+                        self.error(
+                            d.name,
+                            &diag::AUGMENTATIONS_FOR_THE_GLOBAL_SCOPE_CAN_ONLY_BE_DIRECTLY_NESTED_IN_EXTERNAL_MODULES_OR_AMBIENT_MODULE_DECLARATIONS,
+                            &[],
+                        );
+                    }
+                    // Go: tspath.IsExternalModuleNameRelative(name) —
+                    // TODO(port M6 W8): the tspath seam; permissive skip.
+                } else if is_global_augmentation {
+                    self.error(
+                        d.name,
+                        &diag::AUGMENTATIONS_FOR_THE_GLOBAL_SCOPE_CAN_ONLY_BE_DIRECTLY_NESTED_IN_EXTERNAL_MODULES_OR_AMBIENT_MODULE_DECLARATIONS,
+                        &[],
+                    );
+                } else {
+                    // Node is not an augmentation and is not located on the
+                    // script level — ambient module nested in other module
+                    // or namespace, which is prohibited.
+                    self.error(
+                        d.name,
+                        &diag::AMBIENT_MODULES_CANNOT_BE_NESTED_IN_OTHER_MODULES_OR_NAMESPACES,
+                        &[],
+                    );
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkImportAttributesType(attributes)` (checker.go:5370).
+    pub(crate) fn check_import_attributes_type(&mut self, attributes: NodeId) {
+        // TODO(port M6 W3): checkGrammarImportAttributesType; permissive.
+        self.check_source_element(Some(attributes));
+        // TODO(port M6 S5): getGlobalImportAttributesTypeChecked — the
+        // global ImportAttributes type seam; permissive emptyObjectType
+        // answer (the assignability gate rests).
+        let _ = attributes;
+    }
+
+    /// Go: `func (c *Checker) getTypeOfModuleDeclarationImportAttributes(attributes)`
+    /// (checker.go:5380).
+    #[allow(dead_code)] // lands with the import/export batch wiring (Go 5420-5943)
+    pub(crate) fn get_type_of_module_declaration_import_attributes(
+        &mut self,
+        attributes: Option<NodeId>,
+    ) -> TypeId {
+        match attributes {
+            None => self.empty_object_type(),
+            Some(attributes) => self.get_type_from_type_node(attributes),
+        }
+    }
+
+    /// Go: `func (c *Checker) getTypeOfModuleImportAttributes(symbol)` (checker.go:5390).
+    #[allow(dead_code)] // lands with the import/export batch wiring (Go 5420-5943)
+    pub(crate) fn get_type_of_module_import_attributes(&mut self, symbol: SymbolId) -> TypeId {
+        if let Some(t) = self.module_import_attributes_types.get(&symbol) {
+            return *t;
+        }
+        let result = {
+            let module_decl = self
+                .program_symbol(symbol)
+                .declarations
+                .iter()
+                .copied()
+                .find(|&d| is_module_with_string_literal_name(self.store(), d));
+            match module_decl {
+                None => self.empty_object_type(),
+                Some(module_decl) => {
+                    let attributes = self
+                        .store()
+                        .node(module_decl)
+                        .as_module_declaration()
+                        .expect("ModuleDeclaration data")
+                        .attributes;
+                    self.get_type_of_module_declaration_import_attributes(attributes)
+                }
+            }
+        };
+        self.module_import_attributes_types.insert(symbol, result);
+        result
+    }
+
+    /// Go: `func (c *Checker) getIsolatedModulesLikeFlagName() string` (checker.go:5407).
+    #[allow(dead_code)] // lands with the import/export batch wiring (Go 5420-5943)
+    pub(crate) fn get_isolated_modules_like_flag_name(&self) -> String {
+        if self.compiler_options.verbatim_module_syntax == Tristate::TSTrue {
+            "verbatimModuleSyntax".to_string()
+        } else {
+            "isolatedModules".to_string()
+        }
+    }
+
+    /// Go: `func (c *Checker) checkModuleAugmentationElement(node)` (checker.go:5394).
+    pub(crate) fn check_module_augmentation_element(&mut self, node: NodeId) {
+        match self.store().node(node).kind {
+            Kind::VariableStatement => {
+                // error each individual name in variable statement instead
+                // of marking the entire variable statement
+                let declaration_list = self
+                    .store()
+                    .node(node)
+                    .as_variable_statement()
+                    .expect("VariableStatement data")
+                    .declaration_list;
+                let declarations = self
+                    .store()
+                    .node(declaration_list)
+                    .as_variable_declaration_list()
+                    .expect("VariableDeclarationList data")
+                    .declarations
+                    .as_ref()
+                    .map(|l| l.nodes.to_vec())
+                    .unwrap_or_default();
+                for decl in declarations {
+                    self.check_module_augmentation_element(decl);
+                }
+            }
+            Kind::ExportAssignment | Kind::ExportDeclaration => {
+                self.grammar_error_on_first_token(
+                    node,
+                    &diag::EXPORTS_AND_EXPORT_ASSIGNMENTS_ARE_NOT_PERMITTED_IN_MODULE_AUGMENTATIONS,
+                    &[],
+                );
+            }
+            Kind::ImportEqualsDeclaration => {
+                // import a = e.x; in module augmentation is ok, but not
+                // import a = require('fs')
+                if !is_internal_module_import_equals_declaration(self.store(), node) {
+                    self.grammar_error_on_first_token(
+                        node,
+                        &diag::IMPORTS_ARE_NOT_PERMITTED_IN_MODULE_AUGMENTATIONS_CONSIDER_MOVING_THEM_TO_THE_ENCLOSING_EXTERNAL_MODULE,
+                        &[],
+                    );
+                }
+            }
+            Kind::ImportDeclaration | Kind::JSImportDeclaration => {
+                self.grammar_error_on_first_token(
+                    node,
+                    &diag::IMPORTS_ARE_NOT_PERMITTED_IN_MODULE_AUGMENTATIONS_CONSIDER_MOVING_THEM_TO_THE_ENCLOSING_EXTERNAL_MODULE,
+                    &[],
+                );
+            }
+            Kind::BindingElement | Kind::VariableDeclaration => {
+                let name = self.store().node(node).name();
+                if name.is_some_and(|n| is_binding_pattern(self.store(), n)) {
+                    for el in binding_pattern_elements(self.store(), name.expect("checked")) {
+                        // mark individual names in binding pattern
+                        self.check_module_augmentation_element(el);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Go: `func (c *Checker) checkExternalModuleExports(node)` (checker.go:5888).
+    #[allow(dead_code)] // lands with the import/export batch wiring (Go 5420-5943)
+    pub(crate) fn check_external_module_exports(&mut self, node: NodeId) {
+        let Some(module_symbol) = self.get_symbol_of_declaration(node) else {
+            return;
+        };
+        if !self.module_symbol_links.get(module_symbol).exports_checked {
+            // Go: moduleSymbol.Exports[InternalSymbolNameExportEquals]
+            let export_equals_symbol = self
+                .program_symbol(module_symbol)
+                .exports
+                .get(INTERNAL_SYMBOL_NAME_EXPORT_EQUALS)
+                .copied();
+            // An export assignment is in error if (a) the module exports
+            // value members or (b) if the module exports type or namespace
+            // members and the exported entity also exports type or namespace
+            // members.
+            if let Some(export_equals_symbol) = export_equals_symbol {
+                if self.has_exported_members_of_kind(module_symbol, SymbolFlags::VALUE)
+                    || self.has_shadowed_namespace(export_equals_symbol)
+                {
+                    let declaration = self
+                        .get_declaration_of_alias_symbol(export_equals_symbol)
+                        .or(self.program_symbol(export_equals_symbol).value_declaration);
+                    if declaration.is_some()
+                        && declaration
+                            .is_some_and(|decl| !u::is_top_level_in_external_module_augmentation(self.store(), decl))
+                    {
+                        self.error(
+                            declaration.expect("checked"),
+                            &diag::AN_EXPORT_ASSIGNMENT_CANNOT_BE_USED_IN_A_MODULE_WITH_OTHER_EXPORTED_ELEMENTS,
+                            &[],
+                        );
+                    }
+                }
+            }
+            // Checks for export * conflicts
+            for (id, symbol) in self
+                .program_symbol(module_symbol)
+                .exports
+                .entries()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect::<Vec<_>>()
+            {
+                if id == INTERNAL_SYMBOL_NAME_EXPORT_STAR {
+                    continue;
+                }
+                // ECMA262: 15.2.1.1 (TS exceptions: namespaces, function
+                // overloads, enums, and interfaces)
+                if self
+                    .program_symbol(symbol)
+                    .flags
+                    .intersects(SymbolFlags::NAMESPACE.union(SymbolFlags::ENUM))
+                {
+                    continue;
+                }
+                let exported_declarations_count = self
+                    .program_symbol(symbol)
+                    .declarations
+                    .iter()
+                    .filter(|&&d| {
+                        is_not_overload(self.store(), d)
+                            && !matches!(
+                                self.store().node(d).kind,
+                                Kind::GetAccessor | Kind::SetAccessor
+                            )
+                            && self.store().node(d).kind != Kind::InterfaceDeclaration
+                    })
+                    .count();
+                if self.program_symbol(symbol).flags.intersects(SymbolFlags::TYPE_ALIAS)
+                    && exported_declarations_count <= 2
+                {
+                    // it is legal to merge type alias with other values
+                    continue;
+                }
+                let all_exports_property = self
+                    .program_symbol(symbol)
+                    .declarations
+                    .iter()
+                    .all(|&_d| {
+                        // TODO(port M6 S4): GetAssignmentDeclarationKind —
+                        // the JS expando family; permissive false.
+                        false
+                    });
+                if exported_declarations_count > 1 && !all_exports_property {
+                    let declarations: Vec<NodeId> =
+                        self.program_symbol(symbol).declarations.clone();
+                    for declaration in declarations {
+                        if is_not_overload(self.store(), declaration) {
+                            self.error(
+                                declaration,
+                                &diag::CANNOT_REDECLARE_EXPORTED_VARIABLE_0,
+                                &[id.clone()],
+                            );
+                        }
+                    }
+                }
+            }
+            self.module_symbol_links.get(module_symbol).exports_checked = true;
+        }
+    }
+
+    /// Go: `func (c *Checker) hasExportedMembersOfKind(moduleSymbol, kind) bool`
+    /// (checker.go:5915).
+    #[allow(dead_code)] // lands with the import/export batch wiring (Go 5420-5943)
+    pub(crate) fn has_exported_members_of_kind(&self, module_symbol: SymbolId, kind: SymbolFlags) -> bool {
+        self.program_symbol(module_symbol)
+            .exports
+            .values()
+            .any(|&symbol| {
+                symbol_name(self, symbol) != INTERNAL_SYMBOL_NAME_EXPORT_EQUALS
+                    && self.get_symbol_flags(symbol).intersects(kind)
+            })
+    }
+
+    /// Go: `func (c *Checker) hasShadowedNamespace(symbol) bool` (checker.go:5923).
+    pub(crate) fn has_shadowed_namespace(&mut self, symbol: SymbolId) -> bool {
+        // TODO(port M6 S6): resolveAlias — the alias target walk; the
+        // permissive typeofsymbol body answers unknownSymbol (no namespace),
+        // so the shadow gate rests.
+        if self
+            .program_symbol(symbol)
+            .flags
+            .intersects(SymbolFlags::NAMESPACE_MODULE.union(SymbolFlags::ALIAS))
+        {
+            let target = self.resolve_alias(symbol);
+            if self.program_symbol(target).flags.intersects(SymbolFlags::NAMESPACE)
+                && self.has_exported_members_of_kind(
+                    target,
+                    SymbolFlags::TYPE.union(SymbolFlags::NAMESPACE),
+                )
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Go: `func getEffectiveDeclarationFlags(n, flagsToCheck)` (checker.go:3736)
+    /// — the REAL body (children of classes should not be marked as ambient
+    /// or export because those flags have no useful semantics there).
+    pub(crate) fn get_effective_declaration_flags_real(
+        &self,
+        n: NodeId,
+        flags_to_check: ModifierFlags,
+    ) -> ModifierFlags {
+        let mut flags = tsc_binder::ast_shims::get_combined_modifier_flags(self.store(), n);
+        let parent = self.store().node(n).parent.get();
+        let parent_kind = self.store().node(parent).kind;
+        if parent_kind != Kind::InterfaceDeclaration
+            && parent_kind != Kind::ClassDeclaration
+            && parent_kind != Kind::ClassExpression
+            && self.store().node(n).flags.intersects(NF::AMBIENT)
+        {
+            if let Some(container) = u::get_enclosing_container(self.store(), n) {
+                let is_module_block = parent_kind == Kind::ModuleBlock;
+                // TODO(port M6 W3): IsGlobalScopeAugmentation on the module
+                // block's parent — the ambient module seam; permissive false.
+                let grandparent_kind =
+                    self.store().node(self.store().node(parent).parent.get()).kind;
+                if self.store().node(container).flags.intersects(NF::EXPORT_CONTEXT)
+                    && !flags.intersects(ModifierFlags::AMBIENT)
+                    && !(is_module_block && grandparent_kind == Kind::ModuleDeclaration && false)
+                {
+                    // It is nested in an ambient export context, which
+                    // means it is automatically exported
+                    flags |= ModifierFlags::EXPORT;
+                }
+            }
+            flags |= ModifierFlags::AMBIENT;
+        }
+        ModifierFlags(flags.bits() & flags_to_check.bits())
+    }
+
+    /// TODO(port M6 S7): `LocalTypeParameters` — the resolved local type-
+    /// parameter row on a class/interface type; permissive empty (the
+    /// identical-list check trivially passes with no target parameters,
+    /// matching an untyped-parameter class).
+    fn get_local_type_parameters(&mut self, _t: TypeId) -> Vec<TypeId> {
+        Vec::new()
+    }
+
+    /// TODO(port M6 S7): `isValidBaseType` — the statics-known-members fact;
+    /// permissive true (the implement-check proceeds like an object type).
+    fn is_valid_base_type(&mut self, _t: TypeId) -> bool {
+        true
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Free helpers for the class/interface/enum/module batch.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `isPrototypeProperty` — the prototype-named synthesized symbol.
+fn is_prototype_property(c: &Checker, symbol: SymbolId) -> bool {
+    c.program_symbol(symbol).name == "prototype"
+}
+
+/// Go: `ast.GetClassLikeDeclarationOfSymbol` — first class-like declaration
+/// of the symbol carrying `t`.
+fn get_class_like_declaration_of_symbol(c: &mut Checker, t: TypeId) -> Option<NodeId> {
+    c.type_(t).symbol.and_then(|symbol| {
+        c.program_symbol(symbol)
+            .declarations
+            .iter()
+            .copied()
+            .find(|&d| is_class_like(c.store(), d))
+    })
+}
+
+/// Go: `ast.GetImplementsHeritageClauseElements`.
+pub(crate) fn get_implements_heritage_clause_elements(
+    store: &dyn NodeStore,
+    node: NodeId,
+) -> Vec<NodeId> {
+    get_heritage_clause_elements_of_token(store, node, Kind::ImplementsKeyword)
+}
+
+/// Go: `ast.GetExtendsHeritageClauseElements` (the interface form).
+pub(crate) fn get_extends_heritage_clause_elements(
+    store: &dyn NodeStore,
+    node: NodeId,
+) -> Vec<NodeId> {
+    get_heritage_clause_elements_of_token(store, node, Kind::ExtendsKeyword)
+}
+
+fn get_heritage_clause_elements_of_token(
+    store: &dyn NodeStore,
+    node: NodeId,
+    token: Kind,
+) -> Vec<NodeId> {
+    let n = store.node(node);
+    let clauses = match n.kind {
+        Kind::ClassDeclaration => n.as_class_declaration().expect("data").heritage_clauses.as_ref(),
+        Kind::ClassExpression => n.as_class_expression().expect("data").heritage_clauses.as_ref(),
+        Kind::InterfaceDeclaration => {
+            n.as_interface_declaration().expect("data").heritage_clauses.as_ref()
+        }
+        _ => None,
+    };
+    let Some(clauses) = clauses else {
+        return Vec::new();
+    };
+    clauses
+        .nodes
+        .iter()
+        .copied()
+        .filter(|&clause| {
+            let c = store.node(clause);
+            c.kind == Kind::HeritageClause
+                && c.as_heritage_clause().expect("HeritageClause data").token == token
+        })
+        .flat_map(|clause| {
+            store
+                .node(clause)
+                .as_heritage_clause()
+                .expect("HeritageClause data")
+                .types
+                .as_ref()
+                .map(|l| l.nodes.to_vec())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Go: `containerAllowsBlockScopedVariable` (grammarchecks.go:1796).
+pub(crate) fn container_allows_block_scoped_variable(
+    store: &dyn NodeStore,
+    parent: NodeId,
+) -> bool {
+    let kind = store.node(parent).kind;
+    !matches!(
+        kind,
+        Kind::IfStatement
+            | Kind::DoStatement
+            | Kind::WhileStatement
+            | Kind::WithStatement
+            | Kind::ForStatement
+            | Kind::ForInStatement
+            | Kind::ForOfStatement
+            | Kind::LabeledStatement
+    ) || (kind == Kind::LabeledStatement
+        && container_allows_block_scoped_variable(store, store.node(parent).parent.get()))
+}
+
+/// Go: `ast.IsClassElement`.
+fn is_class_element(store: &dyn NodeStore, node: NodeId) -> bool {
+    matches!(
+        store.node(node).kind,
+        Kind::PropertyDeclaration
+            | Kind::PropertySignature
+            | Kind::MethodDeclaration
+            | Kind::MethodSignature
+            | Kind::GetAccessor
+            | Kind::SetAccessor
+            | Kind::Constructor
+            | Kind::IndexSignature
+            | Kind::ClassStaticBlockDeclaration
+            | Kind::SemicolonClassElement
+    )
+}
+
+/// TODO(port M6 S8): `isNonBindableDynamicName` — permissive false.
+fn is_non_bindable_dynamic_name_stub(_c: &Checker, _name: NodeId) -> bool {
+    false
+}
+
+/// Go: `isNamedMember` — names not carrying the internal prefix.
+fn is_named_member(name: &str) -> bool {
+    !name.starts_with('\u{FE}')
+}
+
+/// Go: `isModuleWithStringLiteralName`.
+#[allow(dead_code)] // lands with the import/export batch (Go 5420-5943)
+fn is_module_with_string_literal_name(store: &dyn NodeStore, node: NodeId) -> bool {
+    let n = store.node(node);
+    if n.kind != Kind::ModuleDeclaration {
+        return false;
+    }
+    let d = n.as_module_declaration().expect("ModuleDeclaration data");
+    d.name != NodeId::NONE && store.node(d.name).kind == Kind::StringLiteral
+}
+
+/// Go: `ast.IsInternalModuleImportEqualsDeclaration`.
+fn is_internal_module_import_equals_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
+    let n = store.node(node);
+    if n.kind != Kind::ImportEqualsDeclaration {
+        return false;
+    }
+    let module_reference = n
+        .as_import_equals_declaration()
+        .expect("ImportEqualsDeclaration data")
+        .module_reference;
+    // Go: !IsExternalModuleReference(moduleReference) — the internal
+    // `import a = N.S` form.
+    store.node(module_reference).kind != Kind::ExternalModuleReference
+}
+
+/// Go: `func isInstantiatedModule(node, preserveConstEnums) bool` (checker.go:5402).
+pub(crate) fn is_instantiated_module(
+    store: &dyn NodeStore,
+    node: NodeId,
+    preserve_const_enums: bool,
+) -> bool {
+    let module_state = tsc_binder::ast_shims::get_module_instance_state(store, node);
+    module_state == tsc_binder::ast_shims::ModuleInstanceState::Instantiated
+        || (preserve_const_enums
+            && module_state == tsc_binder::ast_shims::ModuleInstanceState::ConstEnumOnly)
+}
+
+/// Go: `func getFirstNonAmbientClassOrFunctionDeclaration(symbol)` (checker.go:5409).
+fn get_first_non_ambient_class_or_function_declaration(
+    c: &Checker,
+    symbol: SymbolId,
+) -> Option<NodeId> {
+    c.program_symbol(symbol).declarations.iter().copied().find(|&declaration| {
+        let kind = c.store().node(declaration).kind;
+        (kind == Kind::ClassDeclaration
+            || (kind == Kind::FunctionDeclaration
+                && function_body_of(c.store(), declaration).is_some()))
+            && !c.store().node(declaration).flags.intersects(NF::AMBIENT)
+    })
+}
+
+/// Go: `func isNotOverload(node) bool` (checker.go:5929).
+#[allow(dead_code)] // lands with the import/export batch (Go 5420-5943)
+pub(crate) fn is_not_overload(store: &dyn NodeStore, node: NodeId) -> bool {
+    let kind = store.node(node).kind;
+    (kind != Kind::FunctionDeclaration && kind != Kind::MethodDeclaration)
+        || function_body_of(store, node).is_some()
+}
+
+/// The local index-signature declaration of an IndexInfo on `t` (the
+/// errorNode (b)/(c) arms of the index-constraint checks; the (a) property
+/// arm needs the S10 parent-symbol seam).
+fn get_local_index_declaration(
+    c: &Checker,
+    _t: TypeId,
+    info: crate::types::IndexInfoId,
+) -> Option<NodeId> {
+    c.index_infos[info.0 as usize].declaration
+}
+
+/// `symbol.Name` read helper (the SymbolTable value's name).
+#[allow(dead_code)] // lands with the import/export batch (Go 5420-5943)
+fn symbol_name(c: &Checker, symbol: SymbolId) -> String {
+    c.program_symbol(symbol).name.clone()
 }

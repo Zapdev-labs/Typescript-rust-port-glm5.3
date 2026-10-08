@@ -1097,7 +1097,7 @@ impl Checker {
     /// taking no type parameters and a single rest parameter of type any[].
     ///
     /// Go: `func (c *Checker) isMixinConstructorType(t *Type) bool`.
-    fn is_mixin_constructor_type(&mut self, t: TypeId) -> bool {
+    pub(crate) fn is_mixin_constructor_type(&mut self, t: TypeId) -> bool {
         let signatures = self.get_signatures_of_type(t, types::SignatureKind::Construct);
         if signatures.len() == 1 {
             let s = &self.signatures[signatures[0].0 as usize];
@@ -1720,7 +1720,7 @@ impl Checker {
     /// unresolvable alias, so the permissive seam resolves to the
     /// unknownSymbol — getSymbolFlagsEx maps that to SymbolFlagsAll exactly
     /// like Go's `target == c.unknownSymbol` arm.
-    fn resolve_alias(&mut self, symbol: SymbolId) -> SymbolId {
+    pub(crate) fn resolve_alias(&mut self, symbol: SymbolId) -> SymbolId {
         let _ = symbol;
         self.unknown_symbol()
     }

@@ -35,7 +35,7 @@ use tsc_diagnostics::Message;
 
 use crate::todo_shapes::UnionReduction;
 use crate::types::{
-    ContextFlags, IndexInfoId, MemberOverrideStatus, SignatureId, SignatureKind, TypeId,
+    ContextFlags, IndexInfoId, SignatureId, SignatureKind, TypeId,
 };
 use crate::utilities as u;
 use crate::Checker;
@@ -343,11 +343,9 @@ impl Checker {
         n: NodeId,
         flags_to_check: ModifierFlags,
     ) -> ModifierFlags {
-        // TODO(port M6 S8): the effective-modifiers computation
-        // (ambient/JS-file handling).
-        let _ = n;
-        let _ = flags_to_check;
-        ModifierFlags::NONE
+        // PORT (M6 S3): routes to the real body (checker.go:3736, ambient
+        // + JS-file handling) that landed with statements.rs.
+        self.get_effective_declaration_flags_real(n, flags_to_check)
     }
 
     /// Go: `func (c *Checker) GetBaseConstraintOfType(t *Type) *Type` →
@@ -574,20 +572,9 @@ impl Checker {
         self.get_base_constructor_type_of_class_impl(t)
     }
 
-    /// Go: `func (c *Checker) GetMemberOverrideModifierStatus(node *ast.Node, member *ast.Node, memberSymbol *ast.Symbol) MemberOverrideStatus`
-    /// → `c.getMemberOverrideModifierStatus(...)` (checker.go — S3's class
-    /// member checks).
-    #[allow(clippy::too_many_arguments)]
-    pub fn get_member_override_modifier_status(
-        &mut self,
-        node: NodeId,
-        member: NodeId,
-        member_symbol: SymbolId,
-    ) -> MemberOverrideStatus {
-        // TODO(port M6 S3): the override-modifier checks.
-        let _ = (node, member, member_symbol);
-        MemberOverrideStatus::None
-    }
+    /// Go: `func (c *Checker) GetMemberOverrideModifierStatus(...)` — the
+    /// real body landed with M6 S3's class-member checks
+    /// (statements.rs::get_member_override_modifier_status).
 
     /// Go: `func (c *Checker) GetRestTypeOfSignature(sig *Signature) *Type` →
     /// `c.getRestTypeOfSignature(sig)` (checker.go — S8).

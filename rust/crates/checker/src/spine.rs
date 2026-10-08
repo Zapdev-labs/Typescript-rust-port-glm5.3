@@ -1045,14 +1045,24 @@ impl Checker {
             Kind::BindingElement => {
                 self.check_binding_element(node);
             }
-            Kind::ClassDeclaration => { /* TODO(port M6 S3): checkClassDeclaration */ }
-            Kind::InterfaceDeclaration => { /* TODO(port M6 S3): checkInterfaceDeclaration */ }
+            Kind::ClassDeclaration => {
+                self.check_class_declaration(node);
+            }
+            Kind::InterfaceDeclaration => {
+                self.check_interface_declaration(node);
+            }
             Kind::TypeAliasDeclaration | Kind::JSTypeAliasDeclaration => {
                 /* TODO(port M6 S3): checkTypeAliasDeclaration */
             }
-            Kind::EnumDeclaration => { /* TODO(port M6 S3): checkEnumDeclaration */ }
-            Kind::EnumMember => { /* TODO(port M6 S3): checkEnumMember */ }
-            Kind::ModuleDeclaration => { /* TODO(port M6 S3): checkModuleDeclaration */ }
+            Kind::EnumDeclaration => {
+                self.check_enum_declaration(node);
+            }
+            Kind::EnumMember => {
+                self.check_enum_member(node);
+            }
+            Kind::ModuleDeclaration => {
+                self.check_module_declaration(node);
+            }
             Kind::ImportDeclaration | Kind::JSImportDeclaration => {
                 /* TODO(port M6 S3): checkImportDeclaration */
             }
@@ -1175,9 +1185,11 @@ impl Checker {
                 }
                 Kind::ModuleDeclaration => {
                     // Go: ast.IsInstantiatedModule(node, ShouldPreserveConstEnums()).
-                    // TODO(port M6 S3): IsInstantiatedModule (module-instance
-                    // state); permissive false = reachable.
-                    false
+                    crate::statements::is_instantiated_module(
+                        self.store(),
+                        node,
+                        self.compiler_options.should_preserve_const_enums(),
+                    )
                 }
                 _ => true,
             }

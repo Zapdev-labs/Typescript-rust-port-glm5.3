@@ -458,7 +458,7 @@ pub fn is_top_level_in_external_module_augmentation(store: &dyn NodeStore, node:
 
 /// Go: `ast.IsExternalModuleAugmentation` — the module is ambient and its
 /// string-literal name makes it external.
-fn is_external_module_augmentation(store: &dyn NodeStore, node: NodeId) -> bool {
+pub(crate) fn is_external_module_augmentation(store: &dyn NodeStore, node: NodeId) -> bool {
     let n = store.node(node);
     is_external_module_augmentation_worker(store, node, n.flags.intersects(NodeFlags::AMBIENT))
 }
