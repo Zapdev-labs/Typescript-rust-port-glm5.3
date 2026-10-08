@@ -1415,3 +1415,60 @@ port). M6 should extend the record with: checker diagnostics per file
 the AST-config wave lands — real-dir runs driven by a project's OWN
 tsconfig (the twin currently synthesizes its config; a real tsconfig
 needs `ConfigFile` syntax positioning for option diagnostics).
+
+## M6 Wave 1 — checker periphery (mapper/jsdoc/exports/symboltracker/stringer)
+
+Wave A of the M6 checker port (the wave/slice order is
+`rust/M6-DISPATCH.md`; the slice survey lives there too). Files landed
+in the 10:28/10:43 auto-checkpoints (0862775f25/7a55811d50) — worker did
+no git; orchestrator verified on exactly that tree before recording.
+
+- **mapper.rs (929 ln)** — the instantiation-mapper machinery:
+  `TypeMapperKind` + `TypeMapperData` (Simple/Array/ArrayToSingle/
+  Deferred/Function/Merged/Composite/Inference), the two-phase
+  `plan()/MapAction` dispatch (Rust closures cannot re-borrow `&mut
+  Checker` mid-map the way Go closures capture the mapper — the plan
+  phase captures, the run phase re-borrows; PORT-noted at the trait),
+  every Go factory + `combine/merge/prepend/append`, and
+  push/popActiveMapper with **Go's slice-spare-capacity reuse** (a Vec
+  with the same capacity trick, PORT-noted) and `clear_cached_inferences`
+  landed early because the mapper caches need it.
+- **jsdoc.rs (424 ln)** — `checkUnmatchedJSDocParameters` (the
+  `arguments`-referencing arm dormant behind the S4
+  `contains_arguments_reference` stub), tag walks, the jsdoc_cache seam.
+- **exports.rs (893 ln)** — the ~70 exported checker wrappers: real
+  bodies where the callee already exists, permissive stubs with
+  `TODO(port M6 <wave>)` banners otherwise; Go's `Get*/get*` pairs
+  collapsed with the pairing documented in the header.
+- **symboltracker.rs (368 ln)** — `SymbolTrackerImpl` over
+  `NodeBuilderContext` (todo_shapes gained the real shape + the
+  `SymbolTracker` trait); `onDiagnosticReported` runs BEFORE the nil
+  check, exactly as Go orders it.
+- **stringer_generated.rs (82 ln)** — the generated `SignatureKind`
+  stringer table, index array `[0,17,39]`, numeric fallback and all.
+- **Cross-wave bug found by the wave's own tests** (fixed in
+  `rust/crates/parser/src/reparser.rs`, outside W1 scope but
+  Go-mandated): `find_matching_parameter` lacked Go's
+  `parameterTag.Name().Kind == KindIdentifier` guard
+  (tsc/internal/parser/reparser.go:639) — it panicked on `@param ns.b`.
+  Guard added; tsc-parser 15 passed.
+
+**State**: `checker.rs` gains `type_mappers: Vec<TypeMapperData>` +
+`active_mappers` + `active_type_mappers_caches` + `inference_contexts`
+and the W1 callee stubs (`instantiate_type`→identity [S7],
+`get_type_from_type_node`→errorType [S5], `is_array_type`→false [S7],
+`contains_arguments_reference`→false [S4], `get_inferred_type`→
+errorType) — each banner names the wave that replaces it.
+`todo_shapes.rs`: real `InferenceContext`/`InferenceContextId`,
+`TrackedSymbolArgs` (SymbolId-based; RefCell invariance PORT),
+`UnionReduction`. `utilities.rs`: the full `compare_type_mappers`
+port (kind-wise Simple/Array/Merged payload compares — mapper IDENTITY
+is `TypeMapperId` equality, mirroring Go's pointer identity).
+
+**Validation**: tsc-checker 60 lib + 7 integration (35 new: 13 mapper,
+5 jsdoc, 6 exports, 8 symboltracker, 3 stringer — Go had no tests for
+these files; checker_test.go's 2 tests exercise S6 surface only);
+tsc-parser 15 passed (reparser fix); clippy zero warnings
+(tsc-checker + tsc-parser); program/symbols/dump twins byte-identical
+post-change (the reparser fix warranted the dump re-run); bench-harness
+builds (it does not depend on tsc-checker).
