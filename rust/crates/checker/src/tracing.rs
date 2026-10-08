@@ -658,7 +658,7 @@ fn marshal_legend(records: &[TraceRecord]) -> String {
         }
         buf.push_str("\n  {");
         let mut first = true;
-        let mut field = |buf: &mut String, first: &mut bool, key: &str, value: &str| {
+        let field = |buf: &mut String, first: &mut bool, key: &str, value: &str| {
             if !value.is_empty() {
                 if !*first {
                     buf.push(',');
@@ -1000,7 +1000,7 @@ fn write_type_descriptor(buf: &mut String, desc: &TypeDescriptor<'_>) {
     use std::fmt::Write as _;
     buf.push_str("{\"id\":");
     let _ = write!(buf, "{}", desc.id);
-    let mut str_field = |buf: &mut String, key: &str, value: &str| {
+    let str_field = |buf: &mut String, key: &str, value: &str| {
         if !value.is_empty() {
             buf.push(',');
             buf.push('"');
@@ -1018,7 +1018,7 @@ fn write_type_descriptor(buf: &mut String, desc: &TypeDescriptor<'_>) {
     if desc.is_tuple {
         buf.push_str(",\"isTuple\":true");
     }
-    let mut ids_field = |buf: &mut String, key: &str, ids: &[u32]| {
+    let ids_field = |buf: &mut String, key: &str, ids: &[u32]| {
         if !ids.is_empty() {
             buf.push(',');
             buf.push('"');
@@ -1036,7 +1036,7 @@ fn write_type_descriptor(buf: &mut String, desc: &TypeDescriptor<'_>) {
     ids_field(buf, "unionTypes", &desc.union_types);
     ids_field(buf, "intersectionTypes", &desc.intersection_types);
     ids_field(buf, "aliasTypeArguments", &desc.alias_type_arguments);
-    let mut opt_field = |buf: &mut String, key: &str, v: Option<u32>| {
+    let opt_field = |buf: &mut String, key: &str, v: Option<u32>| {
         if let Some(v) = v {
             buf.push(',');
             buf.push('"');

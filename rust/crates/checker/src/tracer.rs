@@ -456,3 +456,101 @@ impl TypeTracer {
         self.write_dump(&content)
     }
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// tracer_test.go (Go: TestTracerPushPreservesEndArgMutations)
+// ────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tracing::{start_tracing, Args, Phase, TraceFs, TraceValue};
+
+    /// Go: vfstest.FromMap — the in-memory fs the test drives StartTracing
+    /// with (write_file/append_file/read_file over a shared map).
+    struct MemFs(std::cell::RefCell<std::collections::HashMap<String, String>>);
+
+    impl MemFs {
+        fn new() -> Rc<Self> {
+            Rc::new(MemFs(std::cell::RefCell::new(
+                std::collections::HashMap::new(),
+            )))
+        }
+    }
+
+    impl TraceFs for MemFs {
+        fn write_file(&self, path: &str, content: &str) -> Result<(), String> {
+            self.0
+                .borrow_mut()
+                .insert(path.to_string(), content.to_string());
+            Ok(())
+        }
+        fn append_file(&self, path: &str, content: &str) -> Result<(), String> {
+            self.0
+                .borrow_mut()
+                .entry(path.to_string())
+                .and_modify(|existing| existing.push_str(content))
+                .or_insert_with(|| content.to_string());
+            Ok(())
+        }
+        fn read_file(&self, path: &str) -> Option<String> {
+            self.0.borrow().get(path).cloned()
+        }
+    }
+
+    /// Go: findTestTraceEvent — the events are comma-separated one-per-line
+    /// JSON objects in trace.json; the port finds the raw event line for
+    /// (phase, name) and asserts on its JSON text.
+    fn find_test_trace_event<'a>(
+        events: impl Iterator<Item = &'a str>,
+        phase: &str,
+        name: &str,
+    ) -> String {
+        for event in events {
+            if event.contains(&format!("\"ph\":\"{phase}\"")) && event.contains(&format!("\"name\":\"{name}\"")) {
+                return event.to_string();
+            }
+        }
+        panic!("failed to find {phase} event {name:?}");
+    }
+
+    /// Go: TestTracerPushPreservesEndArgMutations — Push with
+    /// separateBeginAndEnd must not leave checkerId in the caller's map, and
+    /// the end event must observe args mutations made between Push and pop.
+    #[test]
+    fn tracer_push_preserves_end_arg_mutations() {
+        let fsys = MemFs::new();
+
+        let tr = start_tracing(fsys.clone(), "/trace", "", true /* deterministic */)
+            .expect("start tracing");
+
+        let args = Args::new();
+        args.insert("id", TraceValue::Int(1));
+        let tracer = new_tracer(&tr, 7);
+        let pop = tracer.push(Phase::CheckTypes, "getVariancesWorker", &args, true);
+        // The caller's map must not observe the temporarily-added checkerId.
+        assert!(args.get("checkerId").is_none());
+
+        // Mutate the shared args between Push and pop.
+        args.insert(
+            "variances",
+            TraceValue::Array(vec![TraceValue::Str("out".to_string())]),
+        );
+        pop.pop();
+        assert!(args.get("checkerId").is_none());
+
+        tr.stop_tracing().expect("stop tracing");
+
+        let trace_text = fsys.read_file("/trace/trace.json").expect("trace written");
+        let event_lines = trace_text.split(",\n");
+
+        let begin_event = find_test_trace_event(event_lines.clone(), "B", "getVariancesWorker");
+        assert!(begin_event.contains("\"checkerId\":7"));
+        // The begin event was serialized before the variances mutation.
+        assert!(!begin_event.contains("\"variances\""));
+
+        let end_event = find_test_trace_event(event_lines, "E", "getVariancesWorker");
+        assert!(end_event.contains("\"checkerId\":7"));
+        assert!(end_event.contains("\"variances\":[\"out\"]"));
+    }
+}

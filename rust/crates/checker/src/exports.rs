@@ -387,7 +387,6 @@ impl Checker {
     /// Go: `func (c *Checker) IsTypeAssignableTo(source *Type, target *Type) bool`
     /// → `c.isTypeAssignableTo(source, target)` (relater.go — M6 wave 2) —
     /// W2: the real body landed with relater.rs.
-
     /// Go: `func (c *Checker) GetLocalTypeParametersOfClassOrInterfaceOrTypeAlias(symbol *ast.Symbol) []*Type`
     /// → `c.getLocalTypeParametersOfClassOrInterfaceOrTypeAlias(symbol)`
     /// (checker.go — S2/S8).
@@ -673,7 +672,6 @@ impl Checker {
     /// Go: `func (c *Checker) IsTypeAssignableTo(source *Type, target *Type) bool`
     /// → `c.isTypeAssignableTo(source, target)` (relater.go — M6 wave 2) —
     /// W2: the real body landed with relater.rs.
-
     /// Go: `func (c *Checker) GetUnionTypeEx(types []*Type, unionReduction UnionReduction) *Type`
     /// → `c.getUnionTypeEx(types, unionReduction, nil, nil)` (checker.go — S7).
     ///
@@ -828,7 +826,9 @@ mod tests {
         assert_eq!(c.get_jsx_namespace(node), "");
         assert_eq!(c.get_jsx_fragment_factory(node), "");
         assert_eq!(c.resolve_name("x", node, SymbolFlags::VALUE, false), None);
-        assert!(!c.is_type_assignable_to(t, t));
+        // M6 W2 wired the real relater: identity comparability of a type
+        // with itself now holds (Go: isTypeAssignableTo(string, string)).
+        assert!(c.is_type_assignable_to(t, t));
         assert!(!c.is_context_sensitive(node));
         assert!(!c.requires_adding_implicit_undefined(node));
         assert!(!c.is_readonly_symbol(sym));

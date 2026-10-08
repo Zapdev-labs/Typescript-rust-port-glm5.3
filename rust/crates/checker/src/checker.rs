@@ -2027,12 +2027,12 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     let marker_super_type = c.new_type(
         TypeFlags::TYPE_PARAMETER,
         ObjectFlags::NONE,
-        TypeData::TypeParameter(Box::new(crate::types::TypeParameter::default())),
+        TypeData::TypeParameter(Box::default()),
     );
     let marker_sub_type = c.new_type(
         TypeFlags::TYPE_PARAMETER,
         ObjectFlags::NONE,
-        TypeData::TypeParameter(Box::new(crate::types::TypeParameter::default())),
+        TypeData::TypeParameter(Box::default()),
     );
     c.type_mut(marker_sub_type)
         .as_type_parameter_mut()
@@ -2041,7 +2041,7 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     let marker_other_type = c.new_type(
         TypeFlags::TYPE_PARAMETER,
         ObjectFlags::NONE,
-        TypeData::TypeParameter(Box::new(crate::types::TypeParameter::default())),
+        TypeData::TypeParameter(Box::default()),
     );
     c.marker_super_type = Some(marker_super_type);
     c.marker_sub_type = Some(marker_sub_type);
