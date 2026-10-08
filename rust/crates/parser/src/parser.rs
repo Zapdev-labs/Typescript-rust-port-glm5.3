@@ -320,10 +320,6 @@ impl<'a, 'f> Parser<'a, 'f> {
     }
 
     pub(crate) fn rewind(&mut self, state: ParserState<'a>) {
-        if std::env::var_os("TSC_TRACE_LIST").is_some() {
-            let cur = self.sink.borrow().diagnostics.len();
-            eprintln!("REWIND truncate diags {} -> {}", cur, state.diagnostics_len);
-        }
         self.scanner.rewind(state.scanner_state);
         self.token = self.scanner.token();
         self.context_flags = state.context_flags;
@@ -897,16 +893,6 @@ impl<'a, 'f> Parser<'a, 'f> {
 
         let mut after_await_statement = 0usize;
         let mut i = 0usize;
-        if std::env::var_os("TSC_TRACE_LIST").is_some() {
-            eprintln!(
-                "REPARSE spans={:?} saved_diags={:?}",
-                self.possible_await_spans,
-                saved_parse_diagnostics
-                    .iter()
-                    .map(|d| d.pos())
-                    .collect::<Vec<_>>()
-            );
-        }
         while i < self.possible_await_spans.len() {
             let next_await_statement = self.possible_await_spans[i] as usize;
             // append all non-await statements between afterAwaitStatement and nextAwaitStatement
@@ -939,14 +925,6 @@ impl<'a, 'f> Parser<'a, 'f> {
             }
 
             let mut state = self.mark();
-            if std::env::var_os("TSC_TRACE_LIST").is_some() {
-                eprintln!(
-                    "REPARSE span prev_pos={} next_pos={} replayed_so_far={}",
-                    prev_pos,
-                    next_pos,
-                    self.sink.borrow().diagnostics.len()
-                );
-            }
             // reparse all statements between start and pos. We skip existing
             // diagnostics for the same range and allow the parser to generate new ones.
             self.context_flags |= NodeFlags::AWAIT_CONTEXT;
@@ -1107,12 +1085,6 @@ impl<'a, 'f> Parser<'a, 'f> {
         self.parsing_contexts |= 1 << kind;
         let mut list: Vec<NodeId> = Vec::with_capacity(16);
         loop {
-            if std::env::var_os("TSC_TRACE_LIST").is_some() {
-                eprintln!(
-                    "LIST kind={:?} token={:?} pos={}",
-                    kind, self.token, self.scanner.token_full_start()
-                );
-            }
             if self.is_list_element(kind, false /*in_error_recovery*/) {
                 let start_pos = self.node_pos();
                 let element = parse_element(self);
@@ -1212,13 +1184,6 @@ impl<'a, 'f> Parser<'a, 'f> {
     /// Returns true if we should abort parsing.
     /// Go: `func (p *Parser) abortParsingListOrMoveToNextToken(kind ParsingContext) bool`.
     fn abort_parsing_list_or_move_to_next_token(&mut self, kind: ParsingContext) -> bool {
-        if std::env::var_os("TSC_TRACE_LIST").is_some() {
-            let in_some = self.is_in_some_parsing_context();
-            eprintln!(
-                "ABORT kind={:?} token={:?} pos={} inSome={}",
-                kind, self.token, self.scanner.token_full_start(), in_some
-            );
-        }
         self.parsing_context_errors(kind);
         if self.is_in_some_parsing_context() {
             return true;

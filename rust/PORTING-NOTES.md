@@ -367,3 +367,49 @@ a view type over unsafe punning. Raw outputs: ~/bench-results/phase0 (rig).
 - Phase A first green: 1.051× at threads=1 / 0.629× at threads=16 on the
   Excalidraw corpus (nodes/errors/shape byte-identical to the Go driver);
   see rust/BENCHMARKS.md for the provisional-load caveat.
+
+## M3 Wave 4 — parser-parity fixes (two dump divergences vs the Go driver)
+
+- **finishSourceFile must not drain the diagnostics sink** (parser.rs):
+  Go's `finishSourceFile` passes `p.diagnostics` to
+  `attachFileToDiagnostics` WITHOUT consuming it (it only stamps `.File`
+  on the shared entries), so the slice stays live for
+  `reparseTopLevelAwait` — which snapshots it into `savedParseDiagnostics`
+  AFTER the first `finishSourceFile` call and replays the entries that
+  fall in non-await statement ranges while re-generating the rest. The
+  port had `std::mem::take` there, so by reparse time the sink was empty,
+  the replay copied nothing, and every diagnostic raised before the
+  await-span statement vanished. Repro:
+  `tsc/testdata/tests/cases/compiler/reachabilityChecksNoCrash1.ts`
+  (`export async function … (p!: AsyncIterable<T>): Promise<T[]> { … await … }`):
+  Go 19 diags vs Rust 13, tree byte-identical — Rust dropped exactly the
+  6 parameter-list-recovery diagnostics (positions 90–111) that live
+  inside the replayed prefix. Fix: clone (not take) `diagnostics` and
+  `jsdoc_diagnostics` in `finish_source_file`, leaving the sink alive
+  like Go. (`reparse_top_level_await`'s own `mem::take` into
+  `saved_parse_diagnostics` is the faithful mirror of Go's
+  `savedParseDiagnostics := p.diagnostics; p.diagnostics = nil`.)
+- **TagNamesAreEquivalent takes TagName(), not the JsxClosingElement**
+  (jsx.rs): Go's mismatched-close recovery calls
+  `TagNamesAreEquivalent(opening.TagName(), child.ClosingElement.TagName())`
+  — the closing element's TAG NAME node. The port passed the
+  `JsxClosingElement` node itself at the two recovery predicates (the
+  "stop after parsing a mismatched child … reattach the `</div>` higher"
+  break in `parse_jsx_children`, and the lastChild-restructure check in
+  `parse_jsx_element_or_self_closing_element_or_fragment`).
+  `tag_names_are_equivalent` first compares node kinds, and
+  `JsxClosingElement != Identifier`, so both predicates were constantly
+  false: the recovery never fired, `<div><span></div>` kept the outer
+  `<div>` open to EOF, swallowing every following statement as JSX
+  text/children (Rust: 72 nodes/13 errors vs Go: 78/11 on
+  `tsc/testdata/tests/cases/conformance/jsx/jsxParsingError2.tsx`,
+  minimal repro `let x1 = <div><span></div>;` — Go 1 error, Rust 3).
+  Fix: extract `.tag_name` from the `JsxClosingElement` data at both
+  predicates. (The other three call sites were already correct.)
+- Validation: both repros + all 194 conformance/jsx files dump-identical;
+  compiler/ sweep has a single remaining divergence,
+  `octalLiteralAndEscapeSequence.ts` — PRE-EXISTING at HEAD and identical
+  before/after these fixes (Go reports the `\x27` escape @420-423, Rust
+  `\x13f` @420-424) — a scanner-crate escape-sequence slicing issue, out
+  of parser scope (reported, not touched). tsc-parser 10/10 tests, gate
+  GATE: panics=0, clippy clean in parser files.
