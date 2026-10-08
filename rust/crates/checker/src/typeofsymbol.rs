@@ -4760,3 +4760,98 @@ fn try_get_text_of_property_name(store: &dyn NodeStore, name: NodeId) -> String 
 fn is_numeric_literal_name_str(name: &str) -> bool {
     u::is_numeric_literal_name(name)
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// In-module unit tests (the S2 slice's internal units that the pub surface
+// does not reach: flags-ex, the enum-literal interning tables, and the
+// symbol-with-type / undefined-property caches).
+// ────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn new_checker() -> Checker {
+        crate::mapper::tests_support::new_empty_checker()
+    }
+
+    /// Go: getSymbolFlagsEx — the non-alias walk returns the symbol's own
+    /// flags; the exclude arms drop local meanings (Go's excludeFlags mask).
+    #[test]
+    fn get_symbol_flags_ex_reads_own_flags_and_honors_the_exclude_arms() {
+        let mut c = new_checker();
+        let sym = c.get_unknown_symbol();
+        let own = c.program_symbol(sym).flags;
+        assert_eq!(c.get_symbol_flags_ex(sym, false, false), own);
+        assert_eq!(c.get_symbol_flags_ex(sym, true, false), own);
+        // excludeLocalMeanings: Go seeds flags = NONE for a non-alias symbol.
+        assert_eq!(c.get_symbol_flags_ex(sym, false, true), SymbolFlags::NONE);
+    }
+
+    /// Go: getEnumLiteralType — the (enum, value) pair interns in
+    /// enumLiteralTypes; string and number members get their literal flags;
+    /// NaN cannot be a map key, so NaN members intern separately per enum.
+    #[test]
+    fn get_enum_literal_type_interns_by_value_and_caches_nan_separately() {
+        let mut c = new_checker();
+        let enum_symbol = c.new_symbol(SymbolFlags::REGULAR_ENUM, "E");
+        let a = c.new_symbol(SymbolFlags::ENUM_MEMBER, "A");
+        let b = c.new_symbol(SymbolFlags::ENUM_MEMBER, "B");
+        let zero = c.get_enum_literal_type(LiteralValue::Number(tsc_jsnum::Number(0.0)), enum_symbol, a);
+        let zero_again = c.get_enum_literal_type(LiteralValue::Number(tsc_jsnum::Number(0.0)), enum_symbol, b);
+        assert_eq!(zero, zero_again, "the (enum, value) pair interns");
+        assert!(c.type_(zero).flags.intersects(TypeFlags::ENUM_LITERAL | TypeFlags::NUMBER_LITERAL));
+        assert_eq!(c.type_(zero).symbol, Some(a), "the first symbol that created the type is attached");
+        let one = c.get_enum_literal_type(LiteralValue::Number(tsc_jsnum::Number(1.0)), enum_symbol, b);
+        assert_ne!(zero, one, "distinct values intern distinctly");
+        let s = c.get_enum_literal_type(LiteralValue::String("x".to_string()), enum_symbol, b);
+        assert!(c.type_(s).flags.intersects(TypeFlags::ENUM_LITERAL | TypeFlags::STRING_LITERAL));
+        // NaN: the separate per-enum cache (IEEE 754 NaN != NaN means the
+        // main table's key lookups always miss for it).
+        let nan = tsc_jsnum::Number(f64::NAN);
+        let nan_a = c.get_enum_literal_type(LiteralValue::Number(nan), enum_symbol, a);
+        let nan_b = c.get_enum_literal_type(LiteralValue::Number(nan), enum_symbol, b);
+        assert_eq!(nan_a, nan_b, "NaN enum literals cache by enum symbol");
+        assert_ne!(nan_a, zero);
+        assert!(c.type_(nan_a).flags.intersects(TypeFlags::ENUM_LITERAL | TypeFlags::NUMBER_LITERAL));
+    }
+
+    /// Go: createSymbolWithType — the new symbol copies the source's flags,
+    /// name, and identity, carries the given resolved type, and leaves the
+    /// source untouched.
+    #[test]
+    fn create_symbol_with_type_copies_identity_and_seeds_the_resolved_type() {
+        let mut c = new_checker();
+        let source = c.get_unknown_symbol();
+        let source_type_before = c.value_symbol_links.get(source).resolved_type;
+        let t = c.string_type();
+        let created = c.create_symbol_with_type(source, t);
+        assert_ne!(created, source);
+        assert_eq!(c.program_symbol(created).name, c.program_symbol(source).name);
+        assert_eq!(c.program_symbol(created).flags, c.program_symbol(source).flags);
+        assert_eq!(c.value_symbol_links.get(created).resolved_type, Some(t));
+        // The source's link is untouched (the unknown symbol's own seeded
+        // resolved type, whatever it was, survives).
+        assert_eq!(
+            c.value_symbol_links.get(source).resolved_type,
+            source_type_before
+        );
+    }
+
+    /// Go: getUndefinedProperty — the widened undefined-property symbol caches
+    /// by name, carries the OPTIONAL flag, and resolves to
+    /// undefinedOrMissingType.
+    #[test]
+    fn get_undefined_property_caches_by_name_with_the_optional_flag() {
+        let mut c = new_checker();
+        let prop = c.get_unknown_symbol(); // name "unknown"
+        let undefined_prop = c.get_undefined_property(prop);
+        assert!(c.program_symbol(undefined_prop).flags.intersects(SymbolFlags::OPTIONAL));
+        let expected = c.undefined_or_missing_type();
+        assert_eq!(c.value_symbol_links.get(undefined_prop).resolved_type, Some(expected));
+        // Same name → the cached symbol; a different name → a fresh one.
+        assert_eq!(c.get_undefined_property(c.get_unknown_symbol()), undefined_prop);
+        let other = c.new_symbol(SymbolFlags::PROPERTY, "other");
+        let other_prop = c.get_undefined_property(other);
+        assert_ne!(other_prop, undefined_prop);
+    }
+}
