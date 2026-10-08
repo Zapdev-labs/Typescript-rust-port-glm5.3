@@ -1,6 +1,6 @@
 # TypeScript → Rust Port — Working Specification
 
-**Status:** active draft · **Owner:** dih · **Last updated:** 2026-10-07
+**Status:** active draft · **Owner:** dih · **Last updated:** 2026-10-07 · **Work branch:** `rust-perf` (perf arc — see §15)
 
 This document is the authoritative spec for porting the TypeScript compiler to Rust.
 It lives at `rust/SPEC.md`; the port lives under `rust/`. The reference implementation
@@ -20,8 +20,9 @@ be updated.
 - **Byte-for-byte behavioral parity** with the Go port: same diagnostics (same codes,
   same message text, same order), same emit, same baselines. Where the Go port
   deliberately diverges from Strada, follow Go.
-- **Performance at parity or better** than the Go port on cold `tsc` runs of large
-  projects, with lower peak memory (no GC, tighter AST layout).
+- **Performance: faster than the Go port** on the benchmark corpus (Excalidraw —
+  §15), phase-gated at every milestone, with lower peak memory (no GC,
+  tighter AST layout).
 - **Full surface eventually**: batch compiler (`tsc`), build mode (`tsc -b`),
   watch mode, transpile API, LSP server, and the IPC/API protocol used by the
   VS Code extension (`packages/vscode-typescript` talks to the native server over
@@ -689,6 +690,17 @@ free). SSH key auth, `BatchMode` — already verified working.
 keeps it byte-identical with the working tree incl. uncommitted WIP).
 **Toolchain:** rustup stable at `~/.cargo/bin` (installed 2026-10-07,
 `--profile minimal`).
+**Bench rig additions (2026-10-07, perf arc — see §15):** Go 1.27 tarball at
+`~/opt/go` (`tsc/go.mod` requires go 1.27; no sudo, no system install);
+`hyperfine` via `cargo install hyperfine --locked`; `~/bench-bin/rsswrap` —
+tiny C `wait4` wrapper printing wall time + peak RSS (the rig has no
+`/usr/bin/time`); baseline binary `~/bench-bin/tsgo-go` built from
+`~/TypeScript/tsc` with `~/opt/go/bin/go` (rebuilt only when
+`rust/GO-BASELINE.txt` moves); benchmark corpus at
+`~/bench-corpus/excalidraw` — Excalidraw (excalidraw.com), commit-pinned at
+setup, **outside** the rsync mirror so `--delete` can never touch it.
+Provisioning: `rust/scripts/rig-setup.sh` (idempotent, runs ON the remote
+after `remote-sync.sh`).
 
 **`rust/scripts/remote-sync.sh`** (contract):
 
@@ -736,10 +748,15 @@ get listed in `rust/ACCEPTED-DELTAS.txt` with reason (mirrors Go's
 
 ## 10. Git & workflow protocol
 
-- **Branch:** work on `rust-port`. `main` is kept as a clean mirror of
-  `origin/main` (upstream microsoft/TypeScript — **never push**, never open
-  PRs upstream; per CONTRIBUTING.md this repo forbids bulk agent PRs — our
-  work stays local). All port commits land on `rust-port`.
+- **Branch:** work on `rust-perf` (created from `rust-port`, which stays as the
+  frozen M0–M1 record). `main` stays a clean mirror of `origin/main`
+  (upstream microsoft/TypeScript — **never** push there, never open PRs
+  upstream; per CONTRIBUTING.md this repo forbids bulk agent PRs). All port
+  commits land on `rust-perf`; **every commit — including the 15-min wip
+  checkpoints — is pushed to origin**, and a fork-internal PR
+  `rust-perf` → `main` on `Jackson57279/TypeScript` stays open and current
+  (gh CLI, account Jackson57279). That PR is the running review surface;
+  it is never opened against upstream microsoft/TypeScript.
 - **Checkpoint commits every 15 minutes.** A background loop commits all
   changes every 900 s when the tree is dirty:
   `wip(auto): checkpoint <HH:MM> — <files changed>`. These are safety
@@ -811,11 +828,137 @@ get listed in `rust/ACCEPTED-DELTAS.txt` with reason (mirrors Go's
 
 ---
 
-## 14. Immediate next actions (ordered)
+## 14. Immediate next actions (ordered — perf arc, 2026-10-07)
 
-1. Land this spec + M0 scaffold (`rust/Cargo.toml`, `crates/core` with
-   `text.rs`+`arena.rs`+`linkstore.rs` ported, `scripts/*`, `.gitignore`).
-2. `remote-test.sh` green on `dih@192.168.1.15`.
-3. Begin M1: `tspath` + `stringutil` + `collections` (they unblock everything).
-4. Stand up `xtask` codegen skeleton (`gen-diagnostics` first — it's needed by
-   `tsc-diagnostics` which `ast` depends on).
+1. ~~Land spec + M0 scaffold~~ done. ~~`remote-test.sh` green on the rig~~ done.
+   M1 in flight: `tspath`, `stringutil`, `jsnum`, `collections`, `json`,
+   `glob`, `semver`, `nativepath`, `locale`, `debug`, `repo`, `osutil`,
+   `core/{text,arena,linkstore}` ported with tests. Still open in M1:
+   the rest of `core` (options enums via codegen, `version.go`, `WorkGroup`),
+   diagnostics codegen (`build.rs` over `diagnosticMessages.json`), `vfs`,
+   `spanmap`, `packagejson`, `sourcemap`, `symlinks`, `contentmapper`.
+2. Stand up the benchmark program (§15): `rig-setup.sh` on the remote,
+   Phase 0 micro-race (`tspath` + `jsnum` vs `go test -bench`), first
+   `BENCHMARKS.md` entries.
+3. Finish the M1 leftovers that block the AST: diagnostics codegen + core
+   enums (`tsc-ast` depends on both).
+4. M2 (AST) → M3 (scanner + parser) with the Phase A corpus parse race as
+   the M3 exit gate (≤1.30× Go, hardening target ≤1.00×).
+5. M4–M6 per §8 with the Phase B/C gates from §15.
+
+---
+
+## 15. Performance program (the "faster than tsgo" arc)
+
+Added 2026-10-07. This section governs how the port is measured against the
+Go port and what "faster" means at each milestone.
+
+- **The race is honest.** Both sides must do identical work: the Rust driver
+  (`rust/crates/bench-harness`, bin `tsc-bench`) and the Go driver
+  (`rust/bench/go-driver`, bin `go-bench`, importing `tsc/internal/...` via a
+  one-line `go.work` addition — fork-level config, never edits `tsc/`
+  sources) walk the same sorted file list and emit the same JSON shape
+  including a `shape_hash` (node count + kind histogram + error count).
+  `shape_hash` must match across languages for a timed run to count.
+- **Measurements live only on the rig** (`dih@192.168.1.15`, 16-core Ryzen 7
+  PRO 6850H, 23 GiB). Protocol: `hyperfine --warmup 2 --runs 10`, median ±
+  MAD; record CPU, rustc/go versions, corpus SHA, both-side git SHAs; threads
+  measured at 1 and 16; output identical at any thread count (determinism rule
+  §5.5). `RUSTFLAGS=-C target-cpu=native` for bench builds only — never for
+  conformance builds.
+- **Results are tracked**: append-only `rust/BENCHMARKS.md`, one entry per
+  run, committed with the milestone it gates. A >10% median regression vs
+  the previous entry in the same phase blocks that milestone's green status
+  until explained or fixed. `rsswrap` (peak RSS via `wait4` rusage) runs
+  alongside every timed command.
+- **Corpus**: Excalidraw (`github.com/excalidraw/excalidraw` — the
+  excalidraw.com whiteboard app; ~8.2 MB TS/TSX, single package), cloned
+  `--depth 1` to `~/bench-corpus/excalidraw` on the rig, pinned to the SHA
+  recorded in `BENCHMARKS.md`. Re-pin only between milestones. `npm ci` in
+  the corpus (for `node_modules` types) is deferred to Phase C.
+
+```mermaid
+flowchart LR
+  EX[excalidraw corpus] --> RB[tsc-bench Rust]
+  EX --> GB[go-bench Go]
+  RB -->|JSON + shape_hash| HY[hyperfine x10]
+  GB -->|JSON + shape_hash| HY
+  TGO[tsgo-go e2e Phase C] --> HY
+  HY --> BM[BENCHMARKS.md append]
+  RW[rsswrap peak RSS] --> BM
+  BM --> GT{gate vs Go}
+  GT -->|pass| MS[milestone commit]
+  GT -->|miss| HP[hardening playbook 15.2]
+  HP --> HY
+```
+
+### 15.1 Phases and gates (median wall time vs Go)
+
+| Phase | Lands with | Comparison | First-green gate | Hardening | Stretch |
+|---|---|---|---|---|---|
+| 0 — micro | M1 crates already ported | mirror Go's own `go test -bench` inputs: 7× `tspath` (`BenchmarkCombinePaths`, `GetNormalizedAbsolutePath`, `ToFileNameLowerCase`, `HasRelativePathSegment`, `PathIsRelative`, `RootedDirectoryPathResolveFile`, `RootedFilePathToPathKey`) + 2× `jsnum` (`ToInt32`, `Exponentiate`). Go via `go test -bench -count=10`, Rust via `tsc-bench micro --samples 10` | ≤ 1.0× | ≤ 0.9× | 0.7× |
+| A — parse race | M2 AST + M3 scanner/parser | `tsc-bench parse` vs `go-bench parse` over all corpus `.ts`/`.tsx` (excl. `node_modules`, `dist`) | ≤ 1.30× (also the M3 gate) | ≤ 1.00× | 0.80×; peak RSS ≤ 1.0× |
+| B — program race | M4 binder/module/tsoptions + M5 compiler spike | corpus bind bench (mirrors `BenchmarkBind`); program build (mirrors `BenchmarkNewProgram`); `--showConfig` on Excalidraw's tsconfig byte-parity vs `tsgo-go` | ≤ 1.15× | ≤ 1.00× | 0.85× |
+| C — e2e typecheck | M6 checker slices | full `tsc --noEmit -p ~/bench-corpus/excalidraw` vs `tsgo-go` (after `npm ci` on rig); diagnostics byte-identical (modulo ACCEPTED-DELTAS) **before** timing counts | ≤ 1.05× | ≤ 1.00× | 0.80×; peak RSS ≤ 0.60× |
+
+Phase 0 runs **before any new porting** so the arc starts with numbers on the
+board. A gate miss after the hardening playbook (§15.2) still lands —
+correctness gates are never traded for speed — with the miss recorded in
+`BENCHMARKS.md` and revisited.
+
+### 15.2 Rust performance playbook
+
+Applied from the first line of every port, not bolted on later:
+
+1. Arena `Vec<Node>` + `Copy NodeId` (§5.1) — no GC, no drop cost, cache-local.
+2. Global `Atom(u32)` interning (FxHash) for identifiers/names (§5.6).
+3. `i32` byte-offset `TextPos`; `&[u8]` scan loops with `memchr` for
+   line/comment/string runs; ASCII fast paths; dense-enum `match` dispatch
+   (jump tables) — no trait objects on hot paths.
+4. `std::thread::scope` per-file parallelism with indexed-slot merge (§5.5).
+5. Release profile `lto=fat, codegen-units=1`; dev-profile deps `opt-level=2`
+   (already in `rust/Cargo.toml`).
+6. Hardening pass order when a gate is missed: allocation counts → memchr/
+   dispatch-table adoption → interning coverage → LTO/`target-cpu=native` →
+   algorithmic diff vs the Go source.
+
+### 15.3 Subagent orchestration
+
+The port is built with subagents under a single-writer-git orchestrator:
+
+```mermaid
+flowchart TD
+  OR[orchestrator] -->|briefs| W1[worker: gen-ast M2]
+  OR --> W2[worker: scanner M3]
+  OR --> W3[worker: bench harness]
+  OR --> W4[worker: go-driver]
+  OR --> EX[explorer: semantics]
+  OR --> CK[checkpoint loop bg]
+  W1 -->|files + tests| OR
+  W2 --> OR
+  W3 --> OR
+  W4 --> OR
+  EX -->|notes| OR
+  OR --> RT[remote-test.sh]
+  RT -->|green| CM[commit + push + PR]
+  RT -->|red| FX[fix / re-dispatch]
+  CM --> OR
+  FX --> OR
+```
+
+- **Orchestrator (main agent):** all git operations (15-min checkpoint loop +
+  milestone commits + pushes), remote sync/test/bench runs, updates to
+  SPEC/PORTING-NOTES/BENCHMARKS/CONFORMANCE, subagent dispatch + integration.
+- **Worker subagents:** one crate or one Go file cluster per brief; briefs
+  carry the §4 contract, exact Go source paths, target file paths, naming
+  rules. Allowed: local `cargo check` with isolated
+  `CARGO_TARGET_DIR=/tmp/tsrs-check-<name>`. Forbidden: git, ssh, editing
+  outside the assigned crate, touching `tsc/`.
+- **Explorer subagents (read-only):** Go semantics maps (scanner state
+  machine, parser error paths, AST codegen inventory, baseline normalization
+  rules).
+- **Parallel lanes** (crate-DAG-respecting): `gen-ast` ∥ `scanner` ∥
+  `bench-harness` ∥ `go-driver`; `parser` waits for `scanner`; the M6 checker
+  ports sequentially in §8 order.
+- Every worker handoff → orchestrator runs `remote-test.sh` → commit
+  (milestone message, or picked up by the 15-min tick).
