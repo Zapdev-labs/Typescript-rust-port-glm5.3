@@ -390,12 +390,12 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) HasEffectiveRestParameter(signature *Signature) bool`
-    /// → `c.hasEffectiveRestParameter(signature)` (checker.go — S8).
-    pub fn has_effective_rest_parameter(&mut self, signature: SignatureId) -> bool {
-        // TODO(port M6 S8): the instantiated rest-parameter resolution.
-        let _ = signature;
-        false
-    }
+    /// → `c.hasEffectiveRestParameter(signature)` (checker.go — S8) —
+    /// W2: the real body landed with relater.rs.
+    ///
+    /// Go: `func (c *Checker) IsTypeAssignableTo(source *Type, target *Type) bool`
+    /// → `c.isTypeAssignableTo(source, target)` (relater.go — M6 wave 2) —
+    /// W2: the real body landed with relater.rs.
 
     /// Go: `func (c *Checker) GetLocalTypeParametersOfClassOrInterfaceOrTypeAlias(symbol *ast.Symbol) []*Type`
     /// → `c.getLocalTypeParametersOfClassOrInterfaceOrTypeAlias(symbol)`
@@ -680,12 +680,8 @@ impl Checker {
     /// checker.rs's `get_widened_type`.
     ///
     /// Go: `func (c *Checker) IsTypeAssignableTo(source *Type, target *Type) bool`
-    /// → `c.isTypeAssignableTo(source, target)` (relater.go — M6 wave 2).
-    pub fn is_type_assignable_to(&mut self, source: TypeId, target: TypeId) -> bool {
-        // TODO(port M6 relater wave): isRelatedTo.
-        let _ = (source, target);
-        false
-    }
+    /// → `c.isTypeAssignableTo(source, target)` (relater.go — M6 wave 2) —
+    /// W2: the real body landed with relater.rs.
 
     /// Go: `func (c *Checker) GetUnionTypeEx(types []*Type, unionReduction UnionReduction) *Type`
     /// → `c.getUnionTypeEx(types, unionReduction, nil, nil)` (checker.go — S7).

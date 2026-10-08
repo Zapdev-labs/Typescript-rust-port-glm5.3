@@ -467,6 +467,11 @@ pub struct SpreadLinks {
 #[derive(Debug, Default)]
 pub struct VarianceLinks {
     pub variances: Vec<VarianceFlags>,
+    /// Go: the nil-vs-empty `variances` slice distinction — nil means
+    /// "circular variance measurement in progress" (getVariancesWorker's
+    /// varianceStack hit returns nil). PORT: the nil slice sentinel doesn't
+    /// port; an explicit flag carries the marker.
+    pub circular_variances: bool,
 }
 
 impl VarianceFlags {
@@ -1046,7 +1051,7 @@ impl ObjectFlags {
 /// Go: `type TypeAlias struct` — Go heap-allocates alias records and stores the
 /// pointer on Type; the port stores `Option<Box<TypeAlias>>` (nil → None; the
 /// nil-tolerant accessors below mirror Go's nil-receiver methods).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TypeAlias {
     pub symbol: Option<SymbolId>,
     pub type_arguments: Vec<TypeId>,
@@ -1826,7 +1831,7 @@ impl ElementFlags {
 }
 
 /// Go: `type TupleElementInfo struct { flags ElementFlags; labeledDeclaration *ast.Node }`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TupleElementInfo {
     pub flags: ElementFlags,
     /// NamedTupleMember | ParameterDeclaration | nil
@@ -2233,6 +2238,11 @@ pub struct Signature {
     pub mapper: Option<TypeMapperId>,
     pub isolated_signature_type: Option<TypeId>,
     pub composite: Option<Box<CompositeSignature>>,
+    /// Go: the `noTypePredicate` sentinel — a non-nil `*TypePredicate` in
+    /// `resolvedTypePredicate` meaning "explicitly no predicate" (the
+    /// union/intersection predicate combiner sets it). PORT: the nil-pointer
+    /// sentinel doesn't port; an explicit flag carries the marker.
+    pub no_type_predicate: bool,
 }
 
 impl Signature {
@@ -2284,7 +2294,7 @@ impl Signature {
 }
 
 /// Go: `type CompositeSignature struct`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct CompositeSignature {
     /// True for union, false for intersection
     pub is_union: bool,
@@ -2304,7 +2314,7 @@ pub enum TypePredicateKind {
 }
 
 /// Go: `type TypePredicate struct`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TypePredicate {
     pub kind: TypePredicateKind,
     pub parameter_index: i32,

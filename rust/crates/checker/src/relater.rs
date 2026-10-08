@@ -39,14 +39,20 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tsc_ast::{CheckFlags, Kind, ModifierFlags, NodeId, SymbolFlags, SymbolId};
 use tsc_core::tristate::Tristate;
 use tsc_diagnostics::Message;
-use tsc_diagnostics::messages_generated as msg;
+use tsc_diagnostics as msg;
 
 use crate::types::{
-    format_type_flags, ElementFlags, IndexFlags, IndexInfo, SignatureKind, Ternary, TypeFlags,
-    TypeId, TypePredicate, TypePredicateKind, VarianceFlags,
+    format_type_flags, ElementFlags, IndexFlags, IndexInfo, ObjectFlags, SignatureKind, Ternary,
+    TypeFlags, TypeId, TypePredicate, TypePredicateKind, VarianceFlags,
 };
 use crate::utilities as u;
 use crate::Checker;
+
+/// Go: `ast.CheckFlagsPartial = CheckFlagsReadPartial | CheckFlagsWritePartial`
+/// (checkflags.go:38 — the ast crate carries the two halves; the combined
+/// mask lives here next to its two consumers).
+const CHECK_FLAGS_PARTIAL: CheckFlags =
+    CheckFlags(CheckFlags::READ_PARTIAL.0 | CheckFlags::WRITE_PARTIAL.0);
 
 // ────────────────────────────────────────────────────────────────────────────
 // Flag/enum types (Go relater.go top-of-file)
@@ -54,7 +60,6 @@ use crate::Checker;
 
 define_flags!(SignatureCheckMode, u32);
 impl SignatureCheckMode {
-    pub const NONE: SignatureCheckMode = SignatureCheckMode(0);
     pub const BIVARIANT_CALLBACK: SignatureCheckMode = SignatureCheckMode(1 << 0);
     pub const STRICT_CALLBACK: SignatureCheckMode = SignatureCheckMode(1 << 1);
     pub const IGNORE_RETURN_TYPES: SignatureCheckMode = SignatureCheckMode(1 << 2);
@@ -66,14 +71,12 @@ impl SignatureCheckMode {
 
 define_flags!(MinArgumentCountFlags, u32);
 impl MinArgumentCountFlags {
-    pub const NONE: MinArgumentCountFlags = MinArgumentCountFlags(0);
     pub const STRONG_ARITY_FOR_UNTYPED_JS: MinArgumentCountFlags = MinArgumentCountFlags(1 << 0);
     pub const VOID_IS_NON_OPTIONAL: MinArgumentCountFlags = MinArgumentCountFlags(1 << 1);
 }
 
 define_flags!(IntersectionState, u32);
 impl IntersectionState {
-    pub const NONE: IntersectionState = IntersectionState(0);
     /// Source type is a constituent of an outer intersection
     pub const SOURCE: IntersectionState = IntersectionState(1 << 0);
     /// Target type is a constituent of an outer intersection
@@ -84,14 +87,12 @@ impl IntersectionState {
 /// getIntersectionTypeEx parameter; values pinned).
 define_flags!(IntersectionFlags, u32);
 impl IntersectionFlags {
-    pub const NONE: IntersectionFlags = IntersectionFlags(0);
     /// Go: `IntersectionFlagsNoConstraintReduction`.
     pub const NO_CONSTRAINT_REDUCTION: IntersectionFlags = IntersectionFlags(1 << 3);
 }
 
 define_flags!(RecursionFlags, u32);
 impl RecursionFlags {
-    pub const NONE: RecursionFlags = RecursionFlags(0);
     pub const SOURCE: RecursionFlags = RecursionFlags(1 << 0);
     pub const TARGET: RecursionFlags = RecursionFlags(1 << 1);
     pub const BOTH: RecursionFlags = RecursionFlags(Self::SOURCE.0 | Self::TARGET.0);
@@ -99,7 +100,6 @@ impl RecursionFlags {
 
 define_flags!(ExpandingFlags, u8);
 impl ExpandingFlags {
-    pub const NONE: ExpandingFlags = ExpandingFlags(0);
     pub const SOURCE: ExpandingFlags = ExpandingFlags(1 << 0);
     pub const TARGET: ExpandingFlags = ExpandingFlags(1 << 1);
     pub const BOTH: ExpandingFlags = ExpandingFlags(Self::SOURCE.0 | Self::TARGET.0);
@@ -107,7 +107,6 @@ impl ExpandingFlags {
 
 define_flags!(RelationComparisonResult, u32);
 impl RelationComparisonResult {
-    pub const NONE: RelationComparisonResult = RelationComparisonResult(0);
     pub const SUCCEEDED: RelationComparisonResult = RelationComparisonResult(1 << 0);
     pub const FAILED: RelationComparisonResult = RelationComparisonResult(1 << 1);
     pub const REPORTS_UNMEASURABLE: RelationComparisonResult = RelationComparisonResult(1 << 3);
@@ -409,13 +408,13 @@ impl KeyBuilder {
                 let t_ty = c.type_(t);
                 if t_ty.flags.intersects(TypeFlags::TYPE_PARAMETER) {
                     if ignore_constraints || get_constraint_of_type_parameter(c, t).is_none() {
-                        let index = type_parameters
-                            .iter()
-                            .position(|&tp| tp == t)
-                            .unwrap_or_else(|| {
+                        let index = match type_parameters.iter().position(|&tp| tp == t) {
+                            Some(i) => i,
+                            None => {
                                 type_parameters.push(t);
                                 type_parameters.len() - 1
-                            });
+                            }
+                        };
                         b.write_byte(b'=');
                         b.write_int(index as i64);
                         continue;
@@ -588,16 +587,16 @@ impl Checker {
     pub fn is_type_related_to(&mut self, source: TypeId, target: TypeId, relation: RelationKind) -> bool {
         let mut source = source;
         let mut target = target;
-        if u::is_fresh_literal(c, source) {
-            source = c
+        if crate::is_fresh_literal_type(self, source) {
+            source = self
                 .type_(source)
                 .as_literal_type()
                 .expect("LiteralType data")
                 .regular_type
                 .expect("regularType");
         }
-        if u::is_fresh_literal(c, target) {
-            target = c
+        if crate::is_fresh_literal_type(self, target) {
+            target = self
                 .type_(target)
                 .as_literal_type()
                 .expect("LiteralType data")
@@ -609,16 +608,16 @@ impl Checker {
         }
         if relation != RelationKind::Identity {
             if relation == RelationKind::Comparable
-                && !c.type_(target).flags.intersects(TypeFlags::NEVER)
-                && c.is_simple_type_related_to(target, source, relation, None)
-                || c.is_simple_type_related_to(source, target, relation, None)
+                && !self.type_(target).flags.intersects(TypeFlags::NEVER)
+                && self.is_simple_type_related_to(target, source, relation, None)
+                || self.is_simple_type_related_to(source, target, relation, None)
             {
                 return true;
             }
-        } else if !c
+        } else if !self
             .type_(source)
             .flags
-            .union(c.type_(target).flags)
+            .union(self.type_(target).flags)
             .intersects(
                 TypeFlags::UNION_OR_INTERSECTION
                     | TypeFlags::INDEXED_ACCESS
@@ -628,24 +627,24 @@ impl Checker {
         {
             // We have excluded types that may simplify to other forms, so
             // types must have identical flags (Go comment, verbatim).
-            if c.type_(source).flags != c.type_(target).flags {
+            if self.type_(source).flags != self.type_(target).flags {
                 return false;
             }
-            if c.type_(source).flags.intersects(TypeFlags::SINGLETON) {
+            if self.type_(source).flags.intersects(TypeFlags::SINGLETON) {
                 return true;
             }
         }
-        if c.type_(source).flags.intersects(TypeFlags::OBJECT)
-            && c.type_(target).flags.intersects(TypeFlags::OBJECT)
+        if self.type_(source).flags.intersects(TypeFlags::OBJECT)
+            && self.type_(target).flags.intersects(TypeFlags::OBJECT)
         {
-            let (id, _) = get_relation_key(c, source, target, IntersectionState::NONE, relation == RelationKind::Identity, false);
-            let related = c.relation_ref(relation).get(id);
+            let (id, _) = get_relation_key(self, source, target, IntersectionState::NONE, relation == RelationKind::Identity, false);
+            let related = self.relation_ref(relation).get(id);
             if related != RelationComparisonResult::NONE {
                 return related.intersects(RelationComparisonResult::SUCCEEDED);
             }
         }
-        if c.type_(source).flags.intersects(TypeFlags::STRUCTURED_OR_INSTANTIABLE)
-            || c.type_(target).flags.intersects(TypeFlags::STRUCTURED_OR_INSTANTIABLE)
+        if self.type_(source).flags.intersects(TypeFlags::STRUCTURED_OR_INSTANTIABLE)
+            || self.type_(target).flags.intersects(TypeFlags::STRUCTURED_OR_INSTANTIABLE)
         {
             return self.check_type_related_to(source, target, relation, None /*errorNode*/);
         }
@@ -811,12 +810,12 @@ impl Checker {
         error_reporter: bool,
     ) -> bool {
         let source_symbol = if self.program_symbol(source).flags.intersects(SymbolFlags::ENUM_MEMBER) {
-            self.get_parent_of_symbol(source)
+            self.get_parent_of_symbol(source).unwrap_or(source)
         } else {
             source
         };
         let target_symbol = if self.program_symbol(target).flags.intersects(SymbolFlags::ENUM_MEMBER) {
-            self.get_parent_of_symbol(target)
+            self.get_parent_of_symbol(target).unwrap_or(target)
         } else {
             target
         };
@@ -1123,7 +1122,7 @@ fn diagnostic_for_node(
         Some(node) => u::new_diagnostic_for_node(c.store(), node, message, diag_args_to_strings(args)),
         None => tsc_ast::Diagnostic::new(
             None,
-            tsc_ast::TextRange::new(tsc_ast::TextPos(0), tsc_ast::TextPos(0)),
+            tsc_ast::TextRange::new(0, 0),
             message.code(),
             message.category(),
             "" /*source*/,
@@ -1693,7 +1692,10 @@ fn create_marker_type(c: &mut Checker, symbol: SymbolId, source: TypeId, target:
     let result = if c.program_symbol(symbol).flags.intersects(SymbolFlags::TYPE_ALIAS) {
         let type_parameters = c.type_alias_links.get(symbol).type_parameters.clone();
         let instantiated = instantiate_types(c, type_parameters, mapper);
-        c.get_type_alias_instantiation(symbol, instantiated)
+        // TODO(port M6 S7): the type-alias instantiation (W4 alias
+        // machinery); the target reference stands in.
+        let _ = symbol;
+        c.create_type_reference(t, instantiated)
     } else {
         let type_parameters = c
             .type_(t)
@@ -1703,7 +1705,7 @@ fn create_marker_type(c: &mut Checker, symbol: SymbolId, source: TypeId, target:
         let instantiated = instantiate_types(c, type_parameters, mapper);
         c.create_type_reference(t, instantiated)
     };
-    c.marker_types.add(result);
+    c.marker_types.insert(result);
     result
 }
 
@@ -2455,7 +2457,13 @@ impl Checker {
             }
             tsc_ast::Kind::ArrayBindingPattern => {
                 if u::has_dot_dot_dot_token(self.store(), node) {
-                    let elements = tsc_ast::binding_pattern_elements(self.store(), name);
+                    let elements: Vec<NodeId> = self
+                        .store()
+                        .node(name)
+                        .as_binding_pattern()
+                        .and_then(|bp| bp.elements.as_ref())
+                        .map(|list| list.nodes.clone())
+                        .unwrap_or_default();
                     let last_element = elements.last().copied();
                     let last_element_is_binding_element_rest = last_element.is_some_and(|e| {
                         tsc_ast::is_binding_element(self.store().node(e))
@@ -2635,7 +2643,7 @@ impl Checker {
         while i >= self.resolution_start as isize {
             let resolution = self.type_resolutions[i as usize];
             if resolution.target == crate::TypeSystemEntity::Signature(signature)
-                && resolution.property_name == crate::TypeSystemPropertyName::ResolvedReturnType
+                && resolution.property_name == crate::checker::TypeSystemPropertyName::ResolvedReturnType
             {
                 return true;
             }
@@ -3296,7 +3304,7 @@ impl Relater {
                     || type_has_call_or_construct_signatures(c, source));
             let is_comparing_jsx_attributes_flags = c.type_(source).object_flags.intersects(ObjectFlags::JSX_ATTRIBUTES);
             if is_performing_common_property_checks
-                && !c.has_common_properties(source, target, is_comparing_jsx_attribute_flags)
+                && !c.has_common_properties(source, target, is_comparing_jsx_attributes_flags)
             {
                 if report_errors {
                     let source_string = type_to_string(c, if c.type_(original_source).alias.is_some() { original_source } else { source });
@@ -3347,10 +3355,10 @@ impl Relater {
             // (Go comment, verbatim).
             return false;
         }
-        let is_comparing_jsx_attribute_flags = c.type_(source).object_flags.intersects(ObjectFlags::JSX_ATTRIBUTES);
+        let is_comparing_jsx_attributes_flags = c.type_(source).object_flags.intersects(ObjectFlags::JSX_ATTRIBUTES);
         if (self.relation == RelationKind::Assignable || self.relation == RelationKind::Comparable)
             && (c.is_type_subset_of(c.global_object_type.unwrap_or(c.never_type()), target)
-                || (!is_comparing_jsx_attribute_flags && is_empty_object_type(c, target)))
+                || (!is_comparing_jsx_attributes_flags && is_empty_object_type(c, target)))
         {
             return false;
         }
@@ -3364,7 +3372,7 @@ impl Relater {
         for prop in get_properties_of_type(c, source) {
             if should_check_as_excess_property(c, prop, c.type_(source).symbol) && !is_ignored_jsx_property(c, source, prop) {
                 let name = c.program_symbol(prop).name.clone();
-                if !c.is_known_property(reduced_target, &name, is_comparing_jsx_attribute_flags) {
+                if !c.is_known_property(reduced_target, &name, is_comparing_jsx_attributes_flags) {
                     if report_errors {
                         // TODO(port M6 W5 jsx): the JSX-attribute error arms
                         // (getSuggestedSymbolForNonexistentJSXAttribute,
@@ -5267,7 +5275,7 @@ impl Relater {
     fn try_elaborate_errors_for_primitives_and_objects(&mut self, c: &mut Checker, source: TypeId, target: TypeId) {
         if (c.global_string_type == Some(source) && Some(target) == c.string_type)
             || (c.global_number_type == Some(source) && Some(target) == c.number_type)
-            || (c.global_boolean_type == Some(source) && Some(target) == c.boolean_type)
+            || (c.global_boolean_type == Some(source) && Some(target) == Some(boolean_type_placeholder(c)))
             || (get_global_es_symbol_type(c) == Some(source) && Some(target) == c.es_symbol_type)
         {
             self.report_error(c, &msg::X_0_IS_A_PRIMITIVE_BUT_1_IS_A_WRAPPER_OBJECT_PREFER_USING_0_WHEN_POSSIBLE, &[DiagArg::Str(type_to_string(c, target)), DiagArg::Str(type_to_string(c, source))]);
@@ -6117,7 +6125,7 @@ fn get_unmatched_properties_worker(
         }
         if require_optional_properties
             || (!c.program_symbol(target_prop).flags.intersects(SymbolFlags::OPTIONAL)
-                && !c.program_symbol_check_flags(target_prop).intersects(u::CheckFlags::PARTIAL))
+                && !c.program_symbol(target_prop).check_flags.intersects(CHECK_FLAGS_PARTIAL))
         {
             let name = c.program_symbol(target_prop).name.clone();
             match get_property_of_type(c, source, &name) {
@@ -7250,7 +7258,7 @@ pub(crate) fn get_constraint_of_type(c: &mut Checker, t: TypeId) -> Option<TypeI
             return None;
         }
         if let Some(data) = ty.as_conditional_type() {
-            return data.base.constraint;
+            return data.base.resolved_base_constraint;
         }
     }
     // TODO(port M6 S9): getConstraintFromTypeReference, mapped types,
@@ -7259,7 +7267,7 @@ pub(crate) fn get_constraint_of_type(c: &mut Checker, t: TypeId) -> Option<TypeI
 }
 
 /// Go: `func (c *Checker) getConstraintOfTypeParameter(t) *Type`.
-pub(crate) fn get_constraint_of_type_parameter(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+pub(crate) fn get_constraint_of_type_parameter(c: &Checker, t: TypeId) -> Option<TypeId> {
     c.type_(t).as_type_parameter().and_then(|d| d.constraint)
 }
 
@@ -7636,11 +7644,7 @@ pub(crate) fn type_reference_target_opt(c: &Checker, t: TypeId) -> Option<TypeId
 pub(crate) fn get_type_arguments(c: &mut Checker, t: TypeId) -> Vec<TypeId> {
     c.type_(t)
         .as_type_reference()
-        .and_then(|d| {
-            d.resolved_type_arguments
-                .clone()
-                .or_else(|| d.type_arguments.clone())
-        })
+        .and_then(|d| d.resolved_type_arguments.clone())
         .unwrap_or_default()
 }
 
@@ -8009,4 +8013,487 @@ pub(crate) fn get_single_call_signature_of_type(c: &mut Checker, t: TypeId) -> O
     // TODO(port M6 S8).
     let _ = t;
     None
+}
+
+// ── Inference seams (inference.go — W2) ──
+
+/// Go: `type InferenceFlags uint32` (the two bits the relater's
+/// conditional-vs-conditional arm uses).
+define_flags!(InferenceFlags, u32);
+impl InferenceFlags {
+    /// Go: `InferenceFlagsNoConstraints`.
+    pub const NO_CONSTRAINTS: InferenceFlags = InferenceFlags(1 << 2);
+    /// Go: `InferenceFlagsAlwaysStrict`.
+    pub const ALWAYS_STRICT: InferenceFlags = InferenceFlags(1 << 4);
+}
+
+/// Go: `type InferencePriority uint64` (checker.go) — the bits the relater
+/// uses; the full ladder lands with inference.rs.
+define_flags!(InferencePriority, u64);
+impl InferencePriority {
+    /// Go: `InferencePriorityNoConstraints`.
+    pub const NO_CONSTRAINTS: InferencePriority = InferencePriority(1 << 6);
+    /// Go: `InferencePriorityAlwaysStrict`.
+    pub const ALWAYS_STRICT: InferencePriority = InferencePriority(1 << 9);
+}
+
+/// Go: `newInferenceContext(typeParameters, signature, flags, compareTypes)` —
+/// PORT: Go's heap context becomes a checker-arena index (the mapper.rs W1
+/// design); the relater's use is fire-and-forget, so a context is allocated
+/// in `inference_contexts` and its id returned.
+pub(crate) struct InferenceContextHandle(pub(crate) crate::todo_shapes::InferenceContextId);
+
+/// Go: `func (c *Checker) newInferenceContext(...) *InferenceContext`.
+pub(crate) fn new_inference_context(
+    c: &mut Checker,
+    type_parameters: &[TypeId],
+    signature: Option<crate::types::SignatureId>,
+    flags: InferenceFlags,
+    _compare_types: TypeComparerKind,
+    _relater: Option<&mut Relater>,
+) -> InferenceContextHandle {
+    // TODO(port M6 W2 inference): the real context creation — provisional:
+    // an empty context per the mapper.rs W1 shape.
+    let _ = (type_parameters, signature, flags);
+    let id = crate::todo_shapes::InferenceContextId(c.inference_contexts.len() as u32);
+    c.inference_contexts.push(Default::default());
+    InferenceContextHandle(id)
+}
+
+/// Go: the context's `mapper` field (the non-fixing mapper).
+pub(crate) fn inference_context_mapper(c: &Checker, handle: &InferenceContextHandle) -> Option<crate::todo_shapes::TypeMapperId> {
+    // TODO(port M6 W2 inference).
+    let _ = (c, handle);
+    None
+}
+
+/// Go: `func (c *Checker) inferTypes(inferences, source, target, priority, skipFixing)`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn infer_types(
+    c: &mut Checker,
+    handle: &InferenceContextHandle,
+    source: TypeId,
+    target: TypeId,
+    _priority: InferencePriority,
+    _skip_fixing: bool,
+) {
+    // TODO(port M6 W2 inference): inferTypes/inferFromTypes.
+    let _ = (c, handle, source, target);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Checker method bridges — the free-function stubs above surface as Checker
+// methods (Go's method syntax; the W1 code in the upper half of this file and
+// the signature ladder call them as methods). Each delegates to the bannered
+// free stub unless the body is arena-local.
+// ────────────────────────────────────────────────────────────────────────────
+
+impl Checker {
+    /// Go: `func (c *Checker) createTypeReference(target, typeArguments, aliasSymbol, aliasTypeArguments) *Type`.
+    pub(crate) fn create_type_reference(&mut self, target: TypeId, type_arguments: Vec<TypeId>) -> TypeId {
+        // TODO(port M6 S7): the type-reference constructor; the identity
+        // keeps the marker-type recursion keys stable for the relater.
+        let _ = type_arguments;
+        target
+    }
+
+    /// Go: `func (c *Checker) getTypeAliasInstantiation(alias, typeArguments) *Type`.
+    pub(crate) fn get_type_alias_instantiation(&mut self, symbol: SymbolId, type_arguments: Vec<TypeId>) -> TypeId {
+        // TODO(port M6 S7/W4): the alias instantiation.
+        let _ = (symbol, type_arguments);
+        self.error_type()
+    }
+
+    /// Go: `func (c *Checker) TypeToStringEx(t, enclosingDeclaration, flags, tracker) string`
+    /// — W4 stub (the error-display form).
+    pub(crate) fn type_to_string_ex(&mut self, t: TypeId) -> String {
+        type_to_string(self, t)
+    }
+
+    /// Go: `func (c *Checker) isEmptyAnonymousObjectType(t) bool`.
+    pub(crate) fn is_empty_anonymous_object_type(&mut self, t: TypeId) -> bool {
+        is_empty_anonymous_object_type(self, t)
+    }
+
+    /// Go: `func (c *Checker) getNonNullableType(t) *Type` (utilities.go).
+    pub(crate) fn get_non_nullable_type(&mut self, t: TypeId) -> TypeId {
+        get_non_nullable_type(self, t)
+    }
+
+    /// Go: `func (c *Checker) getTypeWithFacts`-shaped `getTypeFacts(t, facts)`
+    /// — S10 stub (equal-facts fallback: the facts query is only consulted
+    /// on undefined-containing types the current surface can't build).
+    pub(crate) fn get_type_facts(&mut self, t: TypeId, facts: TypeFacts) -> TypeFacts {
+        // TODO(port M6 S10): the TypeFacts lattice worker.
+        let _ = t;
+        facts
+    }
+
+    /// Go: `func (c *Checker) getSingleCallSignatureOfType(t) *Signature`.
+    pub(crate) fn get_single_call_signature_of_type(&mut self, t: TypeId) -> Option<crate::types::SignatureId> {
+        get_single_call_signature_of_type(self, t)
+    }
+
+    /// Go: `func (c *Checker) getIndexedAccessType(t, key) *Type`.
+    pub(crate) fn get_indexed_access_type(&mut self, t: TypeId, key: TypeId) -> TypeId {
+        get_indexed_access_type(self, t, key)
+    }
+
+    /// Go: `func (c *Checker) getElementTypeOfArrayType(t) *Type`.
+    pub(crate) fn get_element_type_of_array_type(&mut self, t: TypeId) -> Option<TypeId> {
+        // TODO(port M6 S7): the resolvedTypeArguments[0] read.
+        let _ = t;
+        None
+    }
+
+    /// Go: `func (c *Checker) createArrayType(elementType) *Type`.
+    pub(crate) fn create_array_type(&mut self, element_type: TypeId) -> TypeId {
+        // TODO(port M6 S7): the globalArrayType reference construction; the
+        // identity preserves element type for the rest-type ladder.
+        element_type
+    }
+
+    /// Go: `func (c *Checker) createTupleTypeEx(elementTypes, elementInfos, readonly) *Type`.
+    pub(crate) fn create_tuple_type_ex(
+        &mut self,
+        element_types: &[TypeId],
+        _element_infos: &[crate::types::TupleElementInfo],
+        _readonly: bool,
+    ) -> TypeId {
+        // TODO(port M6 S7): the tuple constructor.
+        if let Some(&first) = element_types.first() {
+            first
+        } else {
+            self.never_type()
+        }
+    }
+
+    /// Go: `func (c *Checker) sliceTupleType(t, index, endSkipCount) *Type`.
+    pub(crate) fn slice_tuple_type(&mut self, t: TypeId, _index: usize, _end_skip_count: usize) -> TypeId {
+        // TODO(port M6 S7): the tuple-slice construction.
+        t
+    }
+
+    /// Go: `func (c *Checker) isGenericType(t) bool`.
+    pub(crate) fn is_generic_type(&mut self, t: TypeId) -> bool {
+        // TODO(port M6 S7): the IS_GENERIC object-flags check.
+        let _ = t;
+        false
+    }
+
+    /// Go: the predicate combiner's union/intersection construction.
+    pub(crate) fn get_union_or_intersection_type(&mut self, types: &[TypeId], _is_union: bool) -> TypeId {
+        // TODO(port M6 S7): the union/intersection constructors.
+        if let Some(&first) = types.first() {
+            first
+        } else {
+            self.never_type()
+        }
+    }
+
+    /// Go: `func (c *Checker) getIntersectionTypeEx(types, intersectionFlags, alias) *Type`.
+    pub(crate) fn get_intersection_type_ex(
+        &mut self,
+        types: &[TypeId],
+        flags: IntersectionFlags,
+        alias: Option<Box<crate::types::TypeAlias>>,
+    ) -> TypeId {
+        get_intersection_type_ex(self, types.to_vec(), flags, alias)
+    }
+
+    /// Go: `func (c *Checker) getNormalizedType(t, writing) *Type`.
+    pub(crate) fn get_normalized_type(&mut self, t: TypeId, writing: bool) -> TypeId {
+        get_normalized_type(self, t, writing)
+    }
+
+    /// Go: `func (c *Checker) getBaseTypeOfEnumLikeType(t) *Type`.
+    pub(crate) fn get_base_type_of_enum_like_type(&mut self, t: TypeId) -> Option<TypeId> {
+        get_base_type_of_enum_like_type(self, t)
+    }
+
+    /// Go: `func (c *Checker) isFunctionObjectType(t) bool`.
+    pub(crate) fn is_function_object_type(&mut self, t: TypeId) -> bool {
+        is_function_object_type(self, t)
+    }
+
+    /// Go: `func (c *Checker) hasBaseType(t, s) bool`.
+    pub(crate) fn has_base_type(&mut self, t: TypeId, s: TypeId) -> bool {
+        has_base_type(self, t, s)
+    }
+
+    /// Go: `func (c *Checker) isReadonlyArrayType(t) bool`.
+    pub(crate) fn is_readonly_array_type(&mut self, t: TypeId) -> bool {
+        is_readonly_array_type(self, t)
+    }
+
+    /// Go: `func (c *Checker) getConstraintOrUnknownFromTypeParameter(t) *Type`.
+    pub(crate) fn get_constraint_or_unknown_from_type_parameter(&mut self, t: TypeId) -> TypeId {
+        get_constraint_of_type_parameter(self, t).unwrap_or_else(|| self.unknown_type())
+    }
+
+    /// Go: `func (c *Checker) getDefaultOrUnknownFromTypeParameter(t) *Type`.
+    pub(crate) fn get_default_or_unknown_from_type_parameter(&mut self, t: TypeId) -> TypeId {
+        // Go: the resolvedDefaultType payload read.
+        self.type_(t)
+            .as_type_parameter()
+            .and_then(|d| d.resolved_default_type)
+            .unwrap_or_else(|| self.unknown_type())
+    }
+
+    /// Go: `func (c *Checker) instantiateSignatureEx(s, mapper, eraseTypeParameters) *Signature`.
+    pub(crate) fn instantiate_signature_ex(
+        &mut self,
+        s: crate::types::SignatureId,
+        _mapper: Option<crate::todo_shapes::TypeMapperId>,
+        _erase_type_parameters: bool,
+    ) -> crate::types::SignatureId {
+        // TODO(port M6 S7): the signature instantiator.
+        s
+    }
+
+    /// Go: `func (c *Checker) getCanonicalSignature(s) *Signature`.
+    pub(crate) fn get_canonical_signature(&mut self, s: crate::types::SignatureId) -> crate::types::SignatureId {
+        // TODO(port M6 S6): the canonical-signature resolution.
+        s
+    }
+
+    /// Go: `func (c *Checker) instantiateSignatureInContextOf(source, target, compareTypes) *Signature`.
+    pub(crate) fn instantiate_signature_in_context_of(
+        &mut self,
+        source: crate::types::SignatureId,
+        _target: crate::types::SignatureId,
+        _compare_types: TypeComparerKind,
+    ) -> crate::types::SignatureId {
+        // TODO(port M6 S6): the type-parameter fixing instantiator.
+        source
+    }
+
+    /// Go: the IndexInfo payload readers (the `index_infos` arena accessors).
+    pub(crate) fn index_info_key_type(&self, info: crate::types::IndexInfoId) -> TypeId {
+        self.index_infos[info.0 as usize].key_type
+    }
+
+    pub(crate) fn index_info_value_type(&self, info: crate::types::IndexInfoId) -> TypeId {
+        self.index_infos[info.0 as usize].value_type
+    }
+
+    pub(crate) fn index_info_is_readonly(&self, info: crate::types::IndexInfoId) -> bool {
+        self.index_infos[info.0 as usize].is_readonly
+    }
+
+    /// Go: the IndexInfo payload `declaration` read (the elaboration path).
+    pub(crate) fn index_info_declaration(&self, info: crate::types::IndexInfoId) -> Option<NodeId> {
+        self.index_infos[info.0 as usize].declaration
+    }
+
+    // ── Error reporting (checker.go's report* family) — the errorReporter
+    // threading needs the live Relater; the S6 diagnostic plumbing wave owns
+    // the real bodies. The signature ladder's calls become no-ops until
+    // then (error elaboration is already gated behind typeToString (W4) and
+    // member resolution (S8) seams).
+
+    /// Go: `func (c *Checker) reportSignatureArityError(errorReporter, source, targetCount)`.
+    pub(crate) fn report_signature_arity_error(
+        &mut self,
+        _error_reporter: Option<ErrorReporterKind>,
+        _source: crate::types::SignatureId,
+        _target_count: usize,
+    ) {
+        // TODO(port M6 S6): the errorReporter threading.
+    }
+
+    /// Go: `func (c *Checker) reportIncompatibleThisTypes(errorReporter, source, target)`.
+    pub(crate) fn report_incompatible_this_types(
+        &mut self,
+        _error_reporter: Option<ErrorReporterKind>,
+    ) {
+        // TODO(port M6 S6): as above.
+    }
+
+    /// Go: `func (c *Checker) reportParameterTypeMismatch(errorReporter, source, target, i)`.
+    pub(crate) fn report_parameter_type_mismatch(
+        &mut self,
+        _error_reporter: Option<ErrorReporterKind>,
+        _source: crate::types::SignatureId,
+        _target: crate::types::SignatureId,
+        _i: usize,
+    ) {
+        // TODO(port M6 S6): as above.
+    }
+
+    /// Go: `func (c *Checker) reportPredicateRequired(errorReporter, signature)`.
+    pub(crate) fn report_predicate_required(
+        &mut self,
+        _error_reporter: Option<ErrorReporterKind>,
+        _source: crate::types::SignatureId,
+    ) {
+        // TODO(port M6 S6): as above.
+    }
+
+    /// Go: `func (c *Checker) reportReturnTypeMismatch(errorReporter, source, sourceReturnType, targetReturnType)`.
+    pub(crate) fn report_return_type_mismatch(
+        &mut self,
+        _error_reporter: Option<ErrorReporterKind>,
+        _source: crate::types::SignatureId,
+        _source_return_type: TypeId,
+        _target_return_type: TypeId,
+    ) {
+        // TODO(port M6 S6): as above.
+    }
+
+    /// Go: `func (c *Checker) reportPredicateKindMismatch(errorReporter, source, target)`.
+    pub(crate) fn report_predicate_kind_mismatch(
+        &mut self,
+        _error_reporter: Option<ErrorReporterKind>,
+        _source: crate::types::SignatureId,
+        _target: crate::types::SignatureId,
+    ) {
+        // TODO(port M6 S6): as above.
+    }
+
+    /// Go: `func (c *Checker) reportPredicatePositionMismatch(errorReporter, source, target)`.
+    pub(crate) fn report_predicate_position_mismatch(
+        &mut self,
+        _error_reporter: Option<ErrorReporterKind>,
+        _source: crate::types::SignatureId,
+        _target: crate::types::SignatureId,
+    ) {
+        // TODO(port M6 S6): as above.
+    }
+
+    /// Go: `func (c *Checker) reportPredicateIncompatible(errorReporter, source, target)`.
+    pub(crate) fn report_predicate_incompatible(
+        &mut self,
+        _error_reporter: Option<ErrorReporterKind>,
+        _source: crate::types::SignatureId,
+        _target: crate::types::SignatureId,
+    ) {
+        // TODO(port M6 S6): as above.
+    }
+}
+
+// ── Missing free helpers (referenced above) ──
+
+/// Go: `func isUnknownLikeUnionType(t) bool` (utilities.go).
+pub(crate) fn is_unknown_like_union_type(c: &mut Checker, t: TypeId) -> bool {
+    // TODO(port M6 S7/S8): the union-contains-undefined/null/{} check.
+    let _ = (c, t);
+    false
+}
+
+/// Go: `func (c *Checker) getReturnTypeOfSignature(sig) *Type` — S8 stub
+/// (free-fn form; the method lives in exports.rs).
+pub(crate) fn get_return_type_of_signature(c: &mut Checker, sig: crate::types::SignatureId) -> TypeId {
+    // TODO(port M6 S8): resolvedReturnType + getReturnTypeFromBody.
+    c.get_return_type_of_signature(sig)
+}
+
+/// Go: `func (c *Checker) getDeclaredTypeOfSymbol(symbol) *Type` — S2 stub.
+pub(crate) fn get_declared_type_of_symbol(c: &mut Checker, symbol: SymbolId) -> TypeId {
+    // TODO(port M6 S2): the declared-type resolution.
+    let _ = symbol;
+    c.error_type()
+}
+
+/// Go: `func (c *Checker) getTypeOfParameter(p) *Type` — the parameter symbol
+/// read (getTypeOfSymbol on a parameter symbol).
+pub(crate) fn get_type_of_parameter(c: &mut Checker, p: SymbolId) -> TypeId {
+    c.get_type_of_symbol(p)
+}
+
+/// Go: `func (c *Checker) getConstraintFromTypeParameter(t) *Type` — the
+/// S9 constrained-reference arm; payload read.
+pub(crate) fn get_constraint_from_type_parameter(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    get_constraint_of_type_parameter(c, t)
+}
+
+/// Go: `c.filterType(reducedTarget, isExcessPropertyCheckTarget)`.
+pub(crate) fn filter_type_is_excess_property_check_target(c: &mut Checker, t: TypeId) -> TypeId {
+    // TODO(port M6 S7): the filter construction; the first match or the
+    // reduced type stands in.
+    if is_excess_property_check_target(c, t) {
+        t
+    } else {
+        c.never_type()
+    }
+}
+
+/// Go: `func (c *Checker) getPermissiveInstantiation(t) *Type` — S7 stub.
+pub(crate) fn get_permissive_instantiation(c: &mut Checker, t: TypeId) -> TypeId {
+    // TODO(port M6 S7): the permissive mapper.
+    t
+}
+
+/// Go: `func (c *Checker) getRestrictiveInstantiation(t) *Type` — S7 stub.
+pub(crate) fn get_restrictive_instantiation(c: &mut Checker, t: TypeId) -> TypeId {
+    // TODO(port M6 S7): the restrictive mapper.
+    t
+}
+
+/// Go: the tuple payload readers (the tuple-comparison ladder; TupleType
+/// fields behind the S7 constructor, but the payload reads are real).
+pub(crate) fn tuple_type_readonly(c: &Checker, t: TypeId) -> bool {
+    // Go: TargetTupleType().readonly — the tuple payload's target read.
+    c.type_(t)
+        .target()
+        .and_then(|target| c.type_(target).as_tuple_type().map(|d| d.readonly))
+        .unwrap_or(false)
+}
+
+/// Go: `target.TargetTupleType().combinedFlags`.
+pub(crate) fn tuple_type_combined_flags(c: &Checker, t: TypeId) -> crate::types::ElementFlags {
+    c.type_(t)
+        .target()
+        .and_then(|target| c.type_(target).as_tuple_type().map(|d| d.combined_flags))
+        .unwrap_or(crate::types::ElementFlags::NONE)
+}
+
+/// Go: `target.TargetTupleType().minLength`.
+pub(crate) fn tuple_type_min_length(c: &Checker, t: TypeId) -> usize {
+    c.type_(t)
+        .target()
+        .and_then(|target| c.type_(target).as_tuple_type().map(|d| d.min_length as usize))
+        .unwrap_or(0)
+}
+
+/// Go: `tuple.TargetTupleType().elementInfos[pos].flags`.
+pub(crate) fn tuple_type_element_flags(c: &Checker, t: TypeId, pos: usize) -> crate::types::ElementFlags {
+    c.type_(t)
+        .target()
+        .and_then(|target| {
+            c.type_(target)
+                .as_tuple_type()
+                .and_then(|d| d.element_infos.get(pos).map(|e| e.flags))
+        })
+        .unwrap_or(crate::types::ElementFlags::NONE)
+}
+
+/// Go: `getStartElementCount(tuple, flags)` (utilities.go).
+pub(crate) fn get_start_element_count(c: &Checker, t: TypeId, flags: crate::types::ElementFlags) -> usize {
+    // TODO(port M6 S7): the element-flag prefix scan.
+    let _ = flags;
+    let _ = c.type_(t);
+    0
+}
+
+/// Go: `getEndElementCount(tuple, flags)` (utilities.go).
+pub(crate) fn get_end_element_count(c: &Checker, t: TypeId, flags: crate::types::ElementFlags) -> usize {
+    // TODO(port M6 S7): the element-flag suffix scan.
+    let _ = flags;
+    let _ = c.type_(t);
+    0
+}
+
+/// Go: `conditional_parts_ex` — the same `(checkType, extendsType)` pair
+/// (the worker's conditional arm; kept as a distinct name for grep parity).
+pub(crate) fn conditional_parts_ex(c: &Checker, t: TypeId) -> (TypeId, TypeId) {
+    conditional_parts(c, t)
+}
+
+/// Go: the booleanType placeholder — `booleanType` is the `true | false`
+/// union (S7's getUnionType); the wrapper-object elaboration that reads it
+/// is unreachable until the S2 globals resolve, so the error type stands in.
+pub(crate) fn boolean_type_placeholder(c: &Checker) -> TypeId {
+    // TODO(port M6 S7): the booleanType union.
+    c.error_type()
 }

@@ -243,6 +243,7 @@ dependencies = [
  "tsc-jsnum",
  "tsc-parser",
  "tsc-scanner",
+ "tsc-stringutil",
 ]
 
 [[package]]
