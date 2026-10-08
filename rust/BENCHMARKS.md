@@ -102,6 +102,29 @@ threads=16: Rust is already **1.59× faster** than Go (89.3 vs 141.9 ms) and
 scales better (5.71× vs 2.21× single→16-thread). The hardening gap is
 single-threaded (~374 vs ~355 ns/node under contention).
 
+### Multi-corpus parity (real-world codebases)
+
+**2026-10-08 04:50 — parity sweep beyond the race corpus.** All runs
+`parse --threads 1`, single shot; parity = byte-identical
+files/bytes/nodes/errors/shape_hash across the two drivers. Provisional
+timings (rig still loaded by the syzkaller campaign, load ~30):
+
+| corpus | files | nodes | errors | shape_hash (both sides) | rust/go t=1 | rust/go t=16 |
+|---|---|---|---|---|---|---|
+| packages/ (tsc Go-port sources) | — | 432,721 | 0 | `90da5655851b0cd1` ✓ | — | — |
+| tools/ | — | 89,287 | 0 | `a283412883b4c90b` ✓ | — | — |
+| type-fest (sindresorhus, depth 1) | 440 | 159,085 | 0 | `77f3b2c60d05ed5d` ✓ | 0.743 | 0.302 |
+| zod (colinhacks, depth 1) | 515 | 563,033 | 0 | `15803bfa6c347c94` ✓ | 1.003 | 0.642 |
+| vite (vitejs, depth 1) | 602 | 355,856 | 1 | `db36d00b94e30112` ✓ | 0.835 | 0.398 |
+
+tsc/testdata (torture corpus, 2.5M nodes, 7,218 intentional errors) found the
+only divergences so far: `!`-definite-assignment on a parameter with a generic
+type annotation (6 missing diagnostics) and multi-case JSX mismatched-close
+recovery (both single-case repros byte-identical; both fixes in flight).
+On 2 of 3 new real-world corpora the Rust parser is faster than Go even at
+threads=1 — the 1.051× single-thread gap on the race corpus is JSX-heavy
+file mix, not a general parser deficit.
+
 ## Phase B — program race (M4/M5 gates)
 
 Corpus bind bench (mirrors `BenchmarkBind`), program build (mirrors
