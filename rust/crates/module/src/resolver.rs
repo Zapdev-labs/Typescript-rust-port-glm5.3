@@ -1418,10 +1418,13 @@ impl ResolutionState<'_> {
     // fails, for declaration file lookups. Returns nil if typeRoots is not
     // configured or if no matching module is found in any typeRoot directory.
     fn resolve_from_type_root(&mut self) -> Option<Resolved> {
-        if self.compiler_options.type_roots.is_empty() {
+        // Go: `if r.compilerOptions.TypeRoots == nil` — an explicitly empty
+        // `typeRoots` array still resolves (loop body never runs); only an
+        // absent key returns early.
+        if self.compiler_options.type_roots.is_none() {
             return None;
         }
-        for type_root in self.compiler_options.type_roots.clone() {
+        for type_root in self.compiler_options.type_roots.clone().unwrap() {
             let candidate = self.get_candidate_from_type_root(&type_root);
             let directory_exists = self.resolver.fs.directory_exists(&type_root);
             if !directory_exists {
@@ -3392,7 +3395,14 @@ impl ResolutionState<'_> {
         if file_name.directory_only {
             return None;
         }
-        if self.compiler_options.module_suffixes.is_empty() {
+        // Go: `len(compilerOptions.ModuleSuffixes) == 0` covers both nil and
+        // explicitly empty — `is_none_or(is_empty)` mirrors that exactly.
+        if self
+            .compiler_options
+            .module_suffixes
+            .as_ref()
+            .is_none_or(|suffixes| suffixes.is_empty())
+        {
             let candidate = rooted_file_path_from_path(file_name.path.clone());
             if self.try_file_lookup(&candidate) {
                 return Some(candidate);
@@ -3407,7 +3417,7 @@ impl ResolutionState<'_> {
         // PORT: Go iterates `compilerOptions.ModuleSuffixes` directly; the
         // port clones the suffix list so `tryFileLookup` can take `&mut self`
         // inside the loop (suffix lists are tiny).
-        let module_suffixes = self.compiler_options.module_suffixes.clone();
+        let module_suffixes = self.compiler_options.module_suffixes.clone().unwrap();
         for suffix in &module_suffixes {
             let path = file_name_no_extension.append_suffix(&format!("{}{}", suffix, ext));
             if self.try_file_lookup(&path) {
@@ -3967,7 +3977,10 @@ pub fn get_conditions(options: &CompilerOptions, resolution_mode: ResolutionMode
     } else {
         resolution_mode
     };
-    let mut conditions = Vec::with_capacity(3 + options.custom_conditions.len());
+    // Go: `len(nil)` == 0 for the capacity hint; `Concatenate` with a nil
+    // slice is a no-op — both collapse over `Option` the same way.
+    let mut conditions =
+        Vec::with_capacity(3 + options.custom_conditions.as_ref().map_or(0, Vec::len));
     if resolution_mode == ResolutionModeESM {
         conditions.push("import".to_string());
     } else {
@@ -3980,7 +3993,7 @@ pub fn get_conditions(options: &CompilerOptions, resolution_mode: ResolutionMode
     if module_resolution != ModuleResolutionKind::Bundler {
         conditions.push("node".to_string());
     }
-    conditions.extend(options.custom_conditions.iter().cloned());
+    conditions.extend(options.custom_conditions.iter().flatten().cloned());
     conditions
 }
 

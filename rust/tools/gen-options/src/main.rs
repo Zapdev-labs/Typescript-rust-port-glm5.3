@@ -312,14 +312,18 @@ pub(crate) fn rust_type(go_type: &str) -> String {
         "Tristate" => "Tristate".into(),
         "string" => "String".into(),
         "*int" => "Option<i64>".into(),
-        "[]string" => "Vec<String>".into(),
-        "[]PluginImport" => "Vec<PluginImport>".into(),
+        // PORT: Go's slice fields distinguish nil from explicitly-empty
+        // (a config `"types": []` decodes to a non-nil empty slice; an absent
+        // key stays nil). `Option<Vec<_>>` models both states exactly: None =
+        // Go nil, Some(empty) = Go non-nil empty slice.
+        "[]string" => "Option<Vec<String>>".into(),
+        "[]PluginImport" => "Option<Vec<PluginImport>>".into(),
         "*collections.OrderedMap[string, []string]" => {
             "Option<OrderedMap<String, Vec<String>>>".into()
         }
         "tspath.RootedFilePath" => "RootedFilePath".into(),
         "tspath.RootedDirectoryPath" => "RootedDirectoryPath".into(),
-        "[]tspath.RootedDirectoryPath" => "Vec<RootedDirectoryPath>".into(),
+        "[]tspath.RootedDirectoryPath" => "Option<Vec<RootedDirectoryPath>>".into(),
         "tspath.RootedPath" => "RootedPath".into(),
         "tspath.SourceMapLocation" => "SourceMapLocation".into(),
         other => other.into(),
@@ -378,10 +382,11 @@ fn emit_equals(out: &mut String, fields: &[Field]) {
     /// Paths are compared by ordered entries, ignoring backing-storage allocation.
     ///
     /// PORT: Go's generated `Equals` is mirrored field-for-field in declaration
-    /// order. The Go slice nil-vs-empty distinction collapses (fields are
-    /// plain `Vec`s, so `(a == nil) != (b == nil) || !slices.Equal(a, b)`
-    /// reduces to `a != b`); the `*int` and `Paths` nil handling is exact via
-    /// `Option`. Go's `options == other` pointer shortcut has no counterpart.
+    /// order. Slice fields are `Option<Vec<_>>`, so `a != b` is exactly Go's
+    /// `(a == nil) != (b == nil) || !slices.Equal(a, b)` (nil and explicitly-
+    /// empty are distinct, as in Go); the `*int` and `Paths` nil handling is
+    /// exact via `Option`. Go's `options == other` pointer shortcut has no
+    /// counterpart.
     pub fn equals(&self, other: &CompilerOptions) -> bool {{"#
     );
     for field in fields {
@@ -738,7 +743,7 @@ mod options_generated_test {{
         let options = CompilerOptions {{
             {t}: Tristate::TSTrue,
             {tgt}: ScriptTarget::ES2020,
-            {vec}: vec!["lib.es2015.d.ts".to_string()],
+            {vec}: Some(vec!["lib.es2015.d.ts".to_string()]),
             {num}: Some(2),
             ..CompilerOptions::default()
         }};
@@ -755,9 +760,20 @@ mod options_generated_test {{
         other.{num} = None;
         assert!(!options.equals(&other));
 
+        // Go: nil and explicitly-empty slices are distinct (Equals'
+        // `(a == nil) != (b == nil)` arm)...
         let mut other = clone.clone();
-        other.{vec} = Vec::new();
+        other.{vec} = None;
         assert!(!options.equals(&other));
+        let mut other = clone.clone();
+        other.{vec} = Some(Vec::new());
+        assert!(!options.equals(&other));
+        // ...and two equal non-nil slices (empty or not) are equal.
+        let mut a = clone.clone();
+        let mut b = clone.clone();
+        a.{vec} = Some(Vec::new());
+        b.{vec} = Some(Vec::new());
+        assert!(a.equals(&b));
 
         let mut other = clone.clone();
         let mut paths = OrderedMap::new();
@@ -794,9 +810,11 @@ fn generate(model: &Model) -> String {
 // PORT notes (vs options_generated.go):
 //   - Go's `noCopy` embed and json tags have no Rust counterpart; dropped.
 //   - Go `*int` -> `Option<i64>` (Go int is 64-bit here).
-//   - Go's slice nil-vs-empty distinction collapses: nil -> empty Vec, and
-//     the generated Equals compares Vec values (Go's
-//     `(a == nil) != (b == nil) || !slices.Equal(a, b)` reduces to `a != b`).
+//   - Go slice fields keep their nil-vs-empty distinction: `[]T` ->
+//     `Option<Vec<T>>` (None = Go nil, Some(empty) = Go non-nil empty
+//     slice, e.g. an explicit `"types": []` in a tsconfig). The generated
+//     Equals compares `Option`s, which is exactly Go's
+//     `(a == nil) != (b == nil) || !slices.Equal(a, b)`.
 //   - `Clone` (Go's generated method) -> `#[derive(Clone)]` (same shallow,
 //     field-by-field copy semantics).
 //   - Value-alias enum members (`ScriptTargetLatest` = `ScriptTargetESNext`)

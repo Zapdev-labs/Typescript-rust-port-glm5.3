@@ -43,19 +43,18 @@ pub fn int_value(value: Option<i64>) -> Option<Value> {
     raw(n.to_string())
 }
 
-/// Go: `json.Marshal([]string)` — `None` when empty (nil-vs-empty collapse).
-pub fn string_array(values: &[String]) -> Option<Value> {
-    if values.is_empty() {
-        return None;
-    }
+/// Go: `json.Marshal([]string)` — `None` (Go nil slice) skips via IsZero;
+/// PORT: a non-nil empty slice is NOT zero in Go's reflect, so `Some(empty)`
+/// marshals as `[]` (nil-vs-empty preserved via the core `Option<Vec<_>>`).
+pub fn string_array(values: Option<&[String]>) -> Option<Value> {
+    let values = values?;
     raw(serde_json::json!(values).to_string())
 }
 
-/// Go: `json.Marshal([]core.PluginImport)` (array of `{"name": ...}`).
-pub fn plugin_imports(imports: &[PluginImport]) -> Option<Value> {
-    if imports.is_empty() {
-        return None;
-    }
+/// Go: `json.Marshal([]core.PluginImport)` (array of `{"name": ...}`) —
+/// `None` (Go nil) skips; `Some(empty)` marshals `[]` (see string_array).
+pub fn plugin_imports(imports: Option<&[PluginImport]>) -> Option<Value> {
+    let imports = imports?;
     let items: Vec<serde_json::Value> = imports
         .iter()
         .map(|import| serde_json::json!({ "name": import.name }))
@@ -63,12 +62,11 @@ pub fn plugin_imports(imports: &[PluginImport]) -> Option<Value> {
     raw(serde_json::json!(items).to_string())
 }
 
-/// Go: `json.Marshal(map[string][]string)` — `None` when nil.
+/// Go: `json.Marshal(map[string][]string)` — `None` (Go nil pointer) skips
+/// via IsZero; PORT: Go's IsZero tests the *pointer*, so a non-nil empty map
+/// is NOT zero and marshals as `{}` — the empty-map skip is dropped.
 pub fn paths_map(value: Option<&tsc_collections::OrderedMap<String, Vec<String>>>) -> Option<Value> {
     let map = value?;
-    if map.is_empty() {
-        return None;
-    }
     let mut out = String::with_capacity(32);
     out.push('{');
     let mut first = true;
@@ -91,11 +89,10 @@ pub fn rooted_string<T: std::ops::Deref<Target = str>>(value: &T) -> Option<Valu
     string_value(value)
 }
 
-/// `[]tspath.RootedDirectoryPath` (rootDirs/typeRoots).
-pub fn rooted_directory_array(values: &[RootedDirectoryPath]) -> Option<Value> {
-    if values.is_empty() {
-        return None;
-    }
+/// `[]tspath.RootedDirectoryPath` (rootDirs/typeRoots) — `None` (Go nil)
+/// skips; `Some(empty)` marshals `[]` (see string_array).
+pub fn rooted_directory_array(values: Option<&[RootedDirectoryPath]>) -> Option<Value> {
+    let values = values?;
     raw(serde_json::json!(values
         .iter()
         .map(|v| v.as_string().to_owned())

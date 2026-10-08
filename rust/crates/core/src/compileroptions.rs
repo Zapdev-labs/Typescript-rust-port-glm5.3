@@ -133,11 +133,11 @@ impl CompilerOptions {
         &self,
         current_directory: &RootedDirectoryPath,
     ) -> (Vec<RootedDirectoryPath>, bool) {
-        // PORT: Go checks `options.TypeRoots != nil` (nil ⇒ not configured);
-        // the port's Vec collapses nil and empty, so an explicitly empty
-        // `typeRoots` array is treated as unset here.
-        if !self.type_roots.is_empty() {
-            return (self.type_roots.clone(), true);
+        // Go checks `options.TypeRoots != nil` — exact now that the field is
+        // Option<Vec<_>>: an explicitly empty `typeRoots` array counts as
+        // configured, an absent key does not.
+        if self.type_roots.is_some() {
+            return (self.type_roots.clone().unwrap(), true);
         }
         let base_dir: RootedDirectoryPath = if !self.config_file_path.is_empty() {
             self.config_file_path.directory()
@@ -162,7 +162,10 @@ impl CompilerOptions {
 
     /// UsesWildcardTypes returns true if this option's types array includes "*".
     pub fn uses_wildcard_types(&self) -> bool {
-        self.types.iter().any(|ty| ty == "*")
+        // Go: `slices.Contains(options.Types, "*")` — a nil slice contains nothing.
+        self.types
+            .as_deref()
+            .is_some_and(|types| types.iter().any(|ty| ty == "*"))
     }
 
     pub fn get_isolated_modules(&self) -> bool {
@@ -201,7 +204,9 @@ impl CompilerOptions {
     }
 
     pub fn get_effective_root_dirs(&self) -> &[RootedDirectoryPath] {
-        &self.root_dirs
+        // Go returns the nil-able RootDirs slice; callers only iterate, so
+        // None (Go nil) presents as an empty slice here.
+        self.root_dirs.as_deref().unwrap_or(&[])
     }
 
     pub fn get_paths_base_path(
@@ -504,9 +509,9 @@ mod tests {
     fn test_uses_wildcard_types() {
         let mut options = CompilerOptions::default();
         assert!(!options.uses_wildcard_types());
-        options.types = vec!["node".to_string()];
+        options.types = Some(vec!["node".to_string()]);
         assert!(!options.uses_wildcard_types());
-        options.types.push("*".to_string());
+        options.types.as_mut().unwrap().push("*".to_string());
         assert!(options.uses_wildcard_types());
     }
 
@@ -529,17 +534,17 @@ mod tests {
         options.paths_base_path = RootedDirectoryPath::default();
         assert_eq!(options.get_paths_base_path(&cwd), cwd);
 
-        options.root_dirs = vec![
+        options.root_dirs = Some(vec![
             RootedDirectoryPath::from("/a"),
             RootedDirectoryPath::from("/b"),
-        ];
+        ]);
         assert_eq!(options.get_effective_root_dirs().len(), 2);
     }
 
     #[test]
     fn test_get_effective_type_roots_from_config() {
         let options = CompilerOptions {
-            type_roots: vec![RootedDirectoryPath::from("/custom/types")],
+            type_roots: Some(vec![RootedDirectoryPath::from("/custom/types")]),
             ..CompilerOptions::default()
         };
         let (roots, from_config) =

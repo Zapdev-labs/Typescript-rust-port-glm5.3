@@ -378,7 +378,9 @@ fn zero_expr(ty: &str) -> String {
         "Tristate" => "Tristate::TSUnknown".to_string(),
         "string" => "String::new()".to_string(),
         "*int" => "None".to_string(),
-        "[]string" | "[]PluginImport" | "[]tspath.RootedDirectoryPath" => "Vec::new()".to_string(),
+        // PORT: Go's explicit-null branch writes nil; the Option<Vec> field
+        // keeps that exact (a later non-nil source can still override).
+        "[]string" | "[]PluginImport" | "[]tspath.RootedDirectoryPath" => "None".to_string(),
         "*collections.OrderedMap[string, []string]" => "None".to_string(),
         "tspath.RootedFilePath" | "tspath.RootedDirectoryPath" | "tspath.RootedPath"
         | "tspath.SourceMapLocation" => format!("{}::default()", rust_type(ty)),
@@ -393,7 +395,7 @@ fn not_zero(field: &str, ty: &str) -> String {
         "string" => format!("!{field}.is_empty()"),
         "*int" => format!("{field}.is_some()"),
         "[]string" | "[]PluginImport" | "[]tspath.RootedDirectoryPath" => {
-            format!("!{field}.is_empty()")
+            format!("{field}.is_some()")
         }
         "*collections.OrderedMap[string, []string]" => format!("{field}.is_some()"),
         "tspath.RootedFilePath" | "tspath.RootedDirectoryPath" | "tspath.RootedPath"
@@ -412,8 +414,8 @@ fn value_variant(ty: &str, field: &str) -> String {
         "Tristate" => format!("CompilerOptionsValue::Tristate({field})"),
         "string" => format!("CompilerOptionsValue::Str({field}.clone())"),
         "*int" => format!("CompilerOptionsValue::Int({field}.unwrap())"),
-        "[]string" => format!("CompilerOptionsValue::StrArray({field}.clone())"),
-        "[]PluginImport" => format!("CompilerOptionsValue::PluginImports({field}.clone())"),
+        "[]string" => format!("CompilerOptionsValue::StrArray({field}.clone().unwrap())"),
+        "[]PluginImport" => format!("CompilerOptionsValue::PluginImports({field}.clone().unwrap())"),
         "*collections.OrderedMap[string, []string]" => {
             format!("CompilerOptionsValue::PathsMap({field}.clone().unwrap())")
         }
@@ -437,7 +439,9 @@ fn parser_assignment(opt: &FullOption, target: &str) -> String {
         Some("file") => return format!("{target} = parse_file_name(value);"),
         Some("directory") => {
             return if opt.ty == "[]string" {
-                format!("{target} = parse_directory_names(value);")
+                // PORT: Go parseDirectoryNames returns a non-nil slice; the
+                // Option<Vec> field wraps it in Some (Go nil only when unset).
+                format!("{target} = Some(parse_directory_names(value));")
             } else {
                 format!("{target} = parse_directory_name(value);")
             };
@@ -453,12 +457,12 @@ fn parser_assignment(opt: &FullOption, target: &str) -> String {
     match opt.name.as_str() {
         "lib" => {
             return format!(
-                "if let CompilerOptionsValue::StrArray(libs) = value {{ {target} = libs.clone(); }} else {{ {target} = parse_string_array(value); }}"
+                "if let CompilerOptionsValue::StrArray(libs) = value {{ {target} = Some(libs.clone()); }} else {{ {target} = Some(parse_string_array(value)); }}"
             );
         }
         "plugins" => {
             return format!(
-                "if let CompilerOptionsValue::Array(plugins) = value {{ {target} = plugins.iter().map(|plugin| match plugin {{ CompilerOptionsValue::Object(plugin_map) => PluginImport {{ name: parse_string(&plugin_map.get_or_zero(\"name\")) }}, _ => PluginImport {{ name: String::new() }} }}).collect(); }}"
+                "if let CompilerOptionsValue::Array(plugins) = value {{ {target} = Some(plugins.iter().map(|plugin| match plugin {{ CompilerOptionsValue::Object(plugin_map) => PluginImport {{ name: parse_string(&plugin_map.get_or_zero(\"name\")) }}, _ => PluginImport {{ name: String::new() }} }}).collect()); }}"
             );
         }
         _ => {}
@@ -467,7 +471,10 @@ fn parser_assignment(opt: &FullOption, target: &str) -> String {
         "Tristate" => "parse_tristate(value)".to_string(),
         "string" => "parse_string(value)".to_string(),
         "*int" => "parse_number(value)".to_string(),
-        "[]string" => "parse_string_array(value)".to_string(),
+        // PORT: Go's parser assigns the (non-nil) slice the JSON decode
+        // produced; `Some(...)` marks the field as explicitly set — including
+        // an explicit empty `[]`, which must not collapse into unset.
+        "[]string" => "Some(parse_string_array(value))".to_string(),
         "*collections.OrderedMap[string, []string]" => "parse_string_map(value)".to_string(),
         "[]PluginImport" => panic!("gen-options: Plugin options require the plugin parser"),
         other => format!(
@@ -1070,9 +1077,9 @@ fn emit_merge_compiler_option_fields(out: &mut String, model: &TsoptionsModel) {
         out,
         r#"/// Go: `func mergeCompilerOptionFields(targetOptions, sourceOptions *core.CompilerOptions, explicitNullFields collections.Set[string])`.
 ///
-/// PORT: Go's slice nil-vs-empty distinction collapses to empty Vec (same as
-/// the core options_generated.rs PORT note); explicit-null writes the zero
-/// value exactly as Go writes nil/""/0.
+/// PORT: Go's slice nil-vs-empty distinction is exact via the core fields'
+/// `Option<Vec<_>>` (None = Go nil); explicit-null writes the zero value
+/// exactly as Go writes nil/""/0.
 pub fn merge_compiler_option_fields(
     target_options: &mut CompilerOptions,
     source_options: &CompilerOptions,
@@ -1132,10 +1139,12 @@ pub fn handle_option_config_dir_template_substitution(
             "[]string" => {
                 let _ = writeln!(
                     out,
-                    r#"    if let Some(substitution) =
-        get_substituted_string_array_with_config_dir_template(&compiler_options.options.{field}, base_path)
-    {{
-        compiler_options.options.{field} = substitution;
+                    r#"    if let Some(current) = &compiler_options.options.{field} {{
+        if let Some(substitution) =
+            get_substituted_string_array_with_config_dir_template(current, base_path)
+        {{
+            compiler_options.options.{field} = Some(substitution);
+        }}
     }}"#
                 );
             }
@@ -1302,11 +1311,11 @@ pub fn serialize_compiler_options(
                     assert_eq!(opt.ty, "[]string", "gen-options: unsupported path list {}", opt.name);
                     let _ = writeln!(
                         out,
-                        r#"    if !options.{field}.is_empty() {{
+                        r#"    if options.{field}.is_some() {{
         result.set(
             {name},
             CompilerOptionsValue::StrArray(
-                options.{field}.iter().map(|value| {{
+                options.{field}.iter().flatten().map(|value| {{
                     if value.is_empty() {{
                         return String::new();
                     }}
@@ -1323,11 +1332,11 @@ pub fn serialize_compiler_options(
                         .unwrap_or_else(|| panic!("gen-options: missing enum map {}", opt.name));
                     let _ = writeln!(
                         out,
-                        r#"    if !options.{field}.is_empty() {{
+                        r#"    if options.{field}.is_some() {{
         result.set(
             {name},
             CompilerOptionsValue::StrArray(serialize_compiler_option_enum_list(
-                &options.{field},
+                options.{field}.as_deref().unwrap(),
                 crate::declarations_generated::{map_fn}(),
             )),
         );
@@ -1339,15 +1348,17 @@ pub fn serialize_compiler_options(
                     // slice; the value model carries it as PluginImports.
                     let _ = writeln!(
                         out,
-                        r#"    if !options.{field}.is_empty() {{
-        result.set({name}, CompilerOptionsValue::PluginImports(options.{field}.clone()));
+                        r#"    if options.{field}.is_some() {{
+        result.set({name}, CompilerOptionsValue::PluginImports(options.{field}.clone().unwrap()));
     }}"#
                     );
                 } else {
+                    // Go: `if options.X != nil { result.Set("x", options.X) }` —
+                    // None (Go nil) omits the key; Some(empty) emits `[]`.
                     let _ = writeln!(
                         out,
-                        r#"    if !options.{field}.is_empty() {{
-        result.set({name}, CompilerOptionsValue::StrArray(options.{field}.clone()));
+                        r#"    if options.{field}.is_some() {{
+        result.set({name}, CompilerOptionsValue::StrArray(options.{field}.clone().unwrap()));
     }}"#
                     );
                 }
@@ -1433,8 +1444,9 @@ pub fn emit_options_generated(model: &TsoptionsModel) -> String {
 // PORT notes (vs options_generated.go):
 //   - Go's `any` option values become `CompilerOptionsValue` (commandlineoption.rs),
 //     which models exactly the dynamic types that flow through the option maps.
-//   - Go's nil-vs-empty slice distinction collapses to empty Vec (same as the
-//     core options_generated.rs PORT note).
+//   - Go's nil-vs-empty slice distinction is exact via the core fields'
+//     `Option<Vec<_>>` (None = Go nil; `Some(parse_string_array(value))`
+//     keeps an explicit `[]` distinct from unset, as Go's JSON decode does).
 //   - `floatOrInt32ToFlag[T]` becomes the per-enum `as_<T>_flag()` value accessors.
 //   - Typed path values passed to ForEachCompilerOptionAffectingBuildInfo are
 //     carried as their JSON (string) form — identical once marshaled.
@@ -1790,9 +1802,9 @@ pub fn emit_contentmapper_fields(model: &TsoptionsModel) -> String {
 //
 // PORT notes (vs contentmapper.go):
 //   - Go skips a field when `reflect.Value.IsZero()` is true; the port mirrors
-//     per type (Tristate unknown / "" / nil / 0 / empty vec). Go's nil-vs-empty
-//     slice distinction collapses: an explicitly empty (but non-nil) slice
-//     marshals as `[]` in Go and is skipped here (documented in PORTING-NOTES).
+//     per type (Tristate unknown / "" / nil / 0). Slice fields are
+//     `Option<Vec<_>>`, matching Go's IsZero on slices (nil ⇒ skip, non-nil
+//     empty ⇒ marshal `[]`, exactly as Go's reflect does).
 //   - Go marshals typed paths (RootedDirectoryPath etc.) via their json
 //     MarshalJSON (a string); the port marshals `as_string()`.
 //   - Go marshals enum fields as their raw int32 values; same here.
@@ -1813,7 +1825,7 @@ use crate::field_json;
         let call = if opt.path_kind.is_some() && opt.ty.starts_with("[]") {
             // `[]string` + pathKind (rootDirs, typeRoots) maps to
             // Vec<RootedDirectoryPath>.
-            format!("field_json::rooted_directory_array(&options.{field})")
+            format!("field_json::rooted_directory_array(options.{field}.as_deref())")
         } else if opt.path_kind.is_some() {
             // Path-typed options (model `type: "string"` + `pathKind`) map to
             // Rooted*/SourceMapLocation fields, all `Deref<Target = str>`;
@@ -1824,8 +1836,10 @@ use crate::field_json;
                 "Tristate" => format!("field_json::tristate(options.{field})"),
                 "string" => format!("field_json::string_value(&options.{field})"),
                 "*int" => format!("field_json::int_value(options.{field})"),
-                "[]string" => format!("field_json::string_array(&options.{field})"),
-                "[]PluginImport" => format!("field_json::plugin_imports(&options.{field})"),
+                "[]string" => format!("field_json::string_array(options.{field}.as_deref())"),
+                "[]PluginImport" => {
+                    format!("field_json::plugin_imports(options.{field}.as_deref())")
+                }
                 "*collections.OrderedMap[string, []string]" => {
                     format!("field_json::paths_map(options.{field}.as_ref())")
                 }
