@@ -435,17 +435,32 @@ fn gate_demo_enum_member_declared_types_route_through_the_s7_union_seam() {
         assert!(c.program_symbol(member).flags.intersects(SymbolFlags::ENUM_MEMBER));
     }
     let e_type = c.get_declared_type_of_symbol(e);
-    eprintln!("e_type={} flags={:?}", e_type.0, c.type_(e_type).flags);
     assert_eq!(e_type, c.error_type());
-    // Each member's declared type is the enum's declared type (Go: the
-    // getDeclaredTypeOfEnumMember → getDeclaredTypeOfEnum link), cached on
-    // first resolution.
-    assert_eq!(c.get_declared_type_of_symbol(a), e_type);
-    assert_eq!(c.get_declared_type_of_symbol(b), e_type);
-    assert_eq!(c.get_declared_type_of_symbol(s), e_type);
+    // Go: getDeclaredTypeOfEnum seeds each member's declared type with the
+    // FRESH form of its interned enum-literal type (computeEnumMemberValues
+    // ran: A auto-increments to 0, B is the literal 2, S is the string "x");
+    // getDeclaredTypeOfEnumMember then just reads that cached link.
+    let a_type = c.get_declared_type_of_symbol(a);
+    assert!(flags(&c, a_type).intersects(TypeFlags::ENUM_LITERAL | TypeFlags::NUMBER_LITERAL));
+    assert!(matches!(
+        c.type_(a_type).as_literal_type().and_then(|d| d.value.as_ref()),
+        Some(LiteralValue::Number(n)) if *n == tsc_jsnum::Number(0.0)
+    ));
+    let b_type = c.get_declared_type_of_symbol(b);
+    assert!(flags(&c, b_type).intersects(TypeFlags::ENUM_LITERAL | TypeFlags::NUMBER_LITERAL));
+    assert!(matches!(
+        c.type_(b_type).as_literal_type().and_then(|d| d.value.as_ref()),
+        Some(LiteralValue::Number(n)) if *n == tsc_jsnum::Number(2.0)
+    ));
+    let s_type = c.get_declared_type_of_symbol(s);
+    assert!(flags(&c, s_type).intersects(TypeFlags::ENUM_LITERAL | TypeFlags::STRING_LITERAL));
+    assert!(matches!(
+        c.type_(s_type).as_literal_type().and_then(|d| d.value.as_ref()),
+        Some(LiteralValue::String(v)) if v == "x"
+    ));
     // Resolution caching: repeated lookups are stable.
     assert_eq!(c.get_declared_type_of_symbol(e), e_type);
-    assert_eq!(c.get_declared_type_of_symbol(a), e_type);
+    assert_eq!(c.get_declared_type_of_symbol(a), a_type);
     assert!(c.type_resolutions_are_balanced());
 }
 

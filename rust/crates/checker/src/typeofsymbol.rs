@@ -482,8 +482,7 @@ impl Checker {
             .declarations
             .iter()
             .copied()
-            .filter(|&d| is_alias_symbol_declaration(self.store(), d))
-            .next_back()
+            .rfind(|&d| is_alias_symbol_declaration(self.store(), d))
     }
 
     /// Go: `func (c *Checker) getTypeOfSymbolWithDeferredType(symbol *ast.Symbol) *Type`.
@@ -1997,7 +1996,6 @@ impl Checker {
                     let t = self.check_expression_ex(expression, check_mode);
                     // TODO(port M6 S9/S10): getNonNullableTypeIfNeeded — the
                     // facts-stub identity is the permissive value.
-                    let t = t;
                     let index_type = crate::relater::get_index_type(self, t);
                     let index_flags = self.type_(index_type).flags;
                     if index_flags
@@ -2086,12 +2084,9 @@ impl Checker {
         if kind == Kind::Parameter {
             // For a parameter of a set accessor, use the type of the get
             // accessor if one is present
-            let symbol = payload_symbol(self.store().node(declaration));
+            let symbol = payload_symbol(self.store().node(declaration))?;
             // parameters of function types defined in JSDoc in TS files don't
             // have symbols
-            let Some(symbol) = symbol else {
-                return None;
-            };
             let fn_ = self.store().node(declaration).parent.get();
             if self.store().node(fn_).kind == Kind::SetAccessor && self.has_bindable_name(fn_) {
                 let parent_symbol = get_symbol_of_declaration(self, fn_);
@@ -2154,23 +2149,22 @@ impl Checker {
                 let store = self.store();
                 u::get_selected_modifier_flags(store.node(declaration), ModifierFlags::STATIC)
             };
+            let is_ambient = {
+                let store = self.store();
+                u::get_selected_modifier_flags(store.node(declaration), ModifierFlags::AMBIENT)
+                    .intersects(ModifierFlags::AMBIENT)
+            };
             if !modifier_flags.intersects(ModifierFlags::STATIC) {
                 let parent = self.store().node(declaration).parent.get();
                 let constructor = binder_shims::find_constructor_declaration(self.store(), parent);
                 let t = if let Some(constructor) = constructor {
                     self.get_flow_type_in_constructor(symbol, constructor)
-                } else if {
-                    let store = self.store();
-                    u::get_selected_modifier_flags(store.node(declaration), ModifierFlags::AMBIENT)
-                        .intersects(ModifierFlags::AMBIENT)
-                } {
+                } else if is_ambient {
                     self.get_type_of_property_in_base_class(symbol)
                 } else {
                     None
                 };
-                let Some(t) = t else {
-                    return None;
-                };
+                let t = t?;
                 return Some(self.add_optionality_ex(t, true /*isProperty*/, is_optional));
             } else {
                 let parent = self.store().node(declaration).parent.get();
@@ -2182,18 +2176,12 @@ impl Checker {
                     .collect();
                 let t = if !static_blocks.is_empty() {
                     self.get_flow_type_in_static_blocks(symbol, static_blocks)
-                } else if {
-                    let store = self.store();
-                    u::get_selected_modifier_flags(store.node(declaration), ModifierFlags::AMBIENT)
-                        .intersects(ModifierFlags::AMBIENT)
-                } {
+                } else if is_ambient {
                     self.get_type_of_property_in_base_class(symbol)
                 } else {
                     None
                 };
-                let Some(t) = t else {
-                    return None;
-                };
+                let t = t?;
                 return Some(self.add_optionality_ex(t, true /*isProperty*/, is_optional));
             }
         }
@@ -2262,6 +2250,10 @@ impl Checker {
         if self.store().node(root).kind == Kind::Parameter {
             let name = self.store().node(declaration).name();
             let name_kind = name.map(|n| self.store().node(n).kind);
+            // The arms' `if` guards need &mut self (the tuple/object checks),
+            // so they cannot be match guards — collapsible_match is
+            // structurally barred here.
+            #[allow(clippy::collapsible_match)]
             match name_kind {
                 Some(Kind::ObjectBindingPattern) => {
                     if u::is_object_literal_type(self.type_(t)) {
@@ -4287,9 +4279,8 @@ impl Checker {
                 for member in tsc_binder::node_data::members_of(self.store(), declaration).to_vec() {
                     if !binder_shims::has_dynamic_name(self.store(), member) {
                         let member_symbol = self
-                            .get_symbol_of_declaration(member);
-                        eprintln!("DEBUG member kind={:?} symbol={:?}", self.store().node(member).kind, member_symbol);
-                        let member_symbol = member_symbol.expect("enum member symbol");
+                            .get_symbol_of_declaration(member)
+                            .expect("enum member symbol");
                         let value = self.get_enum_member_value(member);
                         let member_type = match value.value {
                             Some(EvaluatorValue::Number(n)) => {
@@ -4458,16 +4449,17 @@ impl Checker {
                 .and_then(|p| ast_shims::initializer_of(self.store(), p))
                 .is_some()
         {
-            let previous = previous.expect("checked");
-            let prev_value = self.get_enum_member_value(previous);
-            match prev_value.value {
-                Some(EvaluatorValue::Number(_)) if !prev_value.resolved_other_files => {}
-                // TODO(port M6 evaluator wave): the previous initializer is
-                // not literal-evaluable by the permissive stub — Go's real
-                // evaluator decides prevIsNum here; the isolatedModules
-                // diagnostic waits for it rather than over-reporting.
-                _ => {
-                    let _ = member_name;
+            if let Some(previous) = previous {
+                let prev_value = self.get_enum_member_value(previous);
+                match prev_value.value {
+                    Some(EvaluatorValue::Number(_)) if !prev_value.resolved_other_files => {}
+                    // TODO(port M6 evaluator wave): the previous initializer is
+                    // not literal-evaluable by the permissive stub — Go's real
+                    // evaluator decides prevIsNum here; the isolatedModules
+                    // diagnostic waits for it rather than over-reporting.
+                    _ => {
+                        let _ = member_name;
+                    }
                 }
             }
         }
@@ -4492,26 +4484,27 @@ impl Checker {
                     // initializer diagnostics — the stub only produces
                     // finite literal values, so this arm is dormant.
                 }
-                if self.compiler_options.get_isolated_modules() {
-                    if matches!(result.value, Some(EvaluatorValue::String(_))) && !result.is_syntactically_string {
-                        let member_name = self.store().node(member).name().expect("EnumMember name");
-                        let enum_name = self
-                            .store()
-                            .node(parent)
-                            .name()
-                            .map(|n| ast_shims::get_text_of_node(self.store(), n))
-                            .unwrap_or_default();
-                        let name = format!(
-                            "{}.{}",
-                            enum_name,
-                            ast_shims::get_text_of_node(self.store(), member_name)
-                        );
-                        self.error(
-                            initializer,
-                            &X_0_HAS_A_STRING_TYPE_BUT_MUST_HAVE_SYNTACTICALLY_RECOGNIZABLE_STRING_SYNTAX_WHEN_ISOLATEDMODULES_IS_ENABLED,
-                            &[name],
-                        );
-                    }
+                if self.compiler_options.get_isolated_modules()
+                    && matches!(result.value, Some(EvaluatorValue::String(_)))
+                    && !result.is_syntactically_string
+                {
+                    let member_name = self.store().node(member).name().expect("EnumMember name");
+                    let enum_name = self
+                        .store()
+                        .node(parent)
+                        .name()
+                        .map(|n| ast_shims::get_text_of_node(self.store(), n))
+                        .unwrap_or_default();
+                    let name = format!(
+                        "{}.{}",
+                        enum_name,
+                        ast_shims::get_text_of_node(self.store(), member_name)
+                    );
+                    self.error(
+                        initializer,
+                        &X_0_HAS_A_STRING_TYPE_BUT_MUST_HAVE_SYNTACTICALLY_RECOGNIZABLE_STRING_SYNTAX_WHEN_ISOLATEDMODULES_IS_ENABLED,
+                        &[name],
+                    );
                 }
             }
             None => {
@@ -4553,7 +4546,14 @@ impl Checker {
                 }
             }
             Kind::StringLiteral | Kind::NoSubstitutionTemplateLiteral => {
-                let text = ast_shims::get_text_of_node(self.store(), expr);
+                // Go: `expr.Text()` — the parser stores the scanner's
+                // UNQUOTED token value in the literal payload's `text`
+                // field (the raw source slice would keep the quotes).
+                let text = match &self.store().node(expr).data {
+                    NodeData::StringLiteral(d) => d.text.to_string(),
+                    NodeData::NoSubstitutionTemplateLiteral(d) => d.text.to_string(),
+                    _ => unreachable!("kind-checked above"),
+                };
                 EvaluatorResult {
                     value: Some(EvaluatorValue::String(text)),
                     is_syntactically_string: true,

@@ -127,9 +127,9 @@ impl Checker {
     /// Go: `func (c *Checker) GetSymbolOfDeclaration(node *ast.Node) *ast.Symbol`
     /// → `c.getSymbolOfDeclaration(node)` (checker.go — S6).
     pub fn get_symbol_of_declaration(&self, node: NodeId) -> Option<SymbolId> {
-        // TODO(port M6 S6): declaration→symbol resolution.
-        let _ = node;
-        None
+        // M6 S2: the real payload read (the binder-set declaration symbol);
+        // the merged/late-bound composition is S6's (identity permissive).
+        crate::typeofsymbol::get_symbol_of_declaration(self, node)
     }
 
     /// Go: `func (c *Checker) GetParentOfSymbol(symbol *ast.Symbol) *ast.Symbol`

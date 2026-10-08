@@ -380,7 +380,7 @@ impl KeyBuilder {
     /// the NodeId (packed file id + index), so the id IS the key.
     pub(crate) fn write_node_id(&mut self, node: Option<NodeId>) {
         match node {
-            Some(node) => self.write_uint64(node.0 as u64),
+            Some(node) => self.write_uint64(node.0),
             None => self.write_byte(0),
         }
     }
