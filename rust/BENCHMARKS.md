@@ -171,9 +171,45 @@ target-dir creates fail ENOSPC while data writes fit). Workarounds in use:
 `TS_RSYNC_INPLACE=1` (rename-free sync) and a tmpfs `CARGO_TARGET_DIR`
 for rig builds. A root `btrfs balance` would fix it properly.
 
-| date | bench | rust median | go median | rust/go | parity |
-|---|---|---|---|---|---|
-| — | — | — | — | — | — |
+### M4-final + M5 parity gates — symbols and program twins (2026-10-08 10:20)
+
+The `symbols` twin (M4 wave E, `ef81ae3778`): canonical pre-order AST walk
+(Locals → node.Symbol → LocalSymbol → children, Members then Exports,
+GlobalExports; keys sorted by `EscapeInternalSymbolName`) — one NDJSON line
+per file + FNV-1a shape hash. Found two real binder bugs before going green
+(`declareSymbolEx` nil-Type panic path, 40 files; `jsx_namespaced_name_text`
+missing arm, 3 files) and closed the M4 gate: conformance sweep
+`tsc/testdata/tests/cases/conformance` (5,935 files / 19MB) IDENTICAL
+local + rig.
+
+The `program` twin (M5 gate, `d0572578c7`): one-file programs per corpus
+root over the bundled `lib.d.ts` VFS — per-root
+`config_errors/loaded/parsed/bound/symbols/duplicates/parse_diag/
+program_errors/unresolved` + FNV-1a shape hash (field order = the contract;
+fold recipe documented + FNV-vectored on both drivers). Found two real
+compiler-crate divergences before going green: `get_unresolved_imports` was
+guarded by a never-set flag (Go never sets `usesUriStyleNodeCoreModules`, so
+the sweep was dead — the missing-import fixture caught it) and
+`get_program_diagnostics` folded the include processor's full collection
+where Go folds `GetGlobalDiagnostics()` only.
+
+| run | verdict |
+|---|---|
+| program × program-matrix (15 roots: parse errors, in-matrix import, `/// <reference lib>` pull, missing bare import, UMD global, JSON root, JSDoc typedefs, JSX, `.d.ts`-only, jsconfig companion) | IDENTICAL (local + rig) |
+| program determinism double-runs | byte-identical (local + rig) |
+| program × packages/typescript/lib (5 roots: .js/.cjs/.d.ts/.d.cts) | IDENTICAL |
+| program × packages/typescript/scripts (2 real .ts roots, one with an in-dir import) | IDENTICAL (local + rig) |
+| symbols × fixtures + fuzz seeds | IDENTICAL (local + rig) |
+| symbols × conformance corpus (5,935 files) | IDENTICAL (local + rig) |
+| dump/showconfig/resolvereact regressions | IDENTICAL |
+
+M5 waves landed and rig-validated before the gate: compiler + bundled +
+outputpaths (`c692d74345`, incl. the fully ported `test_program` asserting
+exact program order vs the 96-entry esnext lib list) and the checker spike
+(`fc21c66df9`, SPEC §5.4/§5.5 strategies proven). Full Phase B bind/program
+TIMING stays queued behind the rig's syzkaller campaign (load ~33 on
+16 cores); the program twin is the parity rail M6's checker-level fields
+extend as waves land.
 
 | date | bench | rust median | go median | rust/go | parity |
 |---|---|---|---|---|---|
