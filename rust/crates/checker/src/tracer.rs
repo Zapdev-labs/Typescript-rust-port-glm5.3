@@ -553,4 +553,38 @@ mod tests {
         assert!(end_event.contains("\"checkerId\":7"));
         assert!(end_event.contains("\"variances\":[\"out\"]"));
     }
+
+    /// The Go-reference trace byte-diff fixture (M6 W2 validation gate):
+    /// runs the SAME event sequence as tracer_test.go's
+    /// TestTracerPushPreservesEndArgMutations (and the scratch Go harness
+    /// $HOME/.w2engines-scratch/gotrace/main.go replicates verbatim) and,
+    /// when TSC_TRACE_FIXTURE_DIR is set, writes the session's trace.json and
+    /// legend.json there so `diff` against the Go harness output is the
+    /// wave's byte-identical gate. Without the env var the test is inert.
+    #[test]
+    fn go_reference_trace_fixture_matches() {
+        let Some(out_dir) = std::env::var_os("TSC_TRACE_FIXTURE_DIR") else {
+            return;
+        };
+        let fsys = MemFs::new();
+        let tr = start_tracing(fsys.clone(), "/trace", "", true /* deterministic */)
+            .expect("start tracing");
+        let args = Args::new();
+        args.insert("id", TraceValue::Int(1));
+        let tracer = new_tracer(&tr, 7);
+        let pop = tracer.push(Phase::CheckTypes, "getVariancesWorker", &args, true);
+        args.insert(
+            "variances",
+            TraceValue::Array(vec![TraceValue::Str("out".to_string())]),
+        );
+        pop.pop();
+        tr.stop_tracing().expect("stop tracing");
+        let out_dir = std::path::PathBuf::from(&out_dir);
+        std::fs::create_dir_all(&out_dir).expect("create fixture dir");
+        for name in ["trace.json", "legend.json"] {
+            if let Some(content) = fsys.read_file(&format!("/trace/{name}")) {
+                std::fs::write(out_dir.join(name), content).expect("write fixture");
+            }
+        }
+    }
 }

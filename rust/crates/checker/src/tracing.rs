@@ -656,17 +656,19 @@ fn marshal_legend(records: &[TraceRecord]) -> String {
         if i > 0 {
             buf.push(',');
         }
-        buf.push_str("\n  {");
+        // std json.MarshalIndent form: one field per line, 2-space indent,
+        // `": "` after each key (the Go-reference legend byte-diff pins it).
+        buf.push_str("\n  {\n    ");
         let mut first = true;
         let field = |buf: &mut String, first: &mut bool, key: &str, value: &str| {
             if !value.is_empty() {
                 if !*first {
-                    buf.push(',');
+                    buf.push_str(",\n    ");
                 }
                 *first = false;
                 buf.push('"');
                 buf.push_str(key);
-                buf.push_str("\":");
+                buf.push_str("\": ");
                 write_json_string(buf, value);
             }
         };
@@ -674,13 +676,16 @@ fn marshal_legend(records: &[TraceRecord]) -> String {
         field(&mut buf, &mut first, "tracePath", &r.trace_path);
         field(&mut buf, &mut first, "typesPath", &r.types_path);
         if !first {
-            buf.push(',');
+            buf.push_str(",\n    ");
         }
         use std::fmt::Write as _;
-        let _ = write!(buf, "\"checkerId\":{}", r.checker_id);
-        buf.push('}');
+        let _ = write!(buf, "\"checkerId\": {}", r.checker_id);
+        buf.push_str("\n  }");
     }
-    buf.push_str("\n]");
+    if !records.is_empty() {
+        buf.push('\n');
+    }
+    buf.push(']');
     buf
 }
 

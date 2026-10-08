@@ -68,21 +68,19 @@ use tsc_ast::{Kind, NodeId, SymbolFlags};
 
 use crate::relater::{
     get_base_constraint_of_type, get_constraint_of_type, get_erased_signature, get_index_infos_of_type,
-    get_index_type_ex, get_literal_type_from_property, get_mapped_type_modifiers,
+    get_index_type_ex, get_literal_type_from_property,
     get_name_type_from_mapped_type, get_properties_of_object_type, get_signatures_of_type,
     get_string_literal_value, get_template_type_from_mapped_type, get_type_alias_type_parameters,
-    get_type_arguments, get_type_parameter_from_mapped_type, get_constraint_type_from_mapped_type,
+    get_type_arguments, get_constraint_type_from_mapped_type,
     get_type_with_this_argument, get_union_type, get_union_type_ex,
     alias_symbol_value_declaration_in_js_file, conditional_parts,
     get_default_constraint_of_conditional_type, get_true_type_from_conditional_type,
-    get_false_type_from_conditional_type, get_end_element_count, get_type_reference_arity,
-    get_unmatched_property, index_target, infer_types_from_template_literal_type,
+    get_false_type_from_conditional_type, index_target, infer_types_from_template_literal_type,
     is_applicable_index_type, is_array_or_tuple_type, is_array_type, is_generic_mapped_type,
     is_literal_type, is_mutable_array_or_tuple, maybe_type_of_kind, remove_missing_type,
-    sig, string_mapping_symbol, string_mapping_target, template_literal_parts,
+    string_mapping_symbol, string_mapping_target, template_literal_parts,
     tuple_type_combined_flags, tuple_type_element_flags, tuple_type_min_length,
-    type_has_call_or_construct_signatures, type_reference_target,
-    ExpandingFlags, RelationKind, TypeComparerKind,
+    type_reference_target, ExpandingFlags, RelationKind, TypeComparerKind,
 };
 use crate::utilities::is_object_or_array_literal_type;
 use crate::todo_shapes::{InferenceContextId, TypeMapperId, UnionReduction};
@@ -176,7 +174,7 @@ impl InferencePriority {
     }
 }
 
-/// Go: `type InferenceFlags uint32` + consts (checker.go).
+// Go: `type InferenceFlags uint32` + consts (checker.go).
 define_flags!(InferenceFlags, u32);
 // (NONE is the define_flags! macro's generated zero value — InferenceFlagsNone.)
 impl InferenceFlags {
@@ -203,9 +201,10 @@ impl InferenceFlags {
 /// the relation kind is captured and the worker re-entered through a fresh
 /// relater (`check_type_related_to`); isRelatedToWorker consults only the
 /// relation, not outer relater state.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum InferenceComparer {
     /// Go: `c.compareTypesAssignable`.
+    #[default]
     Assignable,
     /// Go: a relater method expression (`r.isRelatedToWorker`); the payload
     /// is the creating relater's relation.
@@ -264,11 +263,6 @@ pub struct InferenceContext {
     pub intra_expression_inference_sites: Vec<IntraExpressionInferenceSite>,
 }
 
-impl Default for InferenceComparer {
-    fn default() -> Self {
-        InferenceComparer::Assignable
-    }
-}
 
 /// Go: `type InferenceInfo struct` (checker.go). The first three field names
 /// are the W1 mapper.rs contract (`typeParameter`/`isFixed`/`inferredType`).
@@ -737,7 +731,9 @@ impl Checker {
         } else if self.type_(target).flags.intersects(TypeFlags::TEMPLATE_LITERAL) {
             self.infer_to_template_literal_type(n, source, target);
         } else {
-            let source = crate::relater::get_reduced_type(self, source);
+            // Go reassigns `source` (getReducedType then getApparentType);
+            // shadowing keeps the outer param untouched.
+            let mut source = crate::relater::get_reduced_type(self, source);
             if is_generic_mapped_type(self, source) && is_generic_mapped_type(self, target) {
                 self.invoke_once(n, source, target, Checker::infer_from_generic_mapped_types);
             }
@@ -773,18 +769,24 @@ impl Checker {
         let params = get_type_alias_type_parameters(self, source_alias_symbol);
         let min_params = self.get_min_type_argument_count(&params);
         let node_is_in_js_file = alias_symbol_value_declaration_in_js_file(self, source_alias_symbol);
-        let source_types = self.fill_missing_type_arguments(
-            &self.type_(source).alias.as_ref().expect("alias").type_arguments,
-            &params,
-            min_params,
-            node_is_in_js_file,
-        );
-        let target_types = self.fill_missing_type_arguments(
-            &self.type_(target).alias.as_ref().expect("alias").type_arguments,
-            &params,
-            min_params,
-            node_is_in_js_file,
-        );
+        let source_arguments = self
+            .type_(source)
+            .alias
+            .as_ref()
+            .expect("alias")
+            .type_arguments
+            .clone();
+        let target_arguments = self
+            .type_(target)
+            .alias
+            .as_ref()
+            .expect("alias")
+            .type_arguments
+            .clone();
+        let source_types =
+            self.fill_missing_type_arguments(&source_arguments, &params, min_params, node_is_in_js_file);
+        let target_types =
+            self.fill_missing_type_arguments(&target_arguments, &params, min_params, node_is_in_js_file);
         let variances = self.get_alias_variances(source_alias_symbol);
         self.infer_from_type_arguments(n, source_types, target_types, variances);
     }
@@ -1465,7 +1467,7 @@ impl Checker {
                                     );
                                     self.infer_from_types(n, slice, element_types[start_length]);
                                     if let Some(rest_type) = self.get_element_type_of_slice_of_tuple_type(
-                                        self, source, start_length + implied_arity, end_length, false, false,
+                                        source, start_length + implied_arity, end_length, false, false,
                                     ) {
                                         self.infer_from_types(n, rest_type, element_types[start_length + 1]);
                                     }
@@ -1494,8 +1496,11 @@ impl Checker {
                                         let slice_types: Vec<TypeId> = source_args[start_index..end_index].to_vec();
                                         let slice_infos: Vec<crate::types::TupleElementInfo> =
                                             tuple_element_infos(self, source)[start_index..end_index].to_vec();
-                                        let trailing_slice =
-                                            self.create_tuple_type_ex(slice_types, slice_infos, false /*readonly*/);
+                                        let trailing_slice = self.create_tuple_type_ex(
+                                            &slice_types,
+                                            &slice_infos,
+                                            false, /*readonly*/
+                                        );
                                         if let Some(rest_type) = self.get_element_type_of_slice_of_tuple_type(
                                             source, start_length, end_length + implied_arity, false, false,
                                         ) {
@@ -1589,10 +1594,10 @@ impl Checker {
             // than the target, we infer from the first source signature to the excess target signatures. (Go comment, verbatim.)
             let target_signatures = get_signatures_of_type(self, target, kind);
             let target_len = target_signatures.len();
-            for i in 0..target_len {
+            for (i, &target_signature) in target_signatures.iter().enumerate() {
                 let source_index = source_len.saturating_sub(target_len) + i;
                 let base = self.get_base_signature(source_signatures[source_index]);
-                let erased = get_erased_signature(self, target_signatures[i]);
+                let erased = get_erased_signature(self, target_signature);
                 self.infer_from_signature(n, base, erased);
             }
         }
@@ -1612,7 +1617,7 @@ impl Checker {
             let save_bivariant = n.bivariant;
             let kind = crate::relater::sig(self, target)
                 .declaration
-                .map(|d| self.store().node(d).kind())
+                .map(|d| self.store().node(d).kind)
                 .unwrap_or(Kind::Unknown);
             // Once we descend into a bivariant signature we remain bivariant for all nested inferences (Go comment, verbatim.)
             n.bivariant = n.bivariant
@@ -1667,8 +1672,12 @@ impl Checker {
         if let Some(target_rest_type) = target_rest_type {
             let readonly = self.is_const_type_variable(target_rest_type, 0)
                 && !some_type_mutable_array_like(self, target_rest_type);
-            let source_rest = self.get_rest_type_at_position(source, param_count as usize, readonly);
-            callback(self, n, source_rest, target_rest_type);
+            // PORT: Go's getRestTypeAtPosition may return nil here; Go would
+            // crash on the nil source inside inferFromTypes, so the situation
+            // is out-of-contract — the port skips the callback.
+            if let Some(source_rest) = self.get_rest_type_at_position(source, param_count as usize, readonly) {
+                callback(self, n, source_rest, target_rest_type);
+            }
         }
     }
 
@@ -2032,17 +2041,17 @@ impl Checker {
                     .iter()
                     .any(|&t| self.is_type_parameter_at_top_level(t, tp, depth))
             })
-            || (depth < 3
-                && self.type_(t).flags.intersects(TypeFlags::CONDITIONAL)
-                && (self.is_type_parameter_at_top_level(
-                    get_true_type_from_conditional_type(self, t),
-                    tp,
-                    depth + 1,
-                ) || self.is_type_parameter_at_top_level(
-                    get_false_type_from_conditional_type(self, t),
-                    tp,
-                    depth + 1,
-                )))
+            || {
+                let flags = self.type_(t).flags;
+                depth < 3
+                    && flags.intersects(TypeFlags::CONDITIONAL)
+                    && {
+                        let true_type = get_true_type_from_conditional_type(self, t);
+                        let false_type = get_false_type_from_conditional_type(self, t);
+                        self.is_type_parameter_at_top_level(true_type, tp, depth + 1)
+                            || self.is_type_parameter_at_top_level(false_type, tp, depth + 1)
+                    }
+            }
     }
 
     /// Go: `func (c *Checker) isTypeParameterAtTopLevelInReturnType(signature, typeParameter) bool`.
@@ -2323,7 +2332,7 @@ impl Checker {
                         get_type_with_this_argument(self, instantiated_constraint, current, false);
                     let compare_types = self.inference_contexts[n.0 as usize].compare_types;
                     if compare_types.compare(self, current, constraint_with_this, false) == Ternary::False {
-                        let mut filtered_by_constraint: Option<TypeId> = None;
+                        let filtered_by_constraint: Option<TypeId> = None;
                         if inference_priority == InferencePriority::RETURN_TYPE {
                             // If we have a pure return type inference, we may succeed by removing constituents of the inferred type
                             // that aren't assignable to the constraint type (pure return type inferences are speculation anyway). (Go comment, verbatim.)
@@ -2463,19 +2472,11 @@ impl Checker {
             return types[0];
         }
         // Remove nullable types from each of the candidates. (Go comment, verbatim.)
-        let primary_types: Vec<TypeId> = if self.strict_null_checks {
-            types
-                .iter()
-                .map(|&t| {
-                    // Go: c.filterType(t, u.flags&TypeFlagsNullable == 0) —
-                    // PORT: filter_type's W2 stub consults only the top-level
-                    // type; the nullable filtering lands with S7's reducer.
-                    t
-                })
-                .collect()
-        } else {
-            types.to_vec()
-        };
+        // PORT: Go's `if c.strictNullChecks { ... filterType ... }` branch
+        // reduces to the identity here — filter_type's W2 stub consults only
+        // the top-level type, so the nullable filtering lands with S7's
+        // reducer (primary_types == types either way).
+        let primary_types: Vec<TypeId> = types.to_vec();
         // When the candidate types are all literal types with the same base type, return a union
         // of those literal types. Otherwise, return the leftmost type for which no type to the
         // right is a supertype. (Go comment, verbatim.)
@@ -2568,15 +2569,14 @@ impl Checker {
 
     /// Go: `func (c *Checker) getMapperFromContext(n) *TypeMapper`.
     pub(crate) fn get_mapper_from_context(&self, n: Option<InferenceContextId>) -> Option<TypeMapperId> {
-        n.map(|n| self.inference_contexts[n.0 as usize].mapper)
-            .flatten()
+        n.and_then(|n| self.inference_contexts[n.0 as usize].mapper)
     }
 
     /// Go: `func (c *Checker) createOuterReturnMapper(context) *TypeMapper`.
     pub(crate) fn create_outer_return_mapper(&mut self, context: InferenceContextId) -> Option<TypeMapperId> {
         if self.inference_contexts[context.0 as usize].outer_return_mapper.is_none() {
             let clone = self.clone_inference_context(Some(context), InferenceFlags::NONE);
-            let mapper = clone.map(|c| self.inference_contexts[c.0 as usize].mapper).flatten();
+            let mapper = clone.and_then(|c| self.inference_contexts[c.0 as usize].mapper);
             let return_mapper = self.inference_contexts[context.0 as usize].return_mapper;
             let merged = self.merge_type_mappers(return_mapper, mapper);
             self.inference_contexts[context.0 as usize].outer_return_mapper = merged;
@@ -3122,5 +3122,247 @@ impl Checker {
     /// Go: `func (c *Checker) isObjectTypeWithInferableIndex(t) bool`.
     fn is_object_type_with_inferable_index(&mut self, t: TypeId) -> bool {
         is_object_type_with_inferable_index_helper(self, t)
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Tests (Go's checker tests reach inference only through whole-program checks;
+// these pin the engine's data-plane contracts the Go ladder relies on)
+// ────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mapper::tests_support::new_empty_checker;
+
+    #[test]
+    fn inference_priority_ladder_matches_go() {
+        // checker.go's const ladder — CIRCULARITY is the signed -1 sentinel
+        // that sorts below every other value (the engine min()s over it).
+        assert_eq!(InferencePriority::CIRCULARITY.0, -1);
+        assert_eq!(InferencePriority::NONE.0, 0);
+        assert_eq!(InferencePriority::NAKED_TYPE_VARIABLE.0, 1 << 0);
+        assert_eq!(InferencePriority::SPECULATIVE_TUPLE.0, 1 << 1);
+        assert_eq!(InferencePriority::SUBSTITUTE_SOURCE.0, 1 << 2);
+        assert_eq!(InferencePriority::HOMOMORPHIC_MAPPED_TYPE.0, 1 << 3);
+        assert_eq!(InferencePriority::PARTIAL_HOMOMORPHIC_MAPPED_TYPE.0, 1 << 4);
+        assert_eq!(InferencePriority::MAPPED_TYPE_CONSTRAINT.0, 1 << 5);
+        assert_eq!(InferencePriority::CONTRAVARIANT_CONDITIONAL.0, 1 << 6);
+        assert_eq!(InferencePriority::RETURN_TYPE.0, 1 << 7);
+        assert_eq!(InferencePriority::LITERAL_KEYOF.0, 1 << 8);
+        assert_eq!(InferencePriority::NO_CONSTRAINTS.0, 1 << 9);
+        assert_eq!(InferencePriority::ALWAYS_STRICT.0, 1 << 10);
+        assert_eq!(InferencePriority::MAX_VALUE.0, 1 << 11);
+        // The relater's conditional arm combines exactly these two (the
+        // provisional W2 stub had the WRONG bits — 1<<6/1<<9).
+        assert_eq!(
+            (InferencePriority::NO_CONSTRAINTS | InferencePriority::ALWAYS_STRICT).0,
+            (1 << 9) | (1 << 10)
+        );
+        // PRIORITY_IMPLIES_COMBINATION — RETURN_TYPE|MAPPED_TYPE_CONSTRAINT|LITERAL_KEYOF.
+        assert_eq!(
+            InferencePriority::PRIORITY_IMPLIES_COMBINATION.0,
+            (1 << 7) | (1 << 5) | (1 << 8)
+        );
+        // The min() ordering that seeds inferencePriority and drives circularity.
+        assert!(InferencePriority::CIRCULARITY < InferencePriority::NONE);
+        assert_eq!(
+            InferencePriority::CIRCULARITY.min(InferencePriority::NAKED_TYPE_VARIABLE),
+            InferencePriority::CIRCULARITY
+        );
+    }
+
+    #[test]
+    fn inference_flags_match_go() {
+        assert_eq!(InferenceFlags::NONE.bits(), 0);
+        assert_eq!(InferenceFlags::NO_DEFAULT.bits(), 1 << 0);
+        assert_eq!(InferenceFlags::ANY_DEFAULT.bits(), 1 << 1);
+        assert_eq!(InferenceFlags::SKIPPED_GENERIC_FUNCTION.bits(), 1 << 2);
+        assert_eq!(InferenceFlags::NO_CONSTRAINT_CHECKS.bits(), 1 << 3);
+    }
+
+    #[test]
+    fn new_inference_context_seeds_go_shaped_inference_infos() {
+        let mut c = new_empty_checker();
+        let (string, number) = (c.string_type(), c.number_type());
+        let ctx = c.new_inference_context(
+            &[string, number],
+            None,
+            InferenceFlags::NONE,
+            InferenceComparer::Assignable,
+        );
+        let inferences = &c.inference_contexts[ctx.0 as usize].inferences;
+        assert_eq!(inferences.len(), 2);
+        for (i, tp) in [string, number].into_iter().enumerate() {
+            assert_eq!(inferences[i].type_parameter, tp);
+            // Go newInferenceInfo: priority MaxValue, topLevel true, impliedArity -1,
+            // no candidates and no cached inferredType.
+            assert_eq!(inferences[i].priority, InferencePriority::MAX_VALUE);
+            assert!(inferences[i].top_level);
+            assert_eq!(inferences[i].implied_arity, -1);
+            assert!(inferences[i].candidates.is_empty());
+            assert!(inferences[i].contra_candidates.is_empty());
+            assert_eq!(inferences[i].inferred_type, None);
+            assert!(!inferences[i].is_fixed);
+        }
+        assert_eq!(c.inference_contexts[ctx.0 as usize].flags, InferenceFlags::NONE);
+    }
+
+    #[test]
+    fn infer_types_records_covariant_candidate_and_gets_it_back() {
+        let mut c = new_empty_checker();
+        let tp = c.alloc_test_type_parameter(false);
+        let string = c.string_type();
+        let ctx = c.new_inference_context(&[tp], None, InferenceFlags::NONE, InferenceComparer::Assignable);
+        c.infer_types(ctx, string, tp, InferencePriority::NAKED_TYPE_VARIABLE, false /*contravariant*/);
+        let inference = &c.inference_contexts[ctx.0 as usize].inferences[0];
+        assert_eq!(inference.candidates, vec![string]);
+        assert!(inference.contra_candidates.is_empty());
+        // A single naked-type-variable candidate resolves to itself through
+        // getInferredType's covariant path (no constraint to check).
+        assert_eq!(c.get_inferred_type(ctx, 0), string);
+    }
+
+    #[test]
+    fn infer_types_contravariant_records_contra_candidates() {
+        let mut c = new_empty_checker();
+        let tp = c.alloc_test_type_parameter(false);
+        let string = c.string_type();
+        let ctx = c.new_inference_context(&[tp], None, InferenceFlags::NONE, InferenceComparer::Assignable);
+        c.infer_types(ctx, string, tp, InferencePriority::NAKED_TYPE_VARIABLE, true /*contravariant*/);
+        let inference = &c.inference_contexts[ctx.0 as usize].inferences[0];
+        assert_eq!(inference.contra_candidates, vec![string]);
+        assert!(inference.candidates.is_empty());
+    }
+
+    #[test]
+    fn infer_types_round_trips_states_through_the_pool() {
+        let mut c = new_empty_checker();
+        let tp = c.alloc_test_type_parameter(false);
+        let string = c.string_type();
+        let ctx = c.new_inference_context(&[tp], None, InferenceFlags::NONE, InferenceComparer::Assignable);
+        c.infer_types(ctx, string, tp, InferencePriority::NAKED_TYPE_VARIABLE, false);
+        c.infer_types(ctx, string, tp, InferencePriority::NAKED_TYPE_VARIABLE, false);
+        // Two inferTypes calls: the second pops the first's pooled state —
+        // the free stack never grows past one entry.
+        assert_eq!(c.free_inference_states.len(), 1);
+        // And the second run did not duplicate the candidate (clear_for_pool
+        // cleared the visited map, but the context's candidate set is dedup'd).
+        let inference = &c.inference_contexts[ctx.0 as usize].inferences[0];
+        assert_eq!(inference.candidates.len(), 1);
+    }
+
+    #[test]
+    fn put_inference_state_honors_the_pool_reuse_contract() {
+        let mut c = new_empty_checker();
+        let (s, t) = (c.string_type(), c.number_type());
+        assert!(c.free_inference_states.is_empty());
+        let mut n = c.get_inference_state();
+        n.visited.insert(
+            InferenceKey { source: s, target: t, priority: InferencePriority::NONE, contravariant: false, bivariant: false },
+            InferencePriority::NONE,
+        );
+        n.source_stack.push(s);
+        n.target_stack.push(t);
+        n.bivariant = true;
+        n.propagation_type = Some(t);
+        c.put_inference_state(n);
+        assert_eq!(c.free_inference_states.len(), 1);
+        // clear_for_pool: visited/stacks/expanding/propagation/bivariant reset.
+        let n2 = c.get_inference_state();
+        assert!(c.free_inference_states.is_empty());
+        assert!(n2.visited.is_empty());
+        assert!(n2.source_stack.is_empty());
+        assert!(n2.target_stack.is_empty());
+        assert!(!n2.bivariant);
+        assert_eq!(n2.propagation_type, None);
+    }
+
+    #[test]
+    fn invoke_once_is_guarded_by_the_visited_map() {
+        let mut c = new_empty_checker();
+        let (s, t) = (c.string_type(), c.number_type());
+        let mut n = c.get_inference_state();
+        // Non-object types: inferFromObjectTypes records only the visit.
+        c.invoke_once(&mut n, s, t, Checker::infer_from_object_types);
+        assert_eq!(n.visited.len(), 1);
+        // The second invoke for the same key short-circuits (the action
+        // would re-insert nothing — Go's `if priority, ok := n.visited[key]`).
+        c.invoke_once(&mut n, s, t, Checker::infer_from_object_types);
+        assert_eq!(n.visited.len(), 1);
+        // A different key visits again.
+        c.invoke_once(&mut n, t, s, Checker::infer_from_object_types);
+        assert_eq!(n.visited.len(), 2);
+        c.put_inference_state(n);
+    }
+
+    #[test]
+    fn get_inferred_type_defaults_follow_the_context_flags() {
+        let mut c = new_empty_checker();
+        let tp = c.alloc_test_type_parameter(false);
+        // No candidates: InferenceFlagsNone → unknownType (the anyDefault /
+        // noDefault ladder's fall-through).
+        let ctx = c.new_inference_context(&[tp], None, InferenceFlags::NONE, InferenceComparer::Assignable);
+        assert_eq!(c.get_inferred_type(ctx, 0), c.unknown_type());
+        // NoDefault without a signature: Go's silentNeverType branch lives
+        // inside getInferredType's `if n.signature != nil` ladder, so the
+        // signature-less fall-through is the unknownType default here.
+        let ctx = c.new_inference_context(&[tp], None, InferenceFlags::NO_DEFAULT, InferenceComparer::Assignable);
+        assert_eq!(c.get_inferred_type(ctx, 0), c.unknown_type());
+        // AnyDefault → anyType.
+        let ctx = c.new_inference_context(&[tp], None, InferenceFlags::ANY_DEFAULT, InferenceComparer::Assignable);
+        assert_eq!(c.get_inferred_type(ctx, 0), c.any_type());
+    }
+
+    #[test]
+    fn clone_inference_context_deep_copies_inferences_and_or_flags() {
+        let mut c = new_empty_checker();
+        let tp = c.alloc_test_type_parameter(false);
+        let string = c.string_type();
+        let ctx = c.new_inference_context(&[tp], None, InferenceFlags::NONE, InferenceComparer::Assignable);
+        c.infer_types(ctx, string, tp, InferencePriority::NAKED_TYPE_VARIABLE, false);
+        let clone = c.clone_inference_context(Some(ctx), InferenceFlags::NO_DEFAULT)
+            .expect("clone of a live context");
+        // The clone carries the recorded candidate AND the OR'd extra flag.
+        assert_eq!(c.inference_contexts[clone.0 as usize].inferences[0].candidates, vec![string]);
+        assert!(c.inference_contexts[clone.0 as usize].flags.intersects(InferenceFlags::NO_DEFAULT));
+        // Deep copy: a second inference through the clone leaves the original untouched.
+        let number = c.number_type();
+        c.infer_types(clone, number, tp, InferencePriority::NAKED_TYPE_VARIABLE, false);
+        assert_eq!(c.inference_contexts[clone.0 as usize].inferences[0].candidates.len(), 2);
+        assert_eq!(c.inference_contexts[ctx.0 as usize].inferences[0].candidates, vec![string]);
+    }
+
+    #[test]
+    fn clone_inferred_part_keeps_only_inferred_informations() {
+        let mut c = new_empty_checker();
+        let tp1 = c.alloc_test_type_parameter(false);
+        let tp2 = c.alloc_test_type_parameter(false);
+        let string = c.string_type();
+        let ctx = c.new_inference_context(&[tp1, tp2], None, InferenceFlags::NONE, InferenceComparer::Assignable);
+        // Only tp1 gets a candidate.
+        c.infer_types(ctx, string, tp1, InferencePriority::NAKED_TYPE_VARIABLE, false);
+        let part = c.clone_inferred_part_of_context(ctx).expect("one inferred info");
+        assert_eq!(c.inference_contexts[part.0 as usize].inferences.len(), 1);
+        assert_eq!(c.inference_contexts[part.0 as usize].inferences[0].type_parameter, tp1);
+        assert_eq!(c.inference_contexts[part.0 as usize].inferences[0].candidates, vec![string]);
+        // An empty context yields nil (Go's `if len(inferences) == 0 return nil`).
+        let ctx2 = c.new_inference_context(&[tp2], None, InferenceFlags::NONE, InferenceComparer::Assignable);
+        assert!(c.clone_inferred_part_of_context(ctx2).is_none());
+    }
+
+    #[test]
+    fn get_inference_info_for_type_indexes_the_context_inferences() {
+        let mut c = new_empty_checker();
+        let tp1 = c.alloc_test_type_parameter(false);
+        let tp2 = c.alloc_test_type_parameter(false);
+        let ctx = c.new_inference_context(&[tp1, tp2], None, InferenceFlags::NONE, InferenceComparer::Assignable);
+        let mut n = c.get_inference_state();
+        n.inferences = ctx;
+        // §5.4 index idiom: the match is by type-parameter identity.
+        assert_eq!(get_inference_info_for_type(&c, &n, tp1), Some(0));
+        assert_eq!(get_inference_info_for_type(&c, &n, tp2), Some(1));
+        // Non-variables never match.
+        assert_eq!(get_inference_info_for_type(&c, &n, c.string_type()), None);
+        c.put_inference_state(n);
     }
 }

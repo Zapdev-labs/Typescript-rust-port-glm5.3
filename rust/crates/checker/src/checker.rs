@@ -42,7 +42,7 @@ use crate::ast_shims;
 use crate::links::{NodeLinkStore, SymbolArenaLinkStore};
 use crate::mapper::TypeMapperData;
 use crate::todo_shapes::{
-    CacheHashKey, FlowState, InferenceContext, InferenceContextId, TypeMapperId,
+    CacheHashKey, FlowState, InferenceContext, TypeMapperId,
 };
 use crate::types::{
     AliasSymbolLinks, ArrayLiteralLinks, AssertionLinks, ComputedNameNodeLinks,

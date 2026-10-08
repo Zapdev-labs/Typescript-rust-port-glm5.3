@@ -731,28 +731,39 @@ mod tests {
                     type_parameter: tp,
                     is_fixed: false,
                     inferred_type: Some(c.boolean_type_or_marker()),
+                    ..Default::default()
                 },
                 InferenceInfo {
                     type_parameter: c.number_type(),
                     is_fixed: true,
                     inferred_type: Some(c.never_type()),
+                    ..Default::default()
                 },
             ],
+            ..Default::default()
         });
         let fixing = c.new_inference_type_mapper(ctx, true);
         // First Map: fixing fires — the cached inference is cleared and the
         // type parameter is marked fixed (the mutation is visible through the
         // context, exactly like Go's shared []*InferenceInfo).
-        assert_eq!(map(&mut c, fixing, tp), c.error_type()); // get_inferred_type W1 stub
+        // get_inferred_type is inference.rs's real body now (M6 W2): no
+        // candidates and InferenceFlagsNone default → unknownType.
+        assert_eq!(map(&mut c, fixing, tp), c.unknown_type());
         assert!(c.inference_contexts[ctx.0 as usize].inferences[0].is_fixed);
-        assert_eq!(c.inference_contexts[ctx.0 as usize].inferences[0].inferred_type, None);
+        // Go's getInferredType caches its commitment back into
+        // `inference.inferredType` — the real engine (M6 W2) now leaves the
+        // recomputed default (unknownType) cached, exactly like Go.
+        assert_eq!(
+            c.inference_contexts[ctx.0 as usize].inferences[0].inferred_type,
+            Some(c.unknown_type())
+        );
         // A non-matching type passes through untouched.
         let bigint = c.bigint_type();
         assert_eq!(map(&mut c, fixing, bigint), bigint);
         // A non-fixing mapper never touches the isFixed flag.
         let non_fixing = c.new_inference_type_mapper(ctx, false);
         c.inference_contexts[ctx.0 as usize].inferences[0].is_fixed = false;
-        assert_eq!(map(&mut c, non_fixing, tp), c.error_type());
+        assert_eq!(map(&mut c, non_fixing, tp), c.unknown_type());
         assert!(!c.inference_contexts[ctx.0 as usize].inferences[0].is_fixed);
     }
 
@@ -768,6 +779,7 @@ mod tests {
                 InferenceInfo { type_parameter: number, ..Default::default() },
                 InferenceInfo { type_parameter: bigint, ..Default::default() },
             ],
+            ..Default::default()
         });
         let m = c.new_backreference_mapper(ctx, 1);
         // Only the tail (index 1..) maps to unknownType; the head passes
