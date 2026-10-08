@@ -48,8 +48,23 @@ impl<'a, 'f> Parser<'a, 'f> {
                                 .as_jsx_opening_element()
                                 .expect("JsxOpeningElement data")
                                 .tag_name;
-                            !tag_names_are_equivalent(s, last_opening_tag_name, d.closing_element)
-                                && tag_names_are_equivalent(s, opening_tag_name, d.closing_element)
+                            // Go: `lastChild.AsJsxElement().ClosingElement
+                            // .TagName()` — the closing element's TAG NAME,
+                            // not the JsxClosingElement node itself.
+                            let last_closing_tag_name = s
+                                .node(d.closing_element)
+                                .as_jsx_closing_element()
+                                .expect("JsxClosingElement data")
+                                .tag_name;
+                            !tag_names_are_equivalent(
+                                s,
+                                last_opening_tag_name,
+                                last_closing_tag_name,
+                            ) && tag_names_are_equivalent(
+                                s,
+                                opening_tag_name,
+                                last_closing_tag_name,
+                            )
                         }
                     };
                 }
@@ -330,9 +345,19 @@ impl<'a, 'f> Parser<'a, 'f> {
                         .as_jsx_opening_element()
                         .expect("JsxOpeningElement data")
                         .tag_name;
+                    // Go: `child.AsJsxElement().ClosingElement.TagName()` — the
+                    // closing element's TAG NAME, not the JsxClosingElement node.
+                    let child_closing_tag_name = s
+                        .node(d.closing_element)
+                        .as_jsx_closing_element()
+                        .expect("JsxClosingElement data")
+                        .tag_name;
                     // stop after parsing a mismatched child like <div>...(<span></div>) in order to reattach the </div> higher
-                    stop = !tag_names_are_equivalent(s, child_opening_tag_name, d.closing_element)
-                        && tag_names_are_equivalent(s, opening_tag_name, d.closing_element);
+                    stop = !tag_names_are_equivalent(
+                        s,
+                        child_opening_tag_name,
+                        child_closing_tag_name,
+                    ) && tag_names_are_equivalent(s, opening_tag_name, child_closing_tag_name);
                 }
             }
             list.push(child);

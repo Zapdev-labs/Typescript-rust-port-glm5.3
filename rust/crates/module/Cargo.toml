@@ -1,0 +1,34 @@
+[package]
+name = "tsc-module"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# module imports tsc/internal/ast (Diagnostic, SourceFile for
+# GetResolutionDiagnostic).
+tsc-ast = { path = "../ast" }
+# module imports tsc/internal/collections (Set, OrderedMap, SyncMap).
+tsc-collections = { path = "../collections" }
+# module imports tsc/internal/core (CompilerOptions, Pattern, Tristate,
+# ResolutionMode, Version).
+tsc-core = { path = "../core" }
+# module imports tsc/internal/diagnostics (trace messages).
+tsc-diagnostics = { path = "../diagnostics" }
+# module imports tsc/internal/packagejson (InfoCache, ExportsOrImports).
+tsc-packagejson = { path = "../packagejson" }
+# util.go imports tsc/internal/semver (MustParse, TryParseVersionRange).
+tsc-semver = { path = "../semver" }
+# resolver.go imports tsc/internal/stringutil (HasPrefixAndSuffixWithoutOverlap).
+tsc-stringutil = { path = "../stringutil" }
+# module imports tsc/internal/tspath pervasively.
+tsc-tspath = { path = "../tspath" }
+# module imports tsc/internal/vfs (FS, ResolutionHost surface).
+tsc-vfs = { path = "../vfs" }
+# StaticResolutions entries map + ModeAwareCache (FxHashMap, per the
+# collections crate's backing choice).
+rustc-hash = { workspace = true }

@@ -113,6 +113,7 @@ pub mod deepclone;
 pub mod diagnostic;
 pub mod factory;
 pub mod factory_generated;
+pub mod flow;
 pub mod functionflags;
 pub mod kind_generated;
 pub mod modifierflags;

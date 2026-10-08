@@ -26,6 +26,8 @@ use std::process::ExitCode;
 
 use serde::Deserialize;
 
+mod tsoptions;
+
 // ────────────────────────────────────────────────────────────────────────────
 // JSON model (mirrors the core-relevant subset of tools/scripts/tsc/
 // options-model.ts; see data/README.md for provenance and re-verification)
@@ -143,7 +145,7 @@ fn field_name(field: &Field) -> String {
     }
 }
 
-fn snake_case(go_name: &str) -> String {
+pub(crate) fn snake_case(go_name: &str) -> String {
     let chars: Vec<char> = go_name.chars().collect();
     let mut out = String::with_capacity(go_name.len() + 8);
     for (i, &c) in chars.iter().enumerate() {
@@ -305,7 +307,7 @@ fn validate(model: &Model) {
 
 /// Go field type → Rust field type. Enum names pass through unchanged
 /// (validated to be model enums).
-fn rust_type(go_type: &str) -> String {
+pub(crate) fn rust_type(go_type: &str) -> String {
     match go_type {
         "Tristate" => "Tristate".into(),
         "string" => "String".into(),
@@ -324,7 +326,7 @@ fn rust_type(go_type: &str) -> String {
     }
 }
 
-const GO_COMMIT: &str = "ec47d33c23e464a17cdf2475632cba629bee8763";
+pub(crate) const GO_COMMIT: &str = "ec47d33c23e464a17cdf2475632cba629bee8763";
 
 fn emit_doc_comments(out: &mut String, field: &Field) {
     if let Some(section) = &field.section {
@@ -894,12 +896,122 @@ fn main() -> ExitCode {
         .unwrap_or_else(|e| panic!("cannot parse {}: {e}", input.display()));
     let generated = generate(&model);
 
+    // tsoptions extension outputs (SPEC §5.8 tsc-tsoptions row): same
+    // --check discipline; the tsoptions model loads itself.
+    let ts_model = tsoptions::load();
+    let tsoptions_outputs: Vec<(PathBuf, String)> = vec![
+        (
+            manifest_dir
+                .join("../..")
+                .join("crates/tsoptions/src/options_generated.rs"),
+            tsoptions::emit_options_generated(ts_model),
+        ),
+        (
+            manifest_dir
+                .join("../..")
+                .join("crates/tsoptions/src/declarations_generated.rs"),
+            tsoptions::emit_declarations_generated(ts_model),
+        ),
+        (
+            manifest_dir
+                .join("../..")
+                .join("crates/contentmapper/src/compiler_option_fields_generated.rs"),
+            tsoptions::emit_contentmapper_fields(ts_model),
+        ),
+    ];
+
     // Go runs `format.Source` over the buffer; run rustfmt over the output so
     // the emitted file is `cargo fmt`-stable (and byte-identical on
     // regeneration). The temp file lives next to the target so rustfmt
     // resolves the same config `cargo fmt` would.
+    let formatted = rustfmt_or_raw(&output, &generated);
+    let mut outputs: Vec<(PathBuf, String)> = vec![(output.clone(), formatted)];
+    for (path, content) in tsoptions_outputs {
+        let content = rustfmt_or_raw(&path, &content);
+        outputs.push((path, content));
+    }
+
+    let mut ok = true;
+    for (output, formatted) in &outputs {
+        let file_name = output
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if check {
+            let current = std::fs::read_to_string(output).ok();
+            match current {
+                Some(cur) if cur == *formatted => {
+                    println!(
+                        "{file_name}: OK (current, {} lines)",
+                        formatted.lines().count()
+                    );
+                }
+                Some(cur) => {
+                    let diff_line = cur
+                        .lines()
+                        .zip(formatted.lines())
+                        .position(|(a, b)| a != b)
+                        .map(|i| i + 1)
+                        .unwrap_or_else(|| {
+                            cur.lines().count().max(formatted.lines().count()) + 1
+                        });
+                    println!(
+                        "{file_name}: STALE — first difference at line {diff_line} (checked-in {} lines, expected {} lines)",
+                        cur.lines().count(),
+                        formatted.lines().count()
+                    );
+                    println!("re-run `cargo run -p gen-options` and commit");
+                    ok = false;
+                }
+                None => {
+                    println!("{file_name}: MISSING (expected at {})", output.display());
+                    ok = false;
+                }
+            }
+        } else {
+            let existing = std::fs::read_to_string(output).ok();
+            if existing.as_deref() != Some(formatted.as_str()) {
+                std::fs::write(output, formatted)
+                    .unwrap_or_else(|e| panic!("cannot write {}: {e}", output.display()));
+            }
+            println!(
+                "gen-options: wrote {} ({} lines{})",
+                output.display(),
+                formatted.lines().count(),
+                if existing.as_deref() == Some(formatted.as_str()) {
+                    ", unchanged"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+    if check && !ok {
+        return ExitCode::FAILURE;
+    }
+    if !check {
+        println!(
+            "gen-options: {} enum(s), {} compiler options, {} type acquisition fields, {} build options (core model)",
+            model.enums.len(),
+            model.compiler_options.len(),
+            model.type_acquisition.len(),
+            model
+                .build_options
+                .iter()
+                .filter(|f| f.go_name.is_some())
+                .count(),
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+/// Go runs `format.Source`; the port runs rustfmt over the emitted text so the
+/// checked-in file is `cargo fmt`-stable. The temp file lives next to the
+/// target so rustfmt resolves the same config `cargo fmt` would; on failure the
+/// unformatted output is kept (and reported) rather than aborting.
+fn rustfmt_or_raw(output: &std::path::Path, generated: &str) -> String {
     let temp = output.with_extension("rs.tmp");
-    std::fs::write(&temp, &generated)
+    std::fs::write(&temp, generated)
         .unwrap_or_else(|e| panic!("cannot write {}: {e}", temp.display()));
     let formatted = match std::process::Command::new("rustfmt")
         .arg("--edition")
@@ -914,64 +1026,13 @@ fn main() -> ExitCode {
                 "gen-options: rustfmt failed, keeping unformatted output:\n{}",
                 String::from_utf8_lossy(&result.stderr)
             );
-            generated
+            generated.to_string()
         }
         Err(err) => {
             eprintln!("gen-options: rustfmt unavailable ({err}), keeping unformatted output");
-            generated
+            generated.to_string()
         }
     };
     let _ = std::fs::remove_file(&temp);
-
-    if check {
-        let current = std::fs::read_to_string(&output).ok();
-        match current {
-            Some(cur) if cur == formatted => {
-                println!(
-                    "options_generated.rs: OK (current, {} lines)",
-                    formatted.lines().count()
-                );
-                ExitCode::SUCCESS
-            }
-            Some(cur) => {
-                let diff_line = cur
-                    .lines()
-                    .zip(formatted.lines())
-                    .position(|(a, b)| a != b)
-                    .map(|i| i + 1)
-                    .unwrap_or_else(|| cur.lines().count().max(formatted.lines().count()) + 1);
-                println!(
-                    "options_generated.rs: STALE — first difference at line {diff_line} (checked-in {} lines, expected {} lines)",
-                    cur.lines().count(),
-                    formatted.lines().count()
-                );
-                println!("re-run `cargo run -p gen-options` and commit");
-                ExitCode::FAILURE
-            }
-            None => {
-                println!(
-                    "options_generated.rs: MISSING (expected at {})",
-                    output.display()
-                );
-                ExitCode::FAILURE
-            }
-        }
-    } else {
-        let existing = std::fs::read_to_string(&output).ok();
-        if existing.as_deref() != Some(formatted.as_str()) {
-            std::fs::write(&output, &formatted)
-                .unwrap_or_else(|e| panic!("cannot write {}: {e}", output.display()));
-        }
-        println!(
-            "gen-options: {} enum(s), {} compiler options, {} type acquisition fields, {} build options -> {} ({} lines{})",
-            model.enums.len(),
-            model.compiler_options.len(),
-            model.type_acquisition.len(),
-            model.build_options.iter().filter(|f| f.go_name.is_some()).count(),
-            output.display(),
-            formatted.lines().count(),
-            if existing.as_deref() == Some(formatted.as_str()) { ", unchanged" } else { "" }
-        );
-        ExitCode::SUCCESS
-    }
+    formatted
 }

@@ -1,0 +1,19 @@
+[package]
+name = "tsc-binder"
+version = "0.1.0"
+edition = "2021"
+description = "Rust port of the Go tsc binder (tsc/internal/binder: binder.go, nameresolver.go; referenceresolver.go deferred to the emit wave)"
+license = "Apache-2.0"
+
+[dependencies]
+rustc-hash = { workspace = true } # Go map hashing cost; visited-memo keys
+tsc-ast = { path = "../ast" }
+tsc-core = { path = "../core" }
+tsc-collections = { path = "../collections" }
+tsc-debug = { path = "../debug" }
+tsc-diagnostics = { path = "../diagnostics" }
+tsc-scanner = { path = "../scanner" }
+tsc-tspath = { path = "../tspath" }
+
+[dev-dependencies]
+tsc-parser = { path = "../parser" }

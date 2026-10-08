@@ -26,14 +26,30 @@ commit `ec47d33c23e464a17cdf2475632cba629bee8763`) that
   `option.field !== undefined` filter, and stored fields are ordered by
   `buildOptionFieldOrder` (`orderByName`).
 
-## Deliberately excluded (future `tsc-tsoptions` crate)
+## Deliberately excluded from options-model.json
 
-Everything in options.ts that only feeds the other 6 generator outputs:
+Everything in options.ts that only feeds the other 6 generator outputs —
+these now live in `tsoptions-model.json` (see below) rather than being
+duplicated into this hand-mirrored core subset:
 `schemaOnlyOptions`, declaration metadata (`declaration`,
 `declarationOrder`, `elements`), `rootOptions`, `enumMaps` proper (except the
 pre-resolved jsx stringer strings), `jsconfigDefault`, `parseAliases`,
 `transpile` configs, `lib`/`libComment` (→ `targetToLibMap`), and the
 `api`/`excludeFromAPI` flags (→ the TS `api/*.generated.ts` outputs).
+
+## `tsoptions-model.json` (the tsc-tsoptions tables)
+
+The FULL `OptionsModel` from `tools/scripts/tsc/options.ts` — mechanically
+extracted (no hand mirroring) by `extract-tsoptions-model.mjs`, which imports
+options.ts with node's TypeScript type-stripping and dumps
+`JSON.stringify(options)`. It feeds the three tsc-tsoptions /
+tsc-contentmapper outputs (`rust/crates/tsoptions/src/{options,declarations}
+_generated.rs`, `rust/crates/contentmapper/src/compiler_option_fields_
+generated.rs`) exactly the way `generate-options.ts` feeds
+`tsc/internal/tsoptions/*_generated.go`. Same provenance rule: the Go output
+is never a generation input, only the parity baseline for tests. When
+options.ts changes upstream, re-run the extraction script and
+`cargo run -p gen-options`.
 
 ## Re-verification
 
