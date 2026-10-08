@@ -1,0 +1,20 @@
+[package]
+name = "tsc-testutil"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tsc-ast = { path = "../ast" }
+tsc-diagnostics = { path = "../diagnostics" }
+tsc-repo = { path = "../repo" }
+tsc-scanner = { path = "../scanner" }
+tsc-tspath = { path = "../tspath" }
+
+[dev-dependencies]
+tsc-core = { path = "../core" }
+tsc-parser = { path = "../parser" }
+
+[lints]
+workspace = true

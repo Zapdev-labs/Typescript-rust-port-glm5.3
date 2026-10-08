@@ -40,7 +40,10 @@ use tsc_jsnum::{Number, PseudoBigInt};
 
 use crate::ast_shims;
 use crate::links::{NodeLinkStore, SymbolArenaLinkStore};
-use crate::todo_shapes::{FlowState, Tracer, TypeMapperId};
+use crate::mapper::TypeMapperData;
+use crate::todo_shapes::{
+    CacheHashKey, FlowState, InferenceContext, InferenceContextId, Tracer, TypeMapperId,
+};
 use crate::types::{
     AliasSymbolLinks, ArrayLiteralLinks, AssertionLinks, ComputedNameNodeLinks,
     ContainingSymbolLinks, DeclaredTypeLinks, DeferredSymbolLinks, EnumMemberLinks, ExportTypeLinks,
@@ -310,6 +313,24 @@ pub struct Checker {
     pub(crate) tracer: Option<Tracer>,
     pub(crate) free_flow_state: Option<FlowState>,
     pub(crate) unique_literal_mapper: Option<TypeMapperId>,
+    // ── Type-instantiation mapper machinery (mapper.go W1) ──
+    /// PORT (mapper.go W1): Go's mapper.go constructors return `*TypeMapper`
+    /// heap objects; the port allocates them in this table and hands out
+    /// `TypeMapperId` indices — id equality is Go's pointer equality
+    /// (`compareTypeMappers`'s first check, `findActiveMapper`).
+    pub(crate) type_mappers: Vec<TypeMapperData>,
+    /// Go (checker.go:899): `activeMappers []*TypeMapper` — the instantiation
+    /// mapper stack. push/pop live below (checker.go 22634+); the instantiate
+    /// engine that drives them is M6 S7 (todo stub).
+    pub(crate) active_mappers: Vec<TypeMapperId>,
+    /// Go (checker.go:900): `activeTypeMappersCaches []map[CacheHashKey]*Type`
+    /// — the per-active-mapper instantiation caches.
+    pub(crate) active_type_mappers_caches: Vec<FxHashMap<CacheHashKey, TypeId>>,
+    /// PORT (mapper.go W1): the arena backing todo_shapes' InferenceContext —
+    /// `InferenceTypeMapper` holds `n *InferenceContext` in Go; the port
+    /// indexes this Vec through `InferenceContextId` (the inference wave, M6
+    /// wave 2, owns the real design).
+    pub(crate) inference_contexts: Vec<InferenceContext>,
 }
 
 /// Go: `func createFileIndexMap(files []*ast.SourceFile) map[*ast.SourceFile]int`.
@@ -1449,10 +1470,143 @@ impl Checker {
 
     /// Go: `func (c *Checker) error(node *ast.Node, message, args...)` —
     /// diagnostic creation; the plumbing lands with the M5 compiler crate
-    /// (`ast.Diagnostic` collection on the program).
-    #[allow(dead_code)] // diagnostics-collection seam: wired in the M5 compiler wave
-    pub(crate) fn error(&mut self, _node: NodeId, _message: &'static tsc_diagnostics::Message) {
+    /// (`ast.Diagnostic` collection on the program). Go's variadic args
+    /// port as a slice.
+    pub(crate) fn error(
+        &mut self,
+        _node: NodeId,
+        _message: &'static tsc_diagnostics::Message,
+        _args: &[String],
+    ) {
         // TODO(port M5 compiler): diagnostics collection seam.
+    }
+
+    /// Go: `func (c *Checker) errorOrSuggestion(isSuggestion bool, node *ast.Node, message *diagnostics.Message, args...)`
+    /// — same collection seam as `error`. Permissive W1 stub (no-op); the
+    /// M5 compiler wave wires both.
+    pub(crate) fn error_or_suggestion(
+        &mut self,
+        _is_suggestion: bool,
+        _node: NodeId,
+        _message: &'static tsc_diagnostics::Message,
+        _args: &[String],
+    ) {
+        // TODO(port M5 compiler): diagnostics collection seam.
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // W1 callee stubs + early landings (Go checker.go functions the W1
+    // periphery files — mapper.go / jsdoc.go / exports.go — need; the S-waves
+    // replace the stub bodies and absorb the early landings).
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// Go: `func getNonDistributedTypeParameter(t *Type) *Type`
+    /// (checker.go:23533). EARLY LANDING (mapper.go calls it; the body is
+    /// arena-self-contained) — the S7 checker.go wave keeps it here.
+    pub(crate) fn get_non_distributed_type_parameter(&self, t: TypeId) -> TypeId {
+        let ty = self.type_(t);
+        if ty.flags.intersects(TypeFlags::TYPE_PARAMETER) {
+            let tp = ty.as_type_parameter().expect("TypeParameter data");
+            if tp.is_distributed {
+                // Go: `return t.AsTypeParameter().constraint` — a distributed
+                // type parameter always has its constraint set at creation.
+                return tp.constraint.expect("distributed type parameter constraint");
+            }
+        }
+        t
+    }
+
+    /// Go: `func (c *Checker) instantiateType(t *Type, mapper *TypeMapper) *Type`
+    /// (checker.go — the M6 S7 instantiation engine). Permissive W1 stub:
+    /// identity — Go's `instantiateType` returns `t` unchanged for an
+    /// identity mapping, so composite-mapper flows stay exact for
+    /// identity mappers until S7 lands.
+    pub(crate) fn instantiate_type(&mut self, t: TypeId, mapper: TypeMapperId) -> TypeId {
+        let _ = mapper;
+        // TODO(port M6 S7): instantiateTypeWorker + the activeMappers caches.
+        t
+    }
+
+    /// Go: `func (c *Checker) inferFromIntraExpressionSites(n *InferenceContext)`
+    /// (inference.go — M6 wave 2). No-op W1 stub (mapper.go's
+    /// InferenceTypeMapper is its only W1 caller).
+    pub(crate) fn infer_from_intra_expression_sites(&mut self, n: InferenceContextId) {
+        // TODO(port M6 inference wave): drain intra-expression inference sites.
+        let _ = n;
+    }
+
+    /// Go: `func (c *Checker) getInferredType(n *InferenceContext, index int) *Type`
+    /// (inference.go — M6 wave 2). Obvious-error W1 stub: `errorType`
+    /// (mapper.go's InferenceTypeMapper is its only W1 caller).
+    pub(crate) fn get_inferred_type(&mut self, n: InferenceContextId, index: usize) -> TypeId {
+        let _ = (n, index);
+        // TODO(port M6 inference wave): the real inference commitment.
+        self.error_type()
+    }
+
+    /// Go: `func (c *Checker) containsArgumentsReference(node *ast.Node) bool`
+    /// (checker.go:32675 — S4's flow-walk family). Permissive W1 stub: false
+    /// (jsdoc.go's `arguments`-matching arm stays dormant until then).
+    pub(crate) fn contains_arguments_reference(&mut self, node: NodeId) -> bool {
+        // TODO(port M6 S4): the subtree walk for `arguments` references.
+        let _ = node;
+        false
+    }
+
+    /// Go: `func (c *Checker) isArrayType(t *Type) bool` (checker.go:24005 —
+    /// needs the global array types, S7). Permissive W1 stub: false.
+    pub(crate) fn is_array_type(&self, t: TypeId) -> bool {
+        // TODO(port M6 S7): t.objectFlags&Reference && target is globalArrayType/ReadonlyArrayType.
+        let _ = t;
+        false
+    }
+
+    /// Go: `func (c *Checker) getTypeFromTypeNode(node *ast.Node) *Type`
+    /// (checker.go:23295 — S5). Obvious-error W1 stub: `errorType`
+    /// (jsdoc.go's `arguments`-matching arm is the only W1 caller, and it is
+    /// itself gated by the `containsArgumentsReference` stub).
+    pub(crate) fn get_type_from_type_node(&mut self, node: NodeId) -> TypeId {
+        // TODO(port M6 S5): the type-node resolution family.
+        let _ = node;
+        self.error_type()
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // The activeMappers stack (Go checker.go 22634–22666 — landed with the
+    // mapper.go W1 wave; the instantiateType engine that drives it is S7).
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// Go: `func (c *Checker) pushActiveMapper(mapper *TypeMapper)`.
+    pub(crate) fn push_active_mapper(&mut self, mapper: TypeMapperId) {
+        self.active_mappers.push(mapper);
+        // PORT: Go grows `activeTypeMappersCaches` reusing the spare slice
+        // capacity a previous pop left behind (an allocation optimization,
+        // per its own comment); the port's Vec spare capacity plays the same
+        // role for the Vec itself.
+        self.active_type_mappers_caches
+            .push(FxHashMap::with_capacity_and_hasher(1, Default::default()));
+    }
+
+    /// Go: `func (c *Checker) popActiveMapper()`.
+    pub(crate) fn pop_active_mapper(&mut self) {
+        // PORT: Go nils the popped slot for GC; the port's drop does that.
+        self.active_mappers.pop();
+        // Clear the map, but leave it for later reuse (Go keeps it in the
+        // slice's spare capacity — see pushActiveMapper's PORT note).
+        self.active_type_mappers_caches.pop();
+    }
+
+    /// Go: `func (c *Checker) findActiveMapper(mapper *TypeMapper) int` —
+    /// Go returns -1 when absent; the port returns `Option` (PORT).
+    pub(crate) fn find_active_mapper(&self, mapper: TypeMapperId) -> Option<usize> {
+        self.active_mappers.iter().rposition(|m| *m == mapper)
+    }
+
+    /// Go: `func (c *Checker) clearActiveMapperCaches()`.
+    pub(crate) fn clear_active_mapper_caches(&mut self) {
+        for cache in &mut self.active_type_mappers_caches {
+            cache.clear();
+        }
     }
 }
 
@@ -1625,6 +1779,10 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         tracer: None,
         free_flow_state: None,
         unique_literal_mapper: None,
+        type_mappers: Vec::new(),
+        active_mappers: Vec::new(),
+        active_type_mappers_caches: Vec::new(),
+        inference_contexts: Vec::new(),
     };
 
     // Go: countGlobalSymbols sizes the globals table — a capacity hint; the
