@@ -111,6 +111,10 @@ pub(crate) fn reg_exp_flag_first_available_language_version(flag: i32) -> Option
 // Parser state
 // ────────────────────────────────────────────────────────────────────────────
 
+// PORT: Go defines `classSetExpressionTypeUnknown` and
+// `classSetExpressionTypeClassUnion` (regexp.go:60-61) but never constructs
+// either — the enum is kept complete for structural parity with Go.
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ClassSetExpressionType {
     Unknown,
@@ -140,6 +144,9 @@ const RUNE_ERROR: i32 = 0xFFFD;
 pub(crate) struct RegExpParser<'p, 'a> {
     scanner: &'p mut Scanner<'a>,
     end: usize,
+    /// Go declares `regExpFlags` (regexp.go:81) but never reads or writes
+    /// it; mirrored for structural parity.
+    #[allow(dead_code)]
     reg_exp_flags: i32,
     any_unicode_mode: bool,
     unicode_sets_mode: bool,
@@ -198,10 +205,6 @@ impl<'p, 'a> RegExpParser<'p, 'a> {
 
     fn pos(&self) -> usize {
         self.scanner.state.pos
-    }
-
-    fn set_pos(&mut self, v: usize) {
-        self.scanner.state.pos = v;
     }
 
     fn inc_pos(&mut self, n: i32) {
@@ -760,6 +763,9 @@ impl<'p, 'a> RegExpParser<'p, 'a> {
     /// ClassIntersection ::= ClassSetOperand ('&&' ClassSetOperand)+
     /// ClassSubtraction ::= ClassSetOperand ('--' ClassSetOperand)+
     /// ClassSetRange ::= ClassSetCharacter '-' ClassSetCharacter
+    /// PORT: Go has the same dead store (`expressionMayContainStrings :=
+    /// false`, regexp.go:600) — every path that reads it writes it first.
+    #[allow(unused_assignments)]
     fn scan_class_set_expression(&mut self) {
         tsc_debug::assert_!(self.pos() > 0 && self.text()[self.pos() - 1] == b'[');
         let mut is_character_complement = false;
@@ -1127,20 +1133,17 @@ impl<'p, 'a> RegExpParser<'p, 'a> {
                 }
             }
         } else if self.pos() + 1 < self.end && ch == self.char_at(self.pos() + 1) {
-            match u8::try_from(ch) {
-                Ok(b'&' | b'!' | b'#' | b'%' | b'*' | b'+' | b',' | b'.' | b':' | b';' | b'<'
-                | b'=' | b'>' | b'?' | b'@' | b'`' | b'~') => {
-                    self.error(
-                        &A_CHARACTER_CLASS_MUST_NOT_CONTAIN_A_RESERVED_DOUBLE_PUNCTUATOR_DID_YOU_MEAN_TO_ESCAPE_IT_WITH_BACKSLASH,
-                        self.pos(),
-                        2,
-                        &[],
-                    );
-                    self.inc_pos(2);
-                    let pos = self.pos();
-                    return self.text()[pos - 2..pos].to_vec();
-                }
-                _ => {}
+            if let Ok(b'&' | b'!' | b'#' | b'%' | b'*' | b'+' | b',' | b'.' | b':' | b';' | b'<'
+                | b'=' | b'>' | b'?' | b'@' | b'`' | b'~') = u8::try_from(ch) {
+                self.error(
+                    &A_CHARACTER_CLASS_MUST_NOT_CONTAIN_A_RESERVED_DOUBLE_PUNCTUATOR_DID_YOU_MEAN_TO_ESCAPE_IT_WITH_BACKSLASH,
+                    self.pos(),
+                    2,
+                    &[],
+                );
+                self.inc_pos(2);
+                let pos = self.pos();
+                return self.text()[pos - 2..pos].to_vec();
             }
         }
         match u8::try_from(ch) {
@@ -1457,7 +1460,7 @@ impl<'p, 'a> RegExpParser<'p, 'a> {
                     &THERE_IS_NO_CAPTURING_GROUP_NAMED_0_IN_THIS_REGULAR_EXPRESSION,
                     reference.pos,
                     reference.end - reference.pos,
-                    &[name.clone()],
+                    std::slice::from_ref(&name),
                 );
                 if !self.group_specifiers.is_empty() {
                     let candidates: Vec<&str> = self
@@ -1506,13 +1509,13 @@ impl<'p, 'a> RegExpParser<'p, 'a> {
 
 /// Go: `func compareDecimalStrings(a string, b string) int`.
 fn compare_decimal_strings(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
-    let trim = |s: &[u8]| {
+    fn trim(s: &[u8]) -> &[u8] {
         let mut i = 0;
         while i < s.len() && s[i] == b'0' {
             i += 1;
         }
         &s[i..]
-    };
+    }
     let a = trim(a);
     let b = trim(b);
     let a = if a.is_empty() { b"0" } else { a };

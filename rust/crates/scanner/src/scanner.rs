@@ -48,7 +48,7 @@ use tsc_diagnostics::{Message, ASTERISK_SLASH_EXPECTED, BINARY_DIGIT_EXPECTED,
     UNEXPECTED_TOKEN_DID_YOU_MEAN_OR_GT, UNEXPECTED_TOKEN_DID_YOU_MEAN_OR_RBRACE,
     UNTERMINATED_REGULAR_EXPRESSION_LITERAL, UNTERMINATED_STRING_LITERAL,
     UNTERMINATED_TEMPLATE_LITERAL, UNTERMINATED_UNICODE_ESCAPE_SEQUENCE,
-    UNDETERMINED_CHARACTER_ESCAPE, AN_EXTENDED_UNICODE_ESCAPE_VALUE_MUST_BE_BETWEEN_0X0_AND_0X10FFFF_INCLUSIVE,
+    AN_EXTENDED_UNICODE_ESCAPE_VALUE_MUST_BE_BETWEEN_0X0_AND_0X10FFFF_INCLUSIVE,
     UNICODE_ESCAPE_SEQUENCES_ARE_ONLY_AVAILABLE_WHEN_THE_UNICODE_U_FLAG_OR_THE_UNICODE_SETS_V_FLAG_IS_SET,
     OCTAL_ESCAPE_SEQUENCES_AND_BACKREFERENCES_ARE_NOT_ALLOWED_IN_A_CHARACTER_CLASS_IF_THIS_WAS_INTENDED_AS_AN_ESCAPE_SEQUENCE_USE_THE_SYNTAX_0_INSTEAD,
     OCTAL_ESCAPE_SEQUENCES_ARE_NOT_ALLOWED_USE_THE_SYNTAX_0,
@@ -2193,15 +2193,15 @@ impl<'a> Scanner<'a> {
                 }
                 // '\01', '\011'
                 // Go: fallthrough to the octal cases.
-                return self.scan_octal_escape_sequence_tail(flags, start, ch);
+                self.scan_octal_escape_sequence_tail(flags, start, ch)
             }
             Ok(b'1'..=b'3') => {
                 // '\1', '\17', '\177'
-                return self.scan_octal_escape_sequence_tail(flags, start, ch);
+                self.scan_octal_escape_sequence_tail(flags, start, ch)
             }
             Ok(b'4'..=b'7') => {
                 // '\4', '\47' but not '\477'
-                return self.scan_octal_escape_sequence_tail(flags, start, ch);
+                self.scan_octal_escape_sequence_tail(flags, start, ch)
             }
             Ok(b'8' | b'9') => {
                 // the invalid '\8' and '\9'
@@ -2227,16 +2227,16 @@ impl<'a> Scanner<'a> {
                     return Cow::Owned(vec![ch as u8]);
                 }
                 let value = &self.bytes()[start..self.state.pos];
-                return Cow::Borrowed(value);
+                Cow::Borrowed(value)
             }
-            Ok(b'b') => return Cow::Borrowed(b"\x08"),
-            Ok(b't') => return Cow::Borrowed(b"\t"),
-            Ok(b'n') => return Cow::Borrowed(b"\n"),
-            Ok(b'v') => return Cow::Borrowed(b"\x0B"),
-            Ok(b'f') => return Cow::Borrowed(b"\x0C"),
-            Ok(b'r') => return Cow::Borrowed(b"\r"),
-            Ok(b'\'') => return Cow::Borrowed(b"'"),
-            Ok(b'"') => return Cow::Borrowed(b"\""),
+            Ok(b'b') => Cow::Borrowed(b"\x08"),
+            Ok(b't') => Cow::Borrowed(b"\t"),
+            Ok(b'n') => Cow::Borrowed(b"\n"),
+            Ok(b'v') => Cow::Borrowed(b"\x0B"),
+            Ok(b'f') => Cow::Borrowed(b"\x0C"),
+            Ok(b'r') => Cow::Borrowed(b"\r"),
+            Ok(b'\'') => Cow::Borrowed(b"'"),
+            Ok(b'"') => Cow::Borrowed(b"\""),
             Ok(b'u') => {
                 // '\uDDDD' and '\u{DDDDDD}'
                 let extended = self.char_() == b'{' as i32;
@@ -2304,7 +2304,7 @@ impl<'a> Scanner<'a> {
                 }
                 // Lone surrogate: encode as CESU-8 so it survives losslessly. In a
                 // non-unicode regex this also lets scanClassRanges compare it numerically.
-                return Cow::Owned(stringutil::encode_js_string_rune(code_point));
+                Cow::Owned(stringutil::encode_js_string_rune(code_point))
             }
             Ok(b'x') => {
                 // '\xDD'
@@ -2322,7 +2322,7 @@ impl<'a> Scanner<'a> {
                 self.state.token_flags |= TokenFlags::HEX_ESCAPE;
                 let hex_text = &self.text[start + 2..self.state.pos];
                 let escaped_value = i32::from_str_radix(hex_text, 16).unwrap_or(0);
-                return Cow::Owned(rune_bytes(escaped_value));
+                Cow::Owned(rune_bytes(escaped_value))
             }
             Ok(b'\r') => {
                 // when encountering a LineContinuation (i.e. a backslash and a line terminator sequence),
@@ -2330,10 +2330,10 @@ impl<'a> Scanner<'a> {
                 if self.char_() == b'\n' as i32 {
                     self.state.pos += 1;
                 }
-                return Cow::Borrowed(b"");
+                Cow::Borrowed(b"")
             }
             Ok(b'\n') => {
-                return Cow::Borrowed(b"");
+                Cow::Borrowed(b"")
             }
             Ok(_) | Err(_) => {
                 // ch was read as a single byte; for multi-byte UTF-8 characters,
@@ -2416,14 +2416,14 @@ impl<'a> Scanner<'a> {
         self.state.pos += 2;
         let start = self.state.pos;
         let extended = self.char_() == b'{' as i32;
-        let hex_digits;
-        if extended {
+        
+        let hex_digits = if extended {
             self.state.pos += 1;
-            hex_digits = self.scan_hex_digits(1, true, false);
+            self.scan_hex_digits(1, true, false)
         } else {
             self.state.token_flags |= TokenFlags::UNICODE_ESCAPE;
-            hex_digits = self.scan_hex_digits(4, false, false);
-        }
+            self.scan_hex_digits(4, false, false)
+        };
         if hex_digits.is_empty() {
             self.state.token_flags |= TokenFlags::CONTAINS_INVALID_ESCAPE;
             if should_emit_invalid_escape_error {
@@ -2547,11 +2547,7 @@ impl<'a> Scanner<'a> {
                     self.state.token_value = Cow::Owned(val.to_string().into_bytes());
                     self.state.token_flags |= TokenFlags::OCTAL;
                     let with_minus = self.state.token == Kind::MinusToken;
-                    let literal = format!(
-                        "{}0o{}",
-                        if with_minus { "-" } else { "" },
-                        format!("{val:o}")
-                    );
+                    let literal = format!("{}0o{val:o}", if with_minus { "-" } else { "" });
                     if with_minus {
                         start -= 1;
                     }
@@ -2612,13 +2608,13 @@ impl<'a> Scanner<'a> {
             self.canonicalize_number_value();
             return Kind::NumericLiteral;
         }
-        let result;
-        if fixed_part_end == self.state.pos {
-            result = self.scan_big_int_suffix();
+        
+        let result = if fixed_part_end == self.state.pos {
+            self.scan_big_int_suffix()
         } else {
             self.canonicalize_number_value();
-            result = Kind::NumericLiteral;
-        }
+            Kind::NumericLiteral
+        };
         let (ch, _) = self.char_and_size();
         if is_identifier_start(ch) {
             let id_start = self.state.pos;
@@ -2993,7 +2989,7 @@ pub(crate) fn rune_bytes(r: i32) -> Vec<u8> {
 }
 
 /// The `s.text[start:s.pos]` argument of `Escape_sequence_0_is_not_allowed`.
-fn escape_text<'s>(s: &'s Scanner<'_>, start: usize) -> String {
+fn escape_text(s: &Scanner<'_>, start: usize) -> String {
     String::from_utf8_lossy(&s.bytes()[start..s.state.pos]).into_owned()
 }
 
@@ -3454,11 +3450,9 @@ pub fn is_conflict_marker_trivia(text: &[u8], pos: usize) -> bool {
 }
 
 /// Go: `func scanConflictMarkerTrivia(text string, pos int, reportError func(...)) int`.
-pub fn scan_conflict_marker_trivia(
-    text: &[u8],
-    pos: usize,
-    report_error: Option<&mut dyn FnMut(&'static Message, usize, usize, &[String])>,
-) -> usize {
+pub type ReportError<'a> = Option<&'a mut dyn FnMut(&'static Message, usize, usize, &[String])>;
+
+pub fn scan_conflict_marker_trivia(text: &[u8], pos: usize, report_error: ReportError<'_>) -> usize {
     if let Some(report_error) = report_error {
         report_error(
             &MERGE_CONFLICT_MARKER_ENCOUNTERED,

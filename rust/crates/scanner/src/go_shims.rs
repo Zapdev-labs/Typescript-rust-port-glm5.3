@@ -76,12 +76,13 @@ pub fn decode_rune_in_string(s: &[u8]) -> (i32, usize) {
     if s.len() < size {
         return (RUNE_ERROR, 1);
     }
-    for i in 1..size {
-        if !is_continuation(s[i]) {
+    for &b in &s[1..size] {
+        if !is_continuation(b) {
             return (RUNE_ERROR, 1);
         }
     }
     let r: i32 = match size {
+        1 => b0 as i32,
         2 => ((b0 & 0x1F) as i32) << 6 | (s[1] & 0x3F) as i32,
         3 => ((b0 & 0x0F) as i32) << 12 | ((s[1] & 0x3F) as i32) << 6 | (s[2] & 0x3F) as i32,
         _ => {
@@ -91,10 +92,12 @@ pub fn decode_rune_in_string(s: &[u8]) -> (i32, usize) {
                 | (s[3] & 0x3F) as i32
         }
     };
+    // Go names this `tooShort`; a single-byte sequence is always valid.
     let too_short = match size {
-        2 => r < 0x80,    // overlong
+        1 => false,
+        2 => r < 0x80, // overlong
         3 => r < 0x800 || (0xD800..=0xDFFF).contains(&r),
-        _ => r < 0x10000 || r > 0x10FFFF,
+        _ => !(0x10000..=0x10FFFF).contains(&r),
     };
     if too_short {
         return (RUNE_ERROR, 1);

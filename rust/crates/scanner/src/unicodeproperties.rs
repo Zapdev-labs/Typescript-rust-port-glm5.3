@@ -247,7 +247,11 @@ mod tests {
 
         assert!(script_values().has("Cypro_Minoan"));
         assert!(script_values().has("Zzzz"));
-        assert!(!script_values().has("Cpmn"));
+        // "Cpmn" is Cypro_Minoan's short code and IS in Go's Unicode 15.1
+        // table (unicodeproperties.go:70) — both short and long forms are
+        // Script values. A genuine negative: a string-property name.
+        assert!(script_values().has("Cpmn"));
+        assert!(!script_values().has("Basic_Emoji"));
 
         assert!(values_of_non_binary_unicode_properties("General_Category")
             .unwrap()

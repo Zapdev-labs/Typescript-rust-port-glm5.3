@@ -12,16 +12,17 @@ use std::cell::Cell;
 
 use tsc_ast::{
     Identifier, JSDocAllType, JSDocParameterOrPropertyTag, JSDocTypeExpression, Kind, Node,
-    NodeData, NodeFlags, NodeId, NodeStore, SourceFile, SourceFileParseOptions, TypeLiteralNode,
+    NodeData, NodeFlags, NodeId, SourceFile, SourceFileParseOptions, TypeLiteralNode,
     TypeReferenceNode,
 };
 use tsc_core::text::TextRange;
 use tsc_stringutil as stringutil;
 
-use crate::scanner::{
-    get_text_of_node_from_source_text, string_to_token, token_to_text, Scanner,
+use crate::scanner::{string_to_token, token_to_text, Scanner};
+use crate::utilities::{
+    get_text_of_node_from_source_text, is_jsdoc_type_expression_or_child,
+    normalize_jsdoc_type_source_text,
 };
-use crate::utilities::{is_jsdoc_type_expression_or_child, normalize_jsdoc_type_source_text};
 
 fn make_node(kind: Kind, flags: NodeFlags, loc: TextRange, data: NodeData) -> Node {
     Node {
