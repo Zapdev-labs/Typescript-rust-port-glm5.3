@@ -12,8 +12,6 @@
 // the port compares list values (`PartialEq`), which is the same observable
 // behavior (an unchanged rebuild is value-identical to the input list).
 
-use std::cell::Cell;
-
 use tsc_core::text::TextRange;
 
 use crate::{ModifierList, NodeFlags, NodeId, NodeList};
@@ -72,9 +70,9 @@ impl NodeVisitor for DeepCloneVisitor<'_> {
 
     /// Go: `NodeVisitorHooks.VisitNodes`.
     fn hook_visit_nodes(&mut self, nodes: Option<&NodeList>) -> Option<NodeList> {
-        let Some(nodes) = nodes else { return None };
+        let nodes = nodes?;
         // Go: `visited := v.VisitNodes(nodes)` (the exported core).
-        let visited = self.visit_nodes_core(nodes);
+        let visited = self.visit_nodes_core(Some(nodes));
         let new_list = match visited.as_ref() {
             // Go: `visited != nodes` — pointer inequality; value inequality
             // here (an unchanged rebuild is value-identical).
@@ -97,8 +95,8 @@ impl NodeVisitor for DeepCloneVisitor<'_> {
 
     /// Go: `NodeVisitorHooks.VisitModifiers`.
     fn hook_visit_modifiers(&mut self, nodes: Option<&ModifierList>) -> Option<ModifierList> {
-        let Some(nodes) = nodes else { return None };
-        let visited = self.visit_modifiers_core(nodes);
+        let nodes = nodes?;
+        let visited = self.visit_modifiers_core(Some(nodes));
         let new_list = match visited.as_ref() {
             Some(v) if v != nodes => visited.expect("checked above"),
             _ => nodes.clone(),
@@ -127,11 +125,14 @@ pub fn deep_clone_node(store: &mut dyn NodeStore, node: NodeId) -> NodeId {
 /// Go: `func (f *NodeFactory) DeepCloneReparse(node *Node) *Node`.
 pub fn deep_clone_reparse(store: &mut dyn NodeStore, node: Option<NodeId>) -> Option<NodeId> {
     let node = node?;
-    let mut visitor = DeepCloneVisitor::new(store, /*syntheticLocation:*/ false);
-    let cloned = visitor
-        .visit_node_core(Some(node))
-        .expect("DeepCloneReparse preserves the node (it forcibly clones leaves)");
-    drop(visitor);
+    // The visitor holds the &mut store borrow; scope it so the post-walk work
+    // (SetParentInChildren, the Reparsed flag) can use the store again.
+    let cloned = {
+        let mut visitor = DeepCloneVisitor::new(store, /*syntheticLocation:*/ false);
+        visitor
+            .visit_node_core(Some(node))
+            .expect("DeepCloneReparse preserves the node (it forcibly clones leaves)")
+    };
     // Go: SetParentInChildren(node); node.Flags |= NodeFlagsReparsed.
     crate::utilities::set_parent_in_children(store, cloned);
     store.node_mut(cloned).flags |= NodeFlags::REPARSED;
@@ -154,13 +155,14 @@ mod tests {
     use tsc_core::text::TextRange;
 
     use crate::source_file::SourceFile;
-    use crate::visitor::NodeStore;
+    use crate::visitor::{NodeStore, NodeVisitor};
     use crate::{Kind, Node, NodeData, NodeId, NodeList};
+    use super::DeepCloneVisitor;
 
     fn identifier(file: &mut SourceFile, text: &str, pos: i32, end: i32) -> NodeId {
         let d = crate::ast_generated::Identifier {
             flow_node: None,
-            text: text.to_string(),
+            text: text.into(),
         };
         NodeStore::alloc(
             file,
@@ -179,7 +181,7 @@ mod tests {
         let d = crate::ast_generated::ReturnStatement {
             flow_node: None,
             facts: 0,
-            expression,
+            expression: Some(expression),
         };
         NodeStore::alloc(
             file,
@@ -209,7 +211,14 @@ mod tests {
         assert_ne!(cloned, stmt, "the subtree is reallocated");
         let (kind, loc, cloned_expr) = {
             let n = NodeStore::node(&file, cloned);
-            (n.kind, n.loc, n.as_return_statement().expect("data").expression)
+            (
+                n.kind,
+                n.loc,
+                n.as_return_statement()
+                    .expect("data")
+                    .expression
+                    .expect("the clone kept the expression"),
+            )
         };
         assert_eq!(kind, Kind::ReturnStatement);
         assert_eq!(loc, TextRange::new(-1, -1), "synthetic location");
@@ -224,7 +233,7 @@ mod tests {
         };
         assert_eq!(leaf_kind, Kind::Identifier);
         assert_eq!(leaf_loc, TextRange::new(-1, -1));
-        assert_eq!(leaf_text, "x");
+        assert_eq!(leaf_text.as_ref(), "x");
     }
 
     /// Go: DeepCloneReparse — keeps locations, re-parents the cloned subtree,
@@ -244,12 +253,16 @@ mod tests {
         let n = NodeStore::node(&file, cloned);
         assert_eq!(n.loc, TextRange::new(0, 5), "reparse keeps locations");
         assert!(n.flags.intersects(crate::NodeFlags::REPARSED));
-        let expr = n.as_return_statement().expect("data").expression;
+        let expr = n
+            .as_return_statement()
+            .expect("data")
+            .expression
+            .expect("the clone kept the expression");
         assert_ne!(expr, x);
         // SetParentInChildren re-parented the cloned leaf.
         assert_eq!(NodeStore::node(&file, expr).parent.get(), cloned);
         assert_eq!(
-            NodeStore::node(&file, expr).as_identifier().expect("data").text,
+            NodeStore::node(&file, expr).as_identifier().expect("data").text.as_ref(),
             "x"
         );
     }

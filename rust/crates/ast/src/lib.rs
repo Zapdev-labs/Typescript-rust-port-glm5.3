@@ -204,6 +204,15 @@ impl ModifierList {
     pub fn end(&self) -> TextPos {
         self.loc.end()
     }
+
+    /// Go: inherited from the embedded `NodeList` —
+    /// `func (list *NodeList) HasTrailingComma() bool`.
+    pub fn has_trailing_comma(&self, store: &dyn NodeStore) -> bool {
+        match self.nodes.as_ref().last() {
+            Some(&last) => store.node(last).end() < self.end(),
+            None => false,
+        }
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

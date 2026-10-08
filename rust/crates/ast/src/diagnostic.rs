@@ -26,7 +26,7 @@ pub enum RepopulateDiagnosticKind {
 }
 
 /// Go: `type RepopulateDiagnosticInfo struct`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RepopulateDiagnosticInfo {
     pub kind: RepopulateDiagnosticKind,
     pub module_reference: String,
@@ -103,7 +103,9 @@ impl Diagnostic {
     pub fn end(&self) -> tsc_core::text::TextPos {
         self.loc.end()
     }
-    /// Go: `func (d *Diagnostic) Len() int`.
+    /// Go: `func (d *Diagnostic) Len() int` (no `IsEmpty` in Go either — a
+    /// diagnostic always has a location).
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> tsc_core::text::TextPos {
         self.loc.len()
     }
@@ -122,6 +124,11 @@ impl Diagnostic {
     /// Go: `func (d *Diagnostic) Source() string`.
     pub fn source(&self) -> &str {
         &self.source
+    }
+    /// The original `*diagnostics.Message`, when one was supplied (Go keeps
+    /// the field private; the port exposes it for the Localize port).
+    pub fn message(&self) -> Option<&'static tsc_diagnostics::Message> {
+        self.message
     }
     /// Go: `func (d *Diagnostic) MessageText() string`.
     pub fn message_text(&self) -> &str {

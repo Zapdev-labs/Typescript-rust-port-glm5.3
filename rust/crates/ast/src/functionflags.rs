@@ -45,7 +45,7 @@ pub fn get_function_flags(store: &dyn NodeStore, node: NodeId) -> FunctionFlags 
             let d = n.as_arrow_function().expect("ArrowFunction");
             (false, d.body.is_some(), has_syntactic_modifier(n, ModifierFlags::ASYNC))
         }
-        Kind::ConstructorDeclaration => {
+        Kind::Constructor => {
             let d = n.as_constructor_declaration().expect("ConstructorDeclaration");
             (false, d.body.is_some(), false)
         }

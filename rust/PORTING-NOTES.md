@@ -151,3 +151,94 @@ a view type over unsafe punning. Raw outputs: ~/bench-results/phase0 (rig).
   (32 spanmap + 35 vfs), clippy `--all-targets` clean for both crates
   (pre-existing tsc-tspath warnings untouched), `cargo check --workspace
   --exclude tsc-ast` green.
+
+## 2026-10-07 crates/ast + tools/gen-ast — M2 hand-written AST surface
+- NodeData boxing decision (SPEC §5.1/§12): EVERY `NodeData` variant is
+  boxed (`NodeData::X(Box<X>)`), giving a fixed 48-byte `Node` slot
+  (kind/flags/loc/id/parent/data). Go compares one interface word + one
+  pointer of indirection, so one box is Go parity; the spec's 64–96B window
+  is met without per-variant enum-size tuning. Locked by the
+  `node_size_is_48_bytes` test.
+- Go `Type any` members (SyntheticExpression.Type, SyntheticReferenceExpression
+  .Type): `Arc<dyn Any + Send + Sync>` storage, so all 191 node structs
+  derive `Clone` uniformly (Go copies the interface value; the Arc shares
+  the payload). An earlier `Box<dyn Any>` + per-struct manual Clone (fresh
+  `()` payload) was replaced — the manual impl reset the payload on every
+  clone, which diverged from Go.
+- `NodeStore` seam (visitor.rs): resolution + allocation over the
+  per-`SourceFile` arena (`node`/`node_mut`/`file`/`alloc`, plus
+  `clone_node`/`new_block`/`new_modifier_list` covering the Go factory
+  surface the visitor needs). Go's `*Node` becomes `NodeId` (packed
+  `file_id:20 | local_index:44`, `NONE = u64::MAX`). SourceFile implements
+  it; the M4 program-level file table implements the cross-file case.
+- `NodeVisitor` is a trait, not a struct-of-closures: Go's
+  `getDeepCloneVisitor` builds a closure that captures the visitor itself
+  (illegal in Rust struct-literal form). `Visit` + `store()` are required;
+  the `NodeVisitorHooks` function fields become overridable `hook_*`
+  default methods that route to the `*_core` methods (Go's exported
+  VisitNode/VisitNodes/... algorithms). `VisitEachChild` snapshots the node
+  out of the arena before the walk (a growing `Vec` would invalidate
+  borrows; Go's GC tolerates the aliasing) and returns `None` for
+  "unchanged" (Go returns the same `*Node`).
+- SourceFile split (source_file.rs): Go's single `*SourceFile` struct
+  becomes `SourceFileNodeData` (the `NodeData` payload — everything reachable
+  via `node.AsSourceFile()`: statements, parser/binder fields, diagnostics,
+  indicator `Cell`s) + `SourceFile` (the arena owner: `Vec<Node>` with the
+  file node at slot 0, text, parse options, the `OnceLock` caches, and the
+  cross-package `GetOrComputeData` cell map). The payload cannot contain
+  the arena that stores the payload.
+- `SourceFileNodeData::visit_each_child` mirrors Go's
+  `UpdateSourceFile`+`copyFrom` exactly: only the copyFrom-copied fields
+  carry over; binder results, counts, and diagnostics reset to NewSourceFile
+  zero values (Go deliberately skips them).
+- ComputeECMALineStarts is local to source_file.rs (core.go is not yet
+  ported as a crate); dedup into the core.go port when it lands.
+  `ComputePositionMap` takes `&[u8]`, not `&str`: the scanner's
+  lone-surrogate sentinel encoding (stringutil.EncodeJSStringRune, covered
+  by the ported TestPositionMapLoneSurrogateSentinel) is invalid UTF-8.
+- for_each_child audit (task item 5): the only ast.json member-order
+  divergence from Go's generated visitors is JSDocParameterOrPropertyTag —
+  Go's hand-written `visitEachChild_JSDocParameterOrPropertyTag` orders
+  name/typeExpression by `IsNameFirst` and visitEachChild puts name before
+  comment; the generator now emits both literally (conditional
+  `is_name_first` order in `for_each_child`; Go's fixed order in
+  `visit_each_child`). A second divergence found during the audit:
+  `FunctionLikeWithBodyBase.Body` was skipped by the generator (shadowed by
+  the kind-param `Body` field), so `Body` never routed through
+  `visit_function_body` — fixed (the skip remains for struct fields only).
+  Spot-checked ~20 other kinds against Go: member order matches.
+- Deferrals (each with a TODO marker at the site): `GetExternalModuleIndicator
+  Options`/`isFileForcedToBeModuleByFormat` (needs core.CompilerOptions +
+  ModuleDetectionKind), content-mapper surface (ContentMapperSourceFileInfo/
+  SpanMap/OriginalText/MappedDiagnosticDirective — needs tsc-spanmap wiring),
+  `GetOrCreateToken`/`createToken` + tokenCache (needs NodeFactory),
+  `GetNameTable`/`GetDeclarationMap` (deep utilities.go chains),
+  `resolveJSDoc` (parser-owned `parseJSDocForNode` registration hook),
+  `ReparsedClones`/`Hash`/language-service caches, NodeFactory itself,
+  utilities.go wholesale (utilities.rs carries the minimal subset the M2
+  surface needs: SetParentInChildren, findChildNode, IsImportMeta,
+  TryGetAmbientModuleNameFromSymbolName, IsOptionalChain, IsJsxOpening
+  LikeElement, GetSourceFileOfNode), subtreefacts.go (the JSX-tag walk in
+  parseoptions.rs therefore walks the whole tree — identical results, no
+  SubtreeFacts early-out), and flow.go (FlowNodeId is a placeholder handle).
+- Diagnostic (diagnostic.rs) is the minimal struct port (accessors, setter
+  chain methods) with `file: Option<NodeId>` handles; the full
+  diagnostic.go surface (Localize/displayMessageArgs/message chains) is a
+  separate task. `Symbol` (symbol.rs) keeps Go's field set with `SymbolId`
+  back-references; `SymbolTable = OrderedMap<String, SymbolId>`
+  (insertion-ordered per SPEC §5.2; keys stay `String` until the Atom
+  interner decision). `GetSourceFileOfSymbol` takes the program's symbol
+  slice to walk `symbol.Parent` (Go dereferences `*Symbol`).
+- Flags files carry the exact Go bit values (spot-check tests) and are
+  textually-scoped `define_flags!` newtypes (no bitflags crate). Composite
+  consts reference siblings via `Self::`. `GetFunctionFlags` matches Go's
+  fallthrough semantics per kind.
+- Validation: `CARGO_TARGET_DIR=/tmp/tsrs-ast2 cargo test -p tsc-ast` —
+  48/48 green (kind table, flags bit values, NodeId packing, PositionMap
+  suite incl. the lone-surrogate sentinel, ECMALineStarts, SourceFile
+  arena/lazy caches/bind-once, visitor core (SyntaxList lifting, prefix
+  rebuild, drop/replace), deep-clone contracts, precedence tables);
+  `cargo check --workspace` green; clippy `-p tsc-ast --all-targets` and
+  `-p gen-ast` clean (pre-existing tsc-tspath warnings untouched);
+  `gen-ast --check` confirms the committed generated files are current
+  (kind_generated.rs 1081 lines, ast_generated.rs 12417 lines).

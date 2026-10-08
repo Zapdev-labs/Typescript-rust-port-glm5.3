@@ -1713,25 +1713,12 @@ pub struct TemplateLiteralTypeSpan {
 }
 
 /// Go: `type SyntheticExpression struct { ExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct SyntheticExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
-    pub type_: Box<dyn std::any::Any + Send + Sync>,
+    pub type_: std::sync::Arc<dyn std::any::Any + Send + Sync>,
     pub is_spread: bool,
     pub tuple_name_source: Option<NodeId>, // Optional
-}
-// PORT: Go's Clone shares the `Type any` interface payload (Go `any` members are
-// interfaces, copied by value); `Box<dyn Any + Send + Sync>` cannot be. The port
-// substitutes a fresh `()` payload — such nodes are checker-synthesized and the
-// payload becomes a Clone `TypeId` handle with the checker port (SPEC §5.4), at
-// which point this impl is deleted in favor of a derive.
-impl Clone for SyntheticExpression {
-    fn clone(&self) -> Self {
-        Self {
-            type_: Box::new(()),
-            is_spread: self.is_spread,
-            tuple_name_source: self.tuple_name_source,
-        }
-    }
 }
 
 /// Go: `type PartiallyEmittedExpression struct { LeftHandSideExpressionBase }` (embeds flattened in Go embedding order)

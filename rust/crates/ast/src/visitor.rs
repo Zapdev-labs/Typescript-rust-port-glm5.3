@@ -104,7 +104,7 @@ pub trait NodeStore {
                 loc: TextRange::undefined(),
                 nodes,
             }),
-            multi_line: multi_line,
+            multi_line,
         };
         self.alloc(Node {
             kind: Kind::Block,
@@ -295,8 +295,8 @@ pub trait NodeVisitor {
     /// results with exactly one child are lifted to that child; both Go
     /// panics are preserved.
     fn visit_node_core(&mut self, node: Option<NodeId>) -> Option<NodeId> {
-        let Some(id) = node else { return None };
-        let Some(visited) = self.visit(id) else { return None };
+        let id = node?;
+        let visited = self.visit(id)?;
         if self.store().node(visited).kind == Kind::SyntaxList {
             let children = {
                 let n = self.store().node(visited);
@@ -317,7 +317,7 @@ pub trait NodeVisitor {
 
     /// Go: `func (v *NodeVisitor) VisitEmbeddedStatement(node *Statement) *Statement`.
     fn visit_embedded_statement_core(&mut self, node: Option<NodeId>) -> Option<NodeId> {
-        let Some(id) = node else { return None };
+        let id = node?;
         let visited = self.visit(id)?;
         self.lift_to_block(Some(visited))
     }
@@ -328,7 +328,7 @@ pub trait NodeVisitor {
     /// the same `*NodeList` pointer; Rust lists are values, so "unchanged" is
     /// value equality — the generated rebuilds compare with `==`).
     fn visit_nodes_core(&mut self, nodes: Option<&NodeList>) -> Option<NodeList> {
-        let Some(list) = nodes else { return None };
+        let list = nodes?;
         let (result, changed) = self.visit_slice(&list.nodes);
         if changed {
             Some(NodeList {
@@ -342,7 +342,7 @@ pub trait NodeVisitor {
 
     /// Go: `func (v *NodeVisitor) VisitModifiers(nodes *ModifierList) *ModifierList`.
     fn visit_modifiers_core(&mut self, nodes: Option<&ModifierList>) -> Option<ModifierList> {
-        let Some(list) = nodes else { return None };
+        let list = nodes?;
         let (result, changed) = self.visit_slice(&list.nodes);
         if changed {
             let new_nodes: Box<[NodeId]> = result.unwrap_or_default().into_boxed_slice();
@@ -370,7 +370,7 @@ pub trait NodeVisitor {
     fn visit_slice(&mut self, nodes: &[NodeId]) -> (Option<Vec<NodeId>>, bool) {
         let mut i = 0usize;
         while i < nodes.len() {
-            let visited = self.visit(nodes[i]);
+            let mut visited = self.visit(nodes[i]);
             if visited != Some(nodes[i]) {
                 let mut updated: Vec<NodeId> = nodes[..i].to_vec();
                 loop {
@@ -406,8 +406,11 @@ pub trait NodeVisitor {
     /// growing `Vec` would invalidate the borrow), so the snapshot pays one
     /// payload copy. The transformer's separate target arenas (SPEC §5.6)
     /// remove the cost.
-    fn visit_each_child(&mut self, node: Option<NodeId>) -> Option<NodeId> {
-        let Some(id) = node else { return None };
+    fn visit_each_child(&mut self, node: Option<NodeId>) -> Option<NodeId>
+    where
+        Self: Sized,
+    {
+        let id = node?;
         let snapshot = self.store().node(id).clone();
         match snapshot.visit_each_child(self) {
             Some(new_node) => Some(self.store().alloc(new_node)),
@@ -423,7 +426,7 @@ pub trait NodeVisitor {
             Some(id) if self.store().node(id).kind == Kind::SyntaxList => {
                 let n = self.store().node(id);
                 let d = n.as_syntax_list().expect("SyntaxList data");
-                d.children.clone()
+                d.children.clone().into_boxed_slice()
             }
             Some(id) => Box::new([id]),
         };
@@ -534,9 +537,9 @@ mod tests {
 
     impl NodeVisitor for DropSecond {
         fn visit(&mut self, node: NodeId) -> Option<NodeId> {
-            // Drops the node with local index 2 (the second list element in the
-            // test below).
-            if node.local_index() == 2 {
+            // Drops the node with local index 1 (the second node allocated in
+            // the tests below — "b").
+            if node.local_index() == 1 {
                 None
             } else {
                 Some(node)
@@ -553,11 +556,12 @@ mod tests {
         let a = v.0.empty(Kind::Identifier);
         let b = v.0.empty(Kind::Identifier);
         let c = v.0.empty(Kind::Identifier);
-        // a, c, b — b (index 2) is dropped by the visitor.
+        // [a, b, c] — b is dropped by the visitor.
         let (result, changed) = v.visit_slice(&[a, b, c]);
         assert!(changed);
         assert_eq!(result, Some(vec![a, c]));
 
+        // [a, c, b] — the drop may come last; the prefix survives unchanged.
         let (result, changed) = v.visit_slice(&[a, c, b]);
         assert!(changed);
         assert_eq!(result, Some(vec![a, c]));

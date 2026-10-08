@@ -47,14 +47,11 @@ pub fn is_private_identifier_class_element_declaration(store: &dyn crate::NodeSt
         && crate::is_private_identifier(store.node(n.name().expect("class element has a name")))
 }
 
-/// Go: `func IsJsxOpeningLikeElement(node *Node) bool`.
+/// Go: `func IsJsxOpeningLikeElement(node *Node) bool` (utilities.go — the
+/// kind guard `is_jsx_fragment` comes from the generated kind table; Go's
+/// `IsJsxFragment` is generated in kind_generated.go the same way).
 pub fn is_jsx_opening_like_element(node: &Node) -> bool {
     matches!(node.kind, Kind::JsxOpeningElement | Kind::JsxSelfClosingElement)
-}
-
-/// Go: `func IsJsxFragment(node *Node) bool`.
-pub fn is_jsx_fragment(node: &Node) -> bool {
-    node.kind == Kind::JsxFragment
 }
 
 /// Go: `func GetSourceFileOfNode(node *Node) *SourceFile` — walks the parent
@@ -100,13 +97,9 @@ pub fn try_get_ambient_module_name_from_symbol_name(s: &str) -> Option<String> {
         return Some(s[1..s.len() - 1].to_string());
     }
     let pattern_prefix = format!("{}\"", crate::symbol::INTERNAL_SYMBOL_NAME_PREFIX);
-    let Some(rest) = s.strip_prefix(&pattern_prefix) else {
-        return None;
-    };
+    let rest = s.strip_prefix(&pattern_prefix)?;
     // Go: strings.LastIndex(rest, "\"pattern@")
-    let Some(marker_index) = rest.rfind("\"pattern@") else {
-        return None;
-    };
+    let marker_index = rest.rfind("\"pattern@")?;
     if marker_index < 1 {
         return None;
     }
@@ -157,7 +150,7 @@ pub fn is_import_meta(store: &dyn crate::NodeStore, node: NodeId) -> bool {
     if n.kind == Kind::MetaProperty {
         let d = n.as_meta_property().expect("MetaProperty data");
         return d.keyword_token == Kind::ImportKeyword
-            && n.name().is_some_and(|name| crate::node_text(store, store.node(name)) == "meta");
+            && n.name().is_some_and(|name| crate::node_text(store, name) == "meta");
     }
     false
 }

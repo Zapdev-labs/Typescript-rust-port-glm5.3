@@ -183,6 +183,9 @@ enum TypeSpec {
 // ────────────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
+// The variant names mirror schema.ts's Type classes one-for-one (TypeParam,
+// Alias, List), so the enum-variant-names lint is expected here.
+#[allow(clippy::enum_variant_names)]
 enum Type {
     Primitive(String),
     /// `value` is "Kind" or "SyntaxKind.X".
@@ -943,7 +946,7 @@ fn resolve_type_name(
 fn expand_kind_alias_members(
     kind_aliases: &[KindAliasInfo],
     kind_alias_names: &HashSet<String>,
-    kind_element_names: &[String],
+    _kind_element_names: &[String],
     name: &str,
 ) -> Vec<String> {
     match kind_aliases.iter().find(|a| a.name == name) {
@@ -955,7 +958,7 @@ fn expand_kind_alias_members(
                     result.extend(expand_kind_alias_members(
                         kind_aliases,
                         kind_alias_names,
-                        kind_element_names,
+                        _kind_element_names,
                         m,
                     ));
                 } else {
@@ -1806,19 +1809,15 @@ fn generate_ast(s: &Schema) -> String {
             continue;
         }
         let field_lines = node_struct_lines(s, key);
-        // `Box<dyn Any + Send + Sync>` members (Go `Type any`) are not Clone —
-        // such structs get a manual Clone impl below the struct.
-        let has_any_member = field_lines
-            .iter()
-            .any(|l| matches!(l, FieldLine::Field { ty, .. } if ty.contains("dyn std::any::Any")));
         let embeds = s.go_embeds(&def.extends);
         o.line(format!(
             "/// Go: `type {key} struct {{ {} }}` (embeds flattened in Go embedding order)",
             embeds.join("; ")
         ));
-        if !has_any_member {
-            o.line("#[derive(Clone)]");
-        }
+        // `Arc<dyn Any + Send + Sync>` members (Go `Type any`) are Clone, so
+        // every struct derives Clone (Go copies the interface value on clone;
+        // the Arc shares the payload).
+        o.line("#[derive(Clone)]");
         o.line(format!("pub struct {key} {{"));
         for line in &field_lines {
             match line {
@@ -1833,42 +1832,6 @@ fn generate_ast(s: &Schema) -> String {
             }
         }
         o.line("}");
-        if has_any_member {
-            o.line(format!(
-                "// PORT: Go's Clone shares the `Type any` interface payload (Go `any` members are"
-            ));
-            o.line(
-                "// interfaces, copied by value); `Box<dyn Any + Send + Sync>` cannot be. The port",
-            );
-            o.line(
-                "// substitutes a fresh `()` payload — such nodes are checker-synthesized and the",
-            );
-            o.line(
-                "// payload becomes a Clone `TypeId` handle with the checker port (SPEC §5.4), at",
-            );
-            o.line("// which point this impl is deleted in favor of a derive.",
-            );
-            o.line(format!("impl Clone for {key} {{"));
-            o.line("    fn clone(&self) -> Self {");
-            o.line("        Self {");
-            for line in &field_lines {
-                match line {
-                    FieldLine::Comment(_) => {}
-                    FieldLine::Field { name, ty, .. } => {
-                        if ty.contains("dyn std::any::Any") {
-                            o.line(format!("            {name}: Box::new(()),"));
-                        } else if is_copy_storage(ty) {
-                            o.line(format!("            {name}: self.{name},"));
-                        } else {
-                            o.line(format!("            {name}: self.{name}.clone(),"));
-                        }
-                    }
-                }
-            }
-            o.line("        }");
-            o.line("    }");
-            o.line("}");
-        }
         o.line("");
     }
 
@@ -2070,7 +2033,7 @@ fn generate_ast(s: &Schema) -> String {
             "    pub fn as_{}(&self) -> Option<&{payload}> {{",
             to_snake(key)
         ));
-        o.line(format!("        match &self.data {{"));
+        o.line("        match &self.data {");
         o.line(format!("            NodeData::{key}(d) => Some(&**d),"));
         o.line("            _ => None,");
         o.line("        }");

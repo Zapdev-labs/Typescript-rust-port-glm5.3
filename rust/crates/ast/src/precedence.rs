@@ -216,7 +216,7 @@ impl OperatorPrecedence {
     pub const COALESCE: OperatorPrecedence = OperatorPrecedence::LogicalOR;
 }
 
-/// Go: `type OperatorPrecedenceFlags int` + consts.
+// Go: `type OperatorPrecedenceFlags int` + consts.
 define_flags!(OperatorPrecedenceFlags, i32);
 
 impl OperatorPrecedenceFlags {

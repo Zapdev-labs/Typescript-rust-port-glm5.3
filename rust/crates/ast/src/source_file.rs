@@ -45,7 +45,7 @@ use crate::diagnostic::Diagnostic;
 use crate::parseoptions::SourceFileParseOptions;
 use crate::positionmap::{compute_position_map, PositionMap};
 use crate::{Kind, Node, NodeData, NodeId, NodeList, SymbolId, SymbolTable};
-use crate::visitor::{visit, visit_node_list, NodeStore, NodeVisitor, Visitor};
+use crate::visitor::{visit, visit_node_list, NodeStore, NodeVisitor};
 
 // ────────────────────────────────────────────────────────────────────────────
 // File-scoped support types (Go ast.go)
@@ -53,7 +53,7 @@ use crate::visitor::{visit, visit_node_list, NodeStore, NodeVisitor, Visitor};
 
 /// Go: `type CommentRange struct { core.TextRange; Kind; HasTrailingNewLine }`
 /// (flattened embed).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommentRange {
     pub loc: TextRange,
     pub kind: Kind,
@@ -80,7 +80,7 @@ pub fn new_comment_range(kind: Kind, pos: TextPos, end: TextPos, has_trailing_ne
 }
 
 /// Go: `type CheckJsDirective struct { Enabled bool; Range CommentRange }`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct CheckJsDirective {
     pub enabled: bool,
     pub range: CommentRange,
@@ -147,7 +147,7 @@ impl PragmaArgument {
 /// PORT: `Args` uses std `HashMap` — Go map iteration order is randomized
 /// there too, and args are only ever looked up by name (never iterated into
 /// output), so ordering is not observable.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Pragma {
     // CommentRange (flattened embed)
     pub loc: TextRange,
@@ -268,11 +268,11 @@ pub struct SourceFileNodeData {
 
 impl SourceFileNodeData {
     /// Go: `func (node *SourceFile) ForEachChild(v Visitor) bool`.
-    pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        if visit_node_list(visit, self.statements.as_ref()) {
+    pub fn for_each_child(&self, v: &mut dyn FnMut(NodeId) -> bool) -> bool {
+        if visit_node_list(v, self.statements.as_ref()) {
             return true;
         }
-        visit(visit, self.end_of_file_token)
+        visit(v, self.end_of_file_token)
     }
 
     /// Go: `func (node *SourceFile) VisitEachChild(v *NodeVisitor) *Node` —
@@ -326,7 +326,10 @@ pub struct SourceFileDataKey<T> {
 
 impl<T> Clone for SourceFileDataKey<T> {
     fn clone(&self) -> Self {
-        *self
+        SourceFileDataKey {
+            key: self.key,
+            _marker: std::marker::PhantomData,
+        }
     }
 }
 
@@ -546,15 +549,28 @@ impl SourceFile {
     /// Go: `func (file *SourceFile) GetOrComputeData[T any](key *SourceFileDataKey[T],
     /// compute func(*SourceFile) T) T`.
     pub fn get_or_compute_data<T: Clone + Send + Sync + 'static>(
-        &self,
+        &mut self,
         key: &SourceFileDataKey<T>,
         compute: impl FnOnce(&SourceFile) -> T,
     ) -> T {
-        let cell = self.data.entry(key.key).or_insert_with(OnceLock::new);
-        let value = cell.get_or_init(|| Box::new(compute(self)));
+        // Fast path: the cell exists and is populated.
+        if let Some(value) = self
+            .data
+            .get(&key.key)
+            .and_then(|cell| cell.get())
+            .and_then(|boxed| boxed.downcast_ref::<T>())
+        {
+            return value.clone();
+        }
+        // Slow path: compute, then store (a racing double-compute overwrites
+        // harmlessly; the OnceLock keeps the winner's value for later reads).
+        let value = compute(self);
+        let cell = self.data.entry(key.key).or_default();
+        let _ = cell.set(Box::new(value));
         // The panic mirrors Go's `cell.(*sourceFileDataCell[T])` type
         // assertion (impossible against a well-typed key).
-        value
+        cell.get()
+            .expect("OnceLock was just set")
             .downcast_ref::<T>()
             .expect("SourceFileDataKey type mismatch")
             .clone()
@@ -638,7 +654,10 @@ pub fn compute_ecma_line_starts(text: &str) -> Vec<TextPos> {
         } else {
             let (ch, size) = tsc_stringutil::decode_js_string_rune(&bytes[pos as usize..]);
             pos += size as TextPos;
-            if tsc_stringutil::is_line_break(ch) {
+            // Lone surrogates decode to chars outside `char`'s range; they are
+            // never line breaks, so the `unwrap_or` fallback is behaviorally
+            // inert (Go's IsLineBreak takes a rune).
+            if tsc_stringutil::is_line_break(char::from_u32(ch as u32).unwrap_or('\0')) {
                 result.push(line_start);
                 line_start = pos;
             }
@@ -713,7 +732,7 @@ mod tests {
         let identifier = {
             let d = crate::ast_generated::Identifier {
                 flow_node: None,
-                text: "x".to_string(),
+                text: "x".into(),
             };
             file.alloc(Node {
                 kind: Kind::Identifier,
@@ -725,7 +744,10 @@ mod tests {
             })
         };
         let literal = {
-            let d = crate::ast_generated::StringLiteral { text: "y".to_string() };
+            let d = crate::ast_generated::StringLiteral {
+                text: "y".into(),
+                token_flags: crate::TokenFlags::NONE,
+            };
             file.alloc(Node {
                 kind: Kind::StringLiteral,
                 flags: crate::NodeFlags::NONE,
@@ -749,7 +771,7 @@ mod tests {
     /// Go: `func (file *SourceFile) GetOrComputeData(...)` — once per key.
     #[test]
     fn get_or_compute_data_runs_once() {
-        let file = SourceFile::new(0, SourceFileParseOptions::default(), "", None, None);
+        let mut file = SourceFile::new(0, SourceFileParseOptions::default(), "", None, None);
         let key = new_source_file_data_key::<i32>();
         let mut calls = 0;
         let v = file.get_or_compute_data(&key, |_| {

@@ -74,6 +74,16 @@ impl Default for NodeId {
     }
 }
 
+/// `(file_id, local_index)` — useful in asserts and diagnostics.
+impl std::fmt::Display for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_none() {
+            return write!(f, "NodeId::NONE");
+        }
+        write!(f, "NodeId(file {}, index {})", self.file_id(), self.local_index())
+    }
+}
+
 impl SymbolId {
     pub const NONE: SymbolId = SymbolId(u32::MAX);
 

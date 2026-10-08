@@ -44,34 +44,34 @@ impl TokenFlags {
         TokenFlags(Self::BINARY_SPECIFIER.0 | Self::OCTAL_SPECIFIER.0);
     pub const WITH_SPECIFIER: TokenFlags = TokenFlags(Self::HEX_SPECIFIER.0 | Self::BINARY_OR_OCTAL_SPECIFIER.0);
     pub const STRING_LITERAL_FLAGS: TokenFlags = TokenFlags(
-        (Self::UNTERMINATED.0
+        Self::UNTERMINATED.0
             | Self::HEX_ESCAPE.0
             | Self::UNICODE_ESCAPE.0
             | Self::EXTENDED_UNICODE_ESCAPE.0
             | Self::CONTAINS_INVALID_ESCAPE.0
-            | Self::SINGLE_QUOTE.0) as i32,
+            | Self::SINGLE_QUOTE.0,
     );
     pub const NUMERIC_LITERAL_FLAGS: TokenFlags = TokenFlags(
-        (Self::SCIENTIFIC.0
+        Self::SCIENTIFIC.0
             | Self::OCTAL.0
             | Self::CONTAINS_LEADING_ZERO.0
             | Self::WITH_SPECIFIER.0
             | Self::CONTAINS_SEPARATOR.0
-            | Self::CONTAINS_INVALID_SEPARATOR.0) as i32,
+            | Self::CONTAINS_INVALID_SEPARATOR.0,
     );
     pub const TEMPLATE_LITERAL_LIKE_FLAGS: TokenFlags = TokenFlags(
-        (Self::UNTERMINATED.0
+        Self::UNTERMINATED.0
             | Self::HEX_ESCAPE.0
             | Self::UNICODE_ESCAPE.0
             | Self::EXTENDED_UNICODE_ESCAPE.0
-            | Self::CONTAINS_INVALID_ESCAPE.0) as i32,
+            | Self::CONTAINS_INVALID_ESCAPE.0,
     );
     pub const REGULAR_EXPRESSION_LITERAL_FLAGS: TokenFlags = Self::UNTERMINATED;
     pub const IS_INVALID: TokenFlags = TokenFlags(
-        (Self::OCTAL.0
+        Self::OCTAL.0
             | Self::CONTAINS_LEADING_ZERO.0
             | Self::CONTAINS_INVALID_SEPARATOR.0
-            | Self::CONTAINS_INVALID_ESCAPE.0) as i32,
+            | Self::CONTAINS_INVALID_ESCAPE.0,
     );
 }
 
@@ -96,10 +96,7 @@ mod tests {
             TokenFlags::WITH_SPECIFIER,
             TokenFlags::HEX_SPECIFIER | TokenFlags::BINARY_SPECIFIER | TokenFlags::OCTAL_SPECIFIER
         );
-        assert_eq!(
-            TokenFlags::STRING_LITERAL_FLAGS.intersects(TokenFlags::SINGLE_QUOTE),
-            true
-        );
+        assert!(TokenFlags::STRING_LITERAL_FLAGS.intersects(TokenFlags::SINGLE_QUOTE));
         assert!(!TokenFlags::STRING_LITERAL_FLAGS.intersects(TokenFlags::HEX_SPECIFIER));
         assert_eq!(TokenFlags::REGULAR_EXPRESSION_LITERAL_FLAGS, TokenFlags::UNTERMINATED);
         assert!(TokenFlags::IS_INVALID.intersects(TokenFlags::OCTAL));

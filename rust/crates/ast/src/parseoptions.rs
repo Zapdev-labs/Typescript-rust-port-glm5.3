@@ -21,7 +21,7 @@
 use tsc_core::scriptkind::ScriptKind;
 use tsc_tspath::RootedFilePath;
 
-use crate::{Kind, Node, NodeFlags, NodeId};
+use crate::{NodeFlags, NodeId};
 use crate::modifierflags::has_syntactic_modifier;
 use crate::{ModifierFlags, NodeStore};
 
@@ -41,14 +41,13 @@ pub struct ExternalModuleIndicatorOptions {
 /// Go: `func SetExternalModuleIndicator(file *SourceFile, opts ExternalModuleIndicatorOptions)`.
 pub fn set_external_module_indicator(store: &mut dyn NodeStore, file: NodeId, opts: ExternalModuleIndicatorOptions) {
     let node = get_external_module_indicator(store, file, opts);
-    let file_data = store.node(file).as_source_file().expect("SourceFile data for a SourceFile node");
-    // Go: file.ExternalModuleIndicator = node — the field is a Cell on the
-    // payload (SPEC §5.2 Cell-fields); reach through the mutable accessor.
+    // Go: file.ExternalModuleIndicator = node — nil becomes `None` (Go nils
+    // the pointer; the port stores an `Option<NodeId>` Cell).
     store.node_mut(file)
         .as_source_file_mut()
         .expect("SourceFile data")
         .external_module_indicator
-        .set(node.unwrap_or(NodeId::NONE));
+        .set(node);
 }
 
 /// Go: `func getExternalModuleIndicator(file *SourceFile, opts ExternalModuleIndicatorOptions) *Node`.
@@ -101,12 +100,11 @@ fn is_an_external_module_indicator_node(store: &dyn NodeStore, node: NodeId) -> 
     let n = store.node(node);
     has_syntactic_modifier(n, ModifierFlags::EXPORT)
         || (crate::is_import_equals_declaration(n)
-            && crate::is_external_module_reference(
+            && crate::is_external_module_reference(store.node(
                 n.as_import_equals_declaration()
                     .expect("ImportEqualsDeclaration data")
-                    .module_reference
-                    .expect("ModuleReference is never nil in bound nodes"),
-            ))
+                    .module_reference,
+            )))
         || crate::is_import_declaration(n)
         || crate::is_export_assignment(n)
         || crate::is_export_declaration(n)
@@ -136,23 +134,26 @@ fn is_file_module_from_using_jsx_tag(store: &mut dyn NodeStore, file: NodeId) ->
 /// tree (identical results, no early-out). TODO(porting) restore the
 /// SubtreeFacts gate with the subtreefacts.go port.
 fn walk_tree_for_jsx_tags(store: &mut dyn NodeStore, node: NodeId) -> Option<NodeId> {
-    let n = store.node(node);
-    if crate::utilities::is_jsx_opening_like_element(n) || crate::utilities::is_jsx_fragment(n) {
+    // Snapshot: the walk may allocate into the same arena the borrow would
+    // pin (see NodeVisitor::visit_each_child).
+    let snapshot = store.node(node).clone();
+    if crate::utilities::is_jsx_opening_like_element(&snapshot) || crate::is_jsx_fragment(&snapshot) {
         return Some(node);
     }
-    let mut found = None;
-    n.for_each_child(&mut |child| {
-        if let Some(hit) = walk_tree_for_jsx_tags(store, child) {
-            found = Some(hit);
-            return true;
-        }
+    let mut children = Vec::new();
+    store.node(node).for_each_child(&mut |child| {
+        children.push(child);
         false
     });
+    let mut found = None;
+    for child in children {
+        if let Some(hit) = walk_tree_for_jsx_tags(store, child) {
+            found = Some(hit);
+            break;
+        }
+    }
     found
 }
-
-/// Go: `func (file *SourceFile) IsDefaultLibrary` and friends — declaration/
-/// library classification lives on the SourceFile payload (source_file.rs).
 
 #[cfg(test)]
 mod tests {

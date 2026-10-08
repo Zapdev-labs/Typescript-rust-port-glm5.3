@@ -85,14 +85,14 @@ impl NodeFlags {
 
     // Parsing context flags
     pub const CONTEXT_FLAGS: NodeFlags = NodeFlags(
-        (Self::DISALLOW_IN_CONTEXT.0
+        Self::DISALLOW_IN_CONTEXT.0
             | Self::DISALLOW_CONDITIONAL_TYPES_CONTEXT.0
             | Self::YIELD_CONTEXT.0
             | Self::DECORATOR_CONTEXT.0
             | Self::AWAIT_CONTEXT.0
             | Self::JAVASCRIPT_FILE.0
             | Self::IN_WITH_STATEMENT.0
-            | Self::AMBIENT.0) as u32,
+            | Self::AMBIENT.0,
     );
 
     // Exclude these flags when parsing a Type
@@ -103,7 +103,7 @@ impl NodeFlags {
     /// comment above on `POSSIBLY_CONTAINS_DYNAMIC_IMPORT` and
     /// `POSSIBLY_CONTAINS_IMPORT_META`.
     pub const PERMANENTLY_SET_INCREMENTAL_FLAGS: NodeFlags = NodeFlags(
-        (Self::POSSIBLY_CONTAINS_DYNAMIC_IMPORT.0 | Self::POSSIBLY_CONTAINS_IMPORT_META.0) as u32,
+        Self::POSSIBLY_CONTAINS_DYNAMIC_IMPORT.0 | Self::POSSIBLY_CONTAINS_IMPORT_META.0,
     );
 
     // The following flags repurpose other NodeFlags as different meanings for Identifier nodes
@@ -152,7 +152,7 @@ mod tests {
             NodeFlags::REACHABILITY_CHECK_FLAGS,
             NodeFlags::HAS_IMPLICIT_RETURN | NodeFlags::HAS_EXPLICIT_RETURN
         );
-        assert_eq!(NodeFlags::CONTEXT_FLAGS.intersects(NodeFlags::YIELD_CONTEXT), true);
+        assert!(NodeFlags::CONTEXT_FLAGS.intersects(NodeFlags::YIELD_CONTEXT));
         assert!(!NodeFlags::CONTEXT_FLAGS.intersects(NodeFlags::LET));
         assert_eq!(NodeFlags::TYPE_EXCLUDES_FLAGS, NodeFlags::YIELD_CONTEXT | NodeFlags::AWAIT_CONTEXT);
         // Identifier repurposing (same bits as the underlying flags).

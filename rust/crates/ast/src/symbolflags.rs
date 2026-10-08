@@ -52,7 +52,7 @@ impl SymbolFlags {
     pub const ENUM: SymbolFlags = SymbolFlags(Self::REGULAR_ENUM.0 | Self::CONST_ENUM.0);
     pub const VARIABLE: SymbolFlags = SymbolFlags(Self::FUNCTION_SCOPED_VARIABLE.0 | Self::BLOCK_SCOPED_VARIABLE.0);
     pub const VALUE: SymbolFlags = SymbolFlags(
-        (Self::VARIABLE.0
+        Self::VARIABLE.0
             | Self::PROPERTY.0
             | Self::ENUM_MEMBER.0
             | Self::OBJECT_LITERAL.0
@@ -62,16 +62,16 @@ impl SymbolFlags {
             | Self::VALUE_MODULE.0
             | Self::METHOD.0
             | Self::GET_ACCESSOR.0
-            | Self::SET_ACCESSOR.0) as u32,
+            | Self::SET_ACCESSOR.0,
     );
     pub const TYPE: SymbolFlags = SymbolFlags(
-        (Self::CLASS.0
+        Self::CLASS.0
             | Self::INTERFACE.0
             | Self::ENUM.0
             | Self::ENUM_MEMBER.0
             | Self::TYPE_LITERAL.0
             | Self::TYPE_PARAMETER.0
-            | Self::TYPE_ALIAS.0) as u32,
+            | Self::TYPE_ALIAS.0,
     );
     pub const NAMESPACE: SymbolFlags = SymbolFlags(Self::VALUE_MODULE.0 | Self::NAMESPACE_MODULE.0 | Self::ENUM.0);
     pub const MODULE: SymbolFlags = SymbolFlags(Self::VALUE_MODULE.0 | Self::NAMESPACE_MODULE.0);
@@ -93,17 +93,17 @@ impl SymbolFlags {
         SymbolFlags(Self::VALUE.0 & !(Self::FUNCTION.0 | Self::VALUE_MODULE.0 | Self::CLASS.0));
     /// class-interface mergability done in checker.ts
     pub const CLASS_EXCLUDES: SymbolFlags = SymbolFlags(
-        ((Self::VALUE.0 | Self::TYPE.0) & !(Self::VALUE_MODULE.0 | Self::INTERFACE.0 | Self::FUNCTION.0)) as u32,
+        (Self::VALUE.0 | Self::TYPE.0) & !(Self::VALUE_MODULE.0 | Self::INTERFACE.0 | Self::FUNCTION.0),
     );
     pub const INTERFACE_EXCLUDES: SymbolFlags = SymbolFlags(Self::TYPE.0 & !(Self::INTERFACE.0 | Self::CLASS.0));
     /// regular enums merge only with regular enums and modules
     pub const REGULAR_ENUM_EXCLUDES: SymbolFlags = SymbolFlags(
-        ((Self::VALUE.0 | Self::TYPE.0) & !(Self::REGULAR_ENUM.0 | Self::VALUE_MODULE.0)) as u32,
+        (Self::VALUE.0 | Self::TYPE.0) & !(Self::REGULAR_ENUM.0 | Self::VALUE_MODULE.0),
     );
     /// const enums merge only with const enums
     pub const CONST_ENUM_EXCLUDES: SymbolFlags = SymbolFlags((Self::VALUE.0 | Self::TYPE.0) & !Self::CONST_ENUM.0);
     pub const VALUE_MODULE_EXCLUDES: SymbolFlags = SymbolFlags(
-        (Self::VALUE.0 & !(Self::FUNCTION.0 | Self::CLASS.0 | Self::REGULAR_ENUM.0 | Self::VALUE_MODULE.0)) as u32,
+        Self::VALUE.0 & !(Self::FUNCTION.0 | Self::CLASS.0 | Self::REGULAR_ENUM.0 | Self::VALUE_MODULE.0),
     );
     pub const NAMESPACE_MODULE_EXCLUDES: SymbolFlags = SymbolFlags::NONE;
     pub const METHOD_EXCLUDES: SymbolFlags = SymbolFlags(Self::VALUE.0 & !Self::METHOD.0);
@@ -116,14 +116,14 @@ impl SymbolFlags {
     pub const TYPE_ALIAS_EXCLUDES: SymbolFlags = Self::TYPE;
     pub const ALIAS_EXCLUDES: SymbolFlags = Self::ALIAS;
     pub const MODULE_MEMBER: SymbolFlags = SymbolFlags(
-        (Self::VARIABLE.0
+        Self::VARIABLE.0
             | Self::FUNCTION.0
             | Self::CLASS.0
             | Self::INTERFACE.0
             | Self::ENUM.0
             | Self::MODULE.0
             | Self::TYPE_ALIAS.0
-            | Self::ALIAS.0) as u32,
+            | Self::ALIAS.0,
     );
     pub const EXPORT_HAS_LOCAL: SymbolFlags =
         SymbolFlags(Self::FUNCTION.0 | Self::CLASS.0 | Self::ENUM.0 | Self::VALUE_MODULE.0);
@@ -137,7 +137,7 @@ impl SymbolFlags {
     pub const EXPORT_DOES_NOT_SUPPORT_DEFAULT_MODIFIER: SymbolFlags =
         SymbolFlags(!Self::EXPORT_SUPPORTS_DEFAULT_MODIFIER.0);
     pub const LATE_BINDING_CONTAINER: SymbolFlags = SymbolFlags(
-        (Self::CLASS.0 | Self::INTERFACE.0 | Self::TYPE_LITERAL.0 | Self::OBJECT_LITERAL.0 | Self::FUNCTION.0) as u32,
+        Self::CLASS.0 | Self::INTERFACE.0 | Self::TYPE_LITERAL.0 | Self::OBJECT_LITERAL.0 | Self::FUNCTION.0,
     );
 }
 
@@ -175,8 +175,9 @@ mod tests {
             SymbolFlags::EXPORT_DOES_NOT_SUPPORT_DEFAULT_MODIFIER,
             !SymbolFlags::EXPORT_SUPPORTS_DEFAULT_MODIFIER
         );
-        // ALL covers every bit below GlobalLookup and excludes it.
-        assert_eq!(SymbolFlags::ALL, SymbolFlags::GLOBAL_LOOKUP - SymbolFlags(1));
+        // ALL covers every bit below GlobalLookup and excludes it
+        // (Go: `SymbolFlagsAll = 1<<30 - 1`).
+        assert_eq!(SymbolFlags::ALL, SymbolFlags(SymbolFlags::GLOBAL_LOOKUP.0 - 1));
         assert!(!SymbolFlags::ALL.intersects(SymbolFlags::GLOBAL_LOOKUP));
     }
 }

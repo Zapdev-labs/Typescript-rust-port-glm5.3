@@ -40,10 +40,10 @@ impl ModifierFlags {
     pub const HAS_COMPUTED_FLAGS: ModifierFlags = ModifierFlags(1 << 29);
 
     pub const SYNTACTIC_OR_JSDOC_MODIFIERS: ModifierFlags = ModifierFlags(
-        (Self::PUBLIC.0 | Self::PRIVATE.0 | Self::PROTECTED.0 | Self::READONLY.0 | Self::OVERRIDE.0) as u32,
+        Self::PUBLIC.0 | Self::PRIVATE.0 | Self::PROTECTED.0 | Self::READONLY.0 | Self::OVERRIDE.0,
     );
     pub const SYNTACTIC_ONLY_MODIFIERS: ModifierFlags = ModifierFlags(
-        (Self::EXPORT.0
+        Self::EXPORT.0
             | Self::AMBIENT.0
             | Self::ABSTRACT.0
             | Self::STATIC.0
@@ -53,32 +53,32 @@ impl ModifierFlags {
             | Self::CONST.0
             | Self::IN.0
             | Self::OUT.0
-            | Self::DECORATOR.0) as u32,
+            | Self::DECORATOR.0,
     );
     pub const SYNTACTIC_MODIFIERS: ModifierFlags = ModifierFlags(
-        (Self::SYNTACTIC_OR_JSDOC_MODIFIERS.0 | Self::SYNTACTIC_ONLY_MODIFIERS.0) as u32,
+        Self::SYNTACTIC_OR_JSDOC_MODIFIERS.0 | Self::SYNTACTIC_ONLY_MODIFIERS.0,
     );
     pub const JSDOC_CACHE_ONLY_MODIFIERS: ModifierFlags = ModifierFlags(
-        (Self::JSDOC_PUBLIC.0 | Self::JSDOC_PRIVATE.0 | Self::JSDOC_PROTECTED.0 | Self::JSDOC_READONLY.0
-            | Self::JSDOC_OVERRIDE.0) as u32,
+        Self::JSDOC_PUBLIC.0 | Self::JSDOC_PRIVATE.0 | Self::JSDOC_PROTECTED.0 | Self::JSDOC_READONLY.0
+            | Self::JSDOC_OVERRIDE.0,
     );
     pub const JSDOC_ONLY_MODIFIERS: ModifierFlags = Self::DEPRECATED;
     pub const NON_CACHE_ONLY_MODIFIERS: ModifierFlags = ModifierFlags(
-        (Self::SYNTACTIC_OR_JSDOC_MODIFIERS.0
+        Self::SYNTACTIC_OR_JSDOC_MODIFIERS.0
             | Self::SYNTACTIC_ONLY_MODIFIERS.0
-            | Self::JSDOC_ONLY_MODIFIERS.0) as u32,
+            | Self::JSDOC_ONLY_MODIFIERS.0,
     );
 
     pub const ACCESSIBILITY_MODIFIER: ModifierFlags =
         ModifierFlags(Self::PUBLIC.0 | Self::PRIVATE.0 | Self::PROTECTED.0);
     /// Accessibility modifiers and 'readonly' can be attached to a parameter in a constructor to make it a property.
     pub const PARAMETER_PROPERTY_MODIFIER: ModifierFlags = ModifierFlags(
-        (Self::ACCESSIBILITY_MODIFIER.0 | Self::READONLY.0 | Self::OVERRIDE.0) as u32,
+        Self::ACCESSIBILITY_MODIFIER.0 | Self::READONLY.0 | Self::OVERRIDE.0,
     );
     pub const NON_PUBLIC_ACCESSIBILITY_MODIFIER: ModifierFlags = ModifierFlags(Self::PRIVATE.0 | Self::PROTECTED.0);
 
     pub const TYPESCRIPT_MODIFIER: ModifierFlags = ModifierFlags(
-        (Self::AMBIENT.0
+        Self::AMBIENT.0
             | Self::PUBLIC.0
             | Self::PRIVATE.0
             | Self::PROTECTED.0
@@ -87,11 +87,11 @@ impl ModifierFlags {
             | Self::CONST.0
             | Self::OVERRIDE.0
             | Self::IN.0
-            | Self::OUT.0) as u32,
+            | Self::OUT.0,
     );
     pub const EXPORT_DEFAULT: ModifierFlags = ModifierFlags(Self::EXPORT.0 | Self::DEFAULT.0);
     pub const ALL: ModifierFlags = ModifierFlags(
-        (Self::EXPORT.0
+        Self::EXPORT.0
             | Self::AMBIENT.0
             | Self::PUBLIC.0
             | Self::PRIVATE.0
@@ -107,7 +107,7 @@ impl ModifierFlags {
             | Self::OVERRIDE.0
             | Self::IN.0
             | Self::OUT.0
-            | Self::DECORATOR.0) as u32,
+            | Self::DECORATOR.0,
     );
     pub const MODIFIER: ModifierFlags = ModifierFlags(Self::ALL.0 & !Self::DECORATOR.0);
     pub const JAVASCRIPT: ModifierFlags =

@@ -237,8 +237,10 @@ mod tests {
 
     #[test]
     fn combined_flags() {
-        let mut s = Symbol::default();
-        s.flags = SymbolFlags::FUNCTION;
+        let s = Symbol {
+            flags: SymbolFlags::FUNCTION,
+            ..Default::default()
+        };
         // No export symbol: own flags.
         assert_eq!(combined_local_and_export_symbol_flags(&[Symbol::default()], &s), SymbolFlags::FUNCTION);
     }
