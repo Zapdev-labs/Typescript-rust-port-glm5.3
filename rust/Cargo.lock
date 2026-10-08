@@ -189,7 +189,11 @@ dependencies = [
 name = "tsc-ast"
 version = "0.0.0"
 dependencies = [
+ "tsc-collections",
  "tsc-core",
+ "tsc-diagnostics",
+ "tsc-stringutil",
+ "tsc-tspath",
 ]
 
 [[package]]

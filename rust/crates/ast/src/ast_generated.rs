@@ -2,11 +2,21 @@
 // Rust mirror of tsc/internal/ast/ast_generated.go:
 //   - node structs with base-struct composition FLATTENED (Go embedding order
 //     preserved; NodeBase's kind/flags/loc/id/parent live on Node per SPEC §5.1)
-//   - `NodeData` — one variant per concrete node struct (SPEC §5.1)
+//   - `NodeData` — one variant per concrete node struct (SPEC §5.1); every
+//     payload is Boxed so `Node` stays a fixed 48-byte arena slot (SPEC §12.1:
+//     ≤64B target; box-everything beats per-variant sizing because enum size
+//     is the max variant size, and Go's nodeData interface is one indirection
+//     anyway)
 //   - `as_x` accessors (Go AsX; 192) and `is_x` predicates (Go IsX)
-//   - `for_each_child` (Go ForEachChild; children in ast.json member order)
+//   - `for_each_child` (Go ForEachChild; children in ast.json member order;
+//     JSDocParameterOrPropertyTag ports the hand-written ast.go visitor)
+//   - `visit_each_child` (Go VisitEachChild; returns Option — None = every
+//     child unchanged, mirroring Go Update* returning the original node;
+//     SPEC §5.6) and the Go ast.go `Node.Modifiers()`/`Node.Name()` dispatches
 // Go *Node children are NodeId handles into the arena; Go *NodeList/*ModifierList
 // become inline Option<NodeList>/Option<ModifierList> (SPEC §5.1).
+
+use std::cell::Cell;
 
 use super::*;
 
@@ -297,11 +307,13 @@ pub type ImportExpression = NodeId;
 // ──────────────────────────────────────────────────────────────────────
 
 /// Go: `type Token struct { NodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct Token {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
 }
 
 /// Go: `type Identifier struct { PrimaryExpressionBase; FlowNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct Identifier {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -309,12 +321,14 @@ pub struct Identifier {
 }
 
 /// Go: `type PrivateIdentifier struct { PrimaryExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct PrivateIdentifier {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Box<str>,
 }
 
 /// Go: `type QualifiedName struct { NodeBase; FlowNodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct QualifiedName {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -324,6 +338,7 @@ pub struct QualifiedName {
 }
 
 /// Go: `type ComputedPropertyName struct { NodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ComputedPropertyName {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -331,6 +346,7 @@ pub struct ComputedPropertyName {
 }
 
 /// Go: `type Decorator struct { NodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct Decorator {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -338,12 +354,14 @@ pub struct Decorator {
 }
 
 /// Go: `type EmptyStatement struct { StatementBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct EmptyStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
 }
 
 /// Go: `type IfStatement struct { StatementBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct IfStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -354,6 +372,7 @@ pub struct IfStatement {
 }
 
 /// Go: `type DoStatement struct { IterationStatementBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct DoStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -363,6 +382,7 @@ pub struct DoStatement {
 }
 
 /// Go: `type WhileStatement struct { IterationStatementBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct WhileStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -372,6 +392,7 @@ pub struct WhileStatement {
 }
 
 /// Go: `type ForStatement struct { IterationStatementBase; LocalsContainerBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ForStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -385,6 +406,7 @@ pub struct ForStatement {
 }
 
 /// Go: `type ForInOrOfStatement struct { StatementBase; LocalsContainerBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ForInOrOfStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -398,6 +420,7 @@ pub struct ForInOrOfStatement {
 }
 
 /// Go: `type BreakStatement struct { StatementBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct BreakStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -405,6 +428,7 @@ pub struct BreakStatement {
 }
 
 /// Go: `type ContinueStatement struct { StatementBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ContinueStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -412,6 +436,7 @@ pub struct ContinueStatement {
 }
 
 /// Go: `type ReturnStatement struct { StatementBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ReturnStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -420,6 +445,7 @@ pub struct ReturnStatement {
 }
 
 /// Go: `type WithStatement struct { StatementBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct WithStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -429,6 +455,7 @@ pub struct WithStatement {
 }
 
 /// Go: `type SwitchStatement struct { StatementBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct SwitchStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -438,6 +465,7 @@ pub struct SwitchStatement {
 }
 
 /// Go: `type CaseBlock struct { NodeBase; LocalsContainerBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct CaseBlock {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub locals: SymbolTable,
@@ -447,6 +475,7 @@ pub struct CaseBlock {
 }
 
 /// Go: `type CaseOrDefaultClause struct { NodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct CaseOrDefaultClause {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -456,6 +485,7 @@ pub struct CaseOrDefaultClause {
 }
 
 /// Go: `type ThrowStatement struct { StatementBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ThrowStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -464,6 +494,7 @@ pub struct ThrowStatement {
 }
 
 /// Go: `type TryStatement struct { StatementBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TryStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -474,6 +505,7 @@ pub struct TryStatement {
 }
 
 /// Go: `type CatchClause struct { NodeBase; LocalsContainerBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct CatchClause {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub locals: SymbolTable,
@@ -484,12 +516,14 @@ pub struct CatchClause {
 }
 
 /// Go: `type DebuggerStatement struct { StatementBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct DebuggerStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
 }
 
 /// Go: `type LabeledStatement struct { StatementBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct LabeledStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -498,6 +532,7 @@ pub struct LabeledStatement {
 }
 
 /// Go: `type ExpressionStatement struct { StatementBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ExpressionStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -505,6 +540,7 @@ pub struct ExpressionStatement {
 }
 
 /// Go: `type Block struct { StatementBase; LocalsContainerBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct Block {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -516,6 +552,7 @@ pub struct Block {
 }
 
 /// Go: `type VariableStatement struct { StatementBase; ModifiersBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct VariableStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -525,6 +562,7 @@ pub struct VariableStatement {
 }
 
 /// Go: `type VariableDeclaration struct { NodeBase; DeclarationBase; ExportableBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct VariableDeclaration {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -537,6 +575,7 @@ pub struct VariableDeclaration {
 }
 
 /// Go: `type VariableDeclarationList struct { NodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct VariableDeclarationList {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -544,6 +583,7 @@ pub struct VariableDeclarationList {
 }
 
 /// Go: `type BindingPattern struct { NodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct BindingPattern {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -551,6 +591,7 @@ pub struct BindingPattern {
 }
 
 /// Go: `type ParameterDeclaration struct { NodeBase; DeclarationBase; ModifiersBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ParameterDeclaration {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -564,6 +605,7 @@ pub struct ParameterDeclaration {
 }
 
 /// Go: `type BindingElement struct { NodeBase; DeclarationBase; ExportableBase; FlowNodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct BindingElement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -577,6 +619,7 @@ pub struct BindingElement {
 }
 
 /// Go: `type MissingDeclaration struct { StatementBase; DeclarationBase; ModifiersBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct MissingDeclaration {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -585,6 +628,7 @@ pub struct MissingDeclaration {
 }
 
 /// Go: `type FunctionDeclaration struct { StatementBase; DeclarationBase; ExportableBase; ModifiersBase; FunctionLikeWithBodyBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct FunctionDeclaration {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -606,6 +650,7 @@ pub struct FunctionDeclaration {
 }
 
 /// Go: `type ClassDeclaration struct { StatementBase; DeclarationBase; ClassLikeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ClassDeclaration {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -622,6 +667,7 @@ pub struct ClassDeclaration {
 }
 
 /// Go: `type ClassExpression struct { PrimaryExpressionBase; DeclarationBase; ClassLikeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ClassExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -637,6 +683,7 @@ pub struct ClassExpression {
 }
 
 /// Go: `type HeritageClause struct { NodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct HeritageClause {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -645,6 +692,7 @@ pub struct HeritageClause {
 }
 
 /// Go: `type InterfaceDeclaration struct { TypeSyntaxBase; StatementBase; DeclarationBase; ExportableBase; ModifiersBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct InterfaceDeclaration {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -659,6 +707,7 @@ pub struct InterfaceDeclaration {
 }
 
 /// Go: `type TypeAliasDeclaration struct { TypeSyntaxBase; StatementBase; DeclarationBase; ExportableBase; ModifiersBase; LocalsContainerBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TypeAliasDeclaration {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -674,6 +723,7 @@ pub struct TypeAliasDeclaration {
 }
 
 /// Go: `type EnumMember struct { NodeBase; DeclarationBase; NamedMemberBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct EnumMember {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -685,6 +735,7 @@ pub struct EnumMember {
 }
 
 /// Go: `type EnumDeclaration struct { StatementBase; DeclarationBase; ExportableBase; ModifiersBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct EnumDeclaration {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -697,6 +748,7 @@ pub struct EnumDeclaration {
 }
 
 /// Go: `type ModuleBlock struct { StatementBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ModuleBlock {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -705,12 +757,14 @@ pub struct ModuleBlock {
 }
 
 /// Go: `type NotEmittedStatement struct { StatementBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NotEmittedStatement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
 }
 
 /// Go: `type NotEmittedTypeElement struct { TypeElementBase; NodeBase; DeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NotEmittedTypeElement {
     // TypeElementBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -718,6 +772,7 @@ pub struct NotEmittedTypeElement {
 }
 
 /// Go: `type ImportDeclaration struct { StatementBase; ModifiersBase; CompositeBase; DeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ImportDeclaration {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -730,12 +785,14 @@ pub struct ImportDeclaration {
 }
 
 /// Go: `type ExternalModuleReference struct { NodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ExternalModuleReference {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
 }
 
 /// Go: `type NamespaceImport struct { NodeBase; DeclarationBase; ExportableBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NamespaceImport {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -744,6 +801,7 @@ pub struct NamespaceImport {
 }
 
 /// Go: `type NamedImports struct { NodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NamedImports {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -751,6 +809,7 @@ pub struct NamedImports {
 }
 
 /// Go: `type ExportAssignment struct { StatementBase; DeclarationBase; ModifiersBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ExportAssignment {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -763,6 +822,7 @@ pub struct ExportAssignment {
 }
 
 /// Go: `type NamespaceExportDeclaration struct { TypeSyntaxBase; StatementBase; DeclarationBase; ModifiersBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NamespaceExportDeclaration {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -773,6 +833,7 @@ pub struct NamespaceExportDeclaration {
 }
 
 /// Go: `type NamespaceExport struct { NodeBase; DeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NamespaceExport {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -780,6 +841,7 @@ pub struct NamespaceExport {
 }
 
 /// Go: `type NamedExports struct { NodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NamedExports {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -787,6 +849,7 @@ pub struct NamedExports {
 }
 
 /// Go: `type ExportSpecifier struct { NodeBase; DeclarationBase; ExportableBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ExportSpecifier {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -798,6 +861,7 @@ pub struct ExportSpecifier {
 }
 
 /// Go: `type CallSignatureDeclaration struct { TypeElementBase; TypeSyntaxBase; NodeBase; DeclarationBase; FunctionLikeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct CallSignatureDeclaration {
     // TypeElementBase (marker base; no fields)
     // TypeSyntaxBase (marker base; no fields)
@@ -812,6 +876,7 @@ pub struct CallSignatureDeclaration {
 }
 
 /// Go: `type ConstructSignatureDeclaration struct { TypeElementBase; TypeSyntaxBase; NodeBase; DeclarationBase; FunctionLikeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ConstructSignatureDeclaration {
     // TypeElementBase (marker base; no fields)
     // TypeSyntaxBase (marker base; no fields)
@@ -826,6 +891,7 @@ pub struct ConstructSignatureDeclaration {
 }
 
 /// Go: `type ConstructorDeclaration struct { ClassElementBase; NodeBase; DeclarationBase; ModifiersBase; FunctionLikeWithBodyBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ConstructorDeclaration {
     // ClassElementBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -845,6 +911,7 @@ pub struct ConstructorDeclaration {
 }
 
 /// Go: `type GetAccessorDeclaration struct { AccessorDeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct GetAccessorDeclaration {
     // TypeElementBase (marker base; no fields)
     // ClassElementBase (marker base; no fields)
@@ -868,6 +935,7 @@ pub struct GetAccessorDeclaration {
 }
 
 /// Go: `type SetAccessorDeclaration struct { AccessorDeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct SetAccessorDeclaration {
     // TypeElementBase (marker base; no fields)
     // ClassElementBase (marker base; no fields)
@@ -891,6 +959,7 @@ pub struct SetAccessorDeclaration {
 }
 
 /// Go: `type IndexSignatureDeclaration struct { TypeElementBase; ClassElementBase; TypeSyntaxBase; NodeBase; DeclarationBase; ModifiersBase; FunctionLikeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct IndexSignatureDeclaration {
     // TypeElementBase (marker base; no fields)
     // ClassElementBase (marker base; no fields)
@@ -907,6 +976,7 @@ pub struct IndexSignatureDeclaration {
 }
 
 /// Go: `type MethodSignatureDeclaration struct { TypeElementBase; TypeSyntaxBase; NodeBase; DeclarationBase; NamedMemberBase; FunctionLikeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct MethodSignatureDeclaration {
     // TypeElementBase (marker base; no fields)
     // TypeSyntaxBase (marker base; no fields)
@@ -924,6 +994,7 @@ pub struct MethodSignatureDeclaration {
 }
 
 /// Go: `type MethodDeclaration struct { ClassElementBase; ObjectLiteralElementBase; NodeBase; DeclarationBase; NamedMemberBase; FunctionLikeWithBodyBase; FlowNodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct MethodDeclaration {
     // ClassElementBase (marker base; no fields)
     // ObjectLiteralElementBase (marker base; no fields)
@@ -946,6 +1017,7 @@ pub struct MethodDeclaration {
 }
 
 /// Go: `type PropertySignatureDeclaration struct { TypeElementBase; TypeSyntaxBase; NodeBase; DeclarationBase; NamedMemberBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct PropertySignatureDeclaration {
     // TypeElementBase (marker base; no fields)
     // TypeSyntaxBase (marker base; no fields)
@@ -959,6 +1031,7 @@ pub struct PropertySignatureDeclaration {
 }
 
 /// Go: `type PropertyDeclaration struct { ClassElementBase; NodeBase; DeclarationBase; NamedMemberBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct PropertyDeclaration {
     // ClassElementBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -972,6 +1045,7 @@ pub struct PropertyDeclaration {
 }
 
 /// Go: `type SemicolonClassElement struct { ClassElementBase; NodeBase; DeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct SemicolonClassElement {
     // ClassElementBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -979,6 +1053,7 @@ pub struct SemicolonClassElement {
 }
 
 /// Go: `type ClassStaticBlockDeclaration struct { ClassElementBase; NodeBase; DeclarationBase; ModifiersBase; LocalsContainerBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ClassStaticBlockDeclaration {
     // ClassElementBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -992,17 +1067,20 @@ pub struct ClassStaticBlockDeclaration {
 }
 
 /// Go: `type OmittedExpression struct { ExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct OmittedExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
 }
 
 /// Go: `type KeywordExpression struct { ExpressionBase; FlowNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct KeywordExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
 }
 
 /// Go: `type StringLiteral struct { LiteralExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct StringLiteral {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Box<str>,
@@ -1010,6 +1088,7 @@ pub struct StringLiteral {
 }
 
 /// Go: `type NumericLiteral struct { LiteralExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NumericLiteral {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Box<str>,
@@ -1017,6 +1096,7 @@ pub struct NumericLiteral {
 }
 
 /// Go: `type BigIntLiteral struct { LiteralExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct BigIntLiteral {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Box<str>,
@@ -1024,6 +1104,7 @@ pub struct BigIntLiteral {
 }
 
 /// Go: `type RegularExpressionLiteral struct { LiteralExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct RegularExpressionLiteral {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Box<str>,
@@ -1031,6 +1112,7 @@ pub struct RegularExpressionLiteral {
 }
 
 /// Go: `type NoSubstitutionTemplateLiteral struct { ExpressionBase; TemplateLiteralLikeNodeBase; DeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NoSubstitutionTemplateLiteral {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Box<str>,
@@ -1041,6 +1123,7 @@ pub struct NoSubstitutionTemplateLiteral {
 }
 
 /// Go: `type BinaryExpression struct { ExpressionBase; DeclarationBase; ModifiersBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct BinaryExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -1053,6 +1136,7 @@ pub struct BinaryExpression {
 }
 
 /// Go: `type PrefixUnaryExpression struct { UpdateExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct PrefixUnaryExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub operator: Kind,
@@ -1060,6 +1144,7 @@ pub struct PrefixUnaryExpression {
 }
 
 /// Go: `type PostfixUnaryExpression struct { UpdateExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct PostfixUnaryExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub operand: NodeId,
@@ -1067,6 +1152,7 @@ pub struct PostfixUnaryExpression {
 }
 
 /// Go: `type YieldExpression struct { ExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct YieldExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub asterisk_token: Option<NodeId>, // Optional
@@ -1074,6 +1160,7 @@ pub struct YieldExpression {
 }
 
 /// Go: `type ArrowFunction struct { ExpressionBase; DeclarationBase; ModifiersBase; FunctionLikeWithBodyBase; FlowNodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ArrowFunction {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -1093,6 +1180,7 @@ pub struct ArrowFunction {
 }
 
 /// Go: `type FunctionExpression struct { PrimaryExpressionBase; DeclarationBase; ModifiersBase; FunctionLikeWithBodyBase; FlowNodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct FunctionExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -1113,6 +1201,7 @@ pub struct FunctionExpression {
 }
 
 /// Go: `type AsExpression struct { ExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct AsExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
@@ -1120,6 +1209,7 @@ pub struct AsExpression {
 }
 
 /// Go: `type SatisfiesExpression struct { ExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct SatisfiesExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
@@ -1127,6 +1217,7 @@ pub struct SatisfiesExpression {
 }
 
 /// Go: `type ConditionalExpression struct { ExpressionBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ConditionalExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1138,6 +1229,7 @@ pub struct ConditionalExpression {
 }
 
 /// Go: `type PropertyAccessExpression struct { MemberExpressionBase; FlowNodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct PropertyAccessExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -1148,6 +1240,7 @@ pub struct PropertyAccessExpression {
 }
 
 /// Go: `type ElementAccessExpression struct { MemberExpressionBase; FlowNodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ElementAccessExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -1158,6 +1251,7 @@ pub struct ElementAccessExpression {
 }
 
 /// Go: `type CallExpression struct { LeftHandSideExpressionBase; DeclarationBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct CallExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -1169,6 +1263,7 @@ pub struct CallExpression {
 }
 
 /// Go: `type NewExpression struct { PrimaryExpressionBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NewExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1178,6 +1273,7 @@ pub struct NewExpression {
 }
 
 /// Go: `type MetaProperty struct { PrimaryExpressionBase; FlowNodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct MetaProperty {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -1187,18 +1283,21 @@ pub struct MetaProperty {
 }
 
 /// Go: `type NonNullExpression struct { LeftHandSideExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NonNullExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
 }
 
 /// Go: `type SpreadElement struct { ExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct SpreadElement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
 }
 
 /// Go: `type TemplateExpression struct { PrimaryExpressionBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TemplateExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1207,6 +1306,7 @@ pub struct TemplateExpression {
 }
 
 /// Go: `type TemplateSpan struct { NodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TemplateSpan {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
@@ -1214,6 +1314,7 @@ pub struct TemplateSpan {
 }
 
 /// Go: `type TaggedTemplateExpression struct { MemberExpressionBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TaggedTemplateExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1224,12 +1325,14 @@ pub struct TaggedTemplateExpression {
 }
 
 /// Go: `type ParenthesizedExpression struct { PrimaryExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ParenthesizedExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
 }
 
 /// Go: `type ArrayLiteralExpression struct { PrimaryExpressionBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ArrayLiteralExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1238,6 +1341,7 @@ pub struct ArrayLiteralExpression {
 }
 
 /// Go: `type ObjectLiteralExpression struct { PrimaryExpressionBase; DeclarationBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ObjectLiteralExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -1247,6 +1351,7 @@ pub struct ObjectLiteralExpression {
 }
 
 /// Go: `type SpreadAssignment struct { ObjectLiteralElementBase; NodeBase; DeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct SpreadAssignment {
     // ObjectLiteralElementBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1255,6 +1360,7 @@ pub struct SpreadAssignment {
 }
 
 /// Go: `type PropertyAssignment struct { ObjectLiteralElementBase; NodeBase; DeclarationBase; NamedMemberBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct PropertyAssignment {
     // ObjectLiteralElementBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1268,6 +1374,7 @@ pub struct PropertyAssignment {
 }
 
 /// Go: `type ShorthandPropertyAssignment struct { ObjectLiteralElementBase; NodeBase; DeclarationBase; NamedMemberBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ShorthandPropertyAssignment {
     // ObjectLiteralElementBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1282,30 +1389,35 @@ pub struct ShorthandPropertyAssignment {
 }
 
 /// Go: `type DeleteExpression struct { UnaryExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct DeleteExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
 }
 
 /// Go: `type TypeOfExpression struct { UnaryExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TypeOfExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
 }
 
 /// Go: `type VoidExpression struct { UnaryExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct VoidExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
 }
 
 /// Go: `type AwaitExpression struct { UnaryExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct AwaitExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
 }
 
 /// Go: `type TypeAssertion struct { UnaryExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TypeAssertion {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub type_: NodeId,
@@ -1313,12 +1425,14 @@ pub struct TypeAssertion {
 }
 
 /// Go: `type KeywordTypeNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct KeywordTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
 }
 
 /// Go: `type UnionTypeNode struct { UnionOrIntersectionTypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct UnionTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1326,6 +1440,7 @@ pub struct UnionTypeNode {
 }
 
 /// Go: `type IntersectionTypeNode struct { UnionOrIntersectionTypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct IntersectionTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1333,6 +1448,7 @@ pub struct IntersectionTypeNode {
 }
 
 /// Go: `type ConditionalTypeNode struct { TypeNodeBase; LocalsContainerBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ConditionalTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1345,6 +1461,7 @@ pub struct ConditionalTypeNode {
 }
 
 /// Go: `type TypeOperatorNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TypeOperatorNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1353,6 +1470,7 @@ pub struct TypeOperatorNode {
 }
 
 /// Go: `type InferTypeNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct InferTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1360,6 +1478,7 @@ pub struct InferTypeNode {
 }
 
 /// Go: `type ArrayTypeNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ArrayTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1367,6 +1486,7 @@ pub struct ArrayTypeNode {
 }
 
 /// Go: `type IndexedAccessTypeNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct IndexedAccessTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1375,6 +1495,7 @@ pub struct IndexedAccessTypeNode {
 }
 
 /// Go: `type TypeReferenceNode struct { NodeWithTypeArgumentsBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TypeReferenceNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1383,6 +1504,7 @@ pub struct TypeReferenceNode {
 }
 
 /// Go: `type ExpressionWithTypeArguments struct { MemberExpressionBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ExpressionWithTypeArguments {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1391,6 +1513,7 @@ pub struct ExpressionWithTypeArguments {
 }
 
 /// Go: `type LiteralTypeNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct LiteralTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1398,12 +1521,14 @@ pub struct LiteralTypeNode {
 }
 
 /// Go: `type ThisTypeNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ThisTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
 }
 
 /// Go: `type TypePredicateNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TypePredicateNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1413,6 +1538,7 @@ pub struct TypePredicateNode {
 }
 
 /// Go: `type ImportAttribute struct { NodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ImportAttribute {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1421,6 +1547,7 @@ pub struct ImportAttribute {
 }
 
 /// Go: `type ImportAttributes struct { NodeBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ImportAttributes {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1430,6 +1557,7 @@ pub struct ImportAttributes {
 }
 
 /// Go: `type TypeQueryNode struct { NodeWithTypeArgumentsBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TypeQueryNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1438,6 +1566,7 @@ pub struct TypeQueryNode {
 }
 
 /// Go: `type MappedTypeNode struct { TypeNodeBase; DeclarationBase; LocalsContainerBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct MappedTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1453,6 +1582,7 @@ pub struct MappedTypeNode {
 }
 
 /// Go: `type TypeLiteralNode struct { TypeNodeBase; DeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TypeLiteralNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1461,6 +1591,7 @@ pub struct TypeLiteralNode {
 }
 
 /// Go: `type TupleTypeNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TupleTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1468,6 +1599,7 @@ pub struct TupleTypeNode {
 }
 
 /// Go: `type NamedTupleMember struct { TypeNodeBase; DeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct NamedTupleMember {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1479,6 +1611,7 @@ pub struct NamedTupleMember {
 }
 
 /// Go: `type OptionalTypeNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct OptionalTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1486,6 +1619,7 @@ pub struct OptionalTypeNode {
 }
 
 /// Go: `type RestTypeNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct RestTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1493,6 +1627,7 @@ pub struct RestTypeNode {
 }
 
 /// Go: `type ParenthesizedTypeNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ParenthesizedTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1500,6 +1635,7 @@ pub struct ParenthesizedTypeNode {
 }
 
 /// Go: `type FunctionTypeNode struct { FunctionOrConstructorTypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct FunctionTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1514,6 +1650,7 @@ pub struct FunctionTypeNode {
 }
 
 /// Go: `type ConstructorTypeNode struct { FunctionOrConstructorTypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ConstructorTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1528,6 +1665,7 @@ pub struct ConstructorTypeNode {
 }
 
 /// Go: `type TemplateHead struct { NodeBase; TemplateLiteralLikeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TemplateHead {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Box<str>,
@@ -1537,6 +1675,7 @@ pub struct TemplateHead {
 }
 
 /// Go: `type TemplateMiddle struct { NodeBase; TemplateLiteralLikeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TemplateMiddle {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Box<str>,
@@ -1546,6 +1685,7 @@ pub struct TemplateMiddle {
 }
 
 /// Go: `type TemplateTail struct { NodeBase; TemplateLiteralLikeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TemplateTail {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Box<str>,
@@ -1555,6 +1695,7 @@ pub struct TemplateTail {
 }
 
 /// Go: `type TemplateLiteralTypeNode struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TemplateLiteralTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1563,6 +1704,7 @@ pub struct TemplateLiteralTypeNode {
 }
 
 /// Go: `type TemplateLiteralTypeSpan struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TemplateLiteralTypeSpan {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1573,18 +1715,34 @@ pub struct TemplateLiteralTypeSpan {
 /// Go: `type SyntheticExpression struct { ExpressionBase }` (embeds flattened in Go embedding order)
 pub struct SyntheticExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
-    pub type_: Box<dyn std::any::Any>,
+    pub type_: Box<dyn std::any::Any + Send + Sync>,
     pub is_spread: bool,
     pub tuple_name_source: Option<NodeId>, // Optional
 }
+// PORT: Go's Clone shares the `Type any` interface payload (Go `any` members are
+// interfaces, copied by value); `Box<dyn Any + Send + Sync>` cannot be. The port
+// substitutes a fresh `()` payload — such nodes are checker-synthesized and the
+// payload becomes a Clone `TypeId` handle with the checker port (SPEC §5.4), at
+// which point this impl is deleted in favor of a derive.
+impl Clone for SyntheticExpression {
+    fn clone(&self) -> Self {
+        Self {
+            type_: Box::new(()),
+            is_spread: self.is_spread,
+            tuple_name_source: self.tuple_name_source,
+        }
+    }
+}
 
 /// Go: `type PartiallyEmittedExpression struct { LeftHandSideExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct PartiallyEmittedExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
 }
 
 /// Go: `type JsxElement struct { PrimaryExpressionBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxElement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1594,6 +1752,7 @@ pub struct JsxElement {
 }
 
 /// Go: `type JsxAttributes struct { PrimaryExpressionBase; DeclarationBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxAttributes {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -1602,6 +1761,7 @@ pub struct JsxAttributes {
 }
 
 /// Go: `type JsxNamespacedName struct { ExpressionBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxNamespacedName {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1610,6 +1770,7 @@ pub struct JsxNamespacedName {
 }
 
 /// Go: `type JsxOpeningElement struct { ExpressionBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxOpeningElement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1619,6 +1780,7 @@ pub struct JsxOpeningElement {
 }
 
 /// Go: `type JsxSelfClosingElement struct { PrimaryExpressionBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxSelfClosingElement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1628,6 +1790,7 @@ pub struct JsxSelfClosingElement {
 }
 
 /// Go: `type JsxFragment struct { PrimaryExpressionBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxFragment {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub facts: u32,
@@ -1637,16 +1800,19 @@ pub struct JsxFragment {
 }
 
 /// Go: `type JsxOpeningFragment struct { ExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxOpeningFragment {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
 }
 
 /// Go: `type JsxClosingFragment struct { ExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxClosingFragment {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
 }
 
 /// Go: `type JsxAttribute struct { NodeBase; DeclarationBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxAttribute {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -1656,6 +1822,7 @@ pub struct JsxAttribute {
 }
 
 /// Go: `type JsxSpreadAttribute struct { ObjectLiteralElementBase; NodeBase; DeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxSpreadAttribute {
     // ObjectLiteralElementBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1664,12 +1831,14 @@ pub struct JsxSpreadAttribute {
 }
 
 /// Go: `type JsxClosingElement struct { NodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxClosingElement {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
 }
 
 /// Go: `type JsxExpression struct { ExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub dot_dot_dot_token: Option<NodeId>, // Optional
@@ -1677,6 +1846,7 @@ pub struct JsxExpression {
 }
 
 /// Go: `type JsxText struct { ExpressionBase; LiteralLikeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JsxText {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Box<str>,
@@ -1685,12 +1855,14 @@ pub struct JsxText {
 }
 
 /// Go: `type SyntaxList struct { NodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct SyntaxList {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub children: Vec<NodeId>,
 }
 
 /// Go: `type JSDoc struct { NodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDoc {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub comment: Option<NodeList>,
@@ -1698,6 +1870,7 @@ pub struct JSDoc {
 }
 
 /// Go: `type JSDocTypeExpression struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocTypeExpression {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1705,6 +1878,7 @@ pub struct JSDocTypeExpression {
 }
 
 /// Go: `type JSDocNonNullableType struct { JSDocTypeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocNonNullableType {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1712,6 +1886,7 @@ pub struct JSDocNonNullableType {
 }
 
 /// Go: `type JSDocNullableType struct { JSDocTypeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocNullableType {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1719,12 +1894,14 @@ pub struct JSDocNullableType {
 }
 
 /// Go: `type JSDocAllType struct { JSDocTypeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocAllType {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
 }
 
 /// Go: `type JSDocVariadicType struct { JSDocTypeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocVariadicType {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1732,6 +1909,7 @@ pub struct JSDocVariadicType {
 }
 
 /// Go: `type JSDocOptionalType struct { JSDocTypeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocOptionalType {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1739,6 +1917,7 @@ pub struct JSDocOptionalType {
 }
 
 /// Go: `type JSDocTypeTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocTypeTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1747,6 +1926,7 @@ pub struct JSDocTypeTag {
 }
 
 /// Go: `type JSDocUnknownTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocUnknownTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1754,6 +1934,7 @@ pub struct JSDocUnknownTag {
 }
 
 /// Go: `type JSDocTemplateTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocTemplateTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1763,6 +1944,7 @@ pub struct JSDocTemplateTag {
 }
 
 /// Go: `type JSDocReturnTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocReturnTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1771,6 +1953,7 @@ pub struct JSDocReturnTag {
 }
 
 /// Go: `type JSDocPublicTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocPublicTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1778,6 +1961,7 @@ pub struct JSDocPublicTag {
 }
 
 /// Go: `type JSDocPrivateTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocPrivateTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1785,6 +1969,7 @@ pub struct JSDocPrivateTag {
 }
 
 /// Go: `type JSDocProtectedTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocProtectedTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1792,6 +1977,7 @@ pub struct JSDocProtectedTag {
 }
 
 /// Go: `type JSDocReadonlyTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocReadonlyTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1799,6 +1985,7 @@ pub struct JSDocReadonlyTag {
 }
 
 /// Go: `type JSDocOverrideTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocOverrideTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1806,6 +1993,7 @@ pub struct JSDocOverrideTag {
 }
 
 /// Go: `type JSDocDeprecatedTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocDeprecatedTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1813,6 +2001,7 @@ pub struct JSDocDeprecatedTag {
 }
 
 /// Go: `type JSDocSeeTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocSeeTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1821,6 +2010,7 @@ pub struct JSDocSeeTag {
 }
 
 /// Go: `type JSDocImplementsTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocImplementsTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1829,6 +2019,7 @@ pub struct JSDocImplementsTag {
 }
 
 /// Go: `type JSDocAugmentsTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocAugmentsTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1837,6 +2028,7 @@ pub struct JSDocAugmentsTag {
 }
 
 /// Go: `type JSDocSatisfiesTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocSatisfiesTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1845,6 +2037,7 @@ pub struct JSDocSatisfiesTag {
 }
 
 /// Go: `type JSDocThrowsTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocThrowsTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1853,6 +2046,7 @@ pub struct JSDocThrowsTag {
 }
 
 /// Go: `type JSDocThisTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocThisTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1861,6 +2055,7 @@ pub struct JSDocThisTag {
 }
 
 /// Go: `type JSDocImportTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocImportTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1871,6 +2066,7 @@ pub struct JSDocImportTag {
 }
 
 /// Go: `type JSDocCallbackTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocCallbackTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1880,6 +2076,7 @@ pub struct JSDocCallbackTag {
 }
 
 /// Go: `type JSDocOverloadTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocOverloadTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1888,6 +2085,7 @@ pub struct JSDocOverloadTag {
 }
 
 /// Go: `type JSDocTypedefTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocTypedefTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -1897,6 +2095,7 @@ pub struct JSDocTypedefTag {
 }
 
 /// Go: `type JSDocSignature struct { JSDocTypeBase; DeclarationBase; FunctionLikeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocSignature {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1910,15 +2109,18 @@ pub struct JSDocSignature {
 }
 
 /// Go: `type JSDocNameReference struct { TypeNodeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocNameReference {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub name: NodeId,
 }
 
-// SourceFile: struct hand-written in tsc/internal/ast/ast.go; Rust core lives in lib.rs
+// SourceFile: struct hand-written in tsc/internal/ast/ast.go; the node-data payload
+// (SourceFileNodeData) and the full owning struct live in the hand-written core
 
 /// Go: `type ModuleDeclaration struct { StatementBase; DeclarationBase; ExportableBase; ModifiersBase; LocalsContainerBase; BodyBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ModuleDeclaration {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -1937,6 +2139,7 @@ pub struct ModuleDeclaration {
 }
 
 /// Go: `type ImportEqualsDeclaration struct { StatementBase; DeclarationBase; ExportableBase; ModifiersBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ImportEqualsDeclaration {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -1950,6 +2153,7 @@ pub struct ImportEqualsDeclaration {
 }
 
 /// Go: `type ExportDeclaration struct { StatementBase; DeclarationBase; ModifiersBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ExportDeclaration {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub flow_node: Option<FlowNodeId>,
@@ -1963,6 +2167,7 @@ pub struct ExportDeclaration {
 }
 
 /// Go: `type ImportTypeNode struct { NodeWithTypeArgumentsBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ImportTypeNode {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -1974,6 +2179,7 @@ pub struct ImportTypeNode {
 }
 
 /// Go: `type ImportClause struct { NodeBase; DeclarationBase; ExportableBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ImportClause {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -1985,6 +2191,7 @@ pub struct ImportClause {
 }
 
 /// Go: `type ImportSpecifier struct { NodeBase; DeclarationBase; ExportableBase; CompositeBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct ImportSpecifier {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub symbol: Option<SymbolId>,
@@ -1996,12 +2203,14 @@ pub struct ImportSpecifier {
 }
 
 /// Go: `type JSDocText struct { JSDocCommentBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocText {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Vec<Box<str>>,
 }
 
 /// Go: `type JSDocLink struct { JSDocCommentBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocLink {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Vec<Box<str>>,
@@ -2009,6 +2218,7 @@ pub struct JSDocLink {
 }
 
 /// Go: `type JSDocLinkPlain struct { JSDocCommentBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocLinkPlain {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Vec<Box<str>>,
@@ -2016,6 +2226,7 @@ pub struct JSDocLinkPlain {
 }
 
 /// Go: `type JSDocLinkCode struct { JSDocCommentBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocLinkCode {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub text: Vec<Box<str>>,
@@ -2023,6 +2234,7 @@ pub struct JSDocLinkCode {
 }
 
 /// Go: `type TypeParameterDeclaration struct { TypeSyntaxBase; NodeBase; DeclarationBase; ModifiersBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct TypeParameterDeclaration {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -2035,6 +2247,7 @@ pub struct TypeParameterDeclaration {
 }
 
 /// Go: `type SyntheticReferenceExpression struct { ExpressionBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct SyntheticReferenceExpression {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub expression: NodeId,
@@ -2042,6 +2255,7 @@ pub struct SyntheticReferenceExpression {
 }
 
 /// Go: `type JSDocTypeLiteral struct { JSDocTypeBase; DeclarationBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocTypeLiteral {
     // TypeSyntaxBase (marker base; no fields)
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
@@ -2051,6 +2265,7 @@ pub struct JSDocTypeLiteral {
 }
 
 /// Go: `type JSDocParameterOrPropertyTag struct { JSDocTagBase }` (embeds flattened in Go embedding order)
+#[derive(Clone)]
 pub struct JSDocParameterOrPropertyTag {
     // NodeBase (kind/flags/loc/id/parent) — stored on Node, not NodeData (SPEC §5.1).
     pub tag_name: NodeId,
@@ -5032,210 +5247,3652 @@ impl JSDocTypeLiteral {
 
 impl JSDocParameterOrPropertyTag {
     pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {
-        // TODO(port): ForEachChild delegates to the hand-written forEachChild_JSDocParameterOrPropertyTag
-        // in tsc/internal/ast/ast.go (runtime-dependent child ordering).
-        let _ = visit;
-        todo!()
+        if visit(self.tag_name) {
+            return true;
+        }
+        if self.is_name_first {
+            if visit(self.name) {
+                return true;
+            }
+            if let Some(id) = self.type_expression {
+                if visit(id) {
+                    return true;
+                }
+            }
+        } else {
+            if let Some(id) = self.type_expression {
+                if visit(id) {
+                    return true;
+                }
+            }
+            if visit(self.name) {
+                return true;
+            }
+        }
+        if let Some(list) = &self.comment {
+            for &id in &list.nodes {
+                if visit(id) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// NodeData — one variant per concrete node struct (SPEC §5.1)
+// VisitEachChild (Go VisitEachChild + the Update* rebuild, merged: children
+// are visited through the NodeVisitor dispatchers in ast.json member
+// order, and the node is rebuilt only when a child changed — Go's Update*
+// returns the original node in that case, which becomes Option::None,
+// SPEC §5.6. Mandatory child slots dropped by the visitor become
+// NodeId::NONE (Go stores a nil *Node).)
 // ──────────────────────────────────────────────────────────────────────
 
+impl Token {
+    /// Go: `func (node *Token) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl Identifier {
+    /// Go: `func (node *Identifier) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl PrivateIdentifier {
+    /// Go: `func (node *PrivateIdentifier) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl QualifiedName {
+    /// Go: `func (node *QualifiedName) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let left = v.visit_node(Some(self.left));
+        let right = v.visit_node(Some(self.right));
+        if left == Some(self.left)
+            && right == Some(self.right) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            facts: self.facts,
+            left: left.unwrap_or(NodeId::NONE),
+            right: right.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ComputedPropertyName {
+    /// Go: `func (node *ComputedPropertyName) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl Decorator {
+    /// Go: `func (node *Decorator) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl EmptyStatement {
+    /// Go: `func (node *EmptyStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl IfStatement {
+    /// Go: `func (node *IfStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let then_statement = v.visit_embedded_statement(Some(self.then_statement));
+        let else_statement = v.visit_embedded_statement(self.else_statement);
+        if expression == Some(self.expression)
+            && then_statement == Some(self.then_statement)
+            && else_statement == self.else_statement {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+            then_statement: then_statement.unwrap_or(NodeId::NONE),
+            else_statement,
+        })
+    }
+}
+
+impl DoStatement {
+    /// Go: `func (node *DoStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let statement = v.visit_iteration_body(Some(self.statement));
+        let expression = v.visit_node(Some(self.expression));
+        if statement == Some(self.statement)
+            && expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            statement: statement.unwrap_or(NodeId::NONE),
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl WhileStatement {
+    /// Go: `func (node *WhileStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let statement = v.visit_iteration_body(Some(self.statement));
+        if expression == Some(self.expression)
+            && statement == Some(self.statement) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            statement: statement.unwrap_or(NodeId::NONE),
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ForStatement {
+    /// Go: `func (node *ForStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let initializer = v.visit_node(self.initializer);
+        let condition = v.visit_node(self.condition);
+        let incrementor = v.visit_node(self.incrementor);
+        let statement = v.visit_iteration_body(Some(self.statement));
+        if initializer == self.initializer
+            && condition == self.condition
+            && incrementor == self.incrementor
+            && statement == Some(self.statement) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            statement: statement.unwrap_or(NodeId::NONE),
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            facts: self.facts,
+            initializer,
+            condition,
+            incrementor,
+        })
+    }
+}
+
+impl ForInOrOfStatement {
+    /// Go: `func (node *ForInOrOfStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let await_modifier = v.visit_node(self.await_modifier);
+        let initializer = v.visit_node(Some(self.initializer));
+        let expression = v.visit_node(Some(self.expression));
+        let statement = v.visit_iteration_body(Some(self.statement));
+        if await_modifier == self.await_modifier
+            && initializer == Some(self.initializer)
+            && expression == Some(self.expression)
+            && statement == Some(self.statement) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            facts: self.facts,
+            await_modifier,
+            initializer: initializer.unwrap_or(NodeId::NONE),
+            expression: expression.unwrap_or(NodeId::NONE),
+            statement: statement.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl BreakStatement {
+    /// Go: `func (node *BreakStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let label = v.visit_node(self.label);
+        if label == self.label {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            label,
+        })
+    }
+}
+
+impl ContinueStatement {
+    /// Go: `func (node *ContinueStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let label = v.visit_node(self.label);
+        if label == self.label {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            label,
+        })
+    }
+}
+
+impl ReturnStatement {
+    /// Go: `func (node *ReturnStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(self.expression);
+        if expression == self.expression {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            facts: self.facts,
+            expression,
+        })
+    }
+}
+
+impl WithStatement {
+    /// Go: `func (node *WithStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let statement = v.visit_embedded_statement(Some(self.statement));
+        if expression == Some(self.expression)
+            && statement == Some(self.statement) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+            statement: statement.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl SwitchStatement {
+    /// Go: `func (node *SwitchStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let case_block = v.visit_node(Some(self.case_block));
+        if expression == Some(self.expression)
+            && case_block == Some(self.case_block) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+            case_block: case_block.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl CaseBlock {
+    /// Go: `func (node *CaseBlock) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let clauses = v.visit_nodes(self.clauses.as_ref());
+        if clauses == self.clauses {
+            return None;
+        }
+        Some(Self {
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            facts: self.facts,
+            clauses,
+        })
+    }
+}
+
+impl CaseOrDefaultClause {
+    /// Go: `func (node *CaseOrDefaultClause) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let statements = v.visit_nodes(self.statements.as_ref());
+        if expression == Some(self.expression)
+            && statements == self.statements {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+            statements,
+            fallthrough_flow_node: self.fallthrough_flow_node,
+        })
+    }
+}
+
+impl ThrowStatement {
+    /// Go: `func (node *ThrowStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl TryStatement {
+    /// Go: `func (node *TryStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let try_block = v.visit_node(Some(self.try_block));
+        let catch_clause = v.visit_node(self.catch_clause);
+        let finally_block = v.visit_node(self.finally_block);
+        if try_block == Some(self.try_block)
+            && catch_clause == self.catch_clause
+            && finally_block == self.finally_block {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            facts: self.facts,
+            try_block: try_block.unwrap_or(NodeId::NONE),
+            catch_clause,
+            finally_block,
+        })
+    }
+}
+
+impl CatchClause {
+    /// Go: `func (node *CatchClause) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let variable_declaration = v.visit_node(self.variable_declaration);
+        let block = v.visit_node(Some(self.block));
+        if variable_declaration == self.variable_declaration
+            && block == Some(self.block) {
+            return None;
+        }
+        Some(Self {
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            facts: self.facts,
+            variable_declaration,
+            block: block.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl DebuggerStatement {
+    /// Go: `func (node *DebuggerStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl LabeledStatement {
+    /// Go: `func (node *LabeledStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let label = v.visit_node(Some(self.label));
+        let statement = v.visit_embedded_statement(Some(self.statement));
+        if label == Some(self.label)
+            && statement == Some(self.statement) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            label: label.unwrap_or(NodeId::NONE),
+            statement: statement.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ExpressionStatement {
+    /// Go: `func (node *ExpressionStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl Block {
+    /// Go: `func (node *Block) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let statements = v.visit_nodes(self.statements.as_ref());
+        if statements == self.statements {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            facts: self.facts,
+            statements,
+            multi_line: self.multi_line,
+        })
+    }
+}
+
+impl VariableStatement {
+    /// Go: `func (node *VariableStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let declaration_list = v.visit_node(Some(self.declaration_list));
+        if modifiers == self.modifiers
+            && declaration_list == Some(self.declaration_list) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            modifiers,
+            facts: self.facts,
+            declaration_list: declaration_list.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl VariableDeclaration {
+    /// Go: `func (node *VariableDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(Some(self.name));
+        let exclamation_token = v.visit_node(self.exclamation_token);
+        let type_ = v.visit_node(self.type_);
+        let initializer = v.visit_node(self.initializer);
+        if name == Some(self.name)
+            && exclamation_token == self.exclamation_token
+            && type_ == self.type_
+            && initializer == self.initializer {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            facts: self.facts,
+            name: name.unwrap_or(NodeId::NONE),
+            exclamation_token,
+            type_,
+            initializer,
+        })
+    }
+}
+
+impl VariableDeclarationList {
+    /// Go: `func (node *VariableDeclarationList) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let declarations = v.visit_nodes(self.declarations.as_ref());
+        if declarations == self.declarations {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            declarations,
+        })
+    }
+}
+
+impl BindingPattern {
+    /// Go: `func (node *BindingPattern) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let elements = v.visit_nodes(self.elements.as_ref());
+        if elements == self.elements {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            elements,
+        })
+    }
+}
+
+impl ParameterDeclaration {
+    /// Go: `func (node *ParameterDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let dot_dot_dot_token = v.visit_node(self.dot_dot_dot_token);
+        let name = v.visit_node(Some(self.name));
+        let question_token = v.visit_node(self.question_token);
+        let type_ = v.visit_node(self.type_);
+        let initializer = v.visit_node(self.initializer);
+        if modifiers == self.modifiers
+            && dot_dot_dot_token == self.dot_dot_dot_token
+            && name == Some(self.name)
+            && question_token == self.question_token
+            && type_ == self.type_
+            && initializer == self.initializer {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            facts: self.facts,
+            dot_dot_dot_token,
+            name: name.unwrap_or(NodeId::NONE),
+            question_token,
+            type_,
+            initializer,
+        })
+    }
+}
+
+impl BindingElement {
+    /// Go: `func (node *BindingElement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let dot_dot_dot_token = v.visit_node(self.dot_dot_dot_token);
+        let property_name = v.visit_node(self.property_name);
+        let name = v.visit_node(self.name);
+        let initializer = v.visit_node(self.initializer);
+        if dot_dot_dot_token == self.dot_dot_dot_token
+            && property_name == self.property_name
+            && name == self.name
+            && initializer == self.initializer {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            flow_node: self.flow_node,
+            facts: self.facts,
+            dot_dot_dot_token,
+            property_name,
+            name,
+            initializer,
+        })
+    }
+}
+
+impl MissingDeclaration {
+    /// Go: `func (node *MissingDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        if modifiers == self.modifiers {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            symbol: self.symbol,
+            modifiers,
+        })
+    }
+}
+
+impl FunctionDeclaration {
+    /// Go: `func (node *FunctionDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let asterisk_token = v.visit_node(self.asterisk_token);
+        let name = v.visit_node(self.name);
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_parameters(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        let full_signature = v.visit_node(self.full_signature);
+        let body = v.visit_function_body(self.body);
+        if modifiers == self.modifiers
+            && asterisk_token == self.asterisk_token
+            && name == self.name
+            && type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_
+            && full_signature == self.full_signature
+            && body == self.body {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            modifiers,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature,
+            asterisk_token,
+            body,
+            end_flow_node: self.end_flow_node,
+            facts: self.facts,
+            name,
+            return_flow_node: self.return_flow_node,
+        })
+    }
+}
+
+impl ClassDeclaration {
+    /// Go: `func (node *ClassDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(self.name);
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let heritage_clauses = v.visit_nodes(self.heritage_clauses.as_ref());
+        let members = v.visit_nodes(self.members.as_ref());
+        if modifiers == self.modifiers
+            && name == self.name
+            && type_parameters == self.type_parameters
+            && heritage_clauses == self.heritage_clauses
+            && members == self.members {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            modifiers,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            facts: self.facts,
+            name,
+            type_parameters,
+            heritage_clauses,
+            members,
+        })
+    }
+}
+
+impl ClassExpression {
+    /// Go: `func (node *ClassExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(self.name);
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let heritage_clauses = v.visit_nodes(self.heritage_clauses.as_ref());
+        let members = v.visit_nodes(self.members.as_ref());
+        if modifiers == self.modifiers
+            && name == self.name
+            && type_parameters == self.type_parameters
+            && heritage_clauses == self.heritage_clauses
+            && members == self.members {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            modifiers,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            facts: self.facts,
+            name,
+            type_parameters,
+            heritage_clauses,
+            members,
+        })
+    }
+}
+
+impl HeritageClause {
+    /// Go: `func (node *HeritageClause) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let types = v.visit_nodes(self.types.as_ref());
+        if types == self.types {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            token: self.token,
+            types,
+        })
+    }
+}
+
+impl InterfaceDeclaration {
+    /// Go: `func (node *InterfaceDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let heritage_clauses = v.visit_nodes(self.heritage_clauses.as_ref());
+        let members = v.visit_nodes(self.members.as_ref());
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && type_parameters == self.type_parameters
+            && heritage_clauses == self.heritage_clauses
+            && members == self.members {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            modifiers,
+            name: name.unwrap_or(NodeId::NONE),
+            type_parameters,
+            heritage_clauses,
+            members,
+        })
+    }
+}
+
+impl TypeAliasDeclaration {
+    /// Go: `func (node *TypeAliasDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let type_ = v.visit_node(Some(self.type_));
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && type_parameters == self.type_parameters
+            && type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            modifiers,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            name: name.unwrap_or(NodeId::NONE),
+            type_parameters,
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl EnumMember {
+    /// Go: `func (node *EnumMember) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(Some(self.name));
+        let initializer = v.visit_node(self.initializer);
+        if name == Some(self.name)
+            && initializer == self.initializer {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers: self.modifiers.clone(),
+            name: name.unwrap_or(NodeId::NONE),
+            postfix_token: self.postfix_token,
+            facts: self.facts,
+            initializer,
+        })
+    }
+}
+
+impl EnumDeclaration {
+    /// Go: `func (node *EnumDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let members = v.visit_nodes(self.members.as_ref());
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && members == self.members {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            modifiers,
+            facts: self.facts,
+            name: name.unwrap_or(NodeId::NONE),
+            members,
+        })
+    }
+}
+
+impl ModuleBlock {
+    /// Go: `func (node *ModuleBlock) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let statements = v.visit_nodes(self.statements.as_ref());
+        if statements == self.statements {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            facts: self.facts,
+            statements,
+        })
+    }
+}
+
+impl NotEmittedStatement {
+    /// Go: `func (node *NotEmittedStatement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl NotEmittedTypeElement {
+    /// Go: `func (node *NotEmittedTypeElement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl ImportDeclaration {
+    /// Go: `func (node *ImportDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let import_clause = v.visit_node(self.import_clause);
+        let module_specifier = v.visit_node(Some(self.module_specifier));
+        let attributes = v.visit_node(self.attributes);
+        if modifiers == self.modifiers
+            && import_clause == self.import_clause
+            && module_specifier == Some(self.module_specifier)
+            && attributes == self.attributes {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            modifiers,
+            facts: self.facts,
+            symbol: self.symbol,
+            import_clause,
+            module_specifier: module_specifier.unwrap_or(NodeId::NONE),
+            attributes,
+        })
+    }
+}
+
+impl ExternalModuleReference {
+    /// Go: `func (node *ExternalModuleReference) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl NamespaceImport {
+    /// Go: `func (node *NamespaceImport) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(Some(self.name));
+        if name == Some(self.name) {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            name: name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl NamedImports {
+    /// Go: `func (node *NamedImports) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let elements = v.visit_nodes(self.elements.as_ref());
+        if elements == self.elements {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            elements,
+        })
+    }
+}
+
+impl ExportAssignment {
+    /// Go: `func (node *ExportAssignment) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let type_ = v.visit_node(Some(self.type_));
+        let expression = v.visit_node(Some(self.expression));
+        if modifiers == self.modifiers
+            && type_ == Some(self.type_)
+            && expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            symbol: self.symbol,
+            modifiers,
+            facts: self.facts,
+            is_export_equals: self.is_export_equals,
+            type_: type_.unwrap_or(NodeId::NONE),
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl NamespaceExportDeclaration {
+    /// Go: `func (node *NamespaceExportDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        if modifiers == self.modifiers
+            && name == Some(self.name) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            symbol: self.symbol,
+            modifiers,
+            name: name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl NamespaceExport {
+    /// Go: `func (node *NamespaceExport) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(Some(self.name));
+        if name == Some(self.name) {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            name: name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl NamedExports {
+    /// Go: `func (node *NamedExports) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let elements = v.visit_nodes(self.elements.as_ref());
+        if elements == self.elements {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            elements,
+        })
+    }
+}
+
+impl ExportSpecifier {
+    /// Go: `func (node *ExportSpecifier) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let property_name = v.visit_node(self.property_name);
+        let name = v.visit_node(Some(self.name));
+        if property_name == self.property_name
+            && name == Some(self.name) {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            facts: self.facts,
+            is_type_only: self.is_type_only,
+            property_name,
+            name: name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl CallSignatureDeclaration {
+    /// Go: `func (node *CallSignatureDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_nodes(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        if type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_ {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature: self.full_signature,
+        })
+    }
+}
+
+impl ConstructSignatureDeclaration {
+    /// Go: `func (node *ConstructSignatureDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_nodes(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        if type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_ {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature: self.full_signature,
+        })
+    }
+}
+
+impl ConstructorDeclaration {
+    /// Go: `func (node *ConstructorDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_parameters(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        let full_signature = v.visit_node(self.full_signature);
+        let body = v.visit_function_body(self.body);
+        if modifiers == self.modifiers
+            && type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_
+            && full_signature == self.full_signature
+            && body == self.body {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature,
+            asterisk_token: self.asterisk_token,
+            body,
+            end_flow_node: self.end_flow_node,
+            facts: self.facts,
+            return_flow_node: self.return_flow_node,
+        })
+    }
+}
+
+impl GetAccessorDeclaration {
+    /// Go: `func (node *GetAccessorDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_parameters(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        let full_signature = v.visit_node(self.full_signature);
+        let body = v.visit_function_body(self.body);
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_
+            && full_signature == self.full_signature
+            && body == self.body {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            name: name.unwrap_or(NodeId::NONE),
+            postfix_token: self.postfix_token,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature,
+            asterisk_token: self.asterisk_token,
+            body,
+            end_flow_node: self.end_flow_node,
+            flow_node: self.flow_node,
+            facts: self.facts,
+        })
+    }
+}
+
+impl SetAccessorDeclaration {
+    /// Go: `func (node *SetAccessorDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_parameters(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        let full_signature = v.visit_node(self.full_signature);
+        let body = v.visit_function_body(self.body);
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_
+            && full_signature == self.full_signature
+            && body == self.body {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            name: name.unwrap_or(NodeId::NONE),
+            postfix_token: self.postfix_token,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature,
+            asterisk_token: self.asterisk_token,
+            body,
+            end_flow_node: self.end_flow_node,
+            flow_node: self.flow_node,
+            facts: self.facts,
+        })
+    }
+}
+
+impl IndexSignatureDeclaration {
+    /// Go: `func (node *IndexSignatureDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let parameters = v.visit_nodes(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        if modifiers == self.modifiers
+            && parameters == self.parameters
+            && type_ == self.type_ {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters: self.type_parameters.clone(),
+            parameters,
+            type_,
+            full_signature: self.full_signature,
+        })
+    }
+}
+
+impl MethodSignatureDeclaration {
+    /// Go: `func (node *MethodSignatureDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let postfix_token = v.visit_node(self.postfix_token);
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_nodes(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && postfix_token == self.postfix_token
+            && type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_ {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            name: name.unwrap_or(NodeId::NONE),
+            postfix_token,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature: self.full_signature,
+        })
+    }
+}
+
+impl MethodDeclaration {
+    /// Go: `func (node *MethodDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let asterisk_token = v.visit_node(self.asterisk_token);
+        let name = v.visit_node(Some(self.name));
+        let postfix_token = v.visit_node(self.postfix_token);
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_parameters(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        let full_signature = v.visit_node(self.full_signature);
+        let body = v.visit_function_body(self.body);
+        if modifiers == self.modifiers
+            && asterisk_token == self.asterisk_token
+            && name == Some(self.name)
+            && postfix_token == self.postfix_token
+            && type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_
+            && full_signature == self.full_signature
+            && body == self.body {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            name: name.unwrap_or(NodeId::NONE),
+            postfix_token,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature,
+            asterisk_token,
+            body,
+            end_flow_node: self.end_flow_node,
+            flow_node: self.flow_node,
+            facts: self.facts,
+        })
+    }
+}
+
+impl PropertySignatureDeclaration {
+    /// Go: `func (node *PropertySignatureDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let postfix_token = v.visit_node(self.postfix_token);
+        let type_ = v.visit_node(Some(self.type_));
+        let initializer = v.visit_node(Some(self.initializer));
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && postfix_token == self.postfix_token
+            && type_ == Some(self.type_)
+            && initializer == Some(self.initializer) {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            name: name.unwrap_or(NodeId::NONE),
+            postfix_token,
+            type_: type_.unwrap_or(NodeId::NONE),
+            initializer: initializer.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl PropertyDeclaration {
+    /// Go: `func (node *PropertyDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let postfix_token = v.visit_node(self.postfix_token);
+        let type_ = v.visit_node(self.type_);
+        let initializer = v.visit_node(self.initializer);
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && postfix_token == self.postfix_token
+            && type_ == self.type_
+            && initializer == self.initializer {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            name: name.unwrap_or(NodeId::NONE),
+            postfix_token,
+            facts: self.facts,
+            type_,
+            initializer,
+        })
+    }
+}
+
+impl SemicolonClassElement {
+    /// Go: `func (node *SemicolonClassElement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl ClassStaticBlockDeclaration {
+    /// Go: `func (node *ClassStaticBlockDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let body = v.visit_node(Some(self.body));
+        if modifiers == self.modifiers
+            && body == Some(self.body) {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            facts: self.facts,
+            body: body.unwrap_or(NodeId::NONE),
+            return_flow_node: self.return_flow_node,
+        })
+    }
+}
+
+impl OmittedExpression {
+    /// Go: `func (node *OmittedExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl KeywordExpression {
+    /// Go: `func (node *KeywordExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl StringLiteral {
+    /// Go: `func (node *StringLiteral) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl NumericLiteral {
+    /// Go: `func (node *NumericLiteral) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl BigIntLiteral {
+    /// Go: `func (node *BigIntLiteral) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl RegularExpressionLiteral {
+    /// Go: `func (node *RegularExpressionLiteral) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl NoSubstitutionTemplateLiteral {
+    /// Go: `func (node *NoSubstitutionTemplateLiteral) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl BinaryExpression {
+    /// Go: `func (node *BinaryExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let left = v.visit_node(Some(self.left));
+        let type_ = v.visit_node(self.type_);
+        let operator_token = v.visit_node(Some(self.operator_token));
+        let right = v.visit_node(Some(self.right));
+        if modifiers == self.modifiers
+            && left == Some(self.left)
+            && type_ == self.type_
+            && operator_token == Some(self.operator_token)
+            && right == Some(self.right) {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            facts: self.facts,
+            left: left.unwrap_or(NodeId::NONE),
+            type_,
+            operator_token: operator_token.unwrap_or(NodeId::NONE),
+            right: right.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl PrefixUnaryExpression {
+    /// Go: `func (node *PrefixUnaryExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let operand = v.visit_node(Some(self.operand));
+        if operand == Some(self.operand) {
+            return None;
+        }
+        Some(Self {
+            operator: self.operator,
+            operand: operand.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl PostfixUnaryExpression {
+    /// Go: `func (node *PostfixUnaryExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let operand = v.visit_node(Some(self.operand));
+        if operand == Some(self.operand) {
+            return None;
+        }
+        Some(Self {
+            operand: operand.unwrap_or(NodeId::NONE),
+            operator: self.operator,
+        })
+    }
+}
+
+impl YieldExpression {
+    /// Go: `func (node *YieldExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let asterisk_token = v.visit_node(self.asterisk_token);
+        let expression = v.visit_node(self.expression);
+        if asterisk_token == self.asterisk_token
+            && expression == self.expression {
+            return None;
+        }
+        Some(Self {
+            asterisk_token,
+            expression,
+        })
+    }
+}
+
+impl ArrowFunction {
+    /// Go: `func (node *ArrowFunction) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_parameters(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        let full_signature = v.visit_node(self.full_signature);
+        let equals_greater_than_token = v.visit_node(Some(self.equals_greater_than_token));
+        let body = v.visit_function_body(self.body);
+        if modifiers == self.modifiers
+            && type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_
+            && full_signature == self.full_signature
+            && equals_greater_than_token == Some(self.equals_greater_than_token)
+            && body == self.body {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature,
+            asterisk_token: self.asterisk_token,
+            body,
+            end_flow_node: self.end_flow_node,
+            flow_node: self.flow_node,
+            facts: self.facts,
+            equals_greater_than_token: equals_greater_than_token.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl FunctionExpression {
+    /// Go: `func (node *FunctionExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let asterisk_token = v.visit_node(self.asterisk_token);
+        let name = v.visit_node(self.name);
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_parameters(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        let full_signature = v.visit_node(self.full_signature);
+        let body = v.visit_function_body(self.body);
+        if modifiers == self.modifiers
+            && asterisk_token == self.asterisk_token
+            && name == self.name
+            && type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_
+            && full_signature == self.full_signature
+            && body == self.body {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature,
+            asterisk_token,
+            body,
+            end_flow_node: self.end_flow_node,
+            flow_node: self.flow_node,
+            facts: self.facts,
+            name,
+            return_flow_node: self.return_flow_node,
+        })
+    }
+}
+
+impl AsExpression {
+    /// Go: `func (node *AsExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let type_ = v.visit_node(Some(self.type_));
+        if expression == Some(self.expression)
+            && type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl SatisfiesExpression {
+    /// Go: `func (node *SatisfiesExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let type_ = v.visit_node(Some(self.type_));
+        if expression == Some(self.expression)
+            && type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ConditionalExpression {
+    /// Go: `func (node *ConditionalExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let condition = v.visit_node(Some(self.condition));
+        let question_token = v.visit_node(Some(self.question_token));
+        let when_true = v.visit_node(Some(self.when_true));
+        let colon_token = v.visit_node(Some(self.colon_token));
+        let when_false = v.visit_node(Some(self.when_false));
+        if condition == Some(self.condition)
+            && question_token == Some(self.question_token)
+            && when_true == Some(self.when_true)
+            && colon_token == Some(self.colon_token)
+            && when_false == Some(self.when_false) {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            condition: condition.unwrap_or(NodeId::NONE),
+            question_token: question_token.unwrap_or(NodeId::NONE),
+            when_true: when_true.unwrap_or(NodeId::NONE),
+            colon_token: colon_token.unwrap_or(NodeId::NONE),
+            when_false: when_false.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl PropertyAccessExpression {
+    /// Go: `func (node *PropertyAccessExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let question_dot_token = v.visit_node(self.question_dot_token);
+        let name = v.visit_node(Some(self.name));
+        if expression == Some(self.expression)
+            && question_dot_token == self.question_dot_token
+            && name == Some(self.name) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+            question_dot_token,
+            name: name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ElementAccessExpression {
+    /// Go: `func (node *ElementAccessExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let question_dot_token = v.visit_node(self.question_dot_token);
+        let argument_expression = v.visit_node(Some(self.argument_expression));
+        if expression == Some(self.expression)
+            && question_dot_token == self.question_dot_token
+            && argument_expression == Some(self.argument_expression) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+            question_dot_token,
+            argument_expression: argument_expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl CallExpression {
+    /// Go: `func (node *CallExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let question_dot_token = v.visit_node(self.question_dot_token);
+        let type_arguments = v.visit_nodes(self.type_arguments.as_ref());
+        let arguments = v.visit_nodes(self.arguments.as_ref());
+        if expression == Some(self.expression)
+            && question_dot_token == self.question_dot_token
+            && type_arguments == self.type_arguments
+            && arguments == self.arguments {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+            question_dot_token,
+            type_arguments,
+            arguments,
+        })
+    }
+}
+
+impl NewExpression {
+    /// Go: `func (node *NewExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let type_arguments = v.visit_nodes(self.type_arguments.as_ref());
+        let arguments = v.visit_nodes(self.arguments.as_ref());
+        if expression == Some(self.expression)
+            && type_arguments == self.type_arguments
+            && arguments == self.arguments {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+            type_arguments,
+            arguments,
+        })
+    }
+}
+
+impl MetaProperty {
+    /// Go: `func (node *MetaProperty) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(Some(self.name));
+        if name == Some(self.name) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            facts: self.facts,
+            keyword_token: self.keyword_token,
+            name: name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl NonNullExpression {
+    /// Go: `func (node *NonNullExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl SpreadElement {
+    /// Go: `func (node *SpreadElement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl TemplateExpression {
+    /// Go: `func (node *TemplateExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let head = v.visit_node(Some(self.head));
+        let template_spans = v.visit_nodes(self.template_spans.as_ref());
+        if head == Some(self.head)
+            && template_spans == self.template_spans {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            head: head.unwrap_or(NodeId::NONE),
+            template_spans,
+        })
+    }
+}
+
+impl TemplateSpan {
+    /// Go: `func (node *TemplateSpan) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let literal = v.visit_node(Some(self.literal));
+        if expression == Some(self.expression)
+            && literal == Some(self.literal) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+            literal: literal.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl TaggedTemplateExpression {
+    /// Go: `func (node *TaggedTemplateExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag = v.visit_node(Some(self.tag));
+        let question_dot_token = v.visit_node(Some(self.question_dot_token));
+        let type_arguments = v.visit_nodes(self.type_arguments.as_ref());
+        let template = v.visit_node(Some(self.template));
+        if tag == Some(self.tag)
+            && question_dot_token == Some(self.question_dot_token)
+            && type_arguments == self.type_arguments
+            && template == Some(self.template) {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            tag: tag.unwrap_or(NodeId::NONE),
+            question_dot_token: question_dot_token.unwrap_or(NodeId::NONE),
+            type_arguments,
+            template: template.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ParenthesizedExpression {
+    /// Go: `func (node *ParenthesizedExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ArrayLiteralExpression {
+    /// Go: `func (node *ArrayLiteralExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let elements = v.visit_nodes(self.elements.as_ref());
+        if elements == self.elements {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            elements,
+            multi_line: self.multi_line,
+        })
+    }
+}
+
+impl ObjectLiteralExpression {
+    /// Go: `func (node *ObjectLiteralExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let properties = v.visit_nodes(self.properties.as_ref());
+        if properties == self.properties {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            facts: self.facts,
+            properties,
+            multi_line: self.multi_line,
+        })
+    }
+}
+
+impl SpreadAssignment {
+    /// Go: `func (node *SpreadAssignment) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl PropertyAssignment {
+    /// Go: `func (node *PropertyAssignment) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let postfix_token = v.visit_node(self.postfix_token);
+        let type_ = v.visit_node(Some(self.type_));
+        let initializer = v.visit_node(Some(self.initializer));
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && postfix_token == self.postfix_token
+            && type_ == Some(self.type_)
+            && initializer == Some(self.initializer) {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            name: name.unwrap_or(NodeId::NONE),
+            postfix_token,
+            facts: self.facts,
+            type_: type_.unwrap_or(NodeId::NONE),
+            initializer: initializer.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ShorthandPropertyAssignment {
+    /// Go: `func (node *ShorthandPropertyAssignment) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let postfix_token = v.visit_node(self.postfix_token);
+        let type_ = v.visit_node(Some(self.type_));
+        let equals_token = v.visit_node(self.equals_token);
+        let object_assignment_initializer = v.visit_node(self.object_assignment_initializer);
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && postfix_token == self.postfix_token
+            && type_ == Some(self.type_)
+            && equals_token == self.equals_token
+            && object_assignment_initializer == self.object_assignment_initializer {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            name: name.unwrap_or(NodeId::NONE),
+            postfix_token,
+            facts: self.facts,
+            type_: type_.unwrap_or(NodeId::NONE),
+            equals_token,
+            object_assignment_initializer,
+        })
+    }
+}
+
+impl DeleteExpression {
+    /// Go: `func (node *DeleteExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl TypeOfExpression {
+    /// Go: `func (node *TypeOfExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl VoidExpression {
+    /// Go: `func (node *VoidExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl AwaitExpression {
+    /// Go: `func (node *AwaitExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl TypeAssertion {
+    /// Go: `func (node *TypeAssertion) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_ = v.visit_node(Some(self.type_));
+        let expression = v.visit_node(Some(self.expression));
+        if type_ == Some(self.type_)
+            && expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            type_: type_.unwrap_or(NodeId::NONE),
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl KeywordTypeNode {
+    /// Go: `func (node *KeywordTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl UnionTypeNode {
+    /// Go: `func (node *UnionTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let types = v.visit_nodes(self.types.as_ref());
+        if types == self.types {
+            return None;
+        }
+        Some(Self {
+            types,
+        })
+    }
+}
+
+impl IntersectionTypeNode {
+    /// Go: `func (node *IntersectionTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let types = v.visit_nodes(self.types.as_ref());
+        if types == self.types {
+            return None;
+        }
+        Some(Self {
+            types,
+        })
+    }
+}
+
+impl ConditionalTypeNode {
+    /// Go: `func (node *ConditionalTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let check_type = v.visit_node(Some(self.check_type));
+        let extends_type = v.visit_node(Some(self.extends_type));
+        let true_type = v.visit_node(Some(self.true_type));
+        let false_type = v.visit_node(Some(self.false_type));
+        if check_type == Some(self.check_type)
+            && extends_type == Some(self.extends_type)
+            && true_type == Some(self.true_type)
+            && false_type == Some(self.false_type) {
+            return None;
+        }
+        Some(Self {
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            check_type: check_type.unwrap_or(NodeId::NONE),
+            extends_type: extends_type.unwrap_or(NodeId::NONE),
+            true_type: true_type.unwrap_or(NodeId::NONE),
+            false_type: false_type.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl TypeOperatorNode {
+    /// Go: `func (node *TypeOperatorNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_ = v.visit_node(Some(self.type_));
+        if type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            operator: self.operator,
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl InferTypeNode {
+    /// Go: `func (node *InferTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_parameter = v.visit_node(Some(self.type_parameter));
+        if type_parameter == Some(self.type_parameter) {
+            return None;
+        }
+        Some(Self {
+            type_parameter: type_parameter.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ArrayTypeNode {
+    /// Go: `func (node *ArrayTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let element_type = v.visit_node(Some(self.element_type));
+        if element_type == Some(self.element_type) {
+            return None;
+        }
+        Some(Self {
+            element_type: element_type.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl IndexedAccessTypeNode {
+    /// Go: `func (node *IndexedAccessTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let object_type = v.visit_node(Some(self.object_type));
+        let index_type = v.visit_node(Some(self.index_type));
+        if object_type == Some(self.object_type)
+            && index_type == Some(self.index_type) {
+            return None;
+        }
+        Some(Self {
+            object_type: object_type.unwrap_or(NodeId::NONE),
+            index_type: index_type.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl TypeReferenceNode {
+    /// Go: `func (node *TypeReferenceNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_name = v.visit_node(Some(self.type_name));
+        let type_arguments = v.visit_nodes(self.type_arguments.as_ref());
+        if type_name == Some(self.type_name)
+            && type_arguments == self.type_arguments {
+            return None;
+        }
+        Some(Self {
+            type_arguments,
+            type_name: type_name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ExpressionWithTypeArguments {
+    /// Go: `func (node *ExpressionWithTypeArguments) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let type_arguments = v.visit_nodes(self.type_arguments.as_ref());
+        if expression == Some(self.expression)
+            && type_arguments == self.type_arguments {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            expression: expression.unwrap_or(NodeId::NONE),
+            type_arguments,
+        })
+    }
+}
+
+impl LiteralTypeNode {
+    /// Go: `func (node *LiteralTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let literal = v.visit_node(Some(self.literal));
+        if literal == Some(self.literal) {
+            return None;
+        }
+        Some(Self {
+            literal: literal.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ThisTypeNode {
+    /// Go: `func (node *ThisTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl TypePredicateNode {
+    /// Go: `func (node *TypePredicateNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let asserts_modifier = v.visit_node(self.asserts_modifier);
+        let parameter_name = v.visit_node(Some(self.parameter_name));
+        let type_ = v.visit_node(self.type_);
+        if asserts_modifier == self.asserts_modifier
+            && parameter_name == Some(self.parameter_name)
+            && type_ == self.type_ {
+            return None;
+        }
+        Some(Self {
+            asserts_modifier,
+            parameter_name: parameter_name.unwrap_or(NodeId::NONE),
+            type_,
+        })
+    }
+}
+
+impl ImportAttribute {
+    /// Go: `func (node *ImportAttribute) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(Some(self.name));
+        let value = v.visit_node(Some(self.value));
+        if name == Some(self.name)
+            && value == Some(self.value) {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            name: name.unwrap_or(NodeId::NONE),
+            value: value.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ImportAttributes {
+    /// Go: `func (node *ImportAttributes) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let attributes = v.visit_nodes(self.attributes.as_ref());
+        if attributes == self.attributes {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            token: self.token,
+            attributes,
+            multi_line: self.multi_line,
+        })
+    }
+}
+
+impl TypeQueryNode {
+    /// Go: `func (node *TypeQueryNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expr_name = v.visit_node(Some(self.expr_name));
+        let type_arguments = v.visit_nodes(self.type_arguments.as_ref());
+        if expr_name == Some(self.expr_name)
+            && type_arguments == self.type_arguments {
+            return None;
+        }
+        Some(Self {
+            type_arguments,
+            expr_name: expr_name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl MappedTypeNode {
+    /// Go: `func (node *MappedTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let readonly_token = v.visit_node(self.readonly_token);
+        let type_parameter = v.visit_node(Some(self.type_parameter));
+        let name_type = v.visit_node(self.name_type);
+        let question_token = v.visit_node(self.question_token);
+        let type_ = v.visit_node(self.type_);
+        let members = v.visit_nodes(self.members.as_ref());
+        if readonly_token == self.readonly_token
+            && type_parameter == Some(self.type_parameter)
+            && name_type == self.name_type
+            && question_token == self.question_token
+            && type_ == self.type_
+            && members == self.members {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            readonly_token,
+            type_parameter: type_parameter.unwrap_or(NodeId::NONE),
+            name_type,
+            question_token,
+            type_,
+            members,
+        })
+    }
+}
+
+impl TypeLiteralNode {
+    /// Go: `func (node *TypeLiteralNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let members = v.visit_nodes(self.members.as_ref());
+        if members == self.members {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            members,
+        })
+    }
+}
+
+impl TupleTypeNode {
+    /// Go: `func (node *TupleTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let elements = v.visit_nodes(self.elements.as_ref());
+        if elements == self.elements {
+            return None;
+        }
+        Some(Self {
+            elements,
+        })
+    }
+}
+
+impl NamedTupleMember {
+    /// Go: `func (node *NamedTupleMember) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let dot_dot_dot_token = v.visit_node(self.dot_dot_dot_token);
+        let name = v.visit_node(Some(self.name));
+        let question_token = v.visit_node(self.question_token);
+        let type_ = v.visit_node(Some(self.type_));
+        if dot_dot_dot_token == self.dot_dot_dot_token
+            && name == Some(self.name)
+            && question_token == self.question_token
+            && type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            dot_dot_dot_token,
+            name: name.unwrap_or(NodeId::NONE),
+            question_token,
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl OptionalTypeNode {
+    /// Go: `func (node *OptionalTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_ = v.visit_node(Some(self.type_));
+        if type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl RestTypeNode {
+    /// Go: `func (node *RestTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_ = v.visit_node(Some(self.type_));
+        if type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ParenthesizedTypeNode {
+    /// Go: `func (node *ParenthesizedTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_ = v.visit_node(Some(self.type_));
+        if type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl FunctionTypeNode {
+    /// Go: `func (node *FunctionTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_nodes(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        if type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_ {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers: self.modifiers.clone(),
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature: self.full_signature,
+        })
+    }
+}
+
+impl ConstructorTypeNode {
+    /// Go: `func (node *ConstructorTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_nodes(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        if modifiers == self.modifiers
+            && type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_ {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature: self.full_signature,
+        })
+    }
+}
+
+impl TemplateHead {
+    /// Go: `func (node *TemplateHead) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl TemplateMiddle {
+    /// Go: `func (node *TemplateMiddle) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl TemplateTail {
+    /// Go: `func (node *TemplateTail) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl TemplateLiteralTypeNode {
+    /// Go: `func (node *TemplateLiteralTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let head = v.visit_node(Some(self.head));
+        let template_spans = v.visit_nodes(self.template_spans.as_ref());
+        if head == Some(self.head)
+            && template_spans == self.template_spans {
+            return None;
+        }
+        Some(Self {
+            head: head.unwrap_or(NodeId::NONE),
+            template_spans,
+        })
+    }
+}
+
+impl TemplateLiteralTypeSpan {
+    /// Go: `func (node *TemplateLiteralTypeSpan) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_ = v.visit_node(Some(self.type_));
+        let literal = v.visit_node(Some(self.literal));
+        if type_ == Some(self.type_)
+            && literal == Some(self.literal) {
+            return None;
+        }
+        Some(Self {
+            type_: type_.unwrap_or(NodeId::NONE),
+            literal: literal.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl SyntheticExpression {
+    /// Go: `func (node *SyntheticExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tuple_name_source = v.visit_node(self.tuple_name_source);
+        if tuple_name_source == self.tuple_name_source {
+            return None;
+        }
+        Some(Self {
+            type_: self.type_.clone(),
+            is_spread: self.is_spread,
+            tuple_name_source,
+        })
+    }
+}
+
+impl PartiallyEmittedExpression {
+    /// Go: `func (node *PartiallyEmittedExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JsxElement {
+    /// Go: `func (node *JsxElement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let opening_element = v.visit_node(Some(self.opening_element));
+        let children = v.visit_nodes(self.children.as_ref());
+        let closing_element = v.visit_node(Some(self.closing_element));
+        if opening_element == Some(self.opening_element)
+            && children == self.children
+            && closing_element == Some(self.closing_element) {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            opening_element: opening_element.unwrap_or(NodeId::NONE),
+            children,
+            closing_element: closing_element.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JsxAttributes {
+    /// Go: `func (node *JsxAttributes) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let properties = v.visit_nodes(self.properties.as_ref());
+        if properties == self.properties {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            facts: self.facts,
+            properties,
+        })
+    }
+}
+
+impl JsxNamespacedName {
+    /// Go: `func (node *JsxNamespacedName) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let namespace = v.visit_node(Some(self.namespace));
+        let name = v.visit_node(Some(self.name));
+        if namespace == Some(self.namespace)
+            && name == Some(self.name) {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            namespace: namespace.unwrap_or(NodeId::NONE),
+            name: name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JsxOpeningElement {
+    /// Go: `func (node *JsxOpeningElement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let type_arguments = v.visit_nodes(self.type_arguments.as_ref());
+        let attributes = v.visit_node(Some(self.attributes));
+        if tag_name == Some(self.tag_name)
+            && type_arguments == self.type_arguments
+            && attributes == Some(self.attributes) {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            type_arguments,
+            attributes: attributes.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JsxSelfClosingElement {
+    /// Go: `func (node *JsxSelfClosingElement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let type_arguments = v.visit_nodes(self.type_arguments.as_ref());
+        let attributes = v.visit_node(Some(self.attributes));
+        if tag_name == Some(self.tag_name)
+            && type_arguments == self.type_arguments
+            && attributes == Some(self.attributes) {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            type_arguments,
+            attributes: attributes.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JsxFragment {
+    /// Go: `func (node *JsxFragment) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let opening_fragment = v.visit_node(Some(self.opening_fragment));
+        let children = v.visit_nodes(self.children.as_ref());
+        let closing_fragment = v.visit_node(Some(self.closing_fragment));
+        if opening_fragment == Some(self.opening_fragment)
+            && children == self.children
+            && closing_fragment == Some(self.closing_fragment) {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            opening_fragment: opening_fragment.unwrap_or(NodeId::NONE),
+            children,
+            closing_fragment: closing_fragment.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JsxOpeningFragment {
+    /// Go: `func (node *JsxOpeningFragment) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl JsxClosingFragment {
+    /// Go: `func (node *JsxClosingFragment) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl JsxAttribute {
+    /// Go: `func (node *JsxAttribute) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(Some(self.name));
+        let initializer = v.visit_node(self.initializer);
+        if name == Some(self.name)
+            && initializer == self.initializer {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            facts: self.facts,
+            name: name.unwrap_or(NodeId::NONE),
+            initializer,
+        })
+    }
+}
+
+impl JsxSpreadAttribute {
+    /// Go: `func (node *JsxSpreadAttribute) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        if expression == Some(self.expression) {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            expression: expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JsxClosingElement {
+    /// Go: `func (node *JsxClosingElement) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        if tag_name == Some(self.tag_name) {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JsxExpression {
+    /// Go: `func (node *JsxExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let dot_dot_dot_token = v.visit_node(self.dot_dot_dot_token);
+        let expression = v.visit_node(self.expression);
+        if dot_dot_dot_token == self.dot_dot_dot_token
+            && expression == self.expression {
+            return None;
+        }
+        Some(Self {
+            dot_dot_dot_token,
+            expression,
+        })
+    }
+}
+
+impl JsxText {
+    /// Go: `func (node *JsxText) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl SyntaxList {
+    /// Go: `func (node *SyntaxList) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let children: Vec<NodeId> = self.children.iter().map(|&c| v.visit_node(Some(c)).unwrap_or(NodeId::NONE)).collect();
+        if children == self.children {
+            return None;
+        }
+        Some(Self {
+            children,
+        })
+    }
+}
+
+impl JSDoc {
+    /// Go: `func (node *JSDoc) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let comment = v.visit_nodes(self.comment.as_ref());
+        let tags = v.visit_nodes(self.tags.as_ref());
+        if comment == self.comment
+            && tags == self.tags {
+            return None;
+        }
+        Some(Self {
+            comment,
+            tags,
+        })
+    }
+}
+
+impl JSDocTypeExpression {
+    /// Go: `func (node *JSDocTypeExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_ = v.visit_node(Some(self.type_));
+        if type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocNonNullableType {
+    /// Go: `func (node *JSDocNonNullableType) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_ = v.visit_node(Some(self.type_));
+        if type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocNullableType {
+    /// Go: `func (node *JSDocNullableType) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_ = v.visit_node(Some(self.type_));
+        if type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocAllType {
+    /// Go: `func (node *JSDocAllType) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl JSDocVariadicType {
+    /// Go: `func (node *JSDocVariadicType) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_ = v.visit_node(Some(self.type_));
+        if type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocOptionalType {
+    /// Go: `func (node *JSDocOptionalType) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_ = v.visit_node(Some(self.type_));
+        if type_ == Some(self.type_) {
+            return None;
+        }
+        Some(Self {
+            type_: type_.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocTypeTag {
+    /// Go: `func (node *JSDocTypeTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let type_expression = v.visit_node(Some(self.type_expression));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && type_expression == Some(self.type_expression)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            type_expression: type_expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocUnknownTag {
+    /// Go: `func (node *JSDocUnknownTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+        })
+    }
+}
+
+impl JSDocTemplateTag {
+    /// Go: `func (node *JSDocTemplateTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let constraint = v.visit_node(Some(self.constraint));
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && constraint == Some(self.constraint)
+            && type_parameters == self.type_parameters
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            constraint: constraint.unwrap_or(NodeId::NONE),
+            type_parameters,
+        })
+    }
+}
+
+impl JSDocReturnTag {
+    /// Go: `func (node *JSDocReturnTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let type_expression = v.visit_node(self.type_expression);
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && type_expression == self.type_expression
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            type_expression,
+        })
+    }
+}
+
+impl JSDocPublicTag {
+    /// Go: `func (node *JSDocPublicTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+        })
+    }
+}
+
+impl JSDocPrivateTag {
+    /// Go: `func (node *JSDocPrivateTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+        })
+    }
+}
+
+impl JSDocProtectedTag {
+    /// Go: `func (node *JSDocProtectedTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+        })
+    }
+}
+
+impl JSDocReadonlyTag {
+    /// Go: `func (node *JSDocReadonlyTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+        })
+    }
+}
+
+impl JSDocOverrideTag {
+    /// Go: `func (node *JSDocOverrideTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+        })
+    }
+}
+
+impl JSDocDeprecatedTag {
+    /// Go: `func (node *JSDocDeprecatedTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+        })
+    }
+}
+
+impl JSDocSeeTag {
+    /// Go: `func (node *JSDocSeeTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let name_expression = v.visit_node(Some(self.name_expression));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && name_expression == Some(self.name_expression)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            name_expression: name_expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocImplementsTag {
+    /// Go: `func (node *JSDocImplementsTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let class_name = v.visit_node(Some(self.class_name));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && class_name == Some(self.class_name)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            class_name: class_name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocAugmentsTag {
+    /// Go: `func (node *JSDocAugmentsTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let class_name = v.visit_node(Some(self.class_name));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && class_name == Some(self.class_name)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            class_name: class_name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocSatisfiesTag {
+    /// Go: `func (node *JSDocSatisfiesTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let type_expression = v.visit_node(Some(self.type_expression));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && type_expression == Some(self.type_expression)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            type_expression: type_expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocThrowsTag {
+    /// Go: `func (node *JSDocThrowsTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let type_expression = v.visit_node(self.type_expression);
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && type_expression == self.type_expression
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            type_expression,
+        })
+    }
+}
+
+impl JSDocThisTag {
+    /// Go: `func (node *JSDocThisTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let type_expression = v.visit_node(Some(self.type_expression));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && type_expression == Some(self.type_expression)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            type_expression: type_expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocImportTag {
+    /// Go: `func (node *JSDocImportTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let import_clause = v.visit_node(self.import_clause);
+        let module_specifier = v.visit_node(Some(self.module_specifier));
+        let attributes = v.visit_node(self.attributes);
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && import_clause == self.import_clause
+            && module_specifier == Some(self.module_specifier)
+            && attributes == self.attributes
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            import_clause,
+            module_specifier: module_specifier.unwrap_or(NodeId::NONE),
+            attributes,
+        })
+    }
+}
+
+impl JSDocCallbackTag {
+    /// Go: `func (node *JSDocCallbackTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let type_expression = v.visit_node(Some(self.type_expression));
+        let name = v.visit_node(self.name);
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && type_expression == Some(self.type_expression)
+            && name == self.name
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            type_expression: type_expression.unwrap_or(NodeId::NONE),
+            name,
+        })
+    }
+}
+
+impl JSDocOverloadTag {
+    /// Go: `func (node *JSDocOverloadTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let type_expression = v.visit_node(Some(self.type_expression));
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && type_expression == Some(self.type_expression)
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            type_expression: type_expression.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocTypedefTag {
+    /// Go: `func (node *JSDocTypedefTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let type_expression = v.visit_node(self.type_expression);
+        let name = v.visit_node(self.name);
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && type_expression == self.type_expression
+            && name == self.name
+            && comment == self.comment {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            type_expression,
+            name,
+        })
+    }
+}
+
+impl JSDocSignature {
+    /// Go: `func (node *JSDocSignature) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let type_parameters = v.visit_nodes(self.type_parameters.as_ref());
+        let parameters = v.visit_nodes(self.parameters.as_ref());
+        let type_ = v.visit_node(self.type_);
+        if type_parameters == self.type_parameters
+            && parameters == self.parameters
+            && type_ == self.type_ {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            type_parameters,
+            parameters,
+            type_,
+            full_signature: self.full_signature,
+        })
+    }
+}
+
+impl JSDocNameReference {
+    /// Go: `func (node *JSDocNameReference) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(Some(self.name));
+        if name == Some(self.name) {
+            return None;
+        }
+        Some(Self {
+            name: name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ModuleDeclaration {
+    /// Go: `func (node *ModuleDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let attributes = v.visit_node(self.attributes);
+        let body = v.visit_node(self.body);
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && attributes == self.attributes
+            && body == self.body {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            modifiers,
+            locals: self.locals.clone(),
+            next_container: self.next_container,
+            asterisk_token: self.asterisk_token,
+            body,
+            end_flow_node: self.end_flow_node,
+            facts: self.facts,
+            keyword: self.keyword,
+            name: name.unwrap_or(NodeId::NONE),
+            attributes,
+        })
+    }
+}
+
+impl ImportEqualsDeclaration {
+    /// Go: `func (node *ImportEqualsDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let module_reference = v.visit_node(Some(self.module_reference));
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && module_reference == Some(self.module_reference) {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            modifiers,
+            facts: self.facts,
+            is_type_only: self.is_type_only,
+            name: name.unwrap_or(NodeId::NONE),
+            module_reference: module_reference.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl ExportDeclaration {
+    /// Go: `func (node *ExportDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let export_clause = v.visit_node(self.export_clause);
+        let module_specifier = v.visit_node(self.module_specifier);
+        let attributes = v.visit_node(self.attributes);
+        if modifiers == self.modifiers
+            && export_clause == self.export_clause
+            && module_specifier == self.module_specifier
+            && attributes == self.attributes {
+            return None;
+        }
+        Some(Self {
+            flow_node: self.flow_node,
+            symbol: self.symbol,
+            modifiers,
+            facts: self.facts,
+            is_type_only: self.is_type_only,
+            export_clause,
+            module_specifier,
+            attributes,
+        })
+    }
+}
+
+impl ImportTypeNode {
+    /// Go: `func (node *ImportTypeNode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let argument = v.visit_node(Some(self.argument));
+        let attributes = v.visit_node(self.attributes);
+        let qualifier = v.visit_node(self.qualifier);
+        let type_arguments = v.visit_nodes(self.type_arguments.as_ref());
+        if argument == Some(self.argument)
+            && attributes == self.attributes
+            && qualifier == self.qualifier
+            && type_arguments == self.type_arguments {
+            return None;
+        }
+        Some(Self {
+            type_arguments,
+            is_type_of: self.is_type_of,
+            argument: argument.unwrap_or(NodeId::NONE),
+            attributes,
+            qualifier,
+        })
+    }
+}
+
+impl ImportClause {
+    /// Go: `func (node *ImportClause) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(self.name);
+        let named_bindings = v.visit_node(self.named_bindings);
+        if name == self.name
+            && named_bindings == self.named_bindings {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            facts: self.facts,
+            phase_modifier: self.phase_modifier,
+            name,
+            named_bindings,
+        })
+    }
+}
+
+impl ImportSpecifier {
+    /// Go: `func (node *ImportSpecifier) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let property_name = v.visit_node(self.property_name);
+        let name = v.visit_node(Some(self.name));
+        if property_name == self.property_name
+            && name == Some(self.name) {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            local_symbol: self.local_symbol,
+            facts: self.facts,
+            is_type_only: self.is_type_only,
+            property_name,
+            name: name.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocText {
+    /// Go: `func (node *JSDocText) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)
+    /// — the node has no children, so nothing can change.
+    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {
+        None
+    }
+}
+
+impl JSDocLink {
+    /// Go: `func (node *JSDocLink) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(self.name);
+        if name == self.name {
+            return None;
+        }
+        Some(Self {
+            text: self.text.clone(),
+            name,
+        })
+    }
+}
+
+impl JSDocLinkPlain {
+    /// Go: `func (node *JSDocLinkPlain) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(self.name);
+        if name == self.name {
+            return None;
+        }
+        Some(Self {
+            text: self.text.clone(),
+            name,
+        })
+    }
+}
+
+impl JSDocLinkCode {
+    /// Go: `func (node *JSDocLinkCode) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let name = v.visit_node(self.name);
+        if name == self.name {
+            return None;
+        }
+        Some(Self {
+            text: self.text.clone(),
+            name,
+        })
+    }
+}
+
+impl TypeParameterDeclaration {
+    /// Go: `func (node *TypeParameterDeclaration) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let modifiers = v.visit_modifiers(self.modifiers.as_ref());
+        let name = v.visit_node(Some(self.name));
+        let constraint = v.visit_node(self.constraint);
+        let expression = v.visit_node(self.expression);
+        let default_type = v.visit_node(self.default_type);
+        if modifiers == self.modifiers
+            && name == Some(self.name)
+            && constraint == self.constraint
+            && expression == self.expression
+            && default_type == self.default_type {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            modifiers,
+            name: name.unwrap_or(NodeId::NONE),
+            constraint,
+            expression,
+            default_type,
+        })
+    }
+}
+
+impl SyntheticReferenceExpression {
+    /// Go: `func (node *SyntheticReferenceExpression) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let expression = v.visit_node(Some(self.expression));
+        let this_arg = v.visit_node(Some(self.this_arg));
+        if expression == Some(self.expression)
+            && this_arg == Some(self.this_arg) {
+            return None;
+        }
+        Some(Self {
+            expression: expression.unwrap_or(NodeId::NONE),
+            this_arg: this_arg.unwrap_or(NodeId::NONE),
+        })
+    }
+}
+
+impl JSDocTypeLiteral {
+    /// Go: `func (node *JSDocTypeLiteral) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let jsdoc_property_tags: Vec<NodeId> = self.jsdoc_property_tags.iter().map(|&c| v.visit_node(Some(c)).unwrap_or(NodeId::NONE)).collect();
+        if jsdoc_property_tags == self.jsdoc_property_tags {
+            return None;
+        }
+        Some(Self {
+            symbol: self.symbol,
+            jsdoc_property_tags,
+            is_array_type: self.is_array_type,
+        })
+    }
+}
+
+impl JSDocParameterOrPropertyTag {
+    /// Go: `func (node *JSDocParameterOrPropertyTag) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {
+        let tag_name = v.visit_node(Some(self.tag_name));
+        let name = v.visit_node(Some(self.name));
+        let type_expression = v.visit_node(self.type_expression);
+        let comment = v.visit_nodes(self.comment.as_ref());
+        if tag_name == Some(self.tag_name)
+            && name == Some(self.name)
+            && type_expression == self.type_expression
+            && comment == self.comment
+        {
+            return None;
+        }
+        Some(Self {
+            tag_name: tag_name.unwrap_or(NodeId::NONE),
+            comment,
+            name: name.unwrap_or(NodeId::NONE),
+            is_bracketed: self.is_bracketed,
+            type_expression,
+            is_name_first: self.is_name_first,
+        })
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// NodeData — one variant per concrete node struct (SPEC §5.1); every
+// payload is Boxed (see the file header) and Clone (Go's Clone copies
+// the struct value via the factory; the port's NodeStore::clone_node
+// needs a plain value copy).)
+// ──────────────────────────────────────────────────────────────────────
+
+#[derive(Clone)]
 pub enum NodeData {
-    Token(Token),
-    Identifier(Identifier),
-    PrivateIdentifier(PrivateIdentifier),
-    QualifiedName(QualifiedName),
-    ComputedPropertyName(ComputedPropertyName),
-    Decorator(Decorator),
-    EmptyStatement(EmptyStatement),
-    IfStatement(IfStatement),
-    DoStatement(DoStatement),
-    WhileStatement(WhileStatement),
-    ForStatement(ForStatement),
-    ForInOrOfStatement(ForInOrOfStatement),
-    BreakStatement(BreakStatement),
-    ContinueStatement(ContinueStatement),
-    ReturnStatement(ReturnStatement),
-    WithStatement(WithStatement),
-    SwitchStatement(SwitchStatement),
-    CaseBlock(CaseBlock),
-    CaseOrDefaultClause(CaseOrDefaultClause),
-    ThrowStatement(ThrowStatement),
-    TryStatement(TryStatement),
-    CatchClause(CatchClause),
-    DebuggerStatement(DebuggerStatement),
-    LabeledStatement(LabeledStatement),
-    ExpressionStatement(ExpressionStatement),
-    Block(Block),
-    VariableStatement(VariableStatement),
-    VariableDeclaration(VariableDeclaration),
-    VariableDeclarationList(VariableDeclarationList),
-    BindingPattern(BindingPattern),
-    ParameterDeclaration(ParameterDeclaration),
-    BindingElement(BindingElement),
-    MissingDeclaration(MissingDeclaration),
-    FunctionDeclaration(FunctionDeclaration),
-    ClassDeclaration(ClassDeclaration),
-    ClassExpression(ClassExpression),
-    HeritageClause(HeritageClause),
-    InterfaceDeclaration(InterfaceDeclaration),
-    TypeAliasDeclaration(TypeAliasDeclaration),
-    EnumMember(EnumMember),
-    EnumDeclaration(EnumDeclaration),
-    ModuleBlock(ModuleBlock),
-    NotEmittedStatement(NotEmittedStatement),
-    NotEmittedTypeElement(NotEmittedTypeElement),
-    ImportDeclaration(ImportDeclaration),
-    ExternalModuleReference(ExternalModuleReference),
-    NamespaceImport(NamespaceImport),
-    NamedImports(NamedImports),
-    ExportAssignment(ExportAssignment),
-    NamespaceExportDeclaration(NamespaceExportDeclaration),
-    NamespaceExport(NamespaceExport),
-    NamedExports(NamedExports),
-    ExportSpecifier(ExportSpecifier),
-    CallSignatureDeclaration(CallSignatureDeclaration),
-    ConstructSignatureDeclaration(ConstructSignatureDeclaration),
-    ConstructorDeclaration(ConstructorDeclaration),
-    GetAccessorDeclaration(GetAccessorDeclaration),
-    SetAccessorDeclaration(SetAccessorDeclaration),
-    IndexSignatureDeclaration(IndexSignatureDeclaration),
-    MethodSignatureDeclaration(MethodSignatureDeclaration),
-    MethodDeclaration(MethodDeclaration),
-    PropertySignatureDeclaration(PropertySignatureDeclaration),
-    PropertyDeclaration(PropertyDeclaration),
-    SemicolonClassElement(SemicolonClassElement),
-    ClassStaticBlockDeclaration(ClassStaticBlockDeclaration),
-    OmittedExpression(OmittedExpression),
-    KeywordExpression(KeywordExpression),
-    StringLiteral(StringLiteral),
-    NumericLiteral(NumericLiteral),
-    BigIntLiteral(BigIntLiteral),
-    RegularExpressionLiteral(RegularExpressionLiteral),
-    NoSubstitutionTemplateLiteral(NoSubstitutionTemplateLiteral),
-    BinaryExpression(BinaryExpression),
-    PrefixUnaryExpression(PrefixUnaryExpression),
-    PostfixUnaryExpression(PostfixUnaryExpression),
-    YieldExpression(YieldExpression),
-    ArrowFunction(ArrowFunction),
-    FunctionExpression(FunctionExpression),
-    AsExpression(AsExpression),
-    SatisfiesExpression(SatisfiesExpression),
-    ConditionalExpression(ConditionalExpression),
-    PropertyAccessExpression(PropertyAccessExpression),
-    ElementAccessExpression(ElementAccessExpression),
-    CallExpression(CallExpression),
-    NewExpression(NewExpression),
-    MetaProperty(MetaProperty),
-    NonNullExpression(NonNullExpression),
-    SpreadElement(SpreadElement),
-    TemplateExpression(TemplateExpression),
-    TemplateSpan(TemplateSpan),
-    TaggedTemplateExpression(TaggedTemplateExpression),
-    ParenthesizedExpression(ParenthesizedExpression),
-    ArrayLiteralExpression(ArrayLiteralExpression),
-    ObjectLiteralExpression(ObjectLiteralExpression),
-    SpreadAssignment(SpreadAssignment),
-    PropertyAssignment(PropertyAssignment),
-    ShorthandPropertyAssignment(ShorthandPropertyAssignment),
-    DeleteExpression(DeleteExpression),
-    TypeOfExpression(TypeOfExpression),
-    VoidExpression(VoidExpression),
-    AwaitExpression(AwaitExpression),
-    TypeAssertion(TypeAssertion),
-    KeywordTypeNode(KeywordTypeNode),
-    UnionTypeNode(UnionTypeNode),
-    IntersectionTypeNode(IntersectionTypeNode),
-    ConditionalTypeNode(ConditionalTypeNode),
-    TypeOperatorNode(TypeOperatorNode),
-    InferTypeNode(InferTypeNode),
-    ArrayTypeNode(ArrayTypeNode),
-    IndexedAccessTypeNode(IndexedAccessTypeNode),
-    TypeReferenceNode(TypeReferenceNode),
-    ExpressionWithTypeArguments(ExpressionWithTypeArguments),
-    LiteralTypeNode(LiteralTypeNode),
-    ThisTypeNode(ThisTypeNode),
-    TypePredicateNode(TypePredicateNode),
-    ImportAttribute(ImportAttribute),
-    ImportAttributes(ImportAttributes),
-    TypeQueryNode(TypeQueryNode),
-    MappedTypeNode(MappedTypeNode),
-    TypeLiteralNode(TypeLiteralNode),
-    TupleTypeNode(TupleTypeNode),
-    NamedTupleMember(NamedTupleMember),
-    OptionalTypeNode(OptionalTypeNode),
-    RestTypeNode(RestTypeNode),
-    ParenthesizedTypeNode(ParenthesizedTypeNode),
-    FunctionTypeNode(FunctionTypeNode),
-    ConstructorTypeNode(ConstructorTypeNode),
-    TemplateHead(TemplateHead),
-    TemplateMiddle(TemplateMiddle),
-    TemplateTail(TemplateTail),
-    TemplateLiteralTypeNode(TemplateLiteralTypeNode),
-    TemplateLiteralTypeSpan(TemplateLiteralTypeSpan),
-    SyntheticExpression(SyntheticExpression),
-    PartiallyEmittedExpression(PartiallyEmittedExpression),
-    JsxElement(JsxElement),
-    JsxAttributes(JsxAttributes),
-    JsxNamespacedName(JsxNamespacedName),
-    JsxOpeningElement(JsxOpeningElement),
-    JsxSelfClosingElement(JsxSelfClosingElement),
-    JsxFragment(JsxFragment),
-    JsxOpeningFragment(JsxOpeningFragment),
-    JsxClosingFragment(JsxClosingFragment),
-    JsxAttribute(JsxAttribute),
-    JsxSpreadAttribute(JsxSpreadAttribute),
-    JsxClosingElement(JsxClosingElement),
-    JsxExpression(JsxExpression),
-    JsxText(JsxText),
-    SyntaxList(SyntaxList),
-    JSDoc(JSDoc),
-    JSDocTypeExpression(JSDocTypeExpression),
-    JSDocNonNullableType(JSDocNonNullableType),
-    JSDocNullableType(JSDocNullableType),
-    JSDocAllType(JSDocAllType),
-    JSDocVariadicType(JSDocVariadicType),
-    JSDocOptionalType(JSDocOptionalType),
-    JSDocTypeTag(JSDocTypeTag),
-    JSDocUnknownTag(JSDocUnknownTag),
-    JSDocTemplateTag(JSDocTemplateTag),
-    JSDocReturnTag(JSDocReturnTag),
-    JSDocPublicTag(JSDocPublicTag),
-    JSDocPrivateTag(JSDocPrivateTag),
-    JSDocProtectedTag(JSDocProtectedTag),
-    JSDocReadonlyTag(JSDocReadonlyTag),
-    JSDocOverrideTag(JSDocOverrideTag),
-    JSDocDeprecatedTag(JSDocDeprecatedTag),
-    JSDocSeeTag(JSDocSeeTag),
-    JSDocImplementsTag(JSDocImplementsTag),
-    JSDocAugmentsTag(JSDocAugmentsTag),
-    JSDocSatisfiesTag(JSDocSatisfiesTag),
-    JSDocThrowsTag(JSDocThrowsTag),
-    JSDocThisTag(JSDocThisTag),
-    JSDocImportTag(JSDocImportTag),
-    JSDocCallbackTag(JSDocCallbackTag),
-    JSDocOverloadTag(JSDocOverloadTag),
-    JSDocTypedefTag(JSDocTypedefTag),
-    JSDocSignature(JSDocSignature),
-    JSDocNameReference(JSDocNameReference),
-    SourceFile(SourceFile),
-    ModuleDeclaration(ModuleDeclaration),
-    ImportEqualsDeclaration(ImportEqualsDeclaration),
-    ExportDeclaration(ExportDeclaration),
-    ImportTypeNode(ImportTypeNode),
-    ImportClause(ImportClause),
-    ImportSpecifier(ImportSpecifier),
-    JSDocText(JSDocText),
-    JSDocLink(JSDocLink),
-    JSDocLinkPlain(JSDocLinkPlain),
-    JSDocLinkCode(JSDocLinkCode),
-    TypeParameterDeclaration(TypeParameterDeclaration),
-    SyntheticReferenceExpression(SyntheticReferenceExpression),
-    JSDocTypeLiteral(JSDocTypeLiteral),
-    JSDocParameterOrPropertyTag(JSDocParameterOrPropertyTag),
+    Token(Box<Token>),
+    Identifier(Box<Identifier>),
+    PrivateIdentifier(Box<PrivateIdentifier>),
+    QualifiedName(Box<QualifiedName>),
+    ComputedPropertyName(Box<ComputedPropertyName>),
+    Decorator(Box<Decorator>),
+    EmptyStatement(Box<EmptyStatement>),
+    IfStatement(Box<IfStatement>),
+    DoStatement(Box<DoStatement>),
+    WhileStatement(Box<WhileStatement>),
+    ForStatement(Box<ForStatement>),
+    ForInOrOfStatement(Box<ForInOrOfStatement>),
+    BreakStatement(Box<BreakStatement>),
+    ContinueStatement(Box<ContinueStatement>),
+    ReturnStatement(Box<ReturnStatement>),
+    WithStatement(Box<WithStatement>),
+    SwitchStatement(Box<SwitchStatement>),
+    CaseBlock(Box<CaseBlock>),
+    CaseOrDefaultClause(Box<CaseOrDefaultClause>),
+    ThrowStatement(Box<ThrowStatement>),
+    TryStatement(Box<TryStatement>),
+    CatchClause(Box<CatchClause>),
+    DebuggerStatement(Box<DebuggerStatement>),
+    LabeledStatement(Box<LabeledStatement>),
+    ExpressionStatement(Box<ExpressionStatement>),
+    Block(Box<Block>),
+    VariableStatement(Box<VariableStatement>),
+    VariableDeclaration(Box<VariableDeclaration>),
+    VariableDeclarationList(Box<VariableDeclarationList>),
+    BindingPattern(Box<BindingPattern>),
+    ParameterDeclaration(Box<ParameterDeclaration>),
+    BindingElement(Box<BindingElement>),
+    MissingDeclaration(Box<MissingDeclaration>),
+    FunctionDeclaration(Box<FunctionDeclaration>),
+    ClassDeclaration(Box<ClassDeclaration>),
+    ClassExpression(Box<ClassExpression>),
+    HeritageClause(Box<HeritageClause>),
+    InterfaceDeclaration(Box<InterfaceDeclaration>),
+    TypeAliasDeclaration(Box<TypeAliasDeclaration>),
+    EnumMember(Box<EnumMember>),
+    EnumDeclaration(Box<EnumDeclaration>),
+    ModuleBlock(Box<ModuleBlock>),
+    NotEmittedStatement(Box<NotEmittedStatement>),
+    NotEmittedTypeElement(Box<NotEmittedTypeElement>),
+    ImportDeclaration(Box<ImportDeclaration>),
+    ExternalModuleReference(Box<ExternalModuleReference>),
+    NamespaceImport(Box<NamespaceImport>),
+    NamedImports(Box<NamedImports>),
+    ExportAssignment(Box<ExportAssignment>),
+    NamespaceExportDeclaration(Box<NamespaceExportDeclaration>),
+    NamespaceExport(Box<NamespaceExport>),
+    NamedExports(Box<NamedExports>),
+    ExportSpecifier(Box<ExportSpecifier>),
+    CallSignatureDeclaration(Box<CallSignatureDeclaration>),
+    ConstructSignatureDeclaration(Box<ConstructSignatureDeclaration>),
+    ConstructorDeclaration(Box<ConstructorDeclaration>),
+    GetAccessorDeclaration(Box<GetAccessorDeclaration>),
+    SetAccessorDeclaration(Box<SetAccessorDeclaration>),
+    IndexSignatureDeclaration(Box<IndexSignatureDeclaration>),
+    MethodSignatureDeclaration(Box<MethodSignatureDeclaration>),
+    MethodDeclaration(Box<MethodDeclaration>),
+    PropertySignatureDeclaration(Box<PropertySignatureDeclaration>),
+    PropertyDeclaration(Box<PropertyDeclaration>),
+    SemicolonClassElement(Box<SemicolonClassElement>),
+    ClassStaticBlockDeclaration(Box<ClassStaticBlockDeclaration>),
+    OmittedExpression(Box<OmittedExpression>),
+    KeywordExpression(Box<KeywordExpression>),
+    StringLiteral(Box<StringLiteral>),
+    NumericLiteral(Box<NumericLiteral>),
+    BigIntLiteral(Box<BigIntLiteral>),
+    RegularExpressionLiteral(Box<RegularExpressionLiteral>),
+    NoSubstitutionTemplateLiteral(Box<NoSubstitutionTemplateLiteral>),
+    BinaryExpression(Box<BinaryExpression>),
+    PrefixUnaryExpression(Box<PrefixUnaryExpression>),
+    PostfixUnaryExpression(Box<PostfixUnaryExpression>),
+    YieldExpression(Box<YieldExpression>),
+    ArrowFunction(Box<ArrowFunction>),
+    FunctionExpression(Box<FunctionExpression>),
+    AsExpression(Box<AsExpression>),
+    SatisfiesExpression(Box<SatisfiesExpression>),
+    ConditionalExpression(Box<ConditionalExpression>),
+    PropertyAccessExpression(Box<PropertyAccessExpression>),
+    ElementAccessExpression(Box<ElementAccessExpression>),
+    CallExpression(Box<CallExpression>),
+    NewExpression(Box<NewExpression>),
+    MetaProperty(Box<MetaProperty>),
+    NonNullExpression(Box<NonNullExpression>),
+    SpreadElement(Box<SpreadElement>),
+    TemplateExpression(Box<TemplateExpression>),
+    TemplateSpan(Box<TemplateSpan>),
+    TaggedTemplateExpression(Box<TaggedTemplateExpression>),
+    ParenthesizedExpression(Box<ParenthesizedExpression>),
+    ArrayLiteralExpression(Box<ArrayLiteralExpression>),
+    ObjectLiteralExpression(Box<ObjectLiteralExpression>),
+    SpreadAssignment(Box<SpreadAssignment>),
+    PropertyAssignment(Box<PropertyAssignment>),
+    ShorthandPropertyAssignment(Box<ShorthandPropertyAssignment>),
+    DeleteExpression(Box<DeleteExpression>),
+    TypeOfExpression(Box<TypeOfExpression>),
+    VoidExpression(Box<VoidExpression>),
+    AwaitExpression(Box<AwaitExpression>),
+    TypeAssertion(Box<TypeAssertion>),
+    KeywordTypeNode(Box<KeywordTypeNode>),
+    UnionTypeNode(Box<UnionTypeNode>),
+    IntersectionTypeNode(Box<IntersectionTypeNode>),
+    ConditionalTypeNode(Box<ConditionalTypeNode>),
+    TypeOperatorNode(Box<TypeOperatorNode>),
+    InferTypeNode(Box<InferTypeNode>),
+    ArrayTypeNode(Box<ArrayTypeNode>),
+    IndexedAccessTypeNode(Box<IndexedAccessTypeNode>),
+    TypeReferenceNode(Box<TypeReferenceNode>),
+    ExpressionWithTypeArguments(Box<ExpressionWithTypeArguments>),
+    LiteralTypeNode(Box<LiteralTypeNode>),
+    ThisTypeNode(Box<ThisTypeNode>),
+    TypePredicateNode(Box<TypePredicateNode>),
+    ImportAttribute(Box<ImportAttribute>),
+    ImportAttributes(Box<ImportAttributes>),
+    TypeQueryNode(Box<TypeQueryNode>),
+    MappedTypeNode(Box<MappedTypeNode>),
+    TypeLiteralNode(Box<TypeLiteralNode>),
+    TupleTypeNode(Box<TupleTypeNode>),
+    NamedTupleMember(Box<NamedTupleMember>),
+    OptionalTypeNode(Box<OptionalTypeNode>),
+    RestTypeNode(Box<RestTypeNode>),
+    ParenthesizedTypeNode(Box<ParenthesizedTypeNode>),
+    FunctionTypeNode(Box<FunctionTypeNode>),
+    ConstructorTypeNode(Box<ConstructorTypeNode>),
+    TemplateHead(Box<TemplateHead>),
+    TemplateMiddle(Box<TemplateMiddle>),
+    TemplateTail(Box<TemplateTail>),
+    TemplateLiteralTypeNode(Box<TemplateLiteralTypeNode>),
+    TemplateLiteralTypeSpan(Box<TemplateLiteralTypeSpan>),
+    SyntheticExpression(Box<SyntheticExpression>),
+    PartiallyEmittedExpression(Box<PartiallyEmittedExpression>),
+    JsxElement(Box<JsxElement>),
+    JsxAttributes(Box<JsxAttributes>),
+    JsxNamespacedName(Box<JsxNamespacedName>),
+    JsxOpeningElement(Box<JsxOpeningElement>),
+    JsxSelfClosingElement(Box<JsxSelfClosingElement>),
+    JsxFragment(Box<JsxFragment>),
+    JsxOpeningFragment(Box<JsxOpeningFragment>),
+    JsxClosingFragment(Box<JsxClosingFragment>),
+    JsxAttribute(Box<JsxAttribute>),
+    JsxSpreadAttribute(Box<JsxSpreadAttribute>),
+    JsxClosingElement(Box<JsxClosingElement>),
+    JsxExpression(Box<JsxExpression>),
+    JsxText(Box<JsxText>),
+    SyntaxList(Box<SyntaxList>),
+    JSDoc(Box<JSDoc>),
+    JSDocTypeExpression(Box<JSDocTypeExpression>),
+    JSDocNonNullableType(Box<JSDocNonNullableType>),
+    JSDocNullableType(Box<JSDocNullableType>),
+    JSDocAllType(Box<JSDocAllType>),
+    JSDocVariadicType(Box<JSDocVariadicType>),
+    JSDocOptionalType(Box<JSDocOptionalType>),
+    JSDocTypeTag(Box<JSDocTypeTag>),
+    JSDocUnknownTag(Box<JSDocUnknownTag>),
+    JSDocTemplateTag(Box<JSDocTemplateTag>),
+    JSDocReturnTag(Box<JSDocReturnTag>),
+    JSDocPublicTag(Box<JSDocPublicTag>),
+    JSDocPrivateTag(Box<JSDocPrivateTag>),
+    JSDocProtectedTag(Box<JSDocProtectedTag>),
+    JSDocReadonlyTag(Box<JSDocReadonlyTag>),
+    JSDocOverrideTag(Box<JSDocOverrideTag>),
+    JSDocDeprecatedTag(Box<JSDocDeprecatedTag>),
+    JSDocSeeTag(Box<JSDocSeeTag>),
+    JSDocImplementsTag(Box<JSDocImplementsTag>),
+    JSDocAugmentsTag(Box<JSDocAugmentsTag>),
+    JSDocSatisfiesTag(Box<JSDocSatisfiesTag>),
+    JSDocThrowsTag(Box<JSDocThrowsTag>),
+    JSDocThisTag(Box<JSDocThisTag>),
+    JSDocImportTag(Box<JSDocImportTag>),
+    JSDocCallbackTag(Box<JSDocCallbackTag>),
+    JSDocOverloadTag(Box<JSDocOverloadTag>),
+    JSDocTypedefTag(Box<JSDocTypedefTag>),
+    JSDocSignature(Box<JSDocSignature>),
+    JSDocNameReference(Box<JSDocNameReference>),
+    SourceFile(Box<SourceFileNodeData>), // payload hand-written in the core
+    ModuleDeclaration(Box<ModuleDeclaration>),
+    ImportEqualsDeclaration(Box<ImportEqualsDeclaration>),
+    ExportDeclaration(Box<ExportDeclaration>),
+    ImportTypeNode(Box<ImportTypeNode>),
+    ImportClause(Box<ImportClause>),
+    ImportSpecifier(Box<ImportSpecifier>),
+    JSDocText(Box<JSDocText>),
+    JSDocLink(Box<JSDocLink>),
+    JSDocLinkPlain(Box<JSDocLinkPlain>),
+    JSDocLinkCode(Box<JSDocLinkCode>),
+    TypeParameterDeclaration(Box<TypeParameterDeclaration>),
+    SyntheticReferenceExpression(Box<SyntheticReferenceExpression>),
+    JSDocTypeLiteral(Box<JSDocTypeLiteral>),
+    JSDocParameterOrPropertyTag(Box<JSDocParameterOrPropertyTag>),
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -5922,14 +9579,15 @@ impl Node {
 // ──────────────────────────────────────────────────────────────────────
 // As*() cast methods (Go returns *X unchecked; the Rust port returns
 // Option — PORT: panics on wrong-kind casts become None at the accessor,
-// callers use it after the matching is_x predicate)
+// callers use it after the matching is_x predicate. Payloads are Boxed,
+// hence the `&**d`.)
 // ──────────────────────────────────────────────────────────────────────
 
 impl Node {
     /// Go: `func (n *Node) AsToken() *Token`
     pub fn as_token(&self) -> Option<&Token> {
         match &self.data {
-            NodeData::Token(d) => Some(d),
+            NodeData::Token(d) => Some(&**d),
             _ => None,
         }
     }
@@ -5937,7 +9595,7 @@ impl Node {
     /// Go: `func (n *Node) AsIdentifier() *Identifier`
     pub fn as_identifier(&self) -> Option<&Identifier> {
         match &self.data {
-            NodeData::Identifier(d) => Some(d),
+            NodeData::Identifier(d) => Some(&**d),
             _ => None,
         }
     }
@@ -5945,7 +9603,7 @@ impl Node {
     /// Go: `func (n *Node) AsPrivateIdentifier() *PrivateIdentifier`
     pub fn as_private_identifier(&self) -> Option<&PrivateIdentifier> {
         match &self.data {
-            NodeData::PrivateIdentifier(d) => Some(d),
+            NodeData::PrivateIdentifier(d) => Some(&**d),
             _ => None,
         }
     }
@@ -5953,7 +9611,7 @@ impl Node {
     /// Go: `func (n *Node) AsQualifiedName() *QualifiedName`
     pub fn as_qualified_name(&self) -> Option<&QualifiedName> {
         match &self.data {
-            NodeData::QualifiedName(d) => Some(d),
+            NodeData::QualifiedName(d) => Some(&**d),
             _ => None,
         }
     }
@@ -5961,7 +9619,7 @@ impl Node {
     /// Go: `func (n *Node) AsComputedPropertyName() *ComputedPropertyName`
     pub fn as_computed_property_name(&self) -> Option<&ComputedPropertyName> {
         match &self.data {
-            NodeData::ComputedPropertyName(d) => Some(d),
+            NodeData::ComputedPropertyName(d) => Some(&**d),
             _ => None,
         }
     }
@@ -5969,7 +9627,7 @@ impl Node {
     /// Go: `func (n *Node) AsDecorator() *Decorator`
     pub fn as_decorator(&self) -> Option<&Decorator> {
         match &self.data {
-            NodeData::Decorator(d) => Some(d),
+            NodeData::Decorator(d) => Some(&**d),
             _ => None,
         }
     }
@@ -5977,7 +9635,7 @@ impl Node {
     /// Go: `func (n *Node) AsEmptyStatement() *EmptyStatement`
     pub fn as_empty_statement(&self) -> Option<&EmptyStatement> {
         match &self.data {
-            NodeData::EmptyStatement(d) => Some(d),
+            NodeData::EmptyStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -5985,7 +9643,7 @@ impl Node {
     /// Go: `func (n *Node) AsIfStatement() *IfStatement`
     pub fn as_if_statement(&self) -> Option<&IfStatement> {
         match &self.data {
-            NodeData::IfStatement(d) => Some(d),
+            NodeData::IfStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -5993,7 +9651,7 @@ impl Node {
     /// Go: `func (n *Node) AsDoStatement() *DoStatement`
     pub fn as_do_statement(&self) -> Option<&DoStatement> {
         match &self.data {
-            NodeData::DoStatement(d) => Some(d),
+            NodeData::DoStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6001,7 +9659,7 @@ impl Node {
     /// Go: `func (n *Node) AsWhileStatement() *WhileStatement`
     pub fn as_while_statement(&self) -> Option<&WhileStatement> {
         match &self.data {
-            NodeData::WhileStatement(d) => Some(d),
+            NodeData::WhileStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6009,7 +9667,7 @@ impl Node {
     /// Go: `func (n *Node) AsForStatement() *ForStatement`
     pub fn as_for_statement(&self) -> Option<&ForStatement> {
         match &self.data {
-            NodeData::ForStatement(d) => Some(d),
+            NodeData::ForStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6017,7 +9675,7 @@ impl Node {
     /// Go: `func (n *Node) AsForInOrOfStatement() *ForInOrOfStatement`
     pub fn as_for_in_or_of_statement(&self) -> Option<&ForInOrOfStatement> {
         match &self.data {
-            NodeData::ForInOrOfStatement(d) => Some(d),
+            NodeData::ForInOrOfStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6025,7 +9683,7 @@ impl Node {
     /// Go: `func (n *Node) AsBreakStatement() *BreakStatement`
     pub fn as_break_statement(&self) -> Option<&BreakStatement> {
         match &self.data {
-            NodeData::BreakStatement(d) => Some(d),
+            NodeData::BreakStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6033,7 +9691,7 @@ impl Node {
     /// Go: `func (n *Node) AsContinueStatement() *ContinueStatement`
     pub fn as_continue_statement(&self) -> Option<&ContinueStatement> {
         match &self.data {
-            NodeData::ContinueStatement(d) => Some(d),
+            NodeData::ContinueStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6041,7 +9699,7 @@ impl Node {
     /// Go: `func (n *Node) AsReturnStatement() *ReturnStatement`
     pub fn as_return_statement(&self) -> Option<&ReturnStatement> {
         match &self.data {
-            NodeData::ReturnStatement(d) => Some(d),
+            NodeData::ReturnStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6049,7 +9707,7 @@ impl Node {
     /// Go: `func (n *Node) AsWithStatement() *WithStatement`
     pub fn as_with_statement(&self) -> Option<&WithStatement> {
         match &self.data {
-            NodeData::WithStatement(d) => Some(d),
+            NodeData::WithStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6057,7 +9715,7 @@ impl Node {
     /// Go: `func (n *Node) AsSwitchStatement() *SwitchStatement`
     pub fn as_switch_statement(&self) -> Option<&SwitchStatement> {
         match &self.data {
-            NodeData::SwitchStatement(d) => Some(d),
+            NodeData::SwitchStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6065,7 +9723,7 @@ impl Node {
     /// Go: `func (n *Node) AsCaseBlock() *CaseBlock`
     pub fn as_case_block(&self) -> Option<&CaseBlock> {
         match &self.data {
-            NodeData::CaseBlock(d) => Some(d),
+            NodeData::CaseBlock(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6073,7 +9731,7 @@ impl Node {
     /// Go: `func (n *Node) AsCaseOrDefaultClause() *CaseOrDefaultClause`
     pub fn as_case_or_default_clause(&self) -> Option<&CaseOrDefaultClause> {
         match &self.data {
-            NodeData::CaseOrDefaultClause(d) => Some(d),
+            NodeData::CaseOrDefaultClause(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6081,7 +9739,7 @@ impl Node {
     /// Go: `func (n *Node) AsThrowStatement() *ThrowStatement`
     pub fn as_throw_statement(&self) -> Option<&ThrowStatement> {
         match &self.data {
-            NodeData::ThrowStatement(d) => Some(d),
+            NodeData::ThrowStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6089,7 +9747,7 @@ impl Node {
     /// Go: `func (n *Node) AsTryStatement() *TryStatement`
     pub fn as_try_statement(&self) -> Option<&TryStatement> {
         match &self.data {
-            NodeData::TryStatement(d) => Some(d),
+            NodeData::TryStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6097,7 +9755,7 @@ impl Node {
     /// Go: `func (n *Node) AsCatchClause() *CatchClause`
     pub fn as_catch_clause(&self) -> Option<&CatchClause> {
         match &self.data {
-            NodeData::CatchClause(d) => Some(d),
+            NodeData::CatchClause(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6105,7 +9763,7 @@ impl Node {
     /// Go: `func (n *Node) AsDebuggerStatement() *DebuggerStatement`
     pub fn as_debugger_statement(&self) -> Option<&DebuggerStatement> {
         match &self.data {
-            NodeData::DebuggerStatement(d) => Some(d),
+            NodeData::DebuggerStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6113,7 +9771,7 @@ impl Node {
     /// Go: `func (n *Node) AsLabeledStatement() *LabeledStatement`
     pub fn as_labeled_statement(&self) -> Option<&LabeledStatement> {
         match &self.data {
-            NodeData::LabeledStatement(d) => Some(d),
+            NodeData::LabeledStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6121,7 +9779,7 @@ impl Node {
     /// Go: `func (n *Node) AsExpressionStatement() *ExpressionStatement`
     pub fn as_expression_statement(&self) -> Option<&ExpressionStatement> {
         match &self.data {
-            NodeData::ExpressionStatement(d) => Some(d),
+            NodeData::ExpressionStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6129,7 +9787,7 @@ impl Node {
     /// Go: `func (n *Node) AsBlock() *Block`
     pub fn as_block(&self) -> Option<&Block> {
         match &self.data {
-            NodeData::Block(d) => Some(d),
+            NodeData::Block(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6137,7 +9795,7 @@ impl Node {
     /// Go: `func (n *Node) AsVariableStatement() *VariableStatement`
     pub fn as_variable_statement(&self) -> Option<&VariableStatement> {
         match &self.data {
-            NodeData::VariableStatement(d) => Some(d),
+            NodeData::VariableStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6145,7 +9803,7 @@ impl Node {
     /// Go: `func (n *Node) AsVariableDeclaration() *VariableDeclaration`
     pub fn as_variable_declaration(&self) -> Option<&VariableDeclaration> {
         match &self.data {
-            NodeData::VariableDeclaration(d) => Some(d),
+            NodeData::VariableDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6153,7 +9811,7 @@ impl Node {
     /// Go: `func (n *Node) AsVariableDeclarationList() *VariableDeclarationList`
     pub fn as_variable_declaration_list(&self) -> Option<&VariableDeclarationList> {
         match &self.data {
-            NodeData::VariableDeclarationList(d) => Some(d),
+            NodeData::VariableDeclarationList(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6161,7 +9819,7 @@ impl Node {
     /// Go: `func (n *Node) AsBindingPattern() *BindingPattern`
     pub fn as_binding_pattern(&self) -> Option<&BindingPattern> {
         match &self.data {
-            NodeData::BindingPattern(d) => Some(d),
+            NodeData::BindingPattern(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6169,7 +9827,7 @@ impl Node {
     /// Go: `func (n *Node) AsParameterDeclaration() *ParameterDeclaration`
     pub fn as_parameter_declaration(&self) -> Option<&ParameterDeclaration> {
         match &self.data {
-            NodeData::ParameterDeclaration(d) => Some(d),
+            NodeData::ParameterDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6177,7 +9835,7 @@ impl Node {
     /// Go: `func (n *Node) AsBindingElement() *BindingElement`
     pub fn as_binding_element(&self) -> Option<&BindingElement> {
         match &self.data {
-            NodeData::BindingElement(d) => Some(d),
+            NodeData::BindingElement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6185,7 +9843,7 @@ impl Node {
     /// Go: `func (n *Node) AsMissingDeclaration() *MissingDeclaration`
     pub fn as_missing_declaration(&self) -> Option<&MissingDeclaration> {
         match &self.data {
-            NodeData::MissingDeclaration(d) => Some(d),
+            NodeData::MissingDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6193,7 +9851,7 @@ impl Node {
     /// Go: `func (n *Node) AsFunctionDeclaration() *FunctionDeclaration`
     pub fn as_function_declaration(&self) -> Option<&FunctionDeclaration> {
         match &self.data {
-            NodeData::FunctionDeclaration(d) => Some(d),
+            NodeData::FunctionDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6201,7 +9859,7 @@ impl Node {
     /// Go: `func (n *Node) AsClassDeclaration() *ClassDeclaration`
     pub fn as_class_declaration(&self) -> Option<&ClassDeclaration> {
         match &self.data {
-            NodeData::ClassDeclaration(d) => Some(d),
+            NodeData::ClassDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6209,7 +9867,7 @@ impl Node {
     /// Go: `func (n *Node) AsClassExpression() *ClassExpression`
     pub fn as_class_expression(&self) -> Option<&ClassExpression> {
         match &self.data {
-            NodeData::ClassExpression(d) => Some(d),
+            NodeData::ClassExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6217,7 +9875,7 @@ impl Node {
     /// Go: `func (n *Node) AsHeritageClause() *HeritageClause`
     pub fn as_heritage_clause(&self) -> Option<&HeritageClause> {
         match &self.data {
-            NodeData::HeritageClause(d) => Some(d),
+            NodeData::HeritageClause(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6225,7 +9883,7 @@ impl Node {
     /// Go: `func (n *Node) AsInterfaceDeclaration() *InterfaceDeclaration`
     pub fn as_interface_declaration(&self) -> Option<&InterfaceDeclaration> {
         match &self.data {
-            NodeData::InterfaceDeclaration(d) => Some(d),
+            NodeData::InterfaceDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6233,7 +9891,7 @@ impl Node {
     /// Go: `func (n *Node) AsTypeAliasDeclaration() *TypeAliasDeclaration`
     pub fn as_type_alias_declaration(&self) -> Option<&TypeAliasDeclaration> {
         match &self.data {
-            NodeData::TypeAliasDeclaration(d) => Some(d),
+            NodeData::TypeAliasDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6241,7 +9899,7 @@ impl Node {
     /// Go: `func (n *Node) AsEnumMember() *EnumMember`
     pub fn as_enum_member(&self) -> Option<&EnumMember> {
         match &self.data {
-            NodeData::EnumMember(d) => Some(d),
+            NodeData::EnumMember(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6249,7 +9907,7 @@ impl Node {
     /// Go: `func (n *Node) AsEnumDeclaration() *EnumDeclaration`
     pub fn as_enum_declaration(&self) -> Option<&EnumDeclaration> {
         match &self.data {
-            NodeData::EnumDeclaration(d) => Some(d),
+            NodeData::EnumDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6257,7 +9915,7 @@ impl Node {
     /// Go: `func (n *Node) AsModuleBlock() *ModuleBlock`
     pub fn as_module_block(&self) -> Option<&ModuleBlock> {
         match &self.data {
-            NodeData::ModuleBlock(d) => Some(d),
+            NodeData::ModuleBlock(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6265,7 +9923,7 @@ impl Node {
     /// Go: `func (n *Node) AsNotEmittedStatement() *NotEmittedStatement`
     pub fn as_not_emitted_statement(&self) -> Option<&NotEmittedStatement> {
         match &self.data {
-            NodeData::NotEmittedStatement(d) => Some(d),
+            NodeData::NotEmittedStatement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6273,7 +9931,7 @@ impl Node {
     /// Go: `func (n *Node) AsNotEmittedTypeElement() *NotEmittedTypeElement`
     pub fn as_not_emitted_type_element(&self) -> Option<&NotEmittedTypeElement> {
         match &self.data {
-            NodeData::NotEmittedTypeElement(d) => Some(d),
+            NodeData::NotEmittedTypeElement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6281,7 +9939,7 @@ impl Node {
     /// Go: `func (n *Node) AsImportDeclaration() *ImportDeclaration`
     pub fn as_import_declaration(&self) -> Option<&ImportDeclaration> {
         match &self.data {
-            NodeData::ImportDeclaration(d) => Some(d),
+            NodeData::ImportDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6289,7 +9947,7 @@ impl Node {
     /// Go: `func (n *Node) AsExternalModuleReference() *ExternalModuleReference`
     pub fn as_external_module_reference(&self) -> Option<&ExternalModuleReference> {
         match &self.data {
-            NodeData::ExternalModuleReference(d) => Some(d),
+            NodeData::ExternalModuleReference(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6297,7 +9955,7 @@ impl Node {
     /// Go: `func (n *Node) AsNamespaceImport() *NamespaceImport`
     pub fn as_namespace_import(&self) -> Option<&NamespaceImport> {
         match &self.data {
-            NodeData::NamespaceImport(d) => Some(d),
+            NodeData::NamespaceImport(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6305,7 +9963,7 @@ impl Node {
     /// Go: `func (n *Node) AsNamedImports() *NamedImports`
     pub fn as_named_imports(&self) -> Option<&NamedImports> {
         match &self.data {
-            NodeData::NamedImports(d) => Some(d),
+            NodeData::NamedImports(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6313,7 +9971,7 @@ impl Node {
     /// Go: `func (n *Node) AsExportAssignment() *ExportAssignment`
     pub fn as_export_assignment(&self) -> Option<&ExportAssignment> {
         match &self.data {
-            NodeData::ExportAssignment(d) => Some(d),
+            NodeData::ExportAssignment(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6321,7 +9979,7 @@ impl Node {
     /// Go: `func (n *Node) AsNamespaceExportDeclaration() *NamespaceExportDeclaration`
     pub fn as_namespace_export_declaration(&self) -> Option<&NamespaceExportDeclaration> {
         match &self.data {
-            NodeData::NamespaceExportDeclaration(d) => Some(d),
+            NodeData::NamespaceExportDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6329,7 +9987,7 @@ impl Node {
     /// Go: `func (n *Node) AsNamespaceExport() *NamespaceExport`
     pub fn as_namespace_export(&self) -> Option<&NamespaceExport> {
         match &self.data {
-            NodeData::NamespaceExport(d) => Some(d),
+            NodeData::NamespaceExport(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6337,7 +9995,7 @@ impl Node {
     /// Go: `func (n *Node) AsNamedExports() *NamedExports`
     pub fn as_named_exports(&self) -> Option<&NamedExports> {
         match &self.data {
-            NodeData::NamedExports(d) => Some(d),
+            NodeData::NamedExports(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6345,7 +10003,7 @@ impl Node {
     /// Go: `func (n *Node) AsExportSpecifier() *ExportSpecifier`
     pub fn as_export_specifier(&self) -> Option<&ExportSpecifier> {
         match &self.data {
-            NodeData::ExportSpecifier(d) => Some(d),
+            NodeData::ExportSpecifier(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6353,7 +10011,7 @@ impl Node {
     /// Go: `func (n *Node) AsCallSignatureDeclaration() *CallSignatureDeclaration`
     pub fn as_call_signature_declaration(&self) -> Option<&CallSignatureDeclaration> {
         match &self.data {
-            NodeData::CallSignatureDeclaration(d) => Some(d),
+            NodeData::CallSignatureDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6361,7 +10019,7 @@ impl Node {
     /// Go: `func (n *Node) AsConstructSignatureDeclaration() *ConstructSignatureDeclaration`
     pub fn as_construct_signature_declaration(&self) -> Option<&ConstructSignatureDeclaration> {
         match &self.data {
-            NodeData::ConstructSignatureDeclaration(d) => Some(d),
+            NodeData::ConstructSignatureDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6369,7 +10027,7 @@ impl Node {
     /// Go: `func (n *Node) AsConstructorDeclaration() *ConstructorDeclaration`
     pub fn as_constructor_declaration(&self) -> Option<&ConstructorDeclaration> {
         match &self.data {
-            NodeData::ConstructorDeclaration(d) => Some(d),
+            NodeData::ConstructorDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6377,7 +10035,7 @@ impl Node {
     /// Go: `func (n *Node) AsGetAccessorDeclaration() *GetAccessorDeclaration`
     pub fn as_get_accessor_declaration(&self) -> Option<&GetAccessorDeclaration> {
         match &self.data {
-            NodeData::GetAccessorDeclaration(d) => Some(d),
+            NodeData::GetAccessorDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6385,7 +10043,7 @@ impl Node {
     /// Go: `func (n *Node) AsSetAccessorDeclaration() *SetAccessorDeclaration`
     pub fn as_set_accessor_declaration(&self) -> Option<&SetAccessorDeclaration> {
         match &self.data {
-            NodeData::SetAccessorDeclaration(d) => Some(d),
+            NodeData::SetAccessorDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6393,7 +10051,7 @@ impl Node {
     /// Go: `func (n *Node) AsIndexSignatureDeclaration() *IndexSignatureDeclaration`
     pub fn as_index_signature_declaration(&self) -> Option<&IndexSignatureDeclaration> {
         match &self.data {
-            NodeData::IndexSignatureDeclaration(d) => Some(d),
+            NodeData::IndexSignatureDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6401,7 +10059,7 @@ impl Node {
     /// Go: `func (n *Node) AsMethodSignatureDeclaration() *MethodSignatureDeclaration`
     pub fn as_method_signature_declaration(&self) -> Option<&MethodSignatureDeclaration> {
         match &self.data {
-            NodeData::MethodSignatureDeclaration(d) => Some(d),
+            NodeData::MethodSignatureDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6409,7 +10067,7 @@ impl Node {
     /// Go: `func (n *Node) AsMethodDeclaration() *MethodDeclaration`
     pub fn as_method_declaration(&self) -> Option<&MethodDeclaration> {
         match &self.data {
-            NodeData::MethodDeclaration(d) => Some(d),
+            NodeData::MethodDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6417,7 +10075,7 @@ impl Node {
     /// Go: `func (n *Node) AsPropertySignatureDeclaration() *PropertySignatureDeclaration`
     pub fn as_property_signature_declaration(&self) -> Option<&PropertySignatureDeclaration> {
         match &self.data {
-            NodeData::PropertySignatureDeclaration(d) => Some(d),
+            NodeData::PropertySignatureDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6425,7 +10083,7 @@ impl Node {
     /// Go: `func (n *Node) AsPropertyDeclaration() *PropertyDeclaration`
     pub fn as_property_declaration(&self) -> Option<&PropertyDeclaration> {
         match &self.data {
-            NodeData::PropertyDeclaration(d) => Some(d),
+            NodeData::PropertyDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6433,7 +10091,7 @@ impl Node {
     /// Go: `func (n *Node) AsSemicolonClassElement() *SemicolonClassElement`
     pub fn as_semicolon_class_element(&self) -> Option<&SemicolonClassElement> {
         match &self.data {
-            NodeData::SemicolonClassElement(d) => Some(d),
+            NodeData::SemicolonClassElement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6441,7 +10099,7 @@ impl Node {
     /// Go: `func (n *Node) AsClassStaticBlockDeclaration() *ClassStaticBlockDeclaration`
     pub fn as_class_static_block_declaration(&self) -> Option<&ClassStaticBlockDeclaration> {
         match &self.data {
-            NodeData::ClassStaticBlockDeclaration(d) => Some(d),
+            NodeData::ClassStaticBlockDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6449,7 +10107,7 @@ impl Node {
     /// Go: `func (n *Node) AsOmittedExpression() *OmittedExpression`
     pub fn as_omitted_expression(&self) -> Option<&OmittedExpression> {
         match &self.data {
-            NodeData::OmittedExpression(d) => Some(d),
+            NodeData::OmittedExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6457,7 +10115,7 @@ impl Node {
     /// Go: `func (n *Node) AsKeywordExpression() *KeywordExpression`
     pub fn as_keyword_expression(&self) -> Option<&KeywordExpression> {
         match &self.data {
-            NodeData::KeywordExpression(d) => Some(d),
+            NodeData::KeywordExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6465,7 +10123,7 @@ impl Node {
     /// Go: `func (n *Node) AsStringLiteral() *StringLiteral`
     pub fn as_string_literal(&self) -> Option<&StringLiteral> {
         match &self.data {
-            NodeData::StringLiteral(d) => Some(d),
+            NodeData::StringLiteral(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6473,7 +10131,7 @@ impl Node {
     /// Go: `func (n *Node) AsNumericLiteral() *NumericLiteral`
     pub fn as_numeric_literal(&self) -> Option<&NumericLiteral> {
         match &self.data {
-            NodeData::NumericLiteral(d) => Some(d),
+            NodeData::NumericLiteral(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6481,7 +10139,7 @@ impl Node {
     /// Go: `func (n *Node) AsBigIntLiteral() *BigIntLiteral`
     pub fn as_big_int_literal(&self) -> Option<&BigIntLiteral> {
         match &self.data {
-            NodeData::BigIntLiteral(d) => Some(d),
+            NodeData::BigIntLiteral(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6489,7 +10147,7 @@ impl Node {
     /// Go: `func (n *Node) AsRegularExpressionLiteral() *RegularExpressionLiteral`
     pub fn as_regular_expression_literal(&self) -> Option<&RegularExpressionLiteral> {
         match &self.data {
-            NodeData::RegularExpressionLiteral(d) => Some(d),
+            NodeData::RegularExpressionLiteral(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6497,7 +10155,7 @@ impl Node {
     /// Go: `func (n *Node) AsNoSubstitutionTemplateLiteral() *NoSubstitutionTemplateLiteral`
     pub fn as_no_substitution_template_literal(&self) -> Option<&NoSubstitutionTemplateLiteral> {
         match &self.data {
-            NodeData::NoSubstitutionTemplateLiteral(d) => Some(d),
+            NodeData::NoSubstitutionTemplateLiteral(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6505,7 +10163,7 @@ impl Node {
     /// Go: `func (n *Node) AsBinaryExpression() *BinaryExpression`
     pub fn as_binary_expression(&self) -> Option<&BinaryExpression> {
         match &self.data {
-            NodeData::BinaryExpression(d) => Some(d),
+            NodeData::BinaryExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6513,7 +10171,7 @@ impl Node {
     /// Go: `func (n *Node) AsPrefixUnaryExpression() *PrefixUnaryExpression`
     pub fn as_prefix_unary_expression(&self) -> Option<&PrefixUnaryExpression> {
         match &self.data {
-            NodeData::PrefixUnaryExpression(d) => Some(d),
+            NodeData::PrefixUnaryExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6521,7 +10179,7 @@ impl Node {
     /// Go: `func (n *Node) AsPostfixUnaryExpression() *PostfixUnaryExpression`
     pub fn as_postfix_unary_expression(&self) -> Option<&PostfixUnaryExpression> {
         match &self.data {
-            NodeData::PostfixUnaryExpression(d) => Some(d),
+            NodeData::PostfixUnaryExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6529,7 +10187,7 @@ impl Node {
     /// Go: `func (n *Node) AsYieldExpression() *YieldExpression`
     pub fn as_yield_expression(&self) -> Option<&YieldExpression> {
         match &self.data {
-            NodeData::YieldExpression(d) => Some(d),
+            NodeData::YieldExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6537,7 +10195,7 @@ impl Node {
     /// Go: `func (n *Node) AsArrowFunction() *ArrowFunction`
     pub fn as_arrow_function(&self) -> Option<&ArrowFunction> {
         match &self.data {
-            NodeData::ArrowFunction(d) => Some(d),
+            NodeData::ArrowFunction(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6545,7 +10203,7 @@ impl Node {
     /// Go: `func (n *Node) AsFunctionExpression() *FunctionExpression`
     pub fn as_function_expression(&self) -> Option<&FunctionExpression> {
         match &self.data {
-            NodeData::FunctionExpression(d) => Some(d),
+            NodeData::FunctionExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6553,7 +10211,7 @@ impl Node {
     /// Go: `func (n *Node) AsAsExpression() *AsExpression`
     pub fn as_as_expression(&self) -> Option<&AsExpression> {
         match &self.data {
-            NodeData::AsExpression(d) => Some(d),
+            NodeData::AsExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6561,7 +10219,7 @@ impl Node {
     /// Go: `func (n *Node) AsSatisfiesExpression() *SatisfiesExpression`
     pub fn as_satisfies_expression(&self) -> Option<&SatisfiesExpression> {
         match &self.data {
-            NodeData::SatisfiesExpression(d) => Some(d),
+            NodeData::SatisfiesExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6569,7 +10227,7 @@ impl Node {
     /// Go: `func (n *Node) AsConditionalExpression() *ConditionalExpression`
     pub fn as_conditional_expression(&self) -> Option<&ConditionalExpression> {
         match &self.data {
-            NodeData::ConditionalExpression(d) => Some(d),
+            NodeData::ConditionalExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6577,7 +10235,7 @@ impl Node {
     /// Go: `func (n *Node) AsPropertyAccessExpression() *PropertyAccessExpression`
     pub fn as_property_access_expression(&self) -> Option<&PropertyAccessExpression> {
         match &self.data {
-            NodeData::PropertyAccessExpression(d) => Some(d),
+            NodeData::PropertyAccessExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6585,7 +10243,7 @@ impl Node {
     /// Go: `func (n *Node) AsElementAccessExpression() *ElementAccessExpression`
     pub fn as_element_access_expression(&self) -> Option<&ElementAccessExpression> {
         match &self.data {
-            NodeData::ElementAccessExpression(d) => Some(d),
+            NodeData::ElementAccessExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6593,7 +10251,7 @@ impl Node {
     /// Go: `func (n *Node) AsCallExpression() *CallExpression`
     pub fn as_call_expression(&self) -> Option<&CallExpression> {
         match &self.data {
-            NodeData::CallExpression(d) => Some(d),
+            NodeData::CallExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6601,7 +10259,7 @@ impl Node {
     /// Go: `func (n *Node) AsNewExpression() *NewExpression`
     pub fn as_new_expression(&self) -> Option<&NewExpression> {
         match &self.data {
-            NodeData::NewExpression(d) => Some(d),
+            NodeData::NewExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6609,7 +10267,7 @@ impl Node {
     /// Go: `func (n *Node) AsMetaProperty() *MetaProperty`
     pub fn as_meta_property(&self) -> Option<&MetaProperty> {
         match &self.data {
-            NodeData::MetaProperty(d) => Some(d),
+            NodeData::MetaProperty(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6617,7 +10275,7 @@ impl Node {
     /// Go: `func (n *Node) AsNonNullExpression() *NonNullExpression`
     pub fn as_non_null_expression(&self) -> Option<&NonNullExpression> {
         match &self.data {
-            NodeData::NonNullExpression(d) => Some(d),
+            NodeData::NonNullExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6625,7 +10283,7 @@ impl Node {
     /// Go: `func (n *Node) AsSpreadElement() *SpreadElement`
     pub fn as_spread_element(&self) -> Option<&SpreadElement> {
         match &self.data {
-            NodeData::SpreadElement(d) => Some(d),
+            NodeData::SpreadElement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6633,7 +10291,7 @@ impl Node {
     /// Go: `func (n *Node) AsTemplateExpression() *TemplateExpression`
     pub fn as_template_expression(&self) -> Option<&TemplateExpression> {
         match &self.data {
-            NodeData::TemplateExpression(d) => Some(d),
+            NodeData::TemplateExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6641,7 +10299,7 @@ impl Node {
     /// Go: `func (n *Node) AsTemplateSpan() *TemplateSpan`
     pub fn as_template_span(&self) -> Option<&TemplateSpan> {
         match &self.data {
-            NodeData::TemplateSpan(d) => Some(d),
+            NodeData::TemplateSpan(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6649,7 +10307,7 @@ impl Node {
     /// Go: `func (n *Node) AsTaggedTemplateExpression() *TaggedTemplateExpression`
     pub fn as_tagged_template_expression(&self) -> Option<&TaggedTemplateExpression> {
         match &self.data {
-            NodeData::TaggedTemplateExpression(d) => Some(d),
+            NodeData::TaggedTemplateExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6657,7 +10315,7 @@ impl Node {
     /// Go: `func (n *Node) AsParenthesizedExpression() *ParenthesizedExpression`
     pub fn as_parenthesized_expression(&self) -> Option<&ParenthesizedExpression> {
         match &self.data {
-            NodeData::ParenthesizedExpression(d) => Some(d),
+            NodeData::ParenthesizedExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6665,7 +10323,7 @@ impl Node {
     /// Go: `func (n *Node) AsArrayLiteralExpression() *ArrayLiteralExpression`
     pub fn as_array_literal_expression(&self) -> Option<&ArrayLiteralExpression> {
         match &self.data {
-            NodeData::ArrayLiteralExpression(d) => Some(d),
+            NodeData::ArrayLiteralExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6673,7 +10331,7 @@ impl Node {
     /// Go: `func (n *Node) AsObjectLiteralExpression() *ObjectLiteralExpression`
     pub fn as_object_literal_expression(&self) -> Option<&ObjectLiteralExpression> {
         match &self.data {
-            NodeData::ObjectLiteralExpression(d) => Some(d),
+            NodeData::ObjectLiteralExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6681,7 +10339,7 @@ impl Node {
     /// Go: `func (n *Node) AsSpreadAssignment() *SpreadAssignment`
     pub fn as_spread_assignment(&self) -> Option<&SpreadAssignment> {
         match &self.data {
-            NodeData::SpreadAssignment(d) => Some(d),
+            NodeData::SpreadAssignment(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6689,7 +10347,7 @@ impl Node {
     /// Go: `func (n *Node) AsPropertyAssignment() *PropertyAssignment`
     pub fn as_property_assignment(&self) -> Option<&PropertyAssignment> {
         match &self.data {
-            NodeData::PropertyAssignment(d) => Some(d),
+            NodeData::PropertyAssignment(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6697,7 +10355,7 @@ impl Node {
     /// Go: `func (n *Node) AsShorthandPropertyAssignment() *ShorthandPropertyAssignment`
     pub fn as_shorthand_property_assignment(&self) -> Option<&ShorthandPropertyAssignment> {
         match &self.data {
-            NodeData::ShorthandPropertyAssignment(d) => Some(d),
+            NodeData::ShorthandPropertyAssignment(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6705,7 +10363,7 @@ impl Node {
     /// Go: `func (n *Node) AsDeleteExpression() *DeleteExpression`
     pub fn as_delete_expression(&self) -> Option<&DeleteExpression> {
         match &self.data {
-            NodeData::DeleteExpression(d) => Some(d),
+            NodeData::DeleteExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6713,7 +10371,7 @@ impl Node {
     /// Go: `func (n *Node) AsTypeOfExpression() *TypeOfExpression`
     pub fn as_type_of_expression(&self) -> Option<&TypeOfExpression> {
         match &self.data {
-            NodeData::TypeOfExpression(d) => Some(d),
+            NodeData::TypeOfExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6721,7 +10379,7 @@ impl Node {
     /// Go: `func (n *Node) AsVoidExpression() *VoidExpression`
     pub fn as_void_expression(&self) -> Option<&VoidExpression> {
         match &self.data {
-            NodeData::VoidExpression(d) => Some(d),
+            NodeData::VoidExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6729,7 +10387,7 @@ impl Node {
     /// Go: `func (n *Node) AsAwaitExpression() *AwaitExpression`
     pub fn as_await_expression(&self) -> Option<&AwaitExpression> {
         match &self.data {
-            NodeData::AwaitExpression(d) => Some(d),
+            NodeData::AwaitExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6737,7 +10395,7 @@ impl Node {
     /// Go: `func (n *Node) AsTypeAssertion() *TypeAssertion`
     pub fn as_type_assertion(&self) -> Option<&TypeAssertion> {
         match &self.data {
-            NodeData::TypeAssertion(d) => Some(d),
+            NodeData::TypeAssertion(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6745,7 +10403,7 @@ impl Node {
     /// Go: `func (n *Node) AsKeywordTypeNode() *KeywordTypeNode`
     pub fn as_keyword_type_node(&self) -> Option<&KeywordTypeNode> {
         match &self.data {
-            NodeData::KeywordTypeNode(d) => Some(d),
+            NodeData::KeywordTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6753,7 +10411,7 @@ impl Node {
     /// Go: `func (n *Node) AsUnionTypeNode() *UnionTypeNode`
     pub fn as_union_type_node(&self) -> Option<&UnionTypeNode> {
         match &self.data {
-            NodeData::UnionTypeNode(d) => Some(d),
+            NodeData::UnionTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6761,7 +10419,7 @@ impl Node {
     /// Go: `func (n *Node) AsIntersectionTypeNode() *IntersectionTypeNode`
     pub fn as_intersection_type_node(&self) -> Option<&IntersectionTypeNode> {
         match &self.data {
-            NodeData::IntersectionTypeNode(d) => Some(d),
+            NodeData::IntersectionTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6769,7 +10427,7 @@ impl Node {
     /// Go: `func (n *Node) AsConditionalTypeNode() *ConditionalTypeNode`
     pub fn as_conditional_type_node(&self) -> Option<&ConditionalTypeNode> {
         match &self.data {
-            NodeData::ConditionalTypeNode(d) => Some(d),
+            NodeData::ConditionalTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6777,7 +10435,7 @@ impl Node {
     /// Go: `func (n *Node) AsTypeOperatorNode() *TypeOperatorNode`
     pub fn as_type_operator_node(&self) -> Option<&TypeOperatorNode> {
         match &self.data {
-            NodeData::TypeOperatorNode(d) => Some(d),
+            NodeData::TypeOperatorNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6785,7 +10443,7 @@ impl Node {
     /// Go: `func (n *Node) AsInferTypeNode() *InferTypeNode`
     pub fn as_infer_type_node(&self) -> Option<&InferTypeNode> {
         match &self.data {
-            NodeData::InferTypeNode(d) => Some(d),
+            NodeData::InferTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6793,7 +10451,7 @@ impl Node {
     /// Go: `func (n *Node) AsArrayTypeNode() *ArrayTypeNode`
     pub fn as_array_type_node(&self) -> Option<&ArrayTypeNode> {
         match &self.data {
-            NodeData::ArrayTypeNode(d) => Some(d),
+            NodeData::ArrayTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6801,7 +10459,7 @@ impl Node {
     /// Go: `func (n *Node) AsIndexedAccessTypeNode() *IndexedAccessTypeNode`
     pub fn as_indexed_access_type_node(&self) -> Option<&IndexedAccessTypeNode> {
         match &self.data {
-            NodeData::IndexedAccessTypeNode(d) => Some(d),
+            NodeData::IndexedAccessTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6809,7 +10467,7 @@ impl Node {
     /// Go: `func (n *Node) AsTypeReferenceNode() *TypeReferenceNode`
     pub fn as_type_reference_node(&self) -> Option<&TypeReferenceNode> {
         match &self.data {
-            NodeData::TypeReferenceNode(d) => Some(d),
+            NodeData::TypeReferenceNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6817,7 +10475,7 @@ impl Node {
     /// Go: `func (n *Node) AsExpressionWithTypeArguments() *ExpressionWithTypeArguments`
     pub fn as_expression_with_type_arguments(&self) -> Option<&ExpressionWithTypeArguments> {
         match &self.data {
-            NodeData::ExpressionWithTypeArguments(d) => Some(d),
+            NodeData::ExpressionWithTypeArguments(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6825,7 +10483,7 @@ impl Node {
     /// Go: `func (n *Node) AsLiteralTypeNode() *LiteralTypeNode`
     pub fn as_literal_type_node(&self) -> Option<&LiteralTypeNode> {
         match &self.data {
-            NodeData::LiteralTypeNode(d) => Some(d),
+            NodeData::LiteralTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6833,7 +10491,7 @@ impl Node {
     /// Go: `func (n *Node) AsThisTypeNode() *ThisTypeNode`
     pub fn as_this_type_node(&self) -> Option<&ThisTypeNode> {
         match &self.data {
-            NodeData::ThisTypeNode(d) => Some(d),
+            NodeData::ThisTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6841,7 +10499,7 @@ impl Node {
     /// Go: `func (n *Node) AsTypePredicateNode() *TypePredicateNode`
     pub fn as_type_predicate_node(&self) -> Option<&TypePredicateNode> {
         match &self.data {
-            NodeData::TypePredicateNode(d) => Some(d),
+            NodeData::TypePredicateNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6849,7 +10507,7 @@ impl Node {
     /// Go: `func (n *Node) AsImportAttribute() *ImportAttribute`
     pub fn as_import_attribute(&self) -> Option<&ImportAttribute> {
         match &self.data {
-            NodeData::ImportAttribute(d) => Some(d),
+            NodeData::ImportAttribute(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6857,7 +10515,7 @@ impl Node {
     /// Go: `func (n *Node) AsImportAttributes() *ImportAttributes`
     pub fn as_import_attributes(&self) -> Option<&ImportAttributes> {
         match &self.data {
-            NodeData::ImportAttributes(d) => Some(d),
+            NodeData::ImportAttributes(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6865,7 +10523,7 @@ impl Node {
     /// Go: `func (n *Node) AsTypeQueryNode() *TypeQueryNode`
     pub fn as_type_query_node(&self) -> Option<&TypeQueryNode> {
         match &self.data {
-            NodeData::TypeQueryNode(d) => Some(d),
+            NodeData::TypeQueryNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6873,7 +10531,7 @@ impl Node {
     /// Go: `func (n *Node) AsMappedTypeNode() *MappedTypeNode`
     pub fn as_mapped_type_node(&self) -> Option<&MappedTypeNode> {
         match &self.data {
-            NodeData::MappedTypeNode(d) => Some(d),
+            NodeData::MappedTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6881,7 +10539,7 @@ impl Node {
     /// Go: `func (n *Node) AsTypeLiteralNode() *TypeLiteralNode`
     pub fn as_type_literal_node(&self) -> Option<&TypeLiteralNode> {
         match &self.data {
-            NodeData::TypeLiteralNode(d) => Some(d),
+            NodeData::TypeLiteralNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6889,7 +10547,7 @@ impl Node {
     /// Go: `func (n *Node) AsTupleTypeNode() *TupleTypeNode`
     pub fn as_tuple_type_node(&self) -> Option<&TupleTypeNode> {
         match &self.data {
-            NodeData::TupleTypeNode(d) => Some(d),
+            NodeData::TupleTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6897,7 +10555,7 @@ impl Node {
     /// Go: `func (n *Node) AsNamedTupleMember() *NamedTupleMember`
     pub fn as_named_tuple_member(&self) -> Option<&NamedTupleMember> {
         match &self.data {
-            NodeData::NamedTupleMember(d) => Some(d),
+            NodeData::NamedTupleMember(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6905,7 +10563,7 @@ impl Node {
     /// Go: `func (n *Node) AsOptionalTypeNode() *OptionalTypeNode`
     pub fn as_optional_type_node(&self) -> Option<&OptionalTypeNode> {
         match &self.data {
-            NodeData::OptionalTypeNode(d) => Some(d),
+            NodeData::OptionalTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6913,7 +10571,7 @@ impl Node {
     /// Go: `func (n *Node) AsRestTypeNode() *RestTypeNode`
     pub fn as_rest_type_node(&self) -> Option<&RestTypeNode> {
         match &self.data {
-            NodeData::RestTypeNode(d) => Some(d),
+            NodeData::RestTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6921,7 +10579,7 @@ impl Node {
     /// Go: `func (n *Node) AsParenthesizedTypeNode() *ParenthesizedTypeNode`
     pub fn as_parenthesized_type_node(&self) -> Option<&ParenthesizedTypeNode> {
         match &self.data {
-            NodeData::ParenthesizedTypeNode(d) => Some(d),
+            NodeData::ParenthesizedTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6929,7 +10587,7 @@ impl Node {
     /// Go: `func (n *Node) AsFunctionTypeNode() *FunctionTypeNode`
     pub fn as_function_type_node(&self) -> Option<&FunctionTypeNode> {
         match &self.data {
-            NodeData::FunctionTypeNode(d) => Some(d),
+            NodeData::FunctionTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6937,7 +10595,7 @@ impl Node {
     /// Go: `func (n *Node) AsConstructorTypeNode() *ConstructorTypeNode`
     pub fn as_constructor_type_node(&self) -> Option<&ConstructorTypeNode> {
         match &self.data {
-            NodeData::ConstructorTypeNode(d) => Some(d),
+            NodeData::ConstructorTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6945,7 +10603,7 @@ impl Node {
     /// Go: `func (n *Node) AsTemplateHead() *TemplateHead`
     pub fn as_template_head(&self) -> Option<&TemplateHead> {
         match &self.data {
-            NodeData::TemplateHead(d) => Some(d),
+            NodeData::TemplateHead(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6953,7 +10611,7 @@ impl Node {
     /// Go: `func (n *Node) AsTemplateMiddle() *TemplateMiddle`
     pub fn as_template_middle(&self) -> Option<&TemplateMiddle> {
         match &self.data {
-            NodeData::TemplateMiddle(d) => Some(d),
+            NodeData::TemplateMiddle(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6961,7 +10619,7 @@ impl Node {
     /// Go: `func (n *Node) AsTemplateTail() *TemplateTail`
     pub fn as_template_tail(&self) -> Option<&TemplateTail> {
         match &self.data {
-            NodeData::TemplateTail(d) => Some(d),
+            NodeData::TemplateTail(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6969,7 +10627,7 @@ impl Node {
     /// Go: `func (n *Node) AsTemplateLiteralTypeNode() *TemplateLiteralTypeNode`
     pub fn as_template_literal_type_node(&self) -> Option<&TemplateLiteralTypeNode> {
         match &self.data {
-            NodeData::TemplateLiteralTypeNode(d) => Some(d),
+            NodeData::TemplateLiteralTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6977,7 +10635,7 @@ impl Node {
     /// Go: `func (n *Node) AsTemplateLiteralTypeSpan() *TemplateLiteralTypeSpan`
     pub fn as_template_literal_type_span(&self) -> Option<&TemplateLiteralTypeSpan> {
         match &self.data {
-            NodeData::TemplateLiteralTypeSpan(d) => Some(d),
+            NodeData::TemplateLiteralTypeSpan(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6985,7 +10643,7 @@ impl Node {
     /// Go: `func (n *Node) AsSyntheticExpression() *SyntheticExpression`
     pub fn as_synthetic_expression(&self) -> Option<&SyntheticExpression> {
         match &self.data {
-            NodeData::SyntheticExpression(d) => Some(d),
+            NodeData::SyntheticExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -6993,7 +10651,7 @@ impl Node {
     /// Go: `func (n *Node) AsPartiallyEmittedExpression() *PartiallyEmittedExpression`
     pub fn as_partially_emitted_expression(&self) -> Option<&PartiallyEmittedExpression> {
         match &self.data {
-            NodeData::PartiallyEmittedExpression(d) => Some(d),
+            NodeData::PartiallyEmittedExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7001,7 +10659,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxElement() *JsxElement`
     pub fn as_jsx_element(&self) -> Option<&JsxElement> {
         match &self.data {
-            NodeData::JsxElement(d) => Some(d),
+            NodeData::JsxElement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7009,7 +10667,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxAttributes() *JsxAttributes`
     pub fn as_jsx_attributes(&self) -> Option<&JsxAttributes> {
         match &self.data {
-            NodeData::JsxAttributes(d) => Some(d),
+            NodeData::JsxAttributes(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7017,7 +10675,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxNamespacedName() *JsxNamespacedName`
     pub fn as_jsx_namespaced_name(&self) -> Option<&JsxNamespacedName> {
         match &self.data {
-            NodeData::JsxNamespacedName(d) => Some(d),
+            NodeData::JsxNamespacedName(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7025,7 +10683,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxOpeningElement() *JsxOpeningElement`
     pub fn as_jsx_opening_element(&self) -> Option<&JsxOpeningElement> {
         match &self.data {
-            NodeData::JsxOpeningElement(d) => Some(d),
+            NodeData::JsxOpeningElement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7033,7 +10691,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxSelfClosingElement() *JsxSelfClosingElement`
     pub fn as_jsx_self_closing_element(&self) -> Option<&JsxSelfClosingElement> {
         match &self.data {
-            NodeData::JsxSelfClosingElement(d) => Some(d),
+            NodeData::JsxSelfClosingElement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7041,7 +10699,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxFragment() *JsxFragment`
     pub fn as_jsx_fragment(&self) -> Option<&JsxFragment> {
         match &self.data {
-            NodeData::JsxFragment(d) => Some(d),
+            NodeData::JsxFragment(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7049,7 +10707,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxOpeningFragment() *JsxOpeningFragment`
     pub fn as_jsx_opening_fragment(&self) -> Option<&JsxOpeningFragment> {
         match &self.data {
-            NodeData::JsxOpeningFragment(d) => Some(d),
+            NodeData::JsxOpeningFragment(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7057,7 +10715,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxClosingFragment() *JsxClosingFragment`
     pub fn as_jsx_closing_fragment(&self) -> Option<&JsxClosingFragment> {
         match &self.data {
-            NodeData::JsxClosingFragment(d) => Some(d),
+            NodeData::JsxClosingFragment(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7065,7 +10723,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxAttribute() *JsxAttribute`
     pub fn as_jsx_attribute(&self) -> Option<&JsxAttribute> {
         match &self.data {
-            NodeData::JsxAttribute(d) => Some(d),
+            NodeData::JsxAttribute(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7073,7 +10731,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxSpreadAttribute() *JsxSpreadAttribute`
     pub fn as_jsx_spread_attribute(&self) -> Option<&JsxSpreadAttribute> {
         match &self.data {
-            NodeData::JsxSpreadAttribute(d) => Some(d),
+            NodeData::JsxSpreadAttribute(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7081,7 +10739,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxClosingElement() *JsxClosingElement`
     pub fn as_jsx_closing_element(&self) -> Option<&JsxClosingElement> {
         match &self.data {
-            NodeData::JsxClosingElement(d) => Some(d),
+            NodeData::JsxClosingElement(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7089,7 +10747,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxExpression() *JsxExpression`
     pub fn as_jsx_expression(&self) -> Option<&JsxExpression> {
         match &self.data {
-            NodeData::JsxExpression(d) => Some(d),
+            NodeData::JsxExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7097,7 +10755,7 @@ impl Node {
     /// Go: `func (n *Node) AsJsxText() *JsxText`
     pub fn as_jsx_text(&self) -> Option<&JsxText> {
         match &self.data {
-            NodeData::JsxText(d) => Some(d),
+            NodeData::JsxText(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7105,7 +10763,7 @@ impl Node {
     /// Go: `func (n *Node) AsSyntaxList() *SyntaxList`
     pub fn as_syntax_list(&self) -> Option<&SyntaxList> {
         match &self.data {
-            NodeData::SyntaxList(d) => Some(d),
+            NodeData::SyntaxList(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7113,7 +10771,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDoc() *JSDoc`
     pub fn as_jsdoc(&self) -> Option<&JSDoc> {
         match &self.data {
-            NodeData::JSDoc(d) => Some(d),
+            NodeData::JSDoc(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7121,7 +10779,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocTypeExpression() *JSDocTypeExpression`
     pub fn as_jsdoc_type_expression(&self) -> Option<&JSDocTypeExpression> {
         match &self.data {
-            NodeData::JSDocTypeExpression(d) => Some(d),
+            NodeData::JSDocTypeExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7129,7 +10787,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocNonNullableType() *JSDocNonNullableType`
     pub fn as_jsdoc_non_nullable_type(&self) -> Option<&JSDocNonNullableType> {
         match &self.data {
-            NodeData::JSDocNonNullableType(d) => Some(d),
+            NodeData::JSDocNonNullableType(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7137,7 +10795,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocNullableType() *JSDocNullableType`
     pub fn as_jsdoc_nullable_type(&self) -> Option<&JSDocNullableType> {
         match &self.data {
-            NodeData::JSDocNullableType(d) => Some(d),
+            NodeData::JSDocNullableType(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7145,7 +10803,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocAllType() *JSDocAllType`
     pub fn as_jsdoc_all_type(&self) -> Option<&JSDocAllType> {
         match &self.data {
-            NodeData::JSDocAllType(d) => Some(d),
+            NodeData::JSDocAllType(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7153,7 +10811,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocVariadicType() *JSDocVariadicType`
     pub fn as_jsdoc_variadic_type(&self) -> Option<&JSDocVariadicType> {
         match &self.data {
-            NodeData::JSDocVariadicType(d) => Some(d),
+            NodeData::JSDocVariadicType(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7161,7 +10819,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocOptionalType() *JSDocOptionalType`
     pub fn as_jsdoc_optional_type(&self) -> Option<&JSDocOptionalType> {
         match &self.data {
-            NodeData::JSDocOptionalType(d) => Some(d),
+            NodeData::JSDocOptionalType(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7169,7 +10827,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocTypeTag() *JSDocTypeTag`
     pub fn as_jsdoc_type_tag(&self) -> Option<&JSDocTypeTag> {
         match &self.data {
-            NodeData::JSDocTypeTag(d) => Some(d),
+            NodeData::JSDocTypeTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7177,7 +10835,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocUnknownTag() *JSDocUnknownTag`
     pub fn as_jsdoc_unknown_tag(&self) -> Option<&JSDocUnknownTag> {
         match &self.data {
-            NodeData::JSDocUnknownTag(d) => Some(d),
+            NodeData::JSDocUnknownTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7185,7 +10843,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocTemplateTag() *JSDocTemplateTag`
     pub fn as_jsdoc_template_tag(&self) -> Option<&JSDocTemplateTag> {
         match &self.data {
-            NodeData::JSDocTemplateTag(d) => Some(d),
+            NodeData::JSDocTemplateTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7193,7 +10851,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocReturnTag() *JSDocReturnTag`
     pub fn as_jsdoc_return_tag(&self) -> Option<&JSDocReturnTag> {
         match &self.data {
-            NodeData::JSDocReturnTag(d) => Some(d),
+            NodeData::JSDocReturnTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7201,7 +10859,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocPublicTag() *JSDocPublicTag`
     pub fn as_jsdoc_public_tag(&self) -> Option<&JSDocPublicTag> {
         match &self.data {
-            NodeData::JSDocPublicTag(d) => Some(d),
+            NodeData::JSDocPublicTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7209,7 +10867,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocPrivateTag() *JSDocPrivateTag`
     pub fn as_jsdoc_private_tag(&self) -> Option<&JSDocPrivateTag> {
         match &self.data {
-            NodeData::JSDocPrivateTag(d) => Some(d),
+            NodeData::JSDocPrivateTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7217,7 +10875,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocProtectedTag() *JSDocProtectedTag`
     pub fn as_jsdoc_protected_tag(&self) -> Option<&JSDocProtectedTag> {
         match &self.data {
-            NodeData::JSDocProtectedTag(d) => Some(d),
+            NodeData::JSDocProtectedTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7225,7 +10883,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocReadonlyTag() *JSDocReadonlyTag`
     pub fn as_jsdoc_readonly_tag(&self) -> Option<&JSDocReadonlyTag> {
         match &self.data {
-            NodeData::JSDocReadonlyTag(d) => Some(d),
+            NodeData::JSDocReadonlyTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7233,7 +10891,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocOverrideTag() *JSDocOverrideTag`
     pub fn as_jsdoc_override_tag(&self) -> Option<&JSDocOverrideTag> {
         match &self.data {
-            NodeData::JSDocOverrideTag(d) => Some(d),
+            NodeData::JSDocOverrideTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7241,7 +10899,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocDeprecatedTag() *JSDocDeprecatedTag`
     pub fn as_jsdoc_deprecated_tag(&self) -> Option<&JSDocDeprecatedTag> {
         match &self.data {
-            NodeData::JSDocDeprecatedTag(d) => Some(d),
+            NodeData::JSDocDeprecatedTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7249,7 +10907,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocSeeTag() *JSDocSeeTag`
     pub fn as_jsdoc_see_tag(&self) -> Option<&JSDocSeeTag> {
         match &self.data {
-            NodeData::JSDocSeeTag(d) => Some(d),
+            NodeData::JSDocSeeTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7257,7 +10915,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocImplementsTag() *JSDocImplementsTag`
     pub fn as_jsdoc_implements_tag(&self) -> Option<&JSDocImplementsTag> {
         match &self.data {
-            NodeData::JSDocImplementsTag(d) => Some(d),
+            NodeData::JSDocImplementsTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7265,7 +10923,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocAugmentsTag() *JSDocAugmentsTag`
     pub fn as_jsdoc_augments_tag(&self) -> Option<&JSDocAugmentsTag> {
         match &self.data {
-            NodeData::JSDocAugmentsTag(d) => Some(d),
+            NodeData::JSDocAugmentsTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7273,7 +10931,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocSatisfiesTag() *JSDocSatisfiesTag`
     pub fn as_jsdoc_satisfies_tag(&self) -> Option<&JSDocSatisfiesTag> {
         match &self.data {
-            NodeData::JSDocSatisfiesTag(d) => Some(d),
+            NodeData::JSDocSatisfiesTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7281,7 +10939,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocThrowsTag() *JSDocThrowsTag`
     pub fn as_jsdoc_throws_tag(&self) -> Option<&JSDocThrowsTag> {
         match &self.data {
-            NodeData::JSDocThrowsTag(d) => Some(d),
+            NodeData::JSDocThrowsTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7289,7 +10947,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocThisTag() *JSDocThisTag`
     pub fn as_jsdoc_this_tag(&self) -> Option<&JSDocThisTag> {
         match &self.data {
-            NodeData::JSDocThisTag(d) => Some(d),
+            NodeData::JSDocThisTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7297,7 +10955,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocImportTag() *JSDocImportTag`
     pub fn as_jsdoc_import_tag(&self) -> Option<&JSDocImportTag> {
         match &self.data {
-            NodeData::JSDocImportTag(d) => Some(d),
+            NodeData::JSDocImportTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7305,7 +10963,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocCallbackTag() *JSDocCallbackTag`
     pub fn as_jsdoc_callback_tag(&self) -> Option<&JSDocCallbackTag> {
         match &self.data {
-            NodeData::JSDocCallbackTag(d) => Some(d),
+            NodeData::JSDocCallbackTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7313,7 +10971,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocOverloadTag() *JSDocOverloadTag`
     pub fn as_jsdoc_overload_tag(&self) -> Option<&JSDocOverloadTag> {
         match &self.data {
-            NodeData::JSDocOverloadTag(d) => Some(d),
+            NodeData::JSDocOverloadTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7321,7 +10979,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocTypedefTag() *JSDocTypedefTag`
     pub fn as_jsdoc_typedef_tag(&self) -> Option<&JSDocTypedefTag> {
         match &self.data {
-            NodeData::JSDocTypedefTag(d) => Some(d),
+            NodeData::JSDocTypedefTag(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7329,7 +10987,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocSignature() *JSDocSignature`
     pub fn as_jsdoc_signature(&self) -> Option<&JSDocSignature> {
         match &self.data {
-            NodeData::JSDocSignature(d) => Some(d),
+            NodeData::JSDocSignature(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7337,15 +10995,15 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocNameReference() *JSDocNameReference`
     pub fn as_jsdoc_name_reference(&self) -> Option<&JSDocNameReference> {
         match &self.data {
-            NodeData::JSDocNameReference(d) => Some(d),
+            NodeData::JSDocNameReference(d) => Some(&**d),
             _ => None,
         }
     }
 
     /// Go: `func (n *Node) AsSourceFile() *SourceFile`
-    pub fn as_source_file(&self) -> Option<&SourceFile> {
+    pub fn as_source_file(&self) -> Option<&SourceFileNodeData> {
         match &self.data {
-            NodeData::SourceFile(d) => Some(d),
+            NodeData::SourceFile(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7353,7 +11011,7 @@ impl Node {
     /// Go: `func (n *Node) AsModuleDeclaration() *ModuleDeclaration`
     pub fn as_module_declaration(&self) -> Option<&ModuleDeclaration> {
         match &self.data {
-            NodeData::ModuleDeclaration(d) => Some(d),
+            NodeData::ModuleDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7361,7 +11019,7 @@ impl Node {
     /// Go: `func (n *Node) AsImportEqualsDeclaration() *ImportEqualsDeclaration`
     pub fn as_import_equals_declaration(&self) -> Option<&ImportEqualsDeclaration> {
         match &self.data {
-            NodeData::ImportEqualsDeclaration(d) => Some(d),
+            NodeData::ImportEqualsDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7369,7 +11027,7 @@ impl Node {
     /// Go: `func (n *Node) AsExportDeclaration() *ExportDeclaration`
     pub fn as_export_declaration(&self) -> Option<&ExportDeclaration> {
         match &self.data {
-            NodeData::ExportDeclaration(d) => Some(d),
+            NodeData::ExportDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7377,7 +11035,7 @@ impl Node {
     /// Go: `func (n *Node) AsImportTypeNode() *ImportTypeNode`
     pub fn as_import_type_node(&self) -> Option<&ImportTypeNode> {
         match &self.data {
-            NodeData::ImportTypeNode(d) => Some(d),
+            NodeData::ImportTypeNode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7385,7 +11043,7 @@ impl Node {
     /// Go: `func (n *Node) AsImportClause() *ImportClause`
     pub fn as_import_clause(&self) -> Option<&ImportClause> {
         match &self.data {
-            NodeData::ImportClause(d) => Some(d),
+            NodeData::ImportClause(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7393,7 +11051,7 @@ impl Node {
     /// Go: `func (n *Node) AsImportSpecifier() *ImportSpecifier`
     pub fn as_import_specifier(&self) -> Option<&ImportSpecifier> {
         match &self.data {
-            NodeData::ImportSpecifier(d) => Some(d),
+            NodeData::ImportSpecifier(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7401,7 +11059,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocText() *JSDocText`
     pub fn as_jsdoc_text(&self) -> Option<&JSDocText> {
         match &self.data {
-            NodeData::JSDocText(d) => Some(d),
+            NodeData::JSDocText(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7409,7 +11067,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocLink() *JSDocLink`
     pub fn as_jsdoc_link(&self) -> Option<&JSDocLink> {
         match &self.data {
-            NodeData::JSDocLink(d) => Some(d),
+            NodeData::JSDocLink(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7417,7 +11075,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocLinkPlain() *JSDocLinkPlain`
     pub fn as_jsdoc_link_plain(&self) -> Option<&JSDocLinkPlain> {
         match &self.data {
-            NodeData::JSDocLinkPlain(d) => Some(d),
+            NodeData::JSDocLinkPlain(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7425,7 +11083,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocLinkCode() *JSDocLinkCode`
     pub fn as_jsdoc_link_code(&self) -> Option<&JSDocLinkCode> {
         match &self.data {
-            NodeData::JSDocLinkCode(d) => Some(d),
+            NodeData::JSDocLinkCode(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7433,7 +11091,7 @@ impl Node {
     /// Go: `func (n *Node) AsTypeParameterDeclaration() *TypeParameterDeclaration`
     pub fn as_type_parameter_declaration(&self) -> Option<&TypeParameterDeclaration> {
         match &self.data {
-            NodeData::TypeParameterDeclaration(d) => Some(d),
+            NodeData::TypeParameterDeclaration(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7441,7 +11099,7 @@ impl Node {
     /// Go: `func (n *Node) AsSyntheticReferenceExpression() *SyntheticReferenceExpression`
     pub fn as_synthetic_reference_expression(&self) -> Option<&SyntheticReferenceExpression> {
         match &self.data {
-            NodeData::SyntheticReferenceExpression(d) => Some(d),
+            NodeData::SyntheticReferenceExpression(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7449,7 +11107,7 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocTypeLiteral() *JSDocTypeLiteral`
     pub fn as_jsdoc_type_literal(&self) -> Option<&JSDocTypeLiteral> {
         match &self.data {
-            NodeData::JSDocTypeLiteral(d) => Some(d),
+            NodeData::JSDocTypeLiteral(d) => Some(&**d),
             _ => None,
         }
     }
@@ -7457,11 +11115,323 @@ impl Node {
     /// Go: `func (n *Node) AsJSDocParameterOrPropertyTag() *JSDocParameterOrPropertyTag`
     pub fn as_jsdoc_parameter_or_property_tag(&self) -> Option<&JSDocParameterOrPropertyTag> {
         match &self.data {
-            NodeData::JSDocParameterOrPropertyTag(d) => Some(d),
+            NodeData::JSDocParameterOrPropertyTag(d) => Some(&**d),
             _ => None,
         }
     }
 
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// VisitEachChild dispatch (Go `Node.VisitEachChild` → nodeData.VisitEachChild;
+// dispatches on the data variant, so multi-kind structs like Token and
+// CaseOrDefaultClause need no Kind switch). The rebuilt node carries a
+// fresh id/parent, exactly like Go's factory New* inside Update*.
+// ──────────────────────────────────────────────────────────────────────
+
+impl Node {
+    /// Go: `func (n *Node) VisitEachChild(v *NodeVisitor) *Node` — Rust returns
+    /// `Option<Node>`: None = every child unchanged (Go returns the same node).
+    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Node> {
+        let data = match &self.data {
+            NodeData::Token(d) => d.visit_each_child(v).map(|x| NodeData::Token(Box::new(x))),
+            NodeData::Identifier(d) => d.visit_each_child(v).map(|x| NodeData::Identifier(Box::new(x))),
+            NodeData::PrivateIdentifier(d) => d.visit_each_child(v).map(|x| NodeData::PrivateIdentifier(Box::new(x))),
+            NodeData::QualifiedName(d) => d.visit_each_child(v).map(|x| NodeData::QualifiedName(Box::new(x))),
+            NodeData::ComputedPropertyName(d) => d.visit_each_child(v).map(|x| NodeData::ComputedPropertyName(Box::new(x))),
+            NodeData::Decorator(d) => d.visit_each_child(v).map(|x| NodeData::Decorator(Box::new(x))),
+            NodeData::EmptyStatement(d) => d.visit_each_child(v).map(|x| NodeData::EmptyStatement(Box::new(x))),
+            NodeData::IfStatement(d) => d.visit_each_child(v).map(|x| NodeData::IfStatement(Box::new(x))),
+            NodeData::DoStatement(d) => d.visit_each_child(v).map(|x| NodeData::DoStatement(Box::new(x))),
+            NodeData::WhileStatement(d) => d.visit_each_child(v).map(|x| NodeData::WhileStatement(Box::new(x))),
+            NodeData::ForStatement(d) => d.visit_each_child(v).map(|x| NodeData::ForStatement(Box::new(x))),
+            NodeData::ForInOrOfStatement(d) => d.visit_each_child(v).map(|x| NodeData::ForInOrOfStatement(Box::new(x))),
+            NodeData::BreakStatement(d) => d.visit_each_child(v).map(|x| NodeData::BreakStatement(Box::new(x))),
+            NodeData::ContinueStatement(d) => d.visit_each_child(v).map(|x| NodeData::ContinueStatement(Box::new(x))),
+            NodeData::ReturnStatement(d) => d.visit_each_child(v).map(|x| NodeData::ReturnStatement(Box::new(x))),
+            NodeData::WithStatement(d) => d.visit_each_child(v).map(|x| NodeData::WithStatement(Box::new(x))),
+            NodeData::SwitchStatement(d) => d.visit_each_child(v).map(|x| NodeData::SwitchStatement(Box::new(x))),
+            NodeData::CaseBlock(d) => d.visit_each_child(v).map(|x| NodeData::CaseBlock(Box::new(x))),
+            NodeData::CaseOrDefaultClause(d) => d.visit_each_child(v).map(|x| NodeData::CaseOrDefaultClause(Box::new(x))),
+            NodeData::ThrowStatement(d) => d.visit_each_child(v).map(|x| NodeData::ThrowStatement(Box::new(x))),
+            NodeData::TryStatement(d) => d.visit_each_child(v).map(|x| NodeData::TryStatement(Box::new(x))),
+            NodeData::CatchClause(d) => d.visit_each_child(v).map(|x| NodeData::CatchClause(Box::new(x))),
+            NodeData::DebuggerStatement(d) => d.visit_each_child(v).map(|x| NodeData::DebuggerStatement(Box::new(x))),
+            NodeData::LabeledStatement(d) => d.visit_each_child(v).map(|x| NodeData::LabeledStatement(Box::new(x))),
+            NodeData::ExpressionStatement(d) => d.visit_each_child(v).map(|x| NodeData::ExpressionStatement(Box::new(x))),
+            NodeData::Block(d) => d.visit_each_child(v).map(|x| NodeData::Block(Box::new(x))),
+            NodeData::VariableStatement(d) => d.visit_each_child(v).map(|x| NodeData::VariableStatement(Box::new(x))),
+            NodeData::VariableDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::VariableDeclaration(Box::new(x))),
+            NodeData::VariableDeclarationList(d) => d.visit_each_child(v).map(|x| NodeData::VariableDeclarationList(Box::new(x))),
+            NodeData::BindingPattern(d) => d.visit_each_child(v).map(|x| NodeData::BindingPattern(Box::new(x))),
+            NodeData::ParameterDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::ParameterDeclaration(Box::new(x))),
+            NodeData::BindingElement(d) => d.visit_each_child(v).map(|x| NodeData::BindingElement(Box::new(x))),
+            NodeData::MissingDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::MissingDeclaration(Box::new(x))),
+            NodeData::FunctionDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::FunctionDeclaration(Box::new(x))),
+            NodeData::ClassDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::ClassDeclaration(Box::new(x))),
+            NodeData::ClassExpression(d) => d.visit_each_child(v).map(|x| NodeData::ClassExpression(Box::new(x))),
+            NodeData::HeritageClause(d) => d.visit_each_child(v).map(|x| NodeData::HeritageClause(Box::new(x))),
+            NodeData::InterfaceDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::InterfaceDeclaration(Box::new(x))),
+            NodeData::TypeAliasDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::TypeAliasDeclaration(Box::new(x))),
+            NodeData::EnumMember(d) => d.visit_each_child(v).map(|x| NodeData::EnumMember(Box::new(x))),
+            NodeData::EnumDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::EnumDeclaration(Box::new(x))),
+            NodeData::ModuleBlock(d) => d.visit_each_child(v).map(|x| NodeData::ModuleBlock(Box::new(x))),
+            NodeData::NotEmittedStatement(d) => d.visit_each_child(v).map(|x| NodeData::NotEmittedStatement(Box::new(x))),
+            NodeData::NotEmittedTypeElement(d) => d.visit_each_child(v).map(|x| NodeData::NotEmittedTypeElement(Box::new(x))),
+            NodeData::ImportDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::ImportDeclaration(Box::new(x))),
+            NodeData::ExternalModuleReference(d) => d.visit_each_child(v).map(|x| NodeData::ExternalModuleReference(Box::new(x))),
+            NodeData::NamespaceImport(d) => d.visit_each_child(v).map(|x| NodeData::NamespaceImport(Box::new(x))),
+            NodeData::NamedImports(d) => d.visit_each_child(v).map(|x| NodeData::NamedImports(Box::new(x))),
+            NodeData::ExportAssignment(d) => d.visit_each_child(v).map(|x| NodeData::ExportAssignment(Box::new(x))),
+            NodeData::NamespaceExportDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::NamespaceExportDeclaration(Box::new(x))),
+            NodeData::NamespaceExport(d) => d.visit_each_child(v).map(|x| NodeData::NamespaceExport(Box::new(x))),
+            NodeData::NamedExports(d) => d.visit_each_child(v).map(|x| NodeData::NamedExports(Box::new(x))),
+            NodeData::ExportSpecifier(d) => d.visit_each_child(v).map(|x| NodeData::ExportSpecifier(Box::new(x))),
+            NodeData::CallSignatureDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::CallSignatureDeclaration(Box::new(x))),
+            NodeData::ConstructSignatureDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::ConstructSignatureDeclaration(Box::new(x))),
+            NodeData::ConstructorDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::ConstructorDeclaration(Box::new(x))),
+            NodeData::GetAccessorDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::GetAccessorDeclaration(Box::new(x))),
+            NodeData::SetAccessorDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::SetAccessorDeclaration(Box::new(x))),
+            NodeData::IndexSignatureDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::IndexSignatureDeclaration(Box::new(x))),
+            NodeData::MethodSignatureDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::MethodSignatureDeclaration(Box::new(x))),
+            NodeData::MethodDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::MethodDeclaration(Box::new(x))),
+            NodeData::PropertySignatureDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::PropertySignatureDeclaration(Box::new(x))),
+            NodeData::PropertyDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::PropertyDeclaration(Box::new(x))),
+            NodeData::SemicolonClassElement(d) => d.visit_each_child(v).map(|x| NodeData::SemicolonClassElement(Box::new(x))),
+            NodeData::ClassStaticBlockDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::ClassStaticBlockDeclaration(Box::new(x))),
+            NodeData::OmittedExpression(d) => d.visit_each_child(v).map(|x| NodeData::OmittedExpression(Box::new(x))),
+            NodeData::KeywordExpression(d) => d.visit_each_child(v).map(|x| NodeData::KeywordExpression(Box::new(x))),
+            NodeData::StringLiteral(d) => d.visit_each_child(v).map(|x| NodeData::StringLiteral(Box::new(x))),
+            NodeData::NumericLiteral(d) => d.visit_each_child(v).map(|x| NodeData::NumericLiteral(Box::new(x))),
+            NodeData::BigIntLiteral(d) => d.visit_each_child(v).map(|x| NodeData::BigIntLiteral(Box::new(x))),
+            NodeData::RegularExpressionLiteral(d) => d.visit_each_child(v).map(|x| NodeData::RegularExpressionLiteral(Box::new(x))),
+            NodeData::NoSubstitutionTemplateLiteral(d) => d.visit_each_child(v).map(|x| NodeData::NoSubstitutionTemplateLiteral(Box::new(x))),
+            NodeData::BinaryExpression(d) => d.visit_each_child(v).map(|x| NodeData::BinaryExpression(Box::new(x))),
+            NodeData::PrefixUnaryExpression(d) => d.visit_each_child(v).map(|x| NodeData::PrefixUnaryExpression(Box::new(x))),
+            NodeData::PostfixUnaryExpression(d) => d.visit_each_child(v).map(|x| NodeData::PostfixUnaryExpression(Box::new(x))),
+            NodeData::YieldExpression(d) => d.visit_each_child(v).map(|x| NodeData::YieldExpression(Box::new(x))),
+            NodeData::ArrowFunction(d) => d.visit_each_child(v).map(|x| NodeData::ArrowFunction(Box::new(x))),
+            NodeData::FunctionExpression(d) => d.visit_each_child(v).map(|x| NodeData::FunctionExpression(Box::new(x))),
+            NodeData::AsExpression(d) => d.visit_each_child(v).map(|x| NodeData::AsExpression(Box::new(x))),
+            NodeData::SatisfiesExpression(d) => d.visit_each_child(v).map(|x| NodeData::SatisfiesExpression(Box::new(x))),
+            NodeData::ConditionalExpression(d) => d.visit_each_child(v).map(|x| NodeData::ConditionalExpression(Box::new(x))),
+            NodeData::PropertyAccessExpression(d) => d.visit_each_child(v).map(|x| NodeData::PropertyAccessExpression(Box::new(x))),
+            NodeData::ElementAccessExpression(d) => d.visit_each_child(v).map(|x| NodeData::ElementAccessExpression(Box::new(x))),
+            NodeData::CallExpression(d) => d.visit_each_child(v).map(|x| NodeData::CallExpression(Box::new(x))),
+            NodeData::NewExpression(d) => d.visit_each_child(v).map(|x| NodeData::NewExpression(Box::new(x))),
+            NodeData::MetaProperty(d) => d.visit_each_child(v).map(|x| NodeData::MetaProperty(Box::new(x))),
+            NodeData::NonNullExpression(d) => d.visit_each_child(v).map(|x| NodeData::NonNullExpression(Box::new(x))),
+            NodeData::SpreadElement(d) => d.visit_each_child(v).map(|x| NodeData::SpreadElement(Box::new(x))),
+            NodeData::TemplateExpression(d) => d.visit_each_child(v).map(|x| NodeData::TemplateExpression(Box::new(x))),
+            NodeData::TemplateSpan(d) => d.visit_each_child(v).map(|x| NodeData::TemplateSpan(Box::new(x))),
+            NodeData::TaggedTemplateExpression(d) => d.visit_each_child(v).map(|x| NodeData::TaggedTemplateExpression(Box::new(x))),
+            NodeData::ParenthesizedExpression(d) => d.visit_each_child(v).map(|x| NodeData::ParenthesizedExpression(Box::new(x))),
+            NodeData::ArrayLiteralExpression(d) => d.visit_each_child(v).map(|x| NodeData::ArrayLiteralExpression(Box::new(x))),
+            NodeData::ObjectLiteralExpression(d) => d.visit_each_child(v).map(|x| NodeData::ObjectLiteralExpression(Box::new(x))),
+            NodeData::SpreadAssignment(d) => d.visit_each_child(v).map(|x| NodeData::SpreadAssignment(Box::new(x))),
+            NodeData::PropertyAssignment(d) => d.visit_each_child(v).map(|x| NodeData::PropertyAssignment(Box::new(x))),
+            NodeData::ShorthandPropertyAssignment(d) => d.visit_each_child(v).map(|x| NodeData::ShorthandPropertyAssignment(Box::new(x))),
+            NodeData::DeleteExpression(d) => d.visit_each_child(v).map(|x| NodeData::DeleteExpression(Box::new(x))),
+            NodeData::TypeOfExpression(d) => d.visit_each_child(v).map(|x| NodeData::TypeOfExpression(Box::new(x))),
+            NodeData::VoidExpression(d) => d.visit_each_child(v).map(|x| NodeData::VoidExpression(Box::new(x))),
+            NodeData::AwaitExpression(d) => d.visit_each_child(v).map(|x| NodeData::AwaitExpression(Box::new(x))),
+            NodeData::TypeAssertion(d) => d.visit_each_child(v).map(|x| NodeData::TypeAssertion(Box::new(x))),
+            NodeData::KeywordTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::KeywordTypeNode(Box::new(x))),
+            NodeData::UnionTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::UnionTypeNode(Box::new(x))),
+            NodeData::IntersectionTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::IntersectionTypeNode(Box::new(x))),
+            NodeData::ConditionalTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::ConditionalTypeNode(Box::new(x))),
+            NodeData::TypeOperatorNode(d) => d.visit_each_child(v).map(|x| NodeData::TypeOperatorNode(Box::new(x))),
+            NodeData::InferTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::InferTypeNode(Box::new(x))),
+            NodeData::ArrayTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::ArrayTypeNode(Box::new(x))),
+            NodeData::IndexedAccessTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::IndexedAccessTypeNode(Box::new(x))),
+            NodeData::TypeReferenceNode(d) => d.visit_each_child(v).map(|x| NodeData::TypeReferenceNode(Box::new(x))),
+            NodeData::ExpressionWithTypeArguments(d) => d.visit_each_child(v).map(|x| NodeData::ExpressionWithTypeArguments(Box::new(x))),
+            NodeData::LiteralTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::LiteralTypeNode(Box::new(x))),
+            NodeData::ThisTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::ThisTypeNode(Box::new(x))),
+            NodeData::TypePredicateNode(d) => d.visit_each_child(v).map(|x| NodeData::TypePredicateNode(Box::new(x))),
+            NodeData::ImportAttribute(d) => d.visit_each_child(v).map(|x| NodeData::ImportAttribute(Box::new(x))),
+            NodeData::ImportAttributes(d) => d.visit_each_child(v).map(|x| NodeData::ImportAttributes(Box::new(x))),
+            NodeData::TypeQueryNode(d) => d.visit_each_child(v).map(|x| NodeData::TypeQueryNode(Box::new(x))),
+            NodeData::MappedTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::MappedTypeNode(Box::new(x))),
+            NodeData::TypeLiteralNode(d) => d.visit_each_child(v).map(|x| NodeData::TypeLiteralNode(Box::new(x))),
+            NodeData::TupleTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::TupleTypeNode(Box::new(x))),
+            NodeData::NamedTupleMember(d) => d.visit_each_child(v).map(|x| NodeData::NamedTupleMember(Box::new(x))),
+            NodeData::OptionalTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::OptionalTypeNode(Box::new(x))),
+            NodeData::RestTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::RestTypeNode(Box::new(x))),
+            NodeData::ParenthesizedTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::ParenthesizedTypeNode(Box::new(x))),
+            NodeData::FunctionTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::FunctionTypeNode(Box::new(x))),
+            NodeData::ConstructorTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::ConstructorTypeNode(Box::new(x))),
+            NodeData::TemplateHead(d) => d.visit_each_child(v).map(|x| NodeData::TemplateHead(Box::new(x))),
+            NodeData::TemplateMiddle(d) => d.visit_each_child(v).map(|x| NodeData::TemplateMiddle(Box::new(x))),
+            NodeData::TemplateTail(d) => d.visit_each_child(v).map(|x| NodeData::TemplateTail(Box::new(x))),
+            NodeData::TemplateLiteralTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::TemplateLiteralTypeNode(Box::new(x))),
+            NodeData::TemplateLiteralTypeSpan(d) => d.visit_each_child(v).map(|x| NodeData::TemplateLiteralTypeSpan(Box::new(x))),
+            NodeData::SyntheticExpression(d) => d.visit_each_child(v).map(|x| NodeData::SyntheticExpression(Box::new(x))),
+            NodeData::PartiallyEmittedExpression(d) => d.visit_each_child(v).map(|x| NodeData::PartiallyEmittedExpression(Box::new(x))),
+            NodeData::JsxElement(d) => d.visit_each_child(v).map(|x| NodeData::JsxElement(Box::new(x))),
+            NodeData::JsxAttributes(d) => d.visit_each_child(v).map(|x| NodeData::JsxAttributes(Box::new(x))),
+            NodeData::JsxNamespacedName(d) => d.visit_each_child(v).map(|x| NodeData::JsxNamespacedName(Box::new(x))),
+            NodeData::JsxOpeningElement(d) => d.visit_each_child(v).map(|x| NodeData::JsxOpeningElement(Box::new(x))),
+            NodeData::JsxSelfClosingElement(d) => d.visit_each_child(v).map(|x| NodeData::JsxSelfClosingElement(Box::new(x))),
+            NodeData::JsxFragment(d) => d.visit_each_child(v).map(|x| NodeData::JsxFragment(Box::new(x))),
+            NodeData::JsxOpeningFragment(d) => d.visit_each_child(v).map(|x| NodeData::JsxOpeningFragment(Box::new(x))),
+            NodeData::JsxClosingFragment(d) => d.visit_each_child(v).map(|x| NodeData::JsxClosingFragment(Box::new(x))),
+            NodeData::JsxAttribute(d) => d.visit_each_child(v).map(|x| NodeData::JsxAttribute(Box::new(x))),
+            NodeData::JsxSpreadAttribute(d) => d.visit_each_child(v).map(|x| NodeData::JsxSpreadAttribute(Box::new(x))),
+            NodeData::JsxClosingElement(d) => d.visit_each_child(v).map(|x| NodeData::JsxClosingElement(Box::new(x))),
+            NodeData::JsxExpression(d) => d.visit_each_child(v).map(|x| NodeData::JsxExpression(Box::new(x))),
+            NodeData::JsxText(d) => d.visit_each_child(v).map(|x| NodeData::JsxText(Box::new(x))),
+            NodeData::SyntaxList(d) => d.visit_each_child(v).map(|x| NodeData::SyntaxList(Box::new(x))),
+            NodeData::JSDoc(d) => d.visit_each_child(v).map(|x| NodeData::JSDoc(Box::new(x))),
+            NodeData::JSDocTypeExpression(d) => d.visit_each_child(v).map(|x| NodeData::JSDocTypeExpression(Box::new(x))),
+            NodeData::JSDocNonNullableType(d) => d.visit_each_child(v).map(|x| NodeData::JSDocNonNullableType(Box::new(x))),
+            NodeData::JSDocNullableType(d) => d.visit_each_child(v).map(|x| NodeData::JSDocNullableType(Box::new(x))),
+            NodeData::JSDocAllType(d) => d.visit_each_child(v).map(|x| NodeData::JSDocAllType(Box::new(x))),
+            NodeData::JSDocVariadicType(d) => d.visit_each_child(v).map(|x| NodeData::JSDocVariadicType(Box::new(x))),
+            NodeData::JSDocOptionalType(d) => d.visit_each_child(v).map(|x| NodeData::JSDocOptionalType(Box::new(x))),
+            NodeData::JSDocTypeTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocTypeTag(Box::new(x))),
+            NodeData::JSDocUnknownTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocUnknownTag(Box::new(x))),
+            NodeData::JSDocTemplateTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocTemplateTag(Box::new(x))),
+            NodeData::JSDocReturnTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocReturnTag(Box::new(x))),
+            NodeData::JSDocPublicTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocPublicTag(Box::new(x))),
+            NodeData::JSDocPrivateTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocPrivateTag(Box::new(x))),
+            NodeData::JSDocProtectedTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocProtectedTag(Box::new(x))),
+            NodeData::JSDocReadonlyTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocReadonlyTag(Box::new(x))),
+            NodeData::JSDocOverrideTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocOverrideTag(Box::new(x))),
+            NodeData::JSDocDeprecatedTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocDeprecatedTag(Box::new(x))),
+            NodeData::JSDocSeeTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocSeeTag(Box::new(x))),
+            NodeData::JSDocImplementsTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocImplementsTag(Box::new(x))),
+            NodeData::JSDocAugmentsTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocAugmentsTag(Box::new(x))),
+            NodeData::JSDocSatisfiesTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocSatisfiesTag(Box::new(x))),
+            NodeData::JSDocThrowsTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocThrowsTag(Box::new(x))),
+            NodeData::JSDocThisTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocThisTag(Box::new(x))),
+            NodeData::JSDocImportTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocImportTag(Box::new(x))),
+            NodeData::JSDocCallbackTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocCallbackTag(Box::new(x))),
+            NodeData::JSDocOverloadTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocOverloadTag(Box::new(x))),
+            NodeData::JSDocTypedefTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocTypedefTag(Box::new(x))),
+            NodeData::JSDocSignature(d) => d.visit_each_child(v).map(|x| NodeData::JSDocSignature(Box::new(x))),
+            NodeData::JSDocNameReference(d) => d.visit_each_child(v).map(|x| NodeData::JSDocNameReference(Box::new(x))),
+            NodeData::SourceFile(d) => d.visit_each_child(v).map(|x| NodeData::SourceFile(Box::new(x))),
+            NodeData::ModuleDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::ModuleDeclaration(Box::new(x))),
+            NodeData::ImportEqualsDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::ImportEqualsDeclaration(Box::new(x))),
+            NodeData::ExportDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::ExportDeclaration(Box::new(x))),
+            NodeData::ImportTypeNode(d) => d.visit_each_child(v).map(|x| NodeData::ImportTypeNode(Box::new(x))),
+            NodeData::ImportClause(d) => d.visit_each_child(v).map(|x| NodeData::ImportClause(Box::new(x))),
+            NodeData::ImportSpecifier(d) => d.visit_each_child(v).map(|x| NodeData::ImportSpecifier(Box::new(x))),
+            NodeData::JSDocText(d) => d.visit_each_child(v).map(|x| NodeData::JSDocText(Box::new(x))),
+            NodeData::JSDocLink(d) => d.visit_each_child(v).map(|x| NodeData::JSDocLink(Box::new(x))),
+            NodeData::JSDocLinkPlain(d) => d.visit_each_child(v).map(|x| NodeData::JSDocLinkPlain(Box::new(x))),
+            NodeData::JSDocLinkCode(d) => d.visit_each_child(v).map(|x| NodeData::JSDocLinkCode(Box::new(x))),
+            NodeData::TypeParameterDeclaration(d) => d.visit_each_child(v).map(|x| NodeData::TypeParameterDeclaration(Box::new(x))),
+            NodeData::SyntheticReferenceExpression(d) => d.visit_each_child(v).map(|x| NodeData::SyntheticReferenceExpression(Box::new(x))),
+            NodeData::JSDocTypeLiteral(d) => d.visit_each_child(v).map(|x| NodeData::JSDocTypeLiteral(Box::new(x))),
+            NodeData::JSDocParameterOrPropertyTag(d) => d.visit_each_child(v).map(|x| NodeData::JSDocParameterOrPropertyTag(Box::new(x))),
+        }?;
+        Some(Node {
+            kind: self.kind,
+            flags: self.flags,
+            loc: self.loc,
+            id: Cell::new(0),
+            parent: Cell::new(NodeId::NONE),
+            data,
+        })
+    }
+
+    /// Go: `func (n *Node) Modifiers() *ModifierList` (ast.go — dispatches
+    /// nodeData.Modifiers(); the flattened per-struct fields replace the
+    /// Go interface method).
+    pub fn modifiers(&self) -> Option<&ModifierList> {
+        match &self.data {
+            NodeData::VariableStatement(d) => d.modifiers.as_ref(),
+            NodeData::ParameterDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::MissingDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::FunctionDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::ClassDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::ClassExpression(d) => d.modifiers.as_ref(),
+            NodeData::InterfaceDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::TypeAliasDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::EnumMember(d) => d.modifiers.as_ref(),
+            NodeData::EnumDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::ImportDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::ExportAssignment(d) => d.modifiers.as_ref(),
+            NodeData::NamespaceExportDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::ConstructorDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::GetAccessorDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::SetAccessorDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::IndexSignatureDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::MethodSignatureDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::MethodDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::PropertySignatureDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::PropertyDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::ClassStaticBlockDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::BinaryExpression(d) => d.modifiers.as_ref(),
+            NodeData::ArrowFunction(d) => d.modifiers.as_ref(),
+            NodeData::FunctionExpression(d) => d.modifiers.as_ref(),
+            NodeData::PropertyAssignment(d) => d.modifiers.as_ref(),
+            NodeData::ShorthandPropertyAssignment(d) => d.modifiers.as_ref(),
+            NodeData::FunctionTypeNode(d) => d.modifiers.as_ref(),
+            NodeData::ConstructorTypeNode(d) => d.modifiers.as_ref(),
+            NodeData::ModuleDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::ImportEqualsDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::ExportDeclaration(d) => d.modifiers.as_ref(),
+            NodeData::TypeParameterDeclaration(d) => d.modifiers.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Go: `func (n *Node) ModifierFlags() ModifierFlags` (ast.go).
+    pub fn modifier_flags(&self) -> ModifierFlags {
+        self.modifiers().map_or(ModifierFlags::NONE, |m| m.modifier_flags)
+    }
+
+    /// Go: `func (n *Node) Name() *DeclarationName` (ast.go — dispatches
+    /// nodeData.Name(); NodeDefault returns nil, mirrored by the `_` arm).
+    pub fn name(&self) -> Option<NodeId> {
+        match &self.data {
+            NodeData::VariableDeclaration(d) => Some(d.name),
+            NodeData::ParameterDeclaration(d) => Some(d.name),
+            NodeData::BindingElement(d) => d.name,
+            NodeData::FunctionDeclaration(d) => d.name,
+            NodeData::ClassDeclaration(d) => d.name,
+            NodeData::ClassExpression(d) => d.name,
+            NodeData::InterfaceDeclaration(d) => Some(d.name),
+            NodeData::TypeAliasDeclaration(d) => Some(d.name),
+            NodeData::EnumMember(d) => Some(d.name),
+            NodeData::EnumDeclaration(d) => Some(d.name),
+            NodeData::NamespaceImport(d) => Some(d.name),
+            NodeData::NamespaceExportDeclaration(d) => Some(d.name),
+            NodeData::NamespaceExport(d) => Some(d.name),
+            NodeData::ExportSpecifier(d) => Some(d.name),
+            NodeData::GetAccessorDeclaration(d) => Some(d.name),
+            NodeData::SetAccessorDeclaration(d) => Some(d.name),
+            NodeData::MethodSignatureDeclaration(d) => Some(d.name),
+            NodeData::MethodDeclaration(d) => Some(d.name),
+            NodeData::PropertySignatureDeclaration(d) => Some(d.name),
+            NodeData::PropertyDeclaration(d) => Some(d.name),
+            NodeData::FunctionExpression(d) => d.name,
+            NodeData::PropertyAccessExpression(d) => Some(d.name),
+            NodeData::MetaProperty(d) => Some(d.name),
+            NodeData::PropertyAssignment(d) => Some(d.name),
+            NodeData::ShorthandPropertyAssignment(d) => Some(d.name),
+            NodeData::ImportAttribute(d) => Some(d.name),
+            NodeData::NamedTupleMember(d) => Some(d.name),
+            NodeData::JsxNamespacedName(d) => Some(d.name),
+            NodeData::JsxAttribute(d) => Some(d.name),
+            NodeData::JSDocCallbackTag(d) => d.name,
+            NodeData::JSDocTypedefTag(d) => d.name,
+            NodeData::JSDocNameReference(d) => Some(d.name),
+            NodeData::ModuleDeclaration(d) => Some(d.name),
+            NodeData::ImportEqualsDeclaration(d) => Some(d.name),
+            NodeData::ImportClause(d) => d.name,
+            NodeData::ImportSpecifier(d) => Some(d.name),
+            NodeData::JSDocLink(d) => d.name,
+            NodeData::JSDocLinkPlain(d) => d.name,
+            NodeData::JSDocLinkCode(d) => d.name,
+            NodeData::TypeParameterDeclaration(d) => Some(d.name),
+            NodeData::JSDocParameterOrPropertyTag(d) => Some(d.name),
+            _ => None,
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────

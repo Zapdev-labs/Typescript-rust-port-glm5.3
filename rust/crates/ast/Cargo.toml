@@ -7,6 +7,10 @@ license.workspace = true
 
 [dependencies]
 tsc-core = { path = "../core" }
+tsc-collections = { path = "../collections" }
+tsc-diagnostics = { path = "../diagnostics" }
+tsc-stringutil = { path = "../stringutil" }
+tsc-tspath = { path = "../tspath" }
 
 [lints]
 workspace = true

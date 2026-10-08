@@ -96,6 +96,11 @@ struct FieldDef {
     no_ts: bool,
     #[serde(rename = "noFactory", default)]
     no_factory: bool,
+    /// Routing hint for the generated VisitEachChild (go: generate-go-ast's
+    /// `visit` attribute; "modifiers" | "parameters" | "functionBody" |
+    /// "embeddedStatement" | "iterationBody" | "topLevelStatements").
+    #[serde(default)]
+    visit: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -155,6 +160,9 @@ struct MemberDef {
     no_ts: bool,
     #[serde(rename = "noFactory", default)]
     no_factory: bool,
+    /// Routing hint for the generated VisitEachChild (see FieldDef::visit).
+    #[serde(default)]
+    visit: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -679,6 +687,13 @@ impl Schema {
         let kind_param = (m.name == "Kind" || m.name == "kind")
             && base_kind(&declared) == BaseKind::Kind;
 
+        // VisitEachChild routing: the member's own `visit` hint, else the
+        // inherited base field's.
+        let visit = m
+            .visit
+            .clone()
+            .or_else(|| field.and_then(|(_, _, f)| f.visit.clone()));
+
         ResolvedMember {
             name: m.name.clone(),
             inherited: m.inherited,
@@ -693,6 +708,7 @@ impl Schema {
             kind_param,
             declared,
             ty,
+            visit,
         }
     }
 
@@ -714,6 +730,7 @@ impl Schema {
             kind_param: false,
             declared,
             ty,
+            visit: f.visit.clone(),
         }
     }
 }
@@ -1019,6 +1036,9 @@ struct ResolvedMember {
     kind_param: bool,
     declared: Type,
     ty: Type,
+    /// VisitEachChild routing hint (ast.json `visit` attribute); member's own
+    /// value or the inherited base field's.
+    visit: Option<String>,
 }
 
 impl ResolvedMember {
@@ -1048,6 +1068,23 @@ fn concrete_node_name(s: &Schema, t: &Type) -> Option<String> {
     }
 }
 
+/// Whether a generated struct field's storage type is `Copy` (the rebuild and
+/// Clone emissions copy such fields directly instead of `.clone()`, keeping
+/// clippy::clone_on_copy out of generated code).
+fn is_copy_storage(ty: &str) -> bool {
+    match ty {
+        "bool" | "i32" | "u32" | "Kind" | "NodeId" | "TokenFlags" | "NodeFlags"
+        | "ModifierFlags" => true,
+        _ => {
+            ty.starts_with("Option<")
+                && matches!(
+                    ty.strip_prefix("Option<").and_then(|t| t.strip_suffix('>')),
+                    Some("NodeId" | "FlowNodeId" | "SymbolId" | "Kind")
+                )
+        }
+    }
+}
+
 fn wrap_opt(ty: &str, optional: bool) -> String {
     if optional {
         format!("Option<{ty}>")
@@ -1062,7 +1099,7 @@ fn storage_type(s: &Schema, t: &Type, optional: bool) -> String {
             "bool" | "boolean" => wrap_opt("bool", optional),
             "int" => wrap_opt("i32", optional),
             "string" => wrap_opt("Box<str>", optional),
-            "any" => wrap_opt("Box<dyn std::any::Any>", optional),
+            "any" => wrap_opt("Box<dyn std::any::Any + Send + Sync>", optional),
             "NodeFlags" => wrap_opt("NodeFlags", optional),
             "TokenFlags" => wrap_opt("TokenFlags", optional),
             "ModifierFlags" => wrap_opt("ModifierFlags", optional),
@@ -1503,17 +1540,198 @@ fn for_each_child_lines(s: &Schema, key: &str) -> Option<Vec<String>> {
     Some(body)
 }
 
+/// How a child member routes through the NodeVisitor in the generated
+/// VisitEachChild (mirror of the v.visitX call the Go generator emits).
+#[derive(Clone, Copy, PartialEq)]
+enum ChildRoute {
+    /// `v.visit_x(Option<NodeId>) -> Option<NodeId>` (visit_node / visit_token /
+    /// visit_embedded_statement / visit_iteration_body / visit_function_body).
+    Node(&'static str),
+    /// `v.visit_x(Option<&NodeList>) -> Option<NodeList>`
+    /// (visit_nodes / visit_parameters / visit_top_level_statements).
+    Nodes(&'static str),
+    /// `v.visit_modifiers(Option<&ModifierList>) -> Option<ModifierList>`.
+    Modifiers,
+    /// Go `core.SameMap(children, v.visitNode)` over a raw `[]*Node` member
+    /// (SyntaxList.Children, JSDocTypeLiteral.JSDocPropertyTags); dropped
+    /// elements become `NodeId::NONE` (Go keeps nil in the slice).
+    RawNodeList,
+}
+
+fn child_route(key: &str, r: &ResolvedMember) -> ChildRoute {
+    let _ = key;
+    if !r.is_child() {
+        panic!("child_route on non-child member {}.{}", key, r.name);
+    }
+    match r.list_kind.as_deref() {
+        Some("raw") => {
+            // Raw node slices are visited element-wise via visitNode (Go SameMap).
+            assert_eq!(base_kind(&r.ty), BaseKind::List);
+            return ChildRoute::RawNodeList;
+        }
+        Some("ModifierList") => return ChildRoute::Modifiers,
+        Some("NodeList") => {
+            return ChildRoute::Nodes(match r.visit.as_deref() {
+                Some("parameters") => "visit_parameters",
+                Some("topLevelStatements") => "visit_top_level_statements",
+                None => "visit_nodes",
+                Some(other) => panic!("unmapped NodeList visit route: {other}"),
+            });
+        }
+        _ => {}
+    }
+    assert_eq!(base_kind(&r.ty), BaseKind::Node);
+    ChildRoute::Node(match r.visit.as_deref() {
+        Some("embeddedStatement") => "visit_embedded_statement",
+        Some("iterationBody") => "visit_iteration_body",
+        Some("functionBody") => "visit_function_body",
+        Some("token") => "visit_token",
+        None => "visit_node",
+        Some(other) => panic!("unmapped node visit route: {other}"),
+    })
+}
+
+/// The generated per-struct visit_each_child body lines (mirror of Go's
+/// generated `VisitEachChild` + the factory `Update*` rebuild merged: all
+/// children are visited; if none changed the method returns None, mirroring
+/// Update*'s "return the original node" identity check).
+fn visit_each_child_lines(s: &Schema, key: &str) -> Option<Vec<String>> {
+    // JSDocParameterOrPropertyTag's visitor is hand-written in Go
+    // (visitEachChild_JSDocParameterOrPropertyTag, ast.go); the ast.json member
+    // order (tag_name, comment, name, ...) differs from Go's hand-written
+    // argument order, so the body is emitted literally.
+    if key == "JSDocParameterOrPropertyTag" {
+        return Some(vec![
+            "let tag_name = v.visit_node(Some(self.tag_name));".into(),
+            "let name = v.visit_node(Some(self.name));".into(),
+            "let type_expression = v.visit_node(self.type_expression);".into(),
+            "let comment = v.visit_nodes(self.comment.as_ref());".into(),
+            "if tag_name == Some(self.tag_name)".into(),
+            "    && name == Some(self.name)".into(),
+            "    && type_expression == self.type_expression".into(),
+            "    && comment == self.comment".into(),
+            "{".into(),
+            "    return None;".into(),
+            "}".into(),
+            "Some(Self {".into(),
+            "    tag_name: tag_name.unwrap_or(NodeId::NONE),".into(),
+            "    comment,".into(),
+            "    name: name.unwrap_or(NodeId::NONE),".into(),
+            "    is_bracketed: self.is_bracketed,".into(),
+            "    type_expression,".into(),
+            "    is_name_first: self.is_name_first,".into(),
+            "})".into(),
+        ]);
+    }
+    let def = s.node_def(key);
+    // Visited children in ast.json member order.
+    let mut visited: Vec<(String, ChildRoute, bool)> = Vec::new(); // (field, route, storage-optional)
+    for m in &def.members {
+        if m.no_factory {
+            continue;
+        }
+        let r = s.resolve_member(key, m);
+        if !r.is_child() {
+            continue;
+        }
+        let route = child_route(key, &r);
+        // Storage optionality mirrors the emitted struct field (base field's
+        // for inherited members — see resolve_member's storage_optional note).
+        let storage_optional = if r.inherited { r.storage_optional } else { r.optional };
+        visited.push((rust_field_name(&r.name), route, storage_optional));
+    }
+    if visited.is_empty() {
+        return None;
+    }
+
+    let mut body = Vec::new();
+    let mut checks = Vec::new();
+    for (f, route, optional) in &visited {
+        match route {
+            ChildRoute::Node(disp) => {
+                if *optional {
+                    body.push(format!("let {f} = v.{disp}(self.{f});"));
+                    checks.push(format!("{f} == self.{f}"));
+                } else {
+                    body.push(format!("let {f} = v.{disp}(Some(self.{f}));"));
+                    checks.push(format!("{f} == Some(self.{f})"));
+                }
+            }
+            ChildRoute::Nodes(disp) => {
+                body.push(format!("let {f} = v.{disp}(self.{f}.as_ref());"));
+                checks.push(format!("{f} == self.{f}"));
+            }
+            ChildRoute::Modifiers => {
+                body.push(format!("let {f} = v.visit_modifiers(self.{f}.as_ref());"));
+                checks.push(format!("{f} == self.{f}"));
+            }
+            ChildRoute::RawNodeList => {
+                body.push(format!(
+                    "let {f}: Vec<NodeId> = self.{f}.iter().map(|&c| v.visit_node(Some(c)).unwrap_or(NodeId::NONE)).collect();"
+                ));
+                checks.push(format!("{f} == self.{f}"));
+            }
+        }
+    }
+    body.push(format!(
+        "if {} {{",
+        checks.join("\n            && ")
+    ));
+    body.push("    return None;".into());
+    body.push("}".into());
+    body.push("Some(Self {".into());
+    // Every struct field gets a value: visited children take the visited
+    // result, everything else is copied from the original (Go's Update* passes
+    // non-child members straight through).
+    let route_of: std::collections::HashMap<&String, (ChildRoute, bool)> = visited
+        .iter()
+        .map(|(f, route, opt)| (f, (*route, *opt)))
+        .collect();
+    for line in node_struct_lines(s, key) {
+        if let FieldLine::Field { name, ty, .. } = line {
+            if let Some((route, optional)) = route_of.get(&name) {
+                match route {
+                    ChildRoute::Node(_) => {
+                        if *optional {
+                            body.push(format!("    {name},"));
+                        } else {
+                            body.push(format!("    {name}: {name}.unwrap_or(NodeId::NONE),"));
+                        }
+                    }
+                    _ => body.push(format!("    {name},")),
+                }
+            } else if is_copy_storage(&ty) {
+                body.push(format!("    {name}: self.{name},"));
+            } else {
+                body.push(format!("    {name}: self.{name}.clone(),"));
+            }
+        }
+    }
+    body.push("})".into());
+    Some(body)
+}
+
 fn generate_ast(s: &Schema) -> String {
     let mut o = Out::new();
     o.line("// Code generated by rust/tools/gen-ast from tools/scripts/tsc/ast.json. DO NOT EDIT.");
     o.line("// Rust mirror of tsc/internal/ast/ast_generated.go:");
     o.line("//   - node structs with base-struct composition FLATTENED (Go embedding order");
     o.line("//     preserved; NodeBase's kind/flags/loc/id/parent live on Node per SPEC §5.1)");
-    o.line("//   - `NodeData` — one variant per concrete node struct (SPEC §5.1)");
+    o.line("//   - `NodeData` — one variant per concrete node struct (SPEC §5.1); every");
+    o.line("//     payload is Boxed so `Node` stays a fixed 48-byte arena slot (SPEC §12.1:");
+    o.line("//     ≤64B target; box-everything beats per-variant sizing because enum size");
+    o.line("//     is the max variant size, and Go's nodeData interface is one indirection");
+    o.line("//     anyway)");
     o.line("//   - `as_x` accessors (Go AsX; 192) and `is_x` predicates (Go IsX)");
-    o.line("//   - `for_each_child` (Go ForEachChild; children in ast.json member order)");
+    o.line("//   - `for_each_child` (Go ForEachChild; children in ast.json member order;");
+    o.line("//     JSDocParameterOrPropertyTag ports the hand-written ast.go visitor)");
+    o.line("//   - `visit_each_child` (Go VisitEachChild; returns Option — None = every");
+    o.line("//     child unchanged, mirroring Go Update* returning the original node;");
+    o.line("//     SPEC §5.6) and the Go ast.go `Node.Modifiers()`/`Node.Name()` dispatches");
     o.line("// Go *Node children are NodeId handles into the arena; Go *NodeList/*ModifierList");
     o.line("// become inline Option<NodeList>/Option<ModifierList> (SPEC §5.1).");
+    o.line("");
+    o.line("use std::cell::Cell;");
     o.line("");
     o.line("use super::*;");
     o.line("");
@@ -1579,22 +1797,34 @@ fn generate_ast(s: &Schema) -> String {
     for (key, def) in s.nodes() {
         if def.hand_written {
             o.line(format!(
-                "// {key}: struct hand-written in tsc/internal/ast/ast.go; Rust core lives in lib.rs"
+                "// {key}: struct hand-written in tsc/internal/ast/ast.go; the node-data payload"
+            ));
+            o.line(format!(
+                "// ({key}NodeData) and the full owning struct live in the hand-written core"
             ));
             o.line("");
             continue;
         }
+        let field_lines = node_struct_lines(s, key);
+        // `Box<dyn Any + Send + Sync>` members (Go `Type any`) are not Clone —
+        // such structs get a manual Clone impl below the struct.
+        let has_any_member = field_lines
+            .iter()
+            .any(|l| matches!(l, FieldLine::Field { ty, .. } if ty.contains("dyn std::any::Any")));
         let embeds = s.go_embeds(&def.extends);
         o.line(format!(
             "/// Go: `type {key} struct {{ {} }}` (embeds flattened in Go embedding order)",
             embeds.join("; ")
         ));
+        if !has_any_member {
+            o.line("#[derive(Clone)]");
+        }
         o.line(format!("pub struct {key} {{"));
-        for line in node_struct_lines(s, key) {
+        for line in &field_lines {
             match line {
                 FieldLine::Comment(c) => o.line(format!("    {c}")),
                 FieldLine::Field { name, ty, optional } => {
-                    if optional {
+                    if *optional {
                         o.line(format!("    pub {name}: {ty}, // Optional"));
                     } else {
                         o.line(format!("    pub {name}: {ty},"));
@@ -1603,6 +1833,42 @@ fn generate_ast(s: &Schema) -> String {
             }
         }
         o.line("}");
+        if has_any_member {
+            o.line(format!(
+                "// PORT: Go's Clone shares the `Type any` interface payload (Go `any` members are"
+            ));
+            o.line(
+                "// interfaces, copied by value); `Box<dyn Any + Send + Sync>` cannot be. The port",
+            );
+            o.line(
+                "// substitutes a fresh `()` payload — such nodes are checker-synthesized and the",
+            );
+            o.line(
+                "// payload becomes a Clone `TypeId` handle with the checker port (SPEC §5.4), at",
+            );
+            o.line("// which point this impl is deleted in favor of a derive.",
+            );
+            o.line(format!("impl Clone for {key} {{"));
+            o.line("    fn clone(&self) -> Self {");
+            o.line("        Self {");
+            for line in &field_lines {
+                match line {
+                    FieldLine::Comment(_) => {}
+                    FieldLine::Field { name, ty, .. } => {
+                        if ty.contains("dyn std::any::Any") {
+                            o.line(format!("            {name}: Box::new(()),"));
+                        } else if is_copy_storage(ty) {
+                            o.line(format!("            {name}: self.{name},"));
+                        } else {
+                            o.line(format!("            {name}: self.{name}.clone(),"));
+                        }
+                    }
+                }
+            }
+            o.line("        }");
+            o.line("    }");
+            o.line("}");
+        }
         o.line("");
     }
 
@@ -1623,12 +1889,46 @@ fn generate_ast(s: &Schema) -> String {
         o.line(format!("impl {key} {{"));
         o.line("    pub fn for_each_child(&self, visit: &mut dyn FnMut(NodeId) -> bool) -> bool {");
         if def.hand_written_visitor {
-            o.line(format!(
-                "        // TODO(port): ForEachChild delegates to the hand-written forEachChild_{key}"
-            ));
-            o.line("        // in tsc/internal/ast/ast.go (runtime-dependent child ordering).");
-            o.line("        let _ = visit;");
-            o.line("        todo!()");
+            // Ported from forEachChild_JSDocParameterOrPropertyTag in
+            // tsc/internal/ast/ast.go (runtime-dependent child ordering — Go's
+            // generated code delegates to the hand-written function, so the
+            // generator emits the equivalent here):
+            //   visit(v, node.TagName) ||
+            //     (node.IsNameFirst && (visit(v, node.name) || visit(v, node.TypeExpression))) ||
+            //     (!node.IsNameFirst && (visit(v, node.TypeExpression) || visit(v, node.name))) ||
+            //     visitNodeList(v, node.Comment)
+            assert_eq!(key, "JSDocParameterOrPropertyTag");
+            let _ = body;
+            o.line("        if visit(self.tag_name) {");
+            o.line("            return true;");
+            o.line("        }");
+            o.line("        if self.is_name_first {");
+            o.line("            if visit(self.name) {");
+            o.line("                return true;");
+            o.line("            }");
+            o.line("            if let Some(id) = self.type_expression {");
+            o.line("                if visit(id) {");
+            o.line("                    return true;");
+            o.line("                }");
+            o.line("            }");
+            o.line("        } else {");
+            o.line("            if let Some(id) = self.type_expression {");
+            o.line("                if visit(id) {");
+            o.line("                    return true;");
+            o.line("                }");
+            o.line("            }");
+            o.line("            if visit(self.name) {");
+            o.line("                return true;");
+            o.line("            }");
+            o.line("        }");
+            o.line("        if let Some(list) = &self.comment {");
+            o.line("            for &id in &list.nodes {");
+            o.line("                if visit(id) {");
+            o.line("                    return true;");
+            o.line("                }");
+            o.line("            }");
+            o.line("        }");
+            o.line("        false");
         } else {
             for l in &body {
                 o.line(format!("        {l}"));
@@ -1639,14 +1939,63 @@ fn generate_ast(s: &Schema) -> String {
         o.line("");
     }
 
-    // NodeData
+    // Per-struct VisitEachChild
     o.line("// ──────────────────────────────────────────────────────────────────────");
-    o.line("// NodeData — one variant per concrete node struct (SPEC §5.1)");
+    o.line("// VisitEachChild (Go VisitEachChild + the Update* rebuild, merged: children");
+    o.line("// are visited through the NodeVisitor dispatchers in ast.json member");
+    o.line("// order, and the node is rebuilt only when a child changed — Go's Update*");
+    o.line("// returns the original node in that case, which becomes Option::None,");
+    o.line("// SPEC §5.6. Mandatory child slots dropped by the visitor become");
+    o.line("// NodeId::NONE (Go stores a nil *Node).)");
     o.line("// ──────────────────────────────────────────────────────────────────────");
     o.line("");
+    for (key, def) in s.nodes() {
+        if def.hand_written {
+            continue; // SourceFile: SourceFileNodeData::visit_each_child lives in the core
+        }
+        let body = visit_each_child_lines(s, key);
+        o.line(format!("impl {key} {{"));
+        if let Some(lines) = &body {
+            o.line(format!(
+                "    /// Go: `func (node *{key}) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)."
+            ));
+            o.line("    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Self> {");
+            for l in lines {
+                o.line(format!("        {l}"));
+            }
+        } else {
+            o.line(format!(
+                "    /// Go: `func (node *{key}) VisitEachChild(v *NodeVisitor) *Node` (ast_generated.go)"
+            ));
+            o.line("    /// — the node has no children, so nothing can change.");
+            o.line("    pub fn visit_each_child(&self, _v: &mut dyn NodeVisitor) -> Option<Self> {");
+            o.line("        None");
+        }
+        o.line("    }");
+        o.line("}");
+        o.line("");
+    }
+
+    // NodeData
+    o.line("// ──────────────────────────────────────────────────────────────────────");
+    o.line("// NodeData — one variant per concrete node struct (SPEC §5.1); every");
+    o.line("// payload is Boxed (see the file header) and Clone (Go's Clone copies");
+    o.line("// the struct value via the factory; the port's NodeStore::clone_node");
+    o.line("// needs a plain value copy).)");
+    o.line("// ──────────────────────────────────────────────────────────────────────");
+    o.line("");
+    o.line("#[derive(Clone)]");
     o.line("pub enum NodeData {");
-    for key in s.json.nodes.definitions.keys() {
-        o.line(format!("    {key}({key}),"));
+    for (key, def) in s.nodes() {
+        if def.hand_written {
+            // The SourceFile node's data payload is hand-written in the core
+            // (the owning SourceFile struct cannot live inside its own arena).
+            o.line(format!(
+                "    {key}(Box<{key}NodeData>), // payload hand-written in the core"
+            ));
+        } else {
+            o.line(format!("    {key}(Box<{key}>),"));
+        }
     }
     o.line("}");
     o.line("");
@@ -1703,25 +2052,111 @@ fn generate_ast(s: &Schema) -> String {
     o.line("// ──────────────────────────────────────────────────────────────────────");
     o.line("// As*() cast methods (Go returns *X unchecked; the Rust port returns");
     o.line("// Option — PORT: panics on wrong-kind casts become None at the accessor,");
-    o.line("// callers use it after the matching is_x predicate)");
+    o.line("// callers use it after the matching is_x predicate. Payloads are Boxed,");
+    o.line("// hence the `&**d`.)");
     o.line("// ──────────────────────────────────────────────────────────────────────");
     o.line("");
     o.line("impl Node {");
-    for key in s.json.nodes.definitions.keys() {
+    for (key, def) in s.nodes() {
+        let payload = if def.hand_written {
+            format!("{key}NodeData")
+        } else {
+            key.clone()
+        };
         o.line(format!(
             "    /// Go: `func (n *Node) As{key}() *{key}`",
         ));
         o.line(format!(
-            "    pub fn as_{}(&self) -> Option<&{key}> {{",
+            "    pub fn as_{}(&self) -> Option<&{payload}> {{",
             to_snake(key)
         ));
         o.line(format!("        match &self.data {{"));
-        o.line(format!("            NodeData::{key}(d) => Some(d),"));
+        o.line(format!("            NodeData::{key}(d) => Some(&**d),"));
         o.line("            _ => None,");
         o.line("        }");
         o.line("    }");
         o.line("");
     }
+    o.line("}");
+    o.line("");
+
+    // Node::visit_each_child dispatch + Modifiers()/ModifierFlags()/Name()
+    o.line("// ──────────────────────────────────────────────────────────────────────");
+    o.line("// VisitEachChild dispatch (Go `Node.VisitEachChild` → nodeData.VisitEachChild;");
+    o.line("// dispatches on the data variant, so multi-kind structs like Token and");
+    o.line("// CaseOrDefaultClause need no Kind switch). The rebuilt node carries a");
+    o.line("// fresh id/parent, exactly like Go's factory New* inside Update*.");
+    o.line("// ──────────────────────────────────────────────────────────────────────");
+    o.line("");
+    o.line("impl Node {");
+    o.line("    /// Go: `func (n *Node) VisitEachChild(v *NodeVisitor) *Node` — Rust returns");
+    o.line("    /// `Option<Node>`: None = every child unchanged (Go returns the same node).");
+    o.line("    pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Node> {");
+    o.line("        let data = match &self.data {");
+    for (key, _def) in s.nodes() {
+        o.line(format!(
+            "            NodeData::{key}(d) => d.visit_each_child(v).map(|x| NodeData::{key}(Box::new(x))),"
+        ));
+    }
+    o.line("        }?;");
+    o.line("        Some(Node {");
+    o.line("            kind: self.kind,");
+    o.line("            flags: self.flags,");
+    o.line("            loc: self.loc,");
+    o.line("            id: Cell::new(0),");
+    o.line("            parent: Cell::new(NodeId::NONE),");
+    o.line("            data,");
+    o.line("        })");
+    o.line("    }");
+    o.line("");
+    o.line("    /// Go: `func (n *Node) Modifiers() *ModifierList` (ast.go — dispatches");
+    o.line("    /// nodeData.Modifiers(); the flattened per-struct fields replace the");
+    o.line("    /// Go interface method).");
+    o.line("    pub fn modifiers(&self) -> Option<&ModifierList> {");
+    o.line("        match &self.data {");
+    for (key, def) in s.nodes() {
+        if def.hand_written {
+            continue;
+        }
+        let has_modifiers = node_struct_lines(s, key).iter().any(|l| {
+            matches!(l, FieldLine::Field { name, ty, .. } if name == "modifiers" && ty == "Option<ModifierList>")
+        });
+        if has_modifiers {
+            o.line(format!("            NodeData::{key}(d) => d.modifiers.as_ref(),"));
+        }
+    }
+    o.line("            _ => None,");
+    o.line("        }");
+    o.line("    }");
+    o.line("");
+    o.line("    /// Go: `func (n *Node) ModifierFlags() ModifierFlags` (ast.go).");
+    o.line("    pub fn modifier_flags(&self) -> ModifierFlags {");
+    o.line("        self.modifiers().map_or(ModifierFlags::NONE, |m| m.modifier_flags)");
+    o.line("    }");
+    o.line("");
+    o.line("    /// Go: `func (n *Node) Name() *DeclarationName` (ast.go — dispatches");
+    o.line("    /// nodeData.Name(); NodeDefault returns nil, mirrored by the `_` arm).");
+    o.line("    pub fn name(&self) -> Option<NodeId> {");
+    o.line("        match &self.data {");
+    for (key, def) in s.nodes() {
+        if def.hand_written {
+            continue;
+        }
+        for l in node_struct_lines(s, key) {
+            if let FieldLine::Field { name, ty, .. } = l {
+                if name == "name" {
+                    if ty == "Option<NodeId>" {
+                        o.line(format!("            NodeData::{key}(d) => d.name,"));
+                    } else if ty == "NodeId" {
+                        o.line(format!("            NodeData::{key}(d) => Some(d.name),"));
+                    }
+                }
+            }
+        }
+    }
+    o.line("            _ => None,");
+    o.line("        }");
+    o.line("    }");
     o.line("}");
     o.line("");
 
