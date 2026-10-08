@@ -274,6 +274,11 @@ version = "0.0.0"
 [[package]]
 name = "tsc-spanmap"
 version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "tsc-core",
+ "tsc-json",
+]
 
 [[package]]
 name = "tsc-stringutil"
@@ -295,6 +300,13 @@ dependencies = [
 [[package]]
 name = "tsc-vfs"
 version = "0.0.0"
+dependencies = [
+ "tsc-core",
+ "tsc-nativepath",
+ "tsc-osutil",
+ "tsc-repo",
+ "tsc-tspath",
+]
 
 [[package]]
 name = "unicode-ident"

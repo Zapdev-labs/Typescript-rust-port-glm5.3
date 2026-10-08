@@ -7,3 +7,18 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# osvfs uses core's LimitedSemaphore (syscall throttling) and VersionMajorMinor
+# (global typings cache location).
+tsc-core = { path = "../core" }
+# vfs.go/walkdir.go are defined over tspath rooted paths + CaseSensitivity.
+tsc-tspath = { path = "../tspath" }
+# osvfs realpath/isReparsePoint call nativepath.
+tsc-nativepath = { path = "../nativepath" }
+# osvfs case-sensitivity detection stats osutil.Executable().
+tsc-osutil = { path = "../osutil" }
+
+[dev-dependencies]
+# osvfs tests read repo files (go.mod) like Go's repo.RootPath().
+tsc-repo = { path = "../repo" }

@@ -1,1 +1,8 @@
 // Ported from tsc/internal/spanmap @ ec47d33c23e464a17cdf2475632cba629bee8763
+
+mod spanmap;
+
+pub use spanmap::*;
+
+#[cfg(test)]
+mod spanmap_test;

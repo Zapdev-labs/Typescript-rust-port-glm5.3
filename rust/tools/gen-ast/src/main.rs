@@ -1099,7 +1099,7 @@ fn storage_type(s: &Schema, t: &Type, optional: bool) -> String {
             "bool" | "boolean" => wrap_opt("bool", optional),
             "int" => wrap_opt("i32", optional),
             "string" => wrap_opt("Box<str>", optional),
-            "any" => wrap_opt("Box<dyn std::any::Any + Send + Sync>", optional),
+            "any" => wrap_opt("std::sync::Arc<dyn std::any::Any + Send + Sync>", optional),
             "NodeFlags" => wrap_opt("NodeFlags", optional),
             "TokenFlags" => wrap_opt("TokenFlags", optional),
             "ModifierFlags" => wrap_opt("ModifierFlags", optional),

@@ -22,52 +22,14 @@
 // NodeFactory (the ~190 New*/Update* factory methods of ast.go/ast_generated.go),
 // utilities.go wholesale, and subtreefacts.go remain separate M2 tasks.
 
-pub mod ast_generated;
-pub mod checkflags;
-pub mod deepclone;
-pub mod diagnostic;
-pub mod functionflags;
-pub mod kind_generated;
-pub mod modifierflags;
-pub mod nodeflags;
-pub mod parseoptions;
-pub mod positionmap;
-pub mod precedence;
-pub mod source_file;
-pub mod symbol;
-pub mod symbolflags;
-pub mod tokenflags;
-pub mod utilities;
-pub mod visitor;
-
-pub use ast_generated::*;
-pub use checkflags::*;
-pub use deepclone::*;
-pub use diagnostic::*;
-pub use functionflags::*;
-pub use kind_generated::*;
-pub use modifierflags::*;
-pub use nodeflags::*;
-pub use parseoptions::*;
-pub use positionmap::*;
-pub use precedence::*;
-pub use source_file::*;
-pub use symbol::*;
-pub use symbolflags::*;
-pub use tokenflags::*;
-pub use utilities::*;
-pub use visitor::*;
-
-use std::cell::Cell;
-pub use tsc_core::text::{TextPos, TextRange};
-
 /// Hand-rolled bitflag pattern shared by the flags modules (the `bitflags`
 /// crate is not on the SPEC §5.11 dependency list).
 ///
 /// PORT: Go defines these as bare integer types with `const X Type = 1 << n`
 /// packages; the Rust port keeps the exact bit values (they appear in
 /// baselines and tsbuildinfo diffs) as associated consts on a newtype, with
-/// the usual bitset operators.
+/// the usual bitset operators. Textually scoped, so declared before the
+/// `mod` list below.
 macro_rules! define_flags {
     ($name:ident, $repr:ty) => {
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
@@ -141,6 +103,45 @@ macro_rules! define_flags {
         }
     };
 }
+
+pub mod ast_generated;
+pub mod checkflags;
+pub mod deepclone;
+pub mod diagnostic;
+pub mod functionflags;
+pub mod kind_generated;
+pub mod modifierflags;
+pub mod nodeflags;
+pub mod parseoptions;
+pub mod positionmap;
+pub mod precedence;
+pub mod source_file;
+pub mod symbol;
+pub mod symbolflags;
+pub mod tokenflags;
+pub mod utilities;
+pub mod visitor;
+
+pub use ast_generated::*;
+pub use checkflags::*;
+pub use deepclone::*;
+pub use diagnostic::*;
+pub use functionflags::*;
+pub use kind_generated::*;
+pub use modifierflags::*;
+pub use nodeflags::*;
+pub use parseoptions::*;
+pub use positionmap::*;
+pub use precedence::*;
+pub use source_file::*;
+pub use symbol::*;
+pub use symbolflags::*;
+pub use tokenflags::*;
+pub use utilities::*;
+pub use visitor::*;
+
+use std::cell::Cell;
+pub use tsc_core::text::{TextPos, TextRange};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Ids (ids.rs re-exports; the definitions live there to keep the Go
@@ -272,7 +273,10 @@ impl Clone for Node {
 }
 
 /// Go: `func (n *Node) Text() string` (ast.go) — the text of a text-bearing
-/// node. Kind-checked exactly like Go (panics on unhandled kinds).
+/// node whose text is a single stored string. Go's `Text()` additionally
+/// concatenates for `KindJsxNamespacedName` and the four JSDoc comment kinds;
+/// those allocate and are TODO(port) with the full Text surface (nothing in
+/// the M2 surface reads them; Go panics on other kinds and so does this).
 pub fn node_text(store: &dyn NodeStore, node: NodeId) -> &str {
     let n = store.node(node);
     match &n.data {
@@ -290,42 +294,8 @@ pub fn node_text(store: &dyn NodeStore, node: NodeId) -> &str {
         NodeData::TemplateHead(d) => &d.text,
         NodeData::TemplateMiddle(d) => &d.text,
         NodeData::TemplateTail(d) => &d.text,
-        NodeData::JsxNamespacedName(d) => {
-            // Go: Namespace.Text() + ":" + name.Text()
-            let namespace = d.namespace;
-            let name = d.name;
-            // The concatenation allocates; a &str return cannot express it, so
-            // the two segments are joined through the same text walk and the
-            // caller sees the namespace segment via node_text on the parts.
-            // This arm is unreachable from node_text's &str signature, so the
-            // JsxNamespacedName case is delegated to `jsx_namespaced_name_text`.
-            let _ = (namespace, name);
-            unreachable!("JsxNamespacedName text is two segments; use jsx_namespaced_name_text")
-        }
         NodeData::RegularExpressionLiteral(d) => &d.text,
-        _ => unreachable!(
-            "Unhandled case in Node.Text: {:?}",
-            n.kind
-        ),
-    }
-}
-
-/// Go `Node.Text()` for `KindJsxNamespacedName` (`Namespace.Text() + ":" +
-/// name.Text()`); the single-node `node_text` returns `&str` and cannot
-/// concatenate, so this variant allocates.
-pub fn jsx_namespaced_name_text(store: &dyn NodeStore, node: NodeId) -> String {
-    let d = store.node(node).as_jsx_namespaced_name().expect("JsxNamespacedName");
-    format!("{}:{}", node_text(store, d.namespace), node_text(store, d.name))
-}
-
-/// Go: `func (n *Node) Symbol() *Symbol` (ast.go) — the DeclarationBase symbol
-/// link, flattened per-struct in the port.
-pub fn node_symbol(node: &Node) -> Option<SymbolId> {
-    match &node.data {
-        NodeData::VariableDeclaration(d) => d.symbol,
-        // The full per-kind dispatch is generated once every struct carrying
-        // a `symbol` member is enumerated below (mirrors nodeData.Symbol()).
-        _ => None,
+        _ => panic!("Unhandled case in Node.Text: {}", n.kind_string()),
     }
 }
 
