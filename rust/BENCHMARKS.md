@@ -157,10 +157,13 @@ ESM, per-record lines + FNV-1a shape-hash summary). Verdict = plain diff.
 | showconfig × excalidraw tsconfig (real-world) | IDENTICAL (rig) |
 | determinism double-runs | byte-identical |
 
-One real divergence found and deferred to the core crate (fix in flight):
+One real divergence was found by the twins and fixed the same day (`bdd088c5db`):
 `tsc/testdata/fixtures/compiler/tsconfig.json`'s `"types": []` — Go emits the
-explicitly-empty list; the port dropped it (core's CompilerOptions collapses
-Go's nil-vs-empty slices into `Vec`, serializer tests `!is_empty()`).
+explicitly-empty list; the port dropped it (core's CompilerOptions collapsed
+Go's nil-vs-empty slices into `Vec`). Fixed with an `Option<Vec<_>>` shape
+regenerated through gen-options for all 9 list fields; the whole-repo
+showconfig sweep (28 configs) now has ZERO divergences, and every twin run
+is byte-identical on the rig with the fix.
 
 Rig environment note: the rig's btrfs is fully allocated (metadata chunks
 exhaust under the concurrent syzkaller campaign — rsync renames and cargo
