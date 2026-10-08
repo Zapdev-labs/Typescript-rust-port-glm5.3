@@ -20,7 +20,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use tsc_ast::{Diagnostic, NodeId, SourceFile};
+use tsc_ast::{Diagnostic, NodeId, NodeStore, SourceFile};
 use tsc_module::PackageId;
 use tsc_tspath::{PathKey, RootedDirectoryPath, RootedFilePath};
 
@@ -28,7 +28,7 @@ use crate::diagnostics_collection::FileDiagnostic;
 use crate::program::Program;
 
 /// Go: `type fileIncludeKind int` + consts (iota order).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[repr(i32)]
 pub enum FileIncludeKind {
     // References from file
@@ -124,8 +124,9 @@ impl ReferenceFileLocation {
                 return format!("\"{synthetic_text}\"");
             }
             let text = file.text();
-            let start = tsc_scanner::skip_trivia(text, node.pos() as i32) as usize;
-            let end = node.end() as usize;
+            let node_loc = file.node(node).loc;
+            let start = tsc_scanner::skip_trivia(text, node_loc.pos()) as usize;
+            let end = node_loc.end() as usize;
             text[start..end].to_string()
         } else if let Some(reference) = &self.r#ref {
             let text = file.text();
@@ -353,7 +354,11 @@ impl FileIncludeReason {
                         &[lib],
                     )
                 } else {
-                    let target = options.get_emit_script_target().to_string();
+                    // PORT: Go calls the ScriptTarget Stringer; the port has
+                    // no stringer module, and the Go stringer's names
+                    // (_ScriptTarget_name_0/_name_1: "None", "ES5", "ES2015"
+                    // .. "ESNext") match the derived Debug spelling exactly.
+                    let target = format!("{:?}", options.get_emit_script_target());
                     if !target.is_empty() {
                         FileDiagnostic::compiler_diagnostic(
                             &tsc_diagnostics::DEFAULT_LIBRARY_FOR_TARGET_0,
@@ -410,8 +415,11 @@ impl FileIncludeReason {
                     .get(file.path_key())
                     .is_some_and(|specifier| {
                         // Go: specifier == referenceLocation.node (pointer
-                        // identity against the synthetic import node).
-                        Some(&specifier) == reference_location.synthetic_text.as_ref()
+                        // identity against the synthetic import node). PORT:
+                        // the synthetic node is text-carried in the port, so
+                        // the identity check compares the specifier texts.
+                        reference_location.synthetic_text.as_deref()
+                            == Some(specifier.as_str())
                     })
                 {
                     if !reference_location.package_id.name.is_empty() {

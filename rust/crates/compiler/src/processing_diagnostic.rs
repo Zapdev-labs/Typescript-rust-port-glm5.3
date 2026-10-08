@@ -73,7 +73,11 @@ impl ProcessingDiagnostic {
                         } else {
                             &tsc_diagnostics::CANNOT_FIND_LIB_DEFINITION_FOR_0
                         };
-                        loc.diagnostic_at(file, message, &[lib_name, suggestion])
+                        loc.diagnostic_at(
+                            file,
+                            message,
+                            &[lib_name.to_string(), suggestion.to_string()],
+                        )
                     }
                     _ => panic!("unknown include kind"),
                 }
@@ -117,7 +121,7 @@ impl ProcessingDiagnostic {
                     .is_synthetic
             {
                 *preferred_location = Some(include_reason.clone());
-            } else if preferred_location.as_deref().map(Arc::as_ptr) != Some(Arc::as_ptr(include_reason)) {
+            } else if preferred_location.as_ref().map(Arc::as_ptr) != Some(Arc::as_ptr(include_reason)) {
                 if let Some(info) = program.include_processor.get_related_info(include_reason, program) {
                     related_info.push(info);
                 }
@@ -144,9 +148,12 @@ impl ProcessingDiagnostic {
                 include_details.push(reason.to_diagnostic(program, false, Default::default()).diagnostic);
                 process_related_info(&mut preferred_location, reason);
             }
-            redirect_info = program
-                .include_processor
-                .explain_redirect_and_implied_format(program, &diag.file);
+            redirect_info = program.include_processor.explain_redirect_and_implied_format(
+                program,
+                &diag.file,
+                // Go: func(fileName tspath.RootedFilePath) string { return fileName.AsString() }
+                &|file_name: &tsc_tspath::RootedFilePath| file_name.as_string().to_string(),
+            );
         }
         if let Some(diagnostic_reason) = &diag.diagnostic_reason {
             // Go: processInclude(diag.diagnosticReason).

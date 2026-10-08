@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
 use tsc_ast::{
-    Diagnostic, Kind, NodeData, NodeFactory, NodeId, SourceFile, SourceFileMetaData,
+    Diagnostic, Kind, NodeData, NodeFactory, NodeId, NodeStore, SourceFile, SourceFileMetaData,
     SourceFileParseOptions, node_text,
 };
 use tsc_core::compileroptions::{
@@ -268,9 +268,15 @@ impl<'a> FileLoader<'a> {
 
     /// Go: `func (p *fileLoader) isSupportedExtension(canonicalFileName) bool`.
     pub(crate) fn is_supported_extension(&self, canonical_file_name: &PathKey) -> bool {
+        // PORT: the extension groups are `Vec<Vec<String>>` (the tsoptions
+        // shape); `extension_is_one_of` takes `&[&str]`, so each group is
+        // mapped to borrowed slices first (Go: any-of-the-group check).
         self.supported_extensions_with_json_if_resolve_json_module
             .iter()
-            .any(|group| canonical_file_name.extension_is_one_of(group))
+            .any(|group| {
+                let extensions: Vec<&str> = group.iter().map(|e| e.as_str()).collect();
+                canonical_file_name.extension_is_one_of(&extensions)
+            })
     }
 
     fn project_references(&self) -> &ProjectReferenceFileMapperBuilder {
@@ -331,10 +337,11 @@ impl<'a> FileLoader<'a> {
             || file_name.has_extension()
         {
             let task = crate::files_parser::ParseTask {
-                normalized_file_path: file_name,
+                // Go: tspath.RootedPath(fileName) → toPath(fileName)
                 path: self.case_sensitivity.path_key(&RootedPath::from(
-                    // Go: tspath.RootedPath(fileName)
+                    file_name.as_string(),
                 )),
+                normalized_file_path: file_name,
                 lib_file,
                 include_reason,
                 ..Default::default()
@@ -367,7 +374,7 @@ impl<'a> FileLoader<'a> {
                 reason: None,
                 explanation: Some(IncludeExplainingDiagnostic {
                     file: PathKey::default(),
-                    diagnostic_reason: Some(include_reason),
+                    diagnostic_reason: Some(Arc::clone(&include_reason)),
                     message: diagnostic.message,
                     args: diagnostic.args,
                 }),
@@ -446,10 +453,11 @@ impl<'a> FileLoader<'a> {
                         })
                         .collect();
                 let root_task_indices: Vec<usize> = (0..tasks.len()).collect();
+                let get_resolved = |file_name: &RootedFilePath, path: &PathKey| {
+                    host.get_resolved_project_reference(file_name, path)
+                };
                 let parser = crate::project_reference_parser::ProjectReferenceParser::new(
-                    &|file_name: &RootedFilePath, path: &PathKey| {
-                        host.get_resolved_project_reference(file_name, path)
-                    },
+                    &get_resolved,
                     self.case_sensitivity,
                 );
                 let parsed = parser.parse(&root_task_indices, &mut tasks);
@@ -528,7 +536,7 @@ impl<'a> FileLoader<'a> {
         let mut package_json_type = String::new();
         let mut package_json_directory = RootedDirectoryPath::default();
         if let Some(package_json_scope) = package_json_scope {
-            if tsc_packagejson::InfoCacheEntry::exists(package_json_scope.as_deref()) {
+            if tsc_packagejson::InfoCacheEntry::exists(Some(&package_json_scope)) {
                 package_json_directory = package_json_scope
                     .package_directory
                     .as_directory_path()
@@ -536,7 +544,7 @@ impl<'a> FileLoader<'a> {
                 if let Some(value) = package_json_scope
                     .contents
                     .as_ref()
-                    .and_then(|contents| contents.type_.get_value())
+                    .and_then(|contents| contents.fields.header_fields.type_.get_value())
                 {
                     if !file_name.extension_is_one_of(&[
                         EXTENSION_MTS, EXTENSION_CTS, EXTENSION_MJS, EXTENSION_CJS,
@@ -544,7 +552,7 @@ impl<'a> FileLoader<'a> {
                         && module_resolution_kind <= ModuleResolutionKind::NodeNext
                         || file_name.contains_lowercase_directory_sequence("/node_modules/"))
                     {
-                        package_json_type = value;
+                        package_json_type = value.clone();
                     }
                 }
             }
@@ -569,7 +577,7 @@ impl<'a> FileLoader<'a> {
         // GetExternalModuleIndicatorOptions' inputs through metadata + jsx).
         let options_for_file =
             crate::project_reference_file_mapper::compiler_options_with_redirect(
-                self.opts.compiler_options_arc(),
+                &self.opts.compiler_options_arc(),
                 redirect,
             );
         let parse_options = SourceFileParseOptions {
@@ -595,7 +603,7 @@ impl<'a> FileLoader<'a> {
     ) -> (RootedFilePath, PathKey, Option<SourceFileFromReferenceDiagnostic>) {
         let options = self.compiler_options();
         let allow_non_ts_extensions = options.allow_non_ts_extensions.is_true();
-        let diagnostic_file_name = tsc_tspath::normalize_slashes(reference_text);
+        let diagnostic_file_name = tsc_tspath::normalize_slashes(reference_text).into_owned();
 
         if file_name.has_extension() {
             let canonical_file_name = self.case_sensitivity.path_key(&RootedPath::from(
@@ -618,7 +626,7 @@ impl<'a> FileLoader<'a> {
                     Some(SourceFileFromReferenceDiagnostic {
                         message: &tsc_diagnostics::FILE_0_HAS_AN_UNSUPPORTED_EXTENSION_THE_ONLY_SUPPORTED_EXTENSIONS_ARE_1,
                         args: vec![
-                            diagnostic_file_name,
+                            diagnostic_file_name.clone(),
                             format!("'{}'", self.supported_extensions_flattened().join("', '")),
                         ],
                     }),
@@ -676,7 +684,7 @@ impl<'a> FileLoader<'a> {
             Some(SourceFileFromReferenceDiagnostic {
                 message: &tsc_diagnostics::COULD_NOT_RESOLVE_THE_PATH_0_WITH_THE_EXTENSIONS_COLON_1,
                 args: vec![
-                    diagnostic_file_name,
+                    diagnostic_file_name.clone(),
                     format!("'{}'", self.supported_extensions_flattened().join("', '")),
                 ],
             }),
@@ -715,7 +723,7 @@ impl<'a> FileLoader<'a> {
                 reason: None,
                 explanation: Some(IncludeExplainingDiagnostic {
                     file: PathKey::default(),
-                    diagnostic_reason: Some(include_reason),
+                    diagnostic_reason: Some(Arc::clone(&include_reason)),
                     message: diagnostic.message,
                     args: diagnostic.args,
                 }),
@@ -727,7 +735,7 @@ impl<'a> FileLoader<'a> {
                 reason: None,
                 explanation: Some(IncludeExplainingDiagnostic {
                     file: PathKey::default(),
-                    diagnostic_reason: Some(include_reason),
+                    diagnostic_reason: Some(Arc::clone(&include_reason)),
                     message: &tsc_diagnostics::A_FILE_CANNOT_HAVE_A_REFERENCE_TO_ITSELF,
                     args: Vec::new(),
                 }),
@@ -789,9 +797,7 @@ impl<'a> FileLoader<'a> {
                     resolved.clone(),
                 );
                 type_resolutions_trace.extend(trace);
-                if tsc_module::ResolvedTypeReferenceDirective::is_resolved(
-                    resolved.as_deref(),
-                ) {
+                if resolved.as_deref().is_some_and(tsc_module::ResolvedTypeReferenceDirective::is_resolved) {
                     let resolved = resolved.expect("resolved");
                     to_parse.push(ResolvedRef {
                         file_name: resolved.resolved_file_name.clone(),
@@ -872,7 +878,7 @@ impl<'a> FileLoader<'a> {
                 self.get_redirect_for_resolution(&file_name, &file_path);
             let options_for_file =
                 crate::project_reference_file_mapper::compiler_options_with_redirect(
-                    self.opts.compiler_options_arc(),
+                    &self.opts.compiler_options_arc(),
                     redirect.clone(),
                 );
             let resolution_mode = get_mode_for_type_reference_directive_in_file(
@@ -881,7 +887,12 @@ impl<'a> FileLoader<'a> {
                 &meta,
                 &options_for_file,
             );
-            let redirect_dyn: Option<Arc<dyn tsc_module::ResolvedProjectReference>> = redirect;
+            // PORT: Go passes `redirect` (nil-able `*tsoptions.ParsedCommandLine`)
+            // straight through; the port's newtype unsizes to the trait object
+            // via the mapper's helper (Option<Arc<_>> → Option<Arc<dyn _>> is
+            // not a coercion site).
+            let redirect_dyn: Option<Arc<dyn tsc_module::ResolvedProjectReference>> =
+                crate::project_reference_file_mapper::redirect_as_dyn(redirect.clone());
             let (resolved, trace) = resolver.resolve_type_reference_directive(
                 &r#ref.file_name,
                 &redirect_file_name,
@@ -909,7 +920,7 @@ impl<'a> FileLoader<'a> {
             });
             type_resolutions_trace.extend(trace);
 
-            if tsc_module::ResolvedTypeReferenceDirective::is_resolved(resolved.as_deref()) {
+            if resolved.as_deref().is_some_and(tsc_module::ResolvedTypeReferenceDirective::is_resolved) {
                 let resolved = resolved.expect("resolved");
                 crate::files_parser::push_sub_task(
                     files_parser,
@@ -957,7 +968,7 @@ impl<'a> FileLoader<'a> {
             self.get_redirect_for_resolution(&file_name, &file_path);
         let options_for_file =
             crate::project_reference_file_mapper::compiler_options_with_redirect(
-                self.opts.compiler_options_arc(),
+                &self.opts.compiler_options_arc(),
                 redirect.clone(),
             );
         let mut module_names: Vec<NodeId> = Vec::with_capacity(
@@ -1034,7 +1045,7 @@ impl<'a> FileLoader<'a> {
                     &options_for_file,
                 );
                 let redirect_dyn: Option<Arc<dyn tsc_module::ResolvedProjectReference>> =
-                    redirect.clone();
+                    crate::project_reference_file_mapper::redirect_as_dyn(redirect.clone());
                 let (resolved_module, trace) = resolver.resolve_module_name(
                     &module_name,
                     &redirect_file_name,
@@ -1090,7 +1101,7 @@ impl<'a> FileLoader<'a> {
                     && tsc_module::get_resolution_diagnostic(
                         &options_for_file,
                         resolved_module.as_ref(),
-                        file,
+                        Some(&*file),
                     )
                     .is_none()
                     && !options_for_file.no_resolve.is_true()
@@ -1155,9 +1166,9 @@ impl<'a> FileLoader<'a> {
             );
             let (resolution, trace) = self.resolve_library(&library_name, &resolve_from);
             if ResolvedModule::is_resolved(resolution.as_deref()) {
-                let resolution = resolution.expect("resolved");
-                path = resolution.resolved_file_name.clone();
-                path_key = resolution.resolved_path.clone();
+                let resolved = resolution.as_deref().expect("resolved");
+                path = resolved.resolved_file_name.clone();
+                path_key = resolved.resolved_path.clone();
                 replaced = true;
             }
             self.path_for_lib_file_resolutions.load_or_store(
@@ -1312,8 +1323,8 @@ pub(crate) fn get_mode_for_usage_location(
             }
         }
     }
-    if parent_kind == Kind::LiteralTypeNode
-        && file.node(file.node(parent).parent.get()).kind == Kind::ImportTypeNode
+    if parent_kind == Kind::LiteralType
+        && file.node(file.node(parent).parent.get()).kind == Kind::ImportType
     {
         let grandparent = file.node(parent).parent.get();
         if let NodeData::ImportTypeNode(import_type) = &file.node(grandparent).data {
@@ -1411,7 +1422,7 @@ fn create_synthetic_import(file: &mut SourceFile, text: &str) -> NodeId {
     let file_node = file.as_node_id();
     let external_helpers_module_reference = {
         let mut factory = NodeFactory::new(file);
-        factory.new_string_literal(text, tsc_ast::TokenFlags::EMPTY)
+        factory.new_string_literal(text, tsc_ast::TokenFlags::NONE)
     };
     let import_decl = {
         let mut factory = NodeFactory::new(file);
@@ -1495,6 +1506,9 @@ pub fn process_all_program_files(
         typings_location: opts.config.typings_location.clone(),
         project_name: opts.config.project_name.clone(),
         extra_extensions: Vec::new(),
+        // Go: NewResolverOptions receives no package-json cache here — the
+        // resolver builds a fresh one over the host (None).
+        package_json_cache: None,
     };
     loader.resolver = Some(match &opts.factories.create_module_resolver {
         Some(create_module_resolver) => create_module_resolver(resolver_options),

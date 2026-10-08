@@ -156,6 +156,10 @@ pub fn get_external_module_indicator_options(
             tsc_ast::parseoptions::ExternalModuleIndicatorOptions { jsx: false, force: true }
         }
         ModuleDetectionKind::Legacy => Default::default(),
+        // PORT: the Rust enum carries a `None` sentinel for the absent
+        // option (Go's zero value is ModuleDetectionKindLegacy — the same
+        // "usual isFileProbablyExternalModule" behavior).
+        ModuleDetectionKind::None => Default::default(),
         ModuleDetectionKind::Auto => {
             // If module is nodenext or node16, all esm format files are modules
             // If jsx is react-jsx or react-jsxdev then jsx tags force module-ness

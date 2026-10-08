@@ -10,10 +10,11 @@
 //     arena and puts it back inside the critical section.
 //   - Go's `parseTaskDataPool` (a sync.Pool) is dropped — pooling is a Go GC
 //     optimization; the port allocates the group map directly.
-//   - The queued group closure captures `&FileLoader`/`&FilesParser`/`&dyn
-//     WorkGroup` borrows (the port's WorkFn has no 'static bound; the
-//     parallel WorkGroup runs them on `std::thread::scope` — see
-//     crates/core/src/workgroup.rs), matching Go's closure captures.
+//   - The queued group closure captures `&FileLoader`/`&FilesParser`/the
+//     group borrows, matching Go's closure captures; `core.WorkFn` is
+//     `Box<dyn FnOnce() + Send>` (whose trait-object default is `'static`),
+//     so the group is the crate-local `ScopedWorkGroup` running the closures
+//     on `std::thread::scope` (see the ScopedWorkGroup PORT note).
 //   - `data.tasks` map iteration: Go iterates the (randomized) map; the port
 //     iterates a snapshot in insertion order — loading is idempotent and the
 //     collection walk (which fixes program order) is a separate
@@ -26,7 +27,7 @@
 //     pointers, including the package-dedup aliasing).
 
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use tsc_ast::{SourceFile, SourceFileMetaData};
 use tsc_module::{
@@ -168,20 +169,28 @@ impl FilesParser {
 
     /// Go: `func (w *filesParser) parse(loader, tasks)`.
     pub(crate) fn parse(&self, loader: &FileLoader, tasks: &[usize]) {
-        let wg = tsc_core::workgroup::new_work_group(loader.single_threaded);
-        self.start(loader, wg.as_ref(), tasks, 0);
-        let mut wg = wg;
+        // Go: core.NewWorkGroup(loader.singleThreaded) — the scoped group
+        // (see ScopedWorkGroup's PORT note).
+        let mut wg = ScopedWorkGroup::new(loader.single_threaded);
+        self.start(loader, &wg, tasks, 0);
         wg.run_and_wait();
     }
 
     /// Go: `func (w *filesParser) start(loader, tasks, depth)`.
-    pub(crate) fn start(
-        &self,
-        loader: &FileLoader,
-        wg: &dyn tsc_core::workgroup::WorkGroup,
+    ///
+    /// `'s`/`'l`/`'w` are the capture lifetimes of the queued closure (the
+    /// group runs it within `parse`'s scope, so they cover `'env`).
+    pub(crate) fn start<'s, 'l, 'w, 'env>(
+        &'s self,
+        loader: &'l FileLoader,
+        wg: &'w ScopedWorkGroup<'env>,
         tasks: &[usize],
         depth: i64,
-    ) {
+    ) where
+        's: 'env,
+        'l: 'env,
+        'w: 'env,
+    {
         for &task_index in tasks {
             let (path, normalized_file_path, increase_depth, elide_on_depth, package_id) =
                 self.arena.with_task_read(task_index, |task| {
@@ -281,9 +290,9 @@ impl ParseTaskData {
 
 /// Go: the queued closure body: `data.mu.Lock(); ... task loads ...; start(subTasks)`.
 #[allow(clippy::too_many_arguments)]
-fn run_task_group(
-    files_parser: &FilesParser,
-    loader: &FileLoader,
+fn run_task_group<'s, 'l, 'w, 'env>(
+    files_parser: &'s FilesParser,
+    loader: &'l FileLoader,
     data: Arc<Mutex<ParseTaskData>>,
     loaded: bool,
     task_index: usize,
@@ -293,8 +302,12 @@ fn run_task_group(
     package_id: PackageId,
     depth: i64,
     max_depth: i64,
-    wg: &dyn tsc_core::workgroup::WorkGroup,
-) {
+    wg: &'w ScopedWorkGroup<'env>,
+) where
+    's: 'env,
+    'l: 'env,
+    'w: 'env,
+{
     let mut data = data.lock().expect("parseTaskData poisoned");
 
     let mut start_subtasks = false;
@@ -456,7 +469,7 @@ pub(crate) fn load(loader: &FileLoader, files_parser: &FilesParser, task: &mut P
     // as loaded.
 
     let no_resolve = loader.compiler_options().no_resolve.is_true();
-    if !no_resolve && !loader.skip_module_resolution {
+    if !no_resolve && !loader.skip_module_resolution() {
         let referenced_files = task
             .file
             .as_ref()
@@ -485,7 +498,7 @@ pub(crate) fn load(loader: &FileLoader, files_parser: &FilesParser, task: &mut P
     }
 
     let no_lib = loader.compiler_options().no_lib == tsc_core::tristate::Tristate::TSTrue;
-    if !no_lib && !loader.skip_module_resolution {
+    if !no_lib && !loader.skip_module_resolution() {
         let lib_reference_directives = task
             .file
             .as_ref()
@@ -606,6 +619,112 @@ enum FileSlot {
     File(usize),
 }
 
+/// The `package_id_to_source_file` map key (see the field's PORT note): a
+/// composite string of every `module.PackageId` field.
+fn package_id_key(id: &PackageId) -> String {
+    format!(
+        "{}\u{1}{}\u{1}{}\u{1}{}",
+        id.name, id.sub_module_name, id.version, id.peer_dependencies
+    )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ScopedWorkGroup
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: the `core.WorkGroup` the parser builds in `parse` (`NewWorkGroup`) —
+/// `queue`/`run_and_wait` (Go's `Queue`/`RunAndWait`).
+///
+/// PORT: `core.WorkFn` is `Box<dyn FnOnce() + Send>`, whose trait-object
+/// default carries a `'static` bound — the parse-task closures capture
+/// `&FilesParser`/`&FileLoader`/the group itself (matching Go's closure
+/// captures; `processAllProgramFiles` borrows `opts`, so no `'static` data
+/// exists to capture), so a crate-local scoped group with the same
+/// queue/run_and_wait surface runs them on `std::thread::scope`. Same
+/// semantics as the core group (queue-during-run works; run_and_wait is
+/// the only barrier); no unsafe code.
+pub(crate) struct ScopedWorkGroup<'env> {
+    single_threaded: bool,
+    state: Mutex<ScopedState<'env>>,
+    cv: Condvar,
+}
+
+struct ScopedState<'env> {
+    fns: Vec<Box<dyn FnOnce() + Send + 'env>>,
+    active: usize,
+    done: bool,
+}
+
+impl Default for ScopedState<'_> {
+    fn default() -> Self {
+        ScopedState {
+            fns: Vec::new(),
+            active: 0,
+            done: false,
+        }
+    }
+}
+
+impl<'env> ScopedWorkGroup<'env> {
+    pub(crate) fn new(single_threaded: bool) -> Self {
+        ScopedWorkGroup {
+            single_threaded,
+            state: Mutex::new(ScopedState::default()),
+            cv: Condvar::new(),
+        }
+    }
+
+    /// Go: `Queue(f func())`.
+    pub(crate) fn queue(&self, f: Box<dyn FnOnce() + Send + 'env>) {
+        let mut state = self.state.lock().expect("work group poisoned");
+        if state.done {
+            panic!("Queue called after RunAndWait returned");
+        }
+        state.fns.push(f);
+        drop(state);
+        self.cv.notify_one();
+    }
+
+    /// Go: `RunAndWait()`.
+    pub(crate) fn run_and_wait(&mut self) {
+        if self.single_threaded {
+            loop {
+                let f = self.state.lock().expect("work group poisoned").fns.pop();
+                match f {
+                    Some(f) => f(),
+                    None => break,
+                }
+            }
+            self.state.lock().expect("work group poisoned").done = true;
+            return;
+        }
+        let this = &*self;
+        std::thread::scope(|scope| {
+            let mut state = this.state.lock().expect("work group poisoned");
+            loop {
+                if let Some(f) = state.fns.pop() {
+                    state.active += 1;
+                    drop(state);
+                    scope.spawn(move || {
+                        f();
+                        let mut state = this.state.lock().expect("work group poisoned");
+                        state.active -= 1;
+                        drop(state);
+                        this.cv.notify_all();
+                    });
+                    state = this.state.lock().expect("work group poisoned");
+                    continue;
+                }
+                if state.active == 0 {
+                    break;
+                }
+                state = this.cv.wait(state).expect("work group poisoned");
+            }
+        });
+        self.state.lock().expect("work group poisoned").done = true;
+    }
+}
+
 /// The collection-walk state (Go: the closure locals of `collectFiles`).
 pub(crate) struct CollectState<'a> {
     files_parser: &'a FilesParser,
@@ -635,7 +754,11 @@ pub(crate) struct CollectState<'a> {
     lib_files_map: rustc_hash::FxHashMap<PathKey, Arc<LibFile>>,
     redirect_targets_map: rustc_hash::FxHashMap<PathKey, Vec<RootedFilePath>>,
     redirect_files_by_path: rustc_hash::FxHashMap<PathKey, RedirectsFile>,
-    package_id_to_source_file: Option<rustc_hash::FxHashMap<PackageId, usize>>,
+    /// Go: `packageIdToSourceFile map[module.PackageId]*parseTask`. PORT:
+    /// `module.PackageId` derives no `Hash` (the module crate is outside
+    /// this wave's touch scope), so the map is keyed by a composite string
+    /// of the id's fields (same identity semantics as Go's map key).
+    package_id_to_source_file: Option<rustc_hash::FxHashMap<String, usize>>,
     /// seen: group identity (Arc ptr) → checked name.
     seen: rustc_hash::FxHashMap<usize, RootedFilePath>,
     /// recordedDuplicates: group identity → recorded casings.
@@ -910,8 +1033,10 @@ impl<'a> CollectState<'a> {
             };
 
             if self.deduplicate_packages && !group_package_id.name.is_empty() {
-                if let Some(&package_id_file) =
-                    self.package_id_to_source_file.as_ref().and_then(|map| map.get(&group_package_id))
+                if let Some(&package_id_file) = self
+                    .package_id_to_source_file
+                    .as_ref()
+                    .and_then(|map| map.get(&package_id_key(&group_package_id)))
                 {
                     // Package deduplication keeps the first package instance
                     // in the program; this task's file is recorded as a
@@ -944,7 +1069,7 @@ impl<'a> CollectState<'a> {
                             index: self.files.len() + self.redirect_files_by_path.len(),
                             file_name: normalized_file_path,
                             path: path.clone(),
-                            target: package_id_file_path,
+                            target: package_id_file_path.clone(),
                         },
                     );
                     let package_slot = self.files_by_path.get(&package_id_file_path).copied();
@@ -963,7 +1088,7 @@ impl<'a> CollectState<'a> {
                 {
                     self.package_id_to_source_file
                         .get_or_insert_with(rustc_hash::FxHashMap::default)
-                        .insert(group_package_id.clone(), task_index);
+                        .insert(package_id_key(&group_package_id), task_index);
                 }
             }
 

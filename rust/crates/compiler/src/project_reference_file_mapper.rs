@@ -45,6 +45,18 @@ pub struct ResolvedProjectReference {
     pub config: Arc<ParsedCommandLine>,
 }
 
+// PORT: a manual Debug impl (ParsedCommandLine derives no Debug, and the
+// wrapping crate cannot derive through the newtype) printing the config-file
+// name — the shape is never printed in output paths, only in test failure
+// messages.
+impl std::fmt::Debug for ResolvedProjectReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedProjectReference")
+            .field("config", &self.config.config_file_name.as_string())
+            .finish()
+    }
+}
+
 impl tsc_module::ResolvedProjectReference for ResolvedProjectReference {
     fn config_name(&self) -> &RootedFilePath {
         &self.config.config_file_name
@@ -124,7 +136,6 @@ impl ProjectReferenceFileMapper {
             // Map to source file from project reference
             let source = self
                 .get_project_reference_from_output_dts(&file.path)
-                .cloned()
                 .or_else(|| {
                     self.realpath_dts_to_source
                         .lock()
@@ -351,6 +362,20 @@ pub struct ProjectReferenceFileMapperBuilder {
 
 /// The shared `Option<Arc<ResolvedProjectReference>>` → module redirect
 /// conversion (Go passes `*tsoptions.ParsedCommandLine` directly; the port
+/// unsizes the newtype — see the file header). `Option<Arc<_>>` →
+/// `Option<Arc<dyn _>>` is not a coercion site, so the unsizing happens
+/// per-entry at a binding.
+pub(crate) fn redirect_as_dyn(
+    redirect: Option<Arc<ResolvedProjectReference>>,
+) -> Option<Arc<dyn tsc_module::ResolvedProjectReference>> {
+    redirect.map(|redirect| {
+        let dyn_redirect: Arc<dyn tsc_module::ResolvedProjectReference> = redirect;
+        dyn_redirect
+    })
+}
+
+/// The shared `Option<Arc<ResolvedProjectReference>>` → module redirect
+/// conversion (Go passes `*tsoptions.ParsedCommandLine` directly; the port
 /// unsizes the newtype — see the file header).
 pub(crate) fn compiler_options_with_redirect(
     compiler_options: &Arc<CompilerOptions>,
@@ -431,7 +456,7 @@ impl ProjectReferenceFileMapperBuilder {
         let has_project_references = !self.config_resolved_project_reference_paths().is_empty();
         drop(cache);
         if has_project_references
-            && self.config.compiler_options().preserve_symlinks
+            && self.mapper.config.compiler_options().preserve_symlinks
                 == tsc_core::tristate::Tristate::TSTrue
         {
             let file_name = &file.file_name;

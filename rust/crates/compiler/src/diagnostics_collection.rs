@@ -405,7 +405,7 @@ impl DiagnosticsCollection {
 
     /// Go: `func (c *DiagnosticsCollection) Lookup(diagnostic *Diagnostic) *Diagnostic`.
     pub fn lookup(&self, diagnostic: &FileDiagnostic) -> Option<FileDiagnostic> {
-        let inner = self.inner.lock().expect("DiagnosticsCollection poisoned");
+        let mut inner = self.inner.lock().expect("DiagnosticsCollection poisoned");
         let diagnostics = if diagnostic.file_name.is_some() {
             inner.get_diagnostics_for_file_locked(get_diagnostic_path(diagnostic).to_string())
         } else {

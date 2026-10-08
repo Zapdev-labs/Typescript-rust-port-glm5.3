@@ -44,7 +44,9 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tsc_ast::{Diagnostic, FileReference, NodeId, SourceFile, SourceFileMetaData};
+use tsc_ast::{
+    Diagnostic, FileReference, NodeId, NodeStore, SourceFile, SourceFileMetaData,
+};
 use tsc_core::compileroptions::{
     ResolutionMode, ResolutionModeCommonJS, ResolutionModeESM, ResolutionModeNone,
 };
@@ -567,7 +569,7 @@ impl Program {
     ) -> RootedDirectoryPath {
         let scoped = self.new_resolver().get_package_scope_for_path(dirname);
         if let Some(scoped) = scoped {
-            if tsc_packagejson::InfoCacheEntry::exists(scoped.as_deref()) {
+            if tsc_packagejson::InfoCacheEntry::exists(Some(&scoped)) {
                 return scoped.package_directory.as_directory_path().clone();
             }
         }
@@ -1018,9 +1020,12 @@ impl Program {
         if file_name.has_extension() {
             if !allow_non_ts_extensions {
                 let canonical_file_name = self.path_key_for_file_name(&file_name);
-                let supported = supported_extensions
-                    .iter()
-                    .any(|group| canonical_file_name.extension_is_one_of(group));
+                let supported = supported_extensions.iter().any(|group| {
+                    // PORT: the groups are Vec<Vec<String>> (the tsoptions
+                    // shape); extension_is_one_of takes &[&str].
+                    let extensions: Vec<&str> = group.iter().map(|e| e.as_str()).collect();
+                    canonical_file_name.extension_is_one_of(&extensions)
+                });
                 if !supported {
                     return None; // unsupported extensions are forced to fail
                 }
@@ -1255,10 +1260,12 @@ impl Program {
         };
         for (cache_key, resolution) in resolved_modules {
             let resolved = tsc_module::ResolvedModule::is_resolved(resolution.as_deref());
+            // Go: tspath.ExtensionIsOneOf(resolution.Extension, ...)
             if (!resolved
-                || !cache_key
-                    .name
-                    .extension_is_one_of(&tsc_tspath::SUPPORTED_TS_EXTENSIONS_WITH_JSON_FLAT))
+                || !tsc_tspath::extension_is_one_of(
+                    resolution.as_deref().map_or("", |r| r.extension.as_str()),
+                    &tsc_tspath::SUPPORTED_TS_EXTENSIONS_WITH_JSON_FLAT,
+                ))
                 && !tsc_tspath::is_external_module_name_relative(&cache_key.name)
             {
                 unresolved_imports.push(cache_key.name.clone());
@@ -1270,7 +1277,7 @@ impl Program {
     // ── emit-blocking + common source directory ─────────────────────────────
 
     /// Go: `func (p *Program) blockEmittingOfFile(emitFileName, diag)`.
-    pub fn block_emitting_of_file(&self, emit_file_name: &RootedFilePath, diag: FileDiagnostic) {
+    pub fn block_emitting_of_file(&mut self, emit_file_name: &RootedFilePath, diag: FileDiagnostic) {
         self.has_emit_blocking_diagnostics
             .insert(self.path_key_for_file_name(emit_file_name));
         self.program_diagnostics
@@ -1286,12 +1293,12 @@ impl Program {
     }
 
     /// Go: `func (p *Program) getSourceFilesToEmit(targetSourceFiles, forceDtsEmit, forceJsEmit)`.
-    pub fn get_source_files_to_emit(
-        &self,
-        target_source_files: Option<&[&SourceFile]>,
+    pub fn get_source_files_to_emit<'a>(
+        &'a self,
+        target_source_files: Option<&'a [&'a SourceFile]>,
         force_dts_emit: bool,
         force_js_emit: bool,
-    ) -> Vec<&SourceFile> {
+    ) -> Vec<&'a SourceFile> {
         if target_source_files.is_none() && !force_dts_emit && !force_js_emit {
             // Go: `if targetSourceFiles == nil && !forceDtsEmit && !forceJsEmit { return p.files }`.
             return self.files.iter().collect();

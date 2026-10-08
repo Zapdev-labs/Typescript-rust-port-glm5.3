@@ -39,7 +39,7 @@ pub struct ProjectReferenceParseTask {
 /// parser does not hold the loader.
 fn parse_task(
     task_index: usize,
-    tasks: &mut [ProjectReferenceParseTask],
+    tasks: &mut Vec<ProjectReferenceParseTask>,
     get_resolved: &dyn Fn(&RootedFilePath, &PathKey) -> Option<Arc<ParsedCommandLine>>,
     case_sensitivity: CaseSensitivity,
 ) {
