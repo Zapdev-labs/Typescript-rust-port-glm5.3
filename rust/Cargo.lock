@@ -262,10 +262,36 @@ version = "0.0.0"
 [[package]]
 name = "tsc-packagejson"
 version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tsc-collections",
+ "tsc-core",
+ "tsc-diagnostics",
+ "tsc-json",
+ "tsc-repo",
+ "tsc-semver",
+ "tsc-tspath",
+]
 
 [[package]]
 name = "tsc-repo"
 version = "0.0.0"
+
+[[package]]
+name = "tsc-scanner"
+version = "0.0.0"
+dependencies = [
+ "memchr",
+ "rustc-hash",
+ "tsc-ast",
+ "tsc-collections",
+ "tsc-core",
+ "tsc-debug",
+ "tsc-diagnostics",
+ "tsc-jsnum",
+ "tsc-stringutil",
+]
 
 [[package]]
 name = "tsc-semver"

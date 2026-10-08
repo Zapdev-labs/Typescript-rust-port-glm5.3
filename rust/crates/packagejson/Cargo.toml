@@ -7,3 +7,28 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# packagejson.go imports tsc/internal/collections (Set for dependency names).
+tsc-collections = { path = "../collections" }
+# cache.go imports tsc/internal/core (Version, VersionMajorMinor).
+tsc-core = { path = "../core" }
+# cache.go imports tsc/internal/diagnostics (trace messages for GetVersionPaths).
+tsc-diagnostics = { path = "../diagnostics" }
+# packagejson.go + jsonvalue.go + exportsorimports.go + expected.go import
+# tsc/internal/json (Unmarshal/UnmarshalDecode/UnmarshalerFrom facade).
+tsc-json = { path = "../json" }
+# cache.go imports tsc/internal/semver (TryParseVersionRange, MustParse).
+tsc-semver = { path = "../semver" }
+# cache.go imports tsc/internal/tspath (RootedDirectoryPath, PathKey,
+# CaseSensitivity, RootedFilePath).
+tsc-tspath = { path = "../tspath" }
+# expected.go / the serde hooks for Fields, JSONValue, ExportsOrImports.
+serde = { workspace = true, features = ["derive"] }
+# "raw_value" exposes serde_json::value::RawValue — the raw-field-bytes
+# capture Expected.UnmarshalJSON receives in Go.
+serde_json = { workspace = true, features = ["raw_value"] }
+
+[dev-dependencies]
+# packagejson_test.go reads its fixtures via internal/repo (RootPath/TestDataPath).
+tsc-repo = { path = "../repo" }

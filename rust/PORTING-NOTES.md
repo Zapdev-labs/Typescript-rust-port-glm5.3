@@ -242,3 +242,45 @@ a view type over unsafe punning. Raw outputs: ~/bench-results/phase0 (rig).
   `-p gen-ast` clean (pre-existing tsc-tspath warnings untouched);
   `gen-ast --check` confirms the committed generated files are current
   (kind_generated.rs 1081 lines, ast_generated.rs 12417 lines).
+
+## 2026-10-07 crates/packagejson — internal/packagejson port (full)
+- Go struct embedding (Fields ⊃ Header/Path/DependencyFields, PackageJson ⊃
+  Fields, ExportsOrImports ⊃ JSONValue) is nested sub-structs
+  (`fields.header_fields`, ...); promoted methods
+  (HasDependency/RangeDependencies/GetRuntimeDependencyNames) are delegating
+  impls at each embedding level. ExportsOrImports flattens the JSONValue embed
+  into the same (type_, value) shape with Go's exact per-method panic texts.
+- `Expected.UnmarshalJSON` receives raw field bytes; the Rust Deserialize
+  captures the same bytes via `Box<RawValue>` (serde "raw_value") and mirrors
+  the null-check + first-byte classification + retry-decode. Reflection-backed
+  `ExpectedJSONType` became the `ExpectedJsonType` trait (float kinds →
+  "unknown" — Go's switch omits the float kinds). `Expected` PartialEq ignores
+  `actual_json_type` (the Go tests compare with IgnoreUnexported).
+- `JSONValue.Value any` is a generic payload enum `JSONValuePayload<T>` so
+  Go's generic `unmarshalJSONValueFrom[T]` stays one function (elements are
+  the concrete type: JSONValue or ExportsOrImports).
+- Duplicate member names: Go decodes with `AllowDuplicateNames(true)`
+  (last wins); serde's derive *rejects* duplicate fields, so `Fields`,
+  `TypeScriptFields`, and `ContentMapperFields` use hand-rolled
+  duplicate-tolerant map visitors (OrderedMap/JSONValue paths were already
+  tolerant). `tsc_json::allow_duplicate_names` stays a documented no-op.
+- InfoCache stores `Arc<InfoCacheEntry>` (Rust SyncMap hands out owned
+  clones, so Go pointer identity maps to Arc identity; WithPackageDirectory
+  takes `self: Arc<Self>` to return the same entry). Go's nil-receiver
+  `Exists`/`GetContents` are `Option<&Self>` associated fns (collections
+  convention). `PackageJson`'s versionPaths/versionTraces/once collapse into
+  one `OnceLock<VersionPathsState>`; `VersionPaths.paths` (Go caches per
+  value-copy) is a shared `Arc<OnceLock<_>>`. `VersionPaths::exists` keeps
+  the Version/pathsJSON checks; the `v != nil` guard is caller-side
+  `Option::is_some_and`.
+- Tests: all four Go test files ported (TestJSONValue, TestExpected,
+  TestExports, TestParse 3/3 cases, TestPackageDirectory, cache-identity,
+  ForEachAncestor). BenchmarkPackageJSON/ParseJSONText — PORT: deferred —
+  requires tsc-parser (M3 wave); the UnmarshalJSON halves' code path runs on
+  the same fixtures in `parse_file_fixtures` (no Rust bench harness yet;
+  repo package.json fixture is absent → skipped like Go's SkipIfNotExist,
+  date-fns.json parses). cache.go has no in-package Go tests; 5 focused
+  GetVersionPaths trace/state tests added, marked PORT: no Go counterpart.
+- Validation: CARGO_TARGET_DIR=/tmp/tsrs-pkg cargo test -p tsc-packagejson
+  16/16 green; clippy --all-targets clean for the crate (pre-existing
+  tsc-tspath warnings untouched); cargo check green.
