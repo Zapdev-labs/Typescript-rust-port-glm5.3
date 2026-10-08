@@ -29,7 +29,7 @@
 //     the callback's first argument (PORT-noted per constructor).
 
 use crate::todo_shapes::{InferenceContextId, InferenceInfo, TypeMapperId};
-use crate::types::{TypeId, TypeParameter};
+use crate::types::TypeId;
 use crate::Checker;
 
 // TypeMapperKind
@@ -566,7 +566,10 @@ pub(crate) fn clear_cached_inferences(inferences: &mut [InferenceInfo]) {
 mod tests {
     use super::*;
     use crate::todo_shapes::{InferenceContext, InferenceInfo};
-    use crate::types::TypeFlags;
+
+    fn new_checker() -> Checker {
+        super::tests_support::new_empty_checker()
+    }
 
     fn map(c: &mut Checker, mapper: TypeMapperId, t: TypeId) -> TypeId {
         c.mapper_map(mapper, t)
@@ -574,7 +577,7 @@ mod tests {
 
     #[test]
     fn simple_type_mapper_maps_only_its_source() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let a = c.string_type();
         let b = c.number_type();
         let other = c.boolean_type_or_marker();
@@ -587,7 +590,7 @@ mod tests {
 
     #[test]
     fn array_type_mapper_first_match_wins() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let (a, b, d) = (c.string_type(), c.number_type(), c.bigint_type());
         let (x, y) = (c.boolean_type_or_marker(), c.never_type());
         let m = c.new_array_type_mapper(&[a, b], &[x, y]);
@@ -599,7 +602,7 @@ mod tests {
 
     #[test]
     fn array_to_single_and_deferred_inherit_unknown_kind() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let (a, b) = (c.string_type(), c.number_type());
         // ArrayToSingleTypeMapper overrides Map/MapsThisOnly but NOT Kind —
         // TypeMapperBase's TypeMapperKindUnknown shows through (Go embedding).
@@ -620,23 +623,20 @@ mod tests {
 
     #[test]
     fn deferred_targets_compute_lazily_at_map_time() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let a = c.string_type();
-        let target = c.number_type();
         // The thunk reads the checker at call time (the port shape) — a
         // deferred mapper created before the target type exists resolves it
         // on first Map, the whole point of DeferredTypeMapper.
-        let m = c.new_deferred_type_mapper(&[a], vec![Box::new(move |c: &mut Checker| target_of(c))]);
-        assert_eq!(map(&mut c, m, a), target);
-        fn target_of(c: &mut Checker) -> TypeId {
-            c.number_type()
-        }
-        let _ = target_of;
+        let m = c.new_deferred_type_mapper(&[a], vec![Box::new(|c: &mut Checker| c.number_type())]);
+        assert_eq!(map(&mut c, m, a), c.number_type());
+        // A non-matching type never invokes the thunk.
+        assert_eq!(map(&mut c, m, c.bigint_type()), c.bigint_type());
     }
 
     #[test]
     fn merged_mapper_applies_m1_then_m2() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let (a, b, d) = (c.string_type(), c.number_type(), c.bigint_type());
         let s1 = c.new_simple_type_mapper(a, b);
         let s2 = c.new_simple_type_mapper(b, d);
@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn composite_mapper_instantiates_only_when_m1_changed_the_type() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let (a, b) = (c.string_type(), c.number_type());
         let d = c.bigint_type();
         let s1 = c.new_simple_type_mapper(a, b);
@@ -666,7 +666,7 @@ mod tests {
 
     #[test]
     fn merge_prepend_and_append_wrappers() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let (a, b, d) = (c.string_type(), c.number_type(), c.bigint_type());
         let s = c.new_simple_type_mapper(a, b);
         // mergeTypeMappers(nil, m2) = m2.
@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn combine_type_mappers() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let (a, b) = (c.string_type(), c.number_type());
         let s = c.new_simple_type_mapper(a, b);
         assert_eq!(c.combine_type_mappers(None, Some(s)), Some(s));
@@ -703,7 +703,7 @@ mod tests {
 
     #[test]
     fn inference_mapper_fixes_and_returns_the_stub_inferred_type() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let tp = c.string_type();
         let ctx = InferenceContextId(c.inference_contexts.len() as u32);
         c.inference_contexts.push(InferenceContext {
@@ -729,14 +729,16 @@ mod tests {
         assert_eq!(c.inference_contexts[ctx.0 as usize].inferences[0].inferred_type, None);
         // A non-matching type passes through untouched.
         assert_eq!(map(&mut c, fixing, c.bigint_type()), c.bigint_type());
-        // A non-fixing mapper never clears the (already-fixed) inference.
+        // A non-fixing mapper never touches the isFixed flag.
         let non_fixing = c.new_inference_type_mapper(ctx, false);
+        c.inference_contexts[ctx.0 as usize].inferences[0].is_fixed = false;
         assert_eq!(map(&mut c, non_fixing, tp), c.error_type());
+        assert!(!c.inference_contexts[ctx.0 as usize].inferences[0].is_fixed);
     }
 
     #[test]
     fn backreference_mapper_maps_the_inference_tail_to_unknown() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let ctx = InferenceContextId(c.inference_contexts.len() as u32);
         c.inference_contexts.push(InferenceContext {
             inferences: vec![
@@ -755,7 +757,7 @@ mod tests {
 
     #[test]
     fn maps_this_only_follows_the_this_type_parameter() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         // A "this" type parameter: TYPE_PARAMETER flag + isThisType on the
         // payload (utilities.go's isThisTypeParameter).
         let tp = c.alloc_test_type_parameter(true /*is_this_type*/);
@@ -769,18 +771,17 @@ mod tests {
 
     #[test]
     fn get_mapped_type_unwraps_distributed_type_parameters() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let (tp, constraint) = c.alloc_test_distributed_type_parameter();
         let m = c.new_simple_type_mapper(constraint, c.number_type());
         // getMappedType maps the CONSTRAINT of a distributed type parameter,
         // not the parameter itself (checker.go's getNonDistributedTypeParameter).
         assert_eq!(get_mapped_type(&mut c, tp, m), c.number_type());
-        let _ = TypeFlags::TYPE_PARAMETER;
     }
 
     #[test]
     fn active_mapper_stack_push_pop_and_find() {
-        let mut c = crate::new_checker(Box::new(crate::tests_support::empty_program()));
+        let mut c = new_checker();
         let (a, b) = (c.string_type(), c.number_type());
         let m1 = c.new_simple_type_mapper(a, b);
         let m2 = c.new_simple_type_mapper(b, a);

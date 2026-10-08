@@ -260,6 +260,13 @@ pub struct TypeId(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct SignatureId(pub u32);
 
+/// Go's `*IndexInfo` — index into the checker's index-info arena (the same
+/// §5.4 handle idiom as SignatureId; exports.go's GetIndexInfoOf* family
+/// hands these to the services layer). TODO(port): the M6 waves that
+/// populate `Checker::index_infos` (S8/S10) own the construction paths.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct IndexInfoId(pub u32);
+
 // Links for referenced symbols
 
 /// Go: `type SymbolReferenceLinks struct`.

@@ -105,14 +105,12 @@ pub fn write_comparison(actual_content: &str, local: &Path, reference: &Path) ->
 
     // Go reads the reference raw (any bytes become the string); the port
     // lossy-converts so non-UTF-8 references still compare, like Go's.
-    let mut expected: &str = NO_CONTENT;
-    let mut expected_owned = String::new();
-    let mut found_expected = false;
-    if let Ok(bytes) = std::fs::read(reference) {
-        expected_owned = String::from_utf8_lossy(&bytes).into_owned();
-        expected = expected_owned.as_str();
-        found_expected = true;
-    }
+    let reference_bytes = std::fs::read(reference);
+    let found_expected = reference_bytes.is_ok();
+    let expected: std::borrow::Cow<'_, str> = match &reference_bytes {
+        Ok(bytes) => String::from_utf8_lossy(bytes),
+        Err(_) => std::borrow::Cow::Borrowed(NO_CONTENT),
+    };
     if expected == actual_content && !(actual_content == NO_CONTENT && found_expected) {
         return ComparisonOutcome::Match;
     }

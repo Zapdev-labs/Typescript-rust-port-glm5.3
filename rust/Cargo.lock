@@ -437,6 +437,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "tsc-testrunner"
+version = "0.0.0"
+dependencies = [
+ "tsc-ast",
+ "tsc-bundled",
+ "tsc-compiler",
+ "tsc-core",
+ "tsc-diagnostics",
+ "tsc-repo",
+ "tsc-scanner",
+ "tsc-testutil",
+ "tsc-tsoptions",
+ "tsc-tspath",
+ "tsc-vfs",
+]
+
+[[package]]
+name = "tsc-testutil"
+version = "0.0.0"
+dependencies = [
+ "tsc-ast",
+ "tsc-core",
+ "tsc-diagnostics",
+ "tsc-parser",
+ "tsc-repo",
+ "tsc-scanner",
+ "tsc-tspath",
+]
+
+[[package]]
 name = "tsc-tsoptions"
 version = "0.0.0"
 dependencies = [

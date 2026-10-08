@@ -117,6 +117,17 @@ pub struct IterationTypes;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct CacheHashKey(pub u64);
 
+/// Go: `type UnionReduction uint32` + the iota consts (checker.go:26139 —
+/// the S7 union-construction wave owns the values' use; exports.go's
+/// GetUnionTypeEx carries the type in its signature, so W1 declares it).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u32)]
+pub enum UnionReduction {
+    None = 0,
+    Literal = 1,
+    Subtype = 2,
+}
+
 /// Go: `ExternalEmitHelpers`-adjacent `patternForType`/`contextFreeTypes` map
 /// key types from checker.go that the spike's Checker skeleton fields need.
 /// `contextFreeTypes` is `map[*ast.Node]*Type` — keyed by NodeId (a plain
@@ -140,10 +151,12 @@ pub type PatternForTypeKey = ();
 /// receivers); `track_symbol` takes the symbol payload by reference (Go's
 /// `*ast.Symbol`) because the tracker has no checker access (§5.4 — the
 /// nodebuilder wave, which constructs trackers with the checker in scope,
-/// owns the final signature); `as_any_mut` backs Go's
-/// `tracker.(*SymbolTrackerImpl)` type assertion in NewSymbolTrackerImpl's
-/// unwrap loop.
-pub trait SymbolTracker: std::any::Any {
+/// owns the final signature). The `'inner` lifetime parameter is the Rust
+/// shape for Go's interface indirection through `*SymbolTrackerImpl` layers:
+/// `take_inner_if_impl` backs the `tracker.(*SymbolTrackerImpl)` type
+/// assertion in NewSymbolTrackerImpl's unwrap loop (the checker impl returns
+/// its inner tracker; every other implementation returns None).
+pub trait SymbolTracker<'inner> {
     /// Go: `TrackSymbol(symbol *ast.Symbol, enclosingDeclaration *ast.Node, meaning ast.SymbolFlags) bool`.
     fn track_symbol(
         &mut self,
@@ -178,6 +191,13 @@ pub trait SymbolTracker: std::any::Any {
     fn push_error_fallback_node(&mut self, node: NodeId);
     /// Go: `PopErrorFallbackNode()`.
     fn pop_error_fallback_node(&mut self);
+    /// PORT (not Go surface): the `tracker.(*SymbolTrackerImpl)` assertion in
+    /// NewSymbolTrackerImpl's unwrap loop — see the trait PORT note.
+    fn take_inner_if_impl(
+        &mut self,
+    ) -> Option<Box<dyn SymbolTracker<'inner> + 'inner>> {
+        None
+    }
 }
 
 /// Go: `type TrackedSymbolArgs struct` (checker/nodebuilderimpl.go:30 — M6

@@ -821,6 +821,7 @@ pub fn compare_types(c: &Checker, t1: TypeId, t2: TypeId) -> std::cmp::Ordering 
                 // ordered by their associated type mappers (which reflect the
                 // mapping of in-scope type parameters to type arguments).
                 let cm = compare_type_mappers(
+                    c,
                     t1r.as_object_type().and_then(|d| d.mapper),
                     t2r.as_object_type().and_then(|d| d.mapper),
                 );
@@ -857,12 +858,22 @@ pub fn compare_types(c: &Checker, t1: TypeId, t2: TypeId) -> std::cmp::Ordering 
                     return cs;
                 }
             }
-            let m1 = t1r.as_object_type().and_then(|d| d.mapper);
-            let m2 = t2r.as_object_type().and_then(|d| d.mapper);
-            // PORT: Go unwraps CompositeTypeMapper.m2 for mapped types; the
-            // composite mapper shape lands with mapper.go (M6) — the direct
-            // compare is exact once mappers are always composite-free.
-            let cm = compare_type_mappers(m1, m2);
+            let mut m1 = t1r.as_object_type().and_then(|d| d.mapper);
+            let mut m2 = t2r.as_object_type().and_then(|d| d.mapper);
+            if t1r.object_flags.intersects(ObjectFlags::MAPPED) {
+                // instantiateAnonymousType prepends a fresh type parameter mapping.
+                // Compare the effective instantiation, not the identity of that fresh parameter.
+                // (Go: `if t1.objectFlags&ObjectFlagsMapped != 0 { m1 =
+                // m1.data.(*CompositeTypeMapper).m2; ... }` — mapper.go W1
+                // landed the composite shape this unwrap reads.)
+                if let Some(id) = m1 {
+                    m1 = c.mapper_composite_m2(id);
+                }
+                if let Some(id) = m2 {
+                    m2 = c.mapper_composite_m2(id);
+                }
+            }
+            let cm = compare_type_mappers(c, m1, m2);
             if cm != Ordering::Equal {
                 return cm;
             }
@@ -969,7 +980,7 @@ pub fn compare_types(c: &Checker, t1: TypeId, t2: TypeId) -> std::cmp::Ordering 
         if cn != Ordering::Equal {
             return cn;
         }
-        let cm = compare_type_mappers(d1.mapper, d2.mapper);
+        let cm = compare_type_mappers(c, d1.mapper, d2.mapper);
         if cm != Ordering::Equal {
             return cm;
         }
@@ -1212,14 +1223,19 @@ pub fn compare_type_lists(c: &Checker, s1: &[TypeId], s2: &[TypeId]) -> std::cmp
 
 /// Go: `func compareTypeMappers(m1, m2 *TypeMapper) int`.
 ///
-/// PORT (todo_shapes): mappers are `TypeMapperId` indices in the spike; the
-/// kind-wise comparison (simple/array/merged) lands with mapper.go (M6). The
-/// None/identity cases are exact.
+/// PORT (mapper.go W1): mappers are `TypeMapperId` indices into
+/// `Checker::type_mappers` (mapper.rs); Go's pointer identity is id equality
+/// (the first check), and the kind-wise payload comparison resolves through
+/// the checker (§5.4) — `m1.data.(*XxxTypeMapper)` becomes the
+/// `mapper_data()` match.
 pub fn compare_type_mappers(
+    c: &Checker,
     m1: Option<crate::todo_shapes::TypeMapperId>,
     m2: Option<crate::todo_shapes::TypeMapperId>,
 ) -> std::cmp::Ordering {
     use std::cmp::Ordering;
+    use crate::mapper::TypeMapperData;
+
     if m1 == m2 {
         return Ordering::Equal;
     }
@@ -1227,7 +1243,48 @@ pub fn compare_type_mappers(
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Greater,
         (Some(_), None) => Ordering::Less,
-        (Some(a), Some(b)) => a.0.cmp(&b.0),
+        (Some(m1), Some(m2)) => {
+            let kind1 = c.mapper_kind(m1);
+            let kind2 = c.mapper_kind(m2);
+            if kind1 != kind2 {
+                return (kind1 as i32).cmp(&(kind2 as i32));
+            }
+            match c.mapper_data(m1) {
+                TypeMapperData::Simple { source: s1, target: t1 } => {
+                    let TypeMapperData::Simple { source: s2, target: t2 } = c.mapper_data(m2) else {
+                        unreachable!("kinds equal");
+                    };
+                    let cr = compare_types(c, *s1, *s2);
+                    if cr != Ordering::Equal {
+                        return cr;
+                    }
+                    compare_types(c, *t1, *t2)
+                }
+                TypeMapperData::Array { sources: s1, targets: t1 } => {
+                    let TypeMapperData::Array { sources: s2, targets: t2 } = c.mapper_data(m2)
+                    else {
+                        unreachable!("kinds equal");
+                    };
+                    let cr = compare_type_lists(c, s1, s2);
+                    if cr != Ordering::Equal {
+                        return cr;
+                    }
+                    compare_type_lists(c, t1, t2)
+                }
+                TypeMapperData::Merged { m1: mm1, m2: mm2 } => {
+                    let TypeMapperData::Merged { m1: mm2_1, m2: mm2_2 } = c.mapper_data(m2) else {
+                        unreachable!("kinds equal");
+                    };
+                    let cr = compare_type_mappers(c, Some(*mm1), Some(*mm2_1));
+                    if cr != Ordering::Equal {
+                        return cr;
+                    }
+                    compare_type_mappers(c, *mm2, *mm2_2)
+                }
+                // Go's switch: every other kind falls to `return 0`.
+                _ => Ordering::Equal,
+            }
+        }
     }
 }
 

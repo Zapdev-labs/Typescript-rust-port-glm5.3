@@ -459,3 +459,67 @@ pub fn type_of_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
         _ => None,
     }
 }
+
+/// Go: `func GetNextJSDocCommentLocation(node *Node) *Node`
+/// (ast/utilities.go:4131) — "Finds the declaration that owns the JSDoc for a
+/// function-like node. Keep these hosts aligned with JSDoc parameter
+/// reparsing so unmatched @param diagnostics use the same attachment rules."
+/// (Go comment, verbatim.)
+///
+/// Needed by checker/jsdoc.go's `getAllJSDocTags` (M6 W1); dedup candidate on
+/// the ast/utilities.go wholesale wave.
+pub fn get_next_jsdoc_comment_location(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    let parent = store.node(node).parent.get();
+    if parent == NodeId::NONE {
+        return None;
+    }
+    let p = store.node(parent);
+    match p.kind {
+        Kind::PropertyAssignment
+        | Kind::ExportAssignment
+        | Kind::PropertyDeclaration
+        | Kind::VariableDeclaration
+        | Kind::SatisfiesExpression
+        | Kind::ReturnStatement
+        | Kind::VariableStatement
+        | Kind::ExpressionStatement => Some(parent),
+        Kind::VariableDeclarationList => {
+            // Go: `if parent.AsVariableDeclarationList().Declarations.Nodes[0] == node`.
+            let declarations = &p
+                .as_variable_declaration_list()
+                .expect("VariableDeclarationList data")
+                .declarations
+                .expect("VariableDeclarationList has declarations");
+            if declarations.nodes.first() == Some(&node) {
+                Some(parent)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Go: the generated `nodeData.Parameters()` accessor family (ast.go) — the
+/// parameter slice of a function-like node (empty when the list is absent,
+/// mirroring Go's nil slice).
+///
+/// Needed by checker/jsdoc.go's `checkUnmatchedJSDocParameters` (M6 W1);
+/// dedup candidate with the parser crate's `reparser.rs::parameters_of`
+/// (identical Go source) on the ast/utilities.go wholesale wave.
+pub fn parameters_of(store: &dyn NodeStore, fun: NodeId) -> &[NodeId] {
+    fn list(parameters: &Option<tsc_ast::NodeList>) -> &[NodeId] {
+        parameters.as_ref().map(|l| &l.nodes[..]).unwrap_or(&[])
+    }
+    match &store.node(fun).data {
+        tsc_ast::NodeData::FunctionDeclaration(d) => list(&d.parameters),
+        tsc_ast::NodeData::MethodDeclaration(d) => list(&d.parameters),
+        tsc_ast::NodeData::ConstructorDeclaration(d) => list(&d.parameters),
+        tsc_ast::NodeData::GetAccessorDeclaration(d) => list(&d.parameters),
+        tsc_ast::NodeData::SetAccessorDeclaration(d) => list(&d.parameters),
+        tsc_ast::NodeData::FunctionExpression(d) => list(&d.parameters),
+        tsc_ast::NodeData::ArrowFunction(d) => list(&d.parameters),
+        tsc_ast::NodeData::FunctionTypeNode(d) => list(&d.parameters),
+        _ => panic!("Node has no FunctionLikeData"),
+    }
+}

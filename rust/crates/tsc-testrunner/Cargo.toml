@@ -1,0 +1,24 @@
+[package]
+name = "tsc-testrunner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tsc-ast = { path = "../ast" }
+tsc-bundled = { path = "../bundled" }
+tsc-compiler = { path = "../compiler" }
+tsc-core = { path = "../core" }
+tsc-diagnostics = { path = "../diagnostics" }
+tsc-scanner = { path = "../scanner" }
+tsc-testutil = { path = "../tsc-testutil" }
+tsc-tsoptions = { path = "../tsoptions" }
+tsc-tspath = { path = "../tspath" }
+tsc-vfs = { path = "../vfs" }
+
+[dev-dependencies]
+tsc-repo = { path = "../repo" }
+
+[lints]
+workspace = true

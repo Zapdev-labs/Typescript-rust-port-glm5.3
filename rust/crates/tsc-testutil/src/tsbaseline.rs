@@ -240,7 +240,7 @@ fn minimal_diagnostics_to_string(diagnostics: &[&ErrorBaselineDiagnostic<'_>]) -
             let line_starts = tsc_ast::compute_ecma_line_starts(d.file_text);
             let (line, character) = line_and_utf16_character(&line_starts, d.file_text, diag.pos());
             out.push_str(&remove_test_path_prefixes(d.file_name, false));
-            out.push_str(&format!("({},{})", line + 1, character.0 + 1));
+            out.push_str(&format!("({},{})", line + 1, character + 1));
             out.push_str(": ");
         }
         out.push_str(&format!("{} TS{}: ", diag.category().name(), diag.code()));
@@ -253,10 +253,16 @@ fn minimal_diagnostics_to_string(diagnostics: &[&ErrorBaselineDiagnostic<'_>]) -
 /// Go: `scanner.GetECMALineAndUTF16CharacterOfPosition` over a text +
 /// precomputed line starts (the scanner crate's SourceFileLike shape needs
 /// an owned source file; the emitter only ever has text here).
-fn line_and_utf16_character(line_starts: &[i32], text: &str, pos: i32) -> (usize, tsc_scanner::UTF16Offset) {
+fn line_and_utf16_character(line_starts: &[i32], text: &str, pos: i32) -> (usize, i32) {
     let line = tsc_scanner::compute_line_of_position(line_starts, pos);
-    let character = tsc_scanner::utf16_len(&text[line_starts[line] as usize..pos as usize]);
+    let character = utf16_len(&text[line_starts[line] as usize..pos as usize]);
     (line, character)
+}
+
+/// Go: `core.UTF16Len` — the length in UTF-16 code units (surrogate pairs
+/// count 2; everything else 1).
+fn utf16_len(s: &str) -> i32 {
+    s.chars().map(|c| c.len_utf16() as i32).sum()
 }
 
 /// Go: `GetErrorBaseline` (non-pretty): the whole `.errors.txt` body — the
@@ -457,7 +463,8 @@ fn output_error_text(
 
 /// Go: `CompareASTDiagnostics` → `ast.CompareDiagnostics` (path via the
 /// file pairing, then loc, code, category, source, message identity, args).
-fn compare_error_baseline_diagnostics(a: &ErrorBaselineDiagnostic<'_>, b: &ErrorBaselineDiagnostic<'_>) -> std::cmp::Ordering {
+/// Exposed for the runner's shape-hash fold order (the render sort).
+pub fn compare_error_baseline_diagnostics(a: &ErrorBaselineDiagnostic<'_>, b: &ErrorBaselineDiagnostic<'_>) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let cmp = a.file_name.cmp(b.file_name);
     if cmp != Ordering::Equal {

@@ -63,11 +63,15 @@ func main() {
 	var rust, goTable []string
 	seen := map[string]bool{}
 	for _, name := range compilerVaryBy {
+		// CLI-only vary-by names marshal into invalid tsconfig entries
+		// (they are not tsconfig compilerOptions); both drivers drop them.
+		if name == "all" || name == "init" || name == "version" {
+			continue
+		}
 		decl, ok := byLower[name]
 		if !ok {
-			// No compiler-option declaration for this vary-by name (e.g.
-			// "all", "init", "version", CLI-only entries) — not marshalable
-			// into a tsconfig; both drivers drop it.
+			// No compiler-option declaration for this vary-by name — not
+			// marshalable into a tsconfig; both drivers drop it.
 			continue
 		}
 		kind := "string"
