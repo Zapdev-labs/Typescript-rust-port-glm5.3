@@ -698,7 +698,7 @@ fn flow_node_of(store: &dyn NodeStore, node: NodeId) -> Option<tsc_ast::FlowNode
 }
 
 /// Go: `func IsTypeDeclaration(node *Node) bool` (ast/utilities.go:3658).
-fn is_type_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
+pub(crate) fn is_type_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
     let n = store.node(node);
     match n.kind {
         Kind::TypeParameter
@@ -813,14 +813,13 @@ impl Checker {
             if is_external_module {
                 // TODO(port M6 S6): checkExternalModuleExports (the module-exports registration).
                 self.check_external_module_exports_stub(source_file);
-                // TODO(port M6 S3): registerForUnusedIdentifiers.
-                self.register_for_unused_identifiers_stub(source_file);
+                self.register_for_unused_identifiers_check(source_file);
             }
             let is_declaration_file = self
                 .source_file_of(source_file)
                 .is_some_and(|f| f.node(f.as_node_id()).as_source_file().expect("SourceFile data").is_declaration_file);
             if !is_declaration_file && !self.is_canceled() {
-                // TODO(port M6 S3): checkUnusedRenamedBindingElements.
+                self.check_unused_renamed_binding_elements();
             }
             self.produce_deferred_diagnostics();
             self.reported_unreachable_nodes.clear();
@@ -833,9 +832,9 @@ impl Checker {
                 .source_file_of(source_file)
                 .is_some_and(|f| f.node(f.as_node_id()).as_source_file().expect("SourceFile data").is_declaration_file);
             if !is_declaration_file && !self.is_canceled() {
-                // TODO(port M6 S3): checkUnusedIdentifiers(links.identifierCheckNodes) —
-                // the unused-identifiers family (checker.go:7248-7516).
-                let _ = self.source_file_links.get(source_file).identifier_check_nodes.clone();
+                let identifier_check_nodes =
+                    self.source_file_links.get(source_file).identifier_check_nodes.clone();
+                self.check_unused_identifiers(&identifier_check_nodes);
             }
             self.source_file_links.get(source_file).unused_checked = true;
         }
@@ -950,26 +949,60 @@ impl Checker {
             Kind::IndexedAccessType => { /* TODO(port M6 S3): checkIndexedAccessType */ }
             Kind::MappedType => { /* TODO(port M6 S3): checkMappedType */ }
             Kind::FunctionDeclaration => { /* TODO(port M6 S3): checkFunctionDeclaration */ }
-            Kind::Block | Kind::ModuleBlock => { /* TODO(port M6 S3): checkBlock */ }
-            Kind::VariableStatement => { /* TODO(port M6 S3): checkVariableStatement */ }
-            Kind::ExpressionStatement => { /* TODO(port M6 S3): checkExpressionStatement */ }
-            Kind::IfStatement => { /* TODO(port M6 S3): checkIfStatement */ }
-            Kind::DoStatement => { /* TODO(port M6 S3): checkDoStatement */ }
-            Kind::WhileStatement => { /* TODO(port M6 S3): checkWhileStatement */ }
-            Kind::ForStatement => { /* TODO(port M6 S3): checkForStatement */ }
-            Kind::ForInStatement => { /* TODO(port M6 S3): checkForInStatement */ }
-            Kind::ForOfStatement => { /* TODO(port M6 S3): checkForOfStatement */ }
-            Kind::ContinueStatement | Kind::BreakStatement => {
-                /* TODO(port M6 S3): checkBreakOrContinueStatement */
+            Kind::Block | Kind::ModuleBlock => {
+                self.check_block(node);
             }
-            Kind::ReturnStatement => { /* TODO(port M6 S3): checkReturnStatement */ }
-            Kind::WithStatement => { /* TODO(port M6 S3): checkWithStatement */ }
-            Kind::SwitchStatement => { /* TODO(port M6 S3): checkSwitchStatement */ }
-            Kind::LabeledStatement => { /* TODO(port M6 S3): checkLabeledStatement */ }
-            Kind::ThrowStatement => { /* TODO(port M6 S3): checkThrowStatement */ }
-            Kind::TryStatement => { /* TODO(port M6 S3): checkTryStatement */ }
-            Kind::VariableDeclaration => { /* TODO(port M6 S3): checkVariableDeclaration */ }
-            Kind::BindingElement => { /* TODO(port M6 S3): checkBindingElement */ }
+            Kind::VariableStatement => {
+                self.check_variable_statement(node);
+            }
+            Kind::ExpressionStatement => {
+                self.check_expression_statement(node);
+            }
+            Kind::IfStatement => {
+                self.check_if_statement(node);
+            }
+            Kind::DoStatement => {
+                self.check_do_statement(node);
+            }
+            Kind::WhileStatement => {
+                self.check_while_statement(node);
+            }
+            Kind::ForStatement => {
+                self.check_for_statement(node);
+            }
+            Kind::ForInStatement => {
+                self.check_for_in_statement(node);
+            }
+            Kind::ForOfStatement => {
+                self.check_for_of_statement(node);
+            }
+            Kind::ContinueStatement | Kind::BreakStatement => {
+                self.check_break_or_continue_statement(node);
+            }
+            Kind::ReturnStatement => {
+                self.check_return_statement(node);
+            }
+            Kind::WithStatement => {
+                self.check_with_statement(node);
+            }
+            Kind::SwitchStatement => {
+                self.check_switch_statement(node);
+            }
+            Kind::LabeledStatement => {
+                self.check_labeled_statement(node);
+            }
+            Kind::ThrowStatement => {
+                self.check_throw_statement(node);
+            }
+            Kind::TryStatement => {
+                self.check_try_statement(node);
+            }
+            Kind::VariableDeclaration => {
+                self.check_variable_declaration(node);
+            }
+            Kind::BindingElement => {
+                self.check_binding_element(node);
+            }
             Kind::ClassDeclaration => { /* TODO(port M6 S3): checkClassDeclaration */ }
             Kind::InterfaceDeclaration => { /* TODO(port M6 S3): checkInterfaceDeclaration */ }
             Kind::TypeAliasDeclaration | Kind::JSTypeAliasDeclaration => {
@@ -989,7 +1022,9 @@ impl Checker {
             Kind::EmptyStatement | Kind::DebuggerStatement => {
                 // TODO(port M6 W3): checkGrammarStatementInAmbientContext (grammarchecks.go).
             }
-            Kind::MissingDeclaration => { /* TODO(port M6 S3): checkMissingDeclaration */ }
+            Kind::MissingDeclaration => {
+                self.check_missing_declaration(node);
+            }
             Kind::JSDocNonNullableType
             | Kind::JSDocNullableType
             | Kind::JSDocAllType

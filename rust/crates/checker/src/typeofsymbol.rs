@@ -1892,7 +1892,7 @@ impl Checker {
     /// M6 S3 real body (statements.rs); this wrapper keeps the S2 call
     /// sites' non-optional TypeId shape (Go's nil iterated type maps to the
     /// errorType answer the S2 spine used).
-    fn check_right_hand_side_of_for_of(&mut self, statement: NodeId) -> TypeId {
+    pub(crate) fn check_right_hand_side_of_for_of(&mut self, statement: NodeId) -> TypeId {
         match self.check_right_hand_side_of_for_of_real(statement) {
             Some(t) => t,
             None => self.error_type(),
@@ -2436,7 +2436,7 @@ impl Checker {
     /// first to see if a type has been assigned by contextual typing.
     ///
     /// Go: `func (c *Checker) getTypeForBindingElementParent(node, checkMode) *Type`.
-    fn get_type_for_binding_element_parent(
+    pub(crate) fn get_type_for_binding_element_parent(
         &mut self,
         node: NodeId,
         check_mode: CheckMode,

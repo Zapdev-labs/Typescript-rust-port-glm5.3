@@ -46,7 +46,7 @@ use tsc_core::tristate::Tristate;
 use tsc_diagnostics::Message;
 use tsc_diagnostics::{
     A_DEFAULT_CLAUSE_CANNOT_APPEAR_MORE_THAN_ONCE_IN_A_SWITCH_STATEMENT,
-    A_REST_PARAMETER_MUST_BE_OF_AN_ARRAY_TYPE, A_RETURN_STATEMENT_CAN_ONLY_BE_USED_WITHIN_A_FUNCTION_BODY,
+    A_RETURN_STATEMENT_CAN_ONLY_BE_USED_WITHIN_A_FUNCTION_BODY,
     A_RETURN_STATEMENT_CANNOT_BE_USED_INSIDE_A_CLASS_STATIC_BLOCK,
     CATCH_CLAUSE_VARIABLE_CANNOT_HAVE_AN_INITIALIZER,
     CATCH_CLAUSE_VARIABLE_TYPE_ANNOTATION_MUST_BE_ANY_OR_UNKNOWN_IF_SPECIFIED,
@@ -195,7 +195,7 @@ impl Checker {
     /// Go: the resolver pair's `getGlobalIteratorType` closure — the S1
     /// spine's memoized global-resolver accessors (spine.rs) ARE the
     /// closure payloads; the resolver discriminant picks the sync/async row.
-    pub(crate) fn get_global_iterator_type(&mut self, r: IterationTypesResolver) -> TypeId {
+    pub(crate) fn get_global_iterator_type_of_resolver(&mut self, r: IterationTypesResolver) -> TypeId {
         match r.kind {
             IterationTypesResolverKind::Sync => self.get_global_iterator_type(),
             IterationTypesResolverKind::Async => self.get_global_async_iterator_type(),
@@ -203,7 +203,7 @@ impl Checker {
     }
 
     /// Go: the resolver pair's `getGlobalIterableTypeChecked` closure.
-    pub(crate) fn get_global_iterable_type_checked(&mut self, r: IterationTypesResolver) -> TypeId {
+    pub(crate) fn get_global_iterable_type_checked_of_resolver(&mut self, r: IterationTypesResolver) -> TypeId {
         match r.kind {
             IterationTypesResolverKind::Sync => self.get_global_iterable_type_checked(),
             IterationTypesResolverKind::Async => self.get_global_async_iterable_type_checked(),
@@ -211,7 +211,7 @@ impl Checker {
     }
 
     /// Go: the resolver pair's `getGlobalIterableIteratorType` closure.
-    pub(crate) fn get_global_iterable_iterator_type(
+    pub(crate) fn get_global_iterable_iterator_type_of_resolver(
         &mut self,
         r: IterationTypesResolver,
     ) -> TypeId {
@@ -224,7 +224,7 @@ impl Checker {
     }
 
     /// Go: the resolver pair's `getGlobalIteratorObjectType` closure.
-    pub(crate) fn get_global_iterator_object_type(&mut self, r: IterationTypesResolver) -> TypeId {
+    pub(crate) fn get_global_iterator_object_type_of_resolver(&mut self, r: IterationTypesResolver) -> TypeId {
         match r.kind {
             IterationTypesResolverKind::Sync => self.get_global_iterator_object_type(),
             IterationTypesResolverKind::Async => self.get_global_async_iterator_object_type(),
@@ -232,7 +232,7 @@ impl Checker {
     }
 
     /// Go: the resolver pair's `getGlobalGeneratorType` closure.
-    pub(crate) fn get_global_generator_type(&mut self, r: IterationTypesResolver) -> TypeId {
+    pub(crate) fn get_global_generator_type_of_resolver(&mut self, r: IterationTypesResolver) -> TypeId {
         match r.kind {
             IterationTypesResolverKind::Sync => self.get_global_generator_type(),
             IterationTypesResolverKind::Async => self.get_global_async_generator_type(),
@@ -956,7 +956,8 @@ impl Checker {
             .store()
             .node(node)
             .as_do_statement()
-            .expect("DoStatement data");
+            .expect("DoStatement data")
+            .clone();
         self.check_source_element(Some(d.statement));
         self.check_truthiness_expression(d.expression, CheckMode::CHECK_MODE_NORMAL);
     }
@@ -968,7 +969,8 @@ impl Checker {
             .store()
             .node(node)
             .as_while_statement()
-            .expect("WhileStatement data");
+            .expect("WhileStatement data")
+            .clone();
         self.check_truthiness_expression(d.expression, CheckMode::CHECK_MODE_NORMAL);
         self.check_source_element(Some(d.statement));
     }
@@ -1022,7 +1024,8 @@ impl Checker {
             .expect("ForInOrOfStatement data")
             .clone();
         self.check_grammar_for_in_or_for_of_statement(node);
-        let right_type = self.get_non_nullable_type_if_needed(self.check_expression(data.expression));
+        let expr_type = self.check_expression(data.expression);
+        let right_type = self.get_non_nullable_type_if_needed(expr_type);
         // TypeScript 1.0 spec (April 2014): 5.4
         if self.store().node(data.initializer).kind == Kind::VariableDeclarationList {
             let declarations = self
@@ -1056,21 +1059,22 @@ impl Checker {
                     &THE_LEFT_HAND_SIDE_OF_A_FOR_IN_STATEMENT_CANNOT_BE_A_DESTRUCTURING_PATTERN,
                     &[],
                 );
-            } else if !self
-                .is_type_assignable_to(self.get_index_type_or_string(right_type), left_type)
-            {
-                self.error(
-                    var_expr,
-                    &THE_LEFT_HAND_SIDE_OF_A_FOR_IN_STATEMENT_MUST_BE_OF_TYPE_STRING_OR_ANY,
-                    &[],
-                );
             } else {
-                // run check only former check succeeded to avoid cascading errors
-                self.check_reference_expression(
-                    var_expr,
-                    &THE_LEFT_HAND_SIDE_OF_A_FOR_IN_STATEMENT_MUST_BE_A_VARIABLE_OR_A_PROPERTY_ACCESS,
-                    &THE_LEFT_HAND_SIDE_OF_A_FOR_IN_STATEMENT_MAY_NOT_BE_AN_OPTIONAL_PROPERTY_ACCESS,
-                );
+                let index = self.get_index_type_or_string(right_type);
+                if !self.is_type_assignable_to(index, left_type) {
+                    self.error(
+                        var_expr,
+                        &THE_LEFT_HAND_SIDE_OF_A_FOR_IN_STATEMENT_MUST_BE_OF_TYPE_STRING_OR_ANY,
+                        &[],
+                    );
+                } else {
+                    // run check only former check succeeded to avoid cascading errors
+                    self.check_reference_expression(
+                        var_expr,
+                        &THE_LEFT_HAND_SIDE_OF_A_FOR_IN_STATEMENT_MUST_BE_A_VARIABLE_OR_A_PROPERTY_ACCESS,
+                        &THE_LEFT_HAND_SIDE_OF_A_FOR_IN_STATEMENT_MAY_NOT_BE_AN_OPTIONAL_PROPERTY_ACCESS,
+                    );
+                }
             }
         }
         // unknownType is returned i.e. if node.expression is identifier whose
@@ -1096,7 +1100,8 @@ impl Checker {
 
     /// Go: `func (c *Checker) getIndexTypeOrString(t)` (checker.go:4081).
     pub(crate) fn get_index_type_or_string(&mut self, t: TypeId) -> TypeId {
-        let index_type = self.get_extract_string_type(relater::get_index_type(self, t));
+        let idx = relater::get_index_type(self, t);
+        let index_type = self.get_extract_string_type(idx);
         if self.type_(index_type).flags.intersects(TypeFlags::NEVER) {
             self.string_type()
         } else {
@@ -1132,8 +1137,7 @@ impl Checker {
                 if function_flags
                     .intersects(FunctionFlags::ASYNC)
                     && !function_flags.intersects(FunctionFlags::INVALID)
-                    && !self
-                        .language_feature_minimum_target_reached(Feature::ForAwaitOf)
+                    && self.language_version < Feature::ForAwaitOf.minimum_target()
                 {
                     // for..await..of prior to ESNext requires __asyncValues
                     self.check_external_emit_helpers_stub(node, ExternalEmitHelpers::FOR_AWAIT_OF_INCLUDES);
@@ -1148,10 +1152,10 @@ impl Checker {
             let iterated_type = self.check_right_hand_side_of_for_of(node);
             let var_kind = self.store().node(var_expr).kind;
             if var_kind == Kind::ArrayLiteralExpression || var_kind == Kind::ObjectLiteralExpression {
-                // iteratedType may be undefined — short-circuit the relation
-                // with the errorType.
-                let error_type = self.error_type();
-                let iterated = iterated_type.unwrap_or(error_type);
+                // iteratedType may be undefined — short-circuit the
+                // relation with the errorType (the typeofsymbol wrapper
+                // already maps Go's nil to errorType).
+                let iterated = iterated_type;
                 self.check_destructuring_assignment_stub(
                     var_expr,
                     iterated,
@@ -1165,9 +1169,10 @@ impl Checker {
                     &THE_LEFT_HAND_SIDE_OF_A_FOR_OF_STATEMENT_MUST_BE_A_VARIABLE_OR_A_PROPERTY_ACCESS,
                     &THE_LEFT_HAND_SIDE_OF_A_FOR_OF_STATEMENT_MAY_NOT_BE_AN_OPTIONAL_PROPERTY_ACCESS,
                 );
-                // iteratedType will be undefined if the rightType was missing
-                // properties/signatures required to get its iteratedType.
-                if let Some(iterated_type) = iterated_type {
+                // iteratedType will be undefined if the rightType was
+                // missing properties/signatures required to get its
+                // iteratedType (errorType in the wrapper's nil mapping).
+                if !relater::is_error_type(self, iterated_type) {
                     self.check_type_assignable_to_and_optionally_elaborate(
                         iterated_type,
                         left_type,
@@ -1248,7 +1253,7 @@ impl Checker {
                         expr_type,
                         return_type,
                         Some(node),
-                        expr_node,
+                        Some(expr_node),
                         None,
                         None,
                     ) {
@@ -1373,7 +1378,8 @@ impl Checker {
             .store()
             .node(node)
             .as_with_statement()
-            .expect("WithStatement data");
+            .expect("WithStatement data")
+            .clone();
         self.check_expression(d.expression);
         let source_file = self.get_source_file_node_of(node);
         if !self.has_parse_diagnostics(source_file) {
@@ -2110,7 +2116,7 @@ impl Checker {
         // the array type.
         if use_.intersects(IterationUse::ALLOWS_STRING_INPUT_FLAG) {
             if self.type_(input_type).flags.intersects(TypeFlags::UNION) {
-                let array_types = self.type_(input_type).as_union_type().expect("UnionType data").types.clone();
+                let array_types = self.type_(input_type).as_union_type().expect("UnionType data").base.types.clone();
                 let filtered_types: Vec<TypeId> = array_types
                     .iter()
                     .copied()
@@ -2307,7 +2313,7 @@ impl Checker {
         no_cache: bool,
     ) -> IterationTypes {
         if self.type_(t).flags.intersects(TypeFlags::UNION) {
-            let types = self.type_(t).as_union_type().expect("UnionType data").types.clone();
+            let types = self.type_(t).as_union_type().expect("UnionType data").base.types.clone();
             let mut all_iteration_types: Vec<IterationTypes> =
                 Vec::with_capacity(types.len());
             for constituent in types {
@@ -2394,10 +2400,14 @@ impl Checker {
         // As an optimization, if the type is an instantiation of the global
         // Iterable/IteratorObject/IterableIterator/Generator types, just
         // grab the related type arguments.
-        if self.is_reference_to_type(t, self.get_global_iterable_type_checked(r))
-            || self.is_reference_to_type(t, self.get_global_iterator_object_type(r))
-            || self.is_reference_to_type(t, self.get_global_iterable_iterator_type(r))
-            || self.is_reference_to_type(t, self.get_global_generator_type(r))
+        let iterable_type = self.get_global_iterable_type_checked_of_resolver(r);
+        let iterator_object_type = self.get_global_iterator_object_type_of_resolver(r);
+        let iterable_iterator_type = self.get_global_iterable_iterator_type_of_resolver(r);
+        let generator_type = self.get_global_generator_type_of_resolver(r);
+        if self.is_reference_to_type(t, iterable_type)
+            || self.is_reference_to_type(t, iterator_object_type)
+            || self.is_reference_to_type(t, iterable_iterator_type)
+            || self.is_reference_to_type(t, generator_type)
         {
             let type_arguments = relater::get_type_arguments(self, t);
             if type_arguments.len() >= 3 {
@@ -2413,7 +2423,8 @@ impl Checker {
         // The builtin iterator list (ArrayIterator etc.) — the globals
         // table is permissive-empty until S2/S5's getGlobalType seam, so
         // this arm matches no type (the empty vec contains nothing).
-        if self.is_reference_to_some_type(t, self.get_global_builtin_iterator_types(r)) {
+        let builtin_iterator_types = self.get_global_builtin_iterator_types(r);
+        if self.is_reference_to_some_type(t, builtin_iterator_types) {
             let type_arguments = relater::get_type_arguments(self, t);
             if !type_arguments.is_empty() {
                 let builtin_return = self.get_builtin_iterator_return_type();
@@ -2457,7 +2468,7 @@ impl Checker {
     pub(crate) fn is_reference_to_type(&mut self, t: TypeId, target: TypeId) -> bool {
         let td = self.type_(t);
         td.object_flags.intersects(ObjectFlags::REFERENCE)
-            && matches!(&td.data, crate::types::TypeData::TypeReference(d) if d.target == Some(target))
+            && matches!(&td.data, crate::types::TypeData::TypeReference(d) if d.base.target == Some(target))
     }
 
     /// Go: `func (c *Checker) isReferenceToSomeType(t, targets) bool` (checker.go:6605).
@@ -2466,7 +2477,7 @@ impl Checker {
         if !td.object_flags.intersects(ObjectFlags::REFERENCE) {
             return false;
         }
-        matches!(&td.data, crate::types::TypeData::TypeReference(d) if d.target.is_some_and(|target| targets.contains(&target)))
+        matches!(&td.data, crate::types::TypeData::TypeReference(d) if d.base.target.is_some_and(|target| targets.contains(&target)))
     }
 
     /// Go: `func (c *Checker) combineIterationTypes(iterationTypes) IterationTypes`
@@ -2506,7 +2517,9 @@ impl Checker {
     pub(crate) fn get_async_from_sync_iteration_types(
         &mut self,
         iteration_types: IterationTypes,
-        error_node: Option<NodeId>,
+        // Go: errorNode feeds the missing-Awaited<T> diagnostics (S9's
+        // getGlobalAwaitedSymbol — TODO(port M6 S9)); unused until then.
+        _error_node: Option<NodeId>,
     ) -> IterationTypes {
         let any_type = self.any_type();
         if !iteration_types.has_types()
@@ -2541,7 +2554,7 @@ impl Checker {
         r: IterationTypesResolver,
         error_node: Option<NodeId>,
     ) -> IterationTypes {
-        let iterator_name = self.resolver_iterator_symbol_name(r);
+        let iterator_name = self.resolver_iterator_symbol_name(&r);
         let method = self.get_property_of_type(t, iterator_name);
         if let Some(method) = method {
             if !self.program.symbol(method).flags.intersects(SymbolFlags::OPTIONAL) {
@@ -2622,10 +2635,14 @@ impl Checker {
         t: TypeId,
         r: IterationTypesResolver,
     ) -> IterationTypes {
-        if self.is_reference_to_type(t, self.get_global_iterator_type(r))
-            || self.is_reference_to_type(t, self.get_global_iterator_object_type(r))
-            || self.is_reference_to_type(t, self.get_global_iterable_iterator_type(r))
-            || self.is_reference_to_type(t, self.get_global_generator_type(r))
+        let iterator_type = self.get_global_iterator_type_of_resolver(r);
+        let iterator_object_type = self.get_global_iterator_object_type_of_resolver(r);
+        let iterable_iterator_type = self.get_global_iterable_iterator_type_of_resolver(r);
+        let generator_type = self.get_global_generator_type_of_resolver(r);
+        if self.is_reference_to_type(t, iterator_type)
+            || self.is_reference_to_type(t, iterator_object_type)
+            || self.is_reference_to_type(t, iterable_iterator_type)
+            || self.is_reference_to_type(t, generator_type)
         {
             let type_arguments = relater::get_type_arguments(self, t);
             if type_arguments.len() >= 3 {
@@ -2638,7 +2655,8 @@ impl Checker {
             }
             return IterationTypes::default();
         }
-        if self.is_reference_to_some_type(t, self.get_global_builtin_iterator_types(r)) {
+        let builtin_iterator_types = self.get_global_builtin_iterator_types(r);
+        if self.is_reference_to_some_type(t, builtin_iterator_types) {
             let type_arguments = relater::get_type_arguments(self, t);
             if !type_arguments.is_empty() {
                 let builtin_return = self.get_builtin_iterator_return_type();
@@ -2661,7 +2679,7 @@ impl Checker {
         t: TypeId,
         r: IterationTypesResolver,
         error_node: Option<NodeId>,
-        diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
+        mut diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
     ) -> IterationTypes {
         let next = self.get_iteration_types_of_method(
             t,
@@ -3009,12 +3027,13 @@ impl Checker {
 /// free fn takes a non-capturing closure; the iteration family's predicates
 /// need the checker — same reduction semantics: union → filter constituents
 /// + getUnionType, else the predicate or neverType).
-fn filter_type_local(c: &mut Checker, t: TypeId, f: impl FnMut(&mut Checker, TypeId) -> bool) -> TypeId {
+fn filter_type_local(c: &mut Checker, t: TypeId, mut f: impl FnMut(&mut Checker, TypeId) -> bool) -> TypeId {
     if c.type_(t).flags.intersects(TypeFlags::UNION) {
         let types = c
             .type_(t)
             .as_union_type()
             .expect("UnionType data")
+            .base
             .types
             .clone();
         let filtered: Vec<TypeId> = types.into_iter().filter(|&x| f(c, x)).collect();
@@ -3125,11 +3144,7 @@ impl Checker {
         let mut has_return_with_no_expression = self.function_has_implicit_return(fn_node);
         let mut has_return_of_type_never = false;
         let body = function_body_of(self.store(), fn_node);
-        let fn_symbol = self
-            .store()
-            .node(fn_node)
-            .symbol()
-            .and_then(|s| s);
+        let fn_symbol = crate::typeofsymbol::get_symbol_of_declaration(self, fn_node);
         let check_mode_no_skip = check_mode & !CheckMode::SKIP_GENERIC_FUNCTIONS;
         for_each_return_statement(self, body, &mut |c, return_statement| {
             let Some(mut expr) = c
@@ -3380,3 +3395,1665 @@ fn may_return_never(store: &dyn NodeStore, fn_node: NodeId) -> bool {
         _ => false,
     }
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// M6 S3 batch 2 — variable/decorator checks, the unused-identifier family,
+// merged-exports + type-parameter checks (Go checker.go:4309-5388 remainder,
+// 5947-7530).
+// ────────────────────────────────────────────────────────────────────────────
+
+use tsc_diagnostics::Category;
+use u::has_dot_dot_dot_token;
+
+// ────────────────────────────────────────────────────────────────────────────
+// Signature-declaration node accessors (the ~10 function-like payloads share
+// the same field set; Go reads them through the SignatureDeclaration interface).
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `node.TypeParameters()` for the function-like payloads.
+pub(crate) fn type_parameters_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> {
+    let n = store.node(node);
+    let list = match n.kind {
+        Kind::FunctionDeclaration => n.as_function_declaration().expect("data").type_parameters.as_ref(),
+        Kind::FunctionExpression => n.as_function_expression().expect("data").type_parameters.as_ref(),
+        Kind::ArrowFunction => n.as_arrow_function().expect("data").type_parameters.as_ref(),
+        Kind::MethodDeclaration | Kind::MethodSignature => {
+            n.as_method_declaration().expect("data").type_parameters.as_ref()
+        }
+        Kind::Constructor => n.as_constructor_declaration().expect("data").type_parameters.as_ref(),
+        Kind::GetAccessor => n.as_get_accessor_declaration().expect("data").type_parameters.as_ref(),
+        Kind::SetAccessor => n.as_set_accessor_declaration().expect("data").type_parameters.as_ref(),
+        Kind::CallSignature => n.as_call_signature_declaration().expect("data").type_parameters.as_ref(),
+        Kind::ConstructSignature => {
+            n.as_construct_signature_declaration()
+                .expect("data")
+                .type_parameters
+                .as_ref()
+        }
+        Kind::IndexSignature => n.as_index_signature_declaration().expect("data").type_parameters.as_ref(),
+        Kind::FunctionType => n.as_function_type_node().expect("data").type_parameters.as_ref(),
+        Kind::ConstructorType => n.as_constructor_type_node().expect("data").type_parameters.as_ref(),
+        _ => None,
+    };
+    list.map(|l| l.nodes.to_vec()).unwrap_or_default()
+}
+
+/// Go: `node.Parameters()` (ast_shims::parameters_of carries the same walk).
+pub(crate) fn parameters_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> {
+    crate::ast_shims::parameters_of(store, node).to_vec()
+}
+
+/// Go: `node.Type()` for the function-like payloads (the return-type node).
+pub(crate) fn signature_type_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    let n = store.node(node);
+    let t = match n.kind {
+        Kind::FunctionDeclaration => n.as_function_declaration().expect("data").type_,
+        Kind::FunctionExpression => n.as_function_expression().expect("data").type_,
+        Kind::ArrowFunction => n.as_arrow_function().expect("data").type_,
+        Kind::MethodDeclaration | Kind::MethodSignature => {
+            n.as_method_declaration().expect("data").type_
+        }
+        Kind::Constructor => n.as_constructor_declaration().expect("data").type_,
+        Kind::GetAccessor => n.as_get_accessor_declaration().expect("data").type_,
+        Kind::SetAccessor => n.as_set_accessor_declaration().expect("data").type_,
+        Kind::CallSignature => n.as_call_signature_declaration().expect("data").type_,
+        Kind::ConstructSignature => {
+            n.as_construct_signature_declaration().expect("data").type_
+        }
+        Kind::IndexSignature => n.as_index_signature_declaration().expect("data").type_,
+        Kind::FunctionType => n.as_function_type_node().expect("data").type_,
+        Kind::ConstructorType => n.as_constructor_type_node().expect("data").type_,
+        _ => None,
+    };
+    t
+}
+
+/// Go: `node.TypeArguments()` for the type-node payloads that carry them.
+pub(crate) fn type_arguments_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> {
+    let n = store.node(node);
+    let list = match n.kind {
+        Kind::TypeReference => n.as_type_reference_node().expect("data").type_arguments.as_ref(),
+        Kind::ImportType => n.as_import_type_node().expect("data").type_arguments.as_ref(),
+        Kind::ExpressionWithTypeArguments => {
+            n.as_expression_with_type_arguments()
+                .expect("data")
+                .type_arguments
+                .as_ref()
+        }
+        Kind::TypeQuery => n.as_type_query_node().expect("data").type_arguments.as_ref(),
+        _ => None,
+    };
+    list.map(|l| l.nodes.to_vec()).unwrap_or_default()
+}
+
+/// Go: `node.Members()` for the member-list payloads.
+pub(crate) fn members_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> {
+    let n = store.node(node);
+    let list = match n.kind {
+        Kind::ClassDeclaration => n.as_class_declaration().expect("data").members.as_ref(),
+        Kind::ClassExpression => n.as_class_expression().expect("data").members.as_ref(),
+        Kind::InterfaceDeclaration => n.as_interface_declaration().expect("data").members.as_ref(),
+        Kind::TypeLiteral => n.as_type_literal_node().expect("data").members.as_ref(),
+        _ => None,
+    };
+    list.map(|l| l.nodes.to_vec()).unwrap_or_default()
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Variable / decorator checks (Go checker.go:5947-6293)
+// ────────────────────────────────────────────────────────────────────────────
+
+impl Checker {
+    /// Go: `func (c *Checker) checkVariableStatement(node)` (checker.go:5951).
+    pub(crate) fn check_variable_statement(&mut self, node: NodeId) {
+        let declaration_list = self
+            .store()
+            .node(node)
+            .as_variable_statement()
+            .expect("VariableStatement data")
+            .declaration_list;
+        if !self.check_grammar_modifiers(node) {
+            self.check_grammar_variable_declaration_list(declaration_list);
+            self.check_grammar_for_disallowed_block_scoped_variable_statement(node);
+        }
+        self.check_variable_declaration_list(declaration_list);
+    }
+
+    /// Go: `func (c *Checker) checkVariableDeclarationList(node)` (checker.go:5960).
+    pub(crate) fn check_variable_declaration_list(&mut self, node: NodeId) {
+        // Go: GetCombinedNodeFlags(node) & NodeFlagsBlockScoped — the using /
+        // await-using emit-helper gate (blockScopeKind one-of).
+        let flags = tsc_binder::ast_shims::get_combined_node_flags(self.store(), node);
+        let block_scope_kind = flags & NF::BLOCK_SCOPED;
+        if (block_scope_kind == NF::USING || block_scope_kind == NF::AWAIT_USING)
+            && self.language_version < Feature::UsingAndAwaitUsing.minimum_target()
+        {
+            self.check_external_emit_helpers_stub(
+                node,
+                ExternalEmitHelpers::ADD_DISPOSABLE_RESOURCE_AND_DISPOSE_RESOURCES,
+            );
+        }
+        let declarations = self
+            .store()
+            .node(node)
+            .as_variable_declaration_list()
+            .expect("VariableDeclarationList data")
+            .declarations
+            .as_ref()
+            .map(|l| l.nodes.to_vec())
+            .unwrap_or_default();
+        self.check_source_elements(&declarations);
+    }
+
+    /// Go: `func (c *Checker) checkVariableDeclaration(node)` (checker.go:5968).
+    pub(crate) fn check_variable_declaration(&mut self, node: NodeId) {
+        // Go: the tracer push (checkVariableDeclaration) — the tracing shape
+        // rides with the tracer wave; skipped here (no output diff at this
+        // depth: the trace flag is host-off in the twins).
+        self.check_grammar_variable_declaration(node);
+        self.check_variable_like_declaration(node);
+    }
+
+    /// Go: `func (c *Checker) checkBindingElement(node)` (checker.go:4399).
+    pub(crate) fn check_binding_element(&mut self, node: NodeId) {
+        self.check_grammar_binding_element(node);
+        self.check_variable_like_declaration(node);
+    }
+
+    /// Go: `func (c *Checker) checkMissingDeclaration(node)` (checker.go:5932).
+    pub(crate) fn check_missing_declaration(&mut self, node: NodeId) {
+        self.check_decorators(node);
+    }
+
+    /// Check variable, parameter, or property declaration — Go:
+    /// `func (c *Checker) checkVariableLikeDeclaration(node)` (checker.go:5977,
+    /// ~173 lines).
+    pub(crate) fn check_variable_like_declaration(&mut self, node: NodeId) {
+        self.check_decorators(node);
+        let Some(name) = self.store().node(node).name() else {
+            // Missing array binding elements have no name
+            return;
+        };
+        let type_node = crate::ast_shims::type_of_node(self.store(), node);
+        let initializer = crate::ast_shims::initializer_of(self.store(), node);
+        if !is_binding_element(self.store(), node) {
+            self.check_source_element(type_node);
+        }
+        // For a computed property, just check the initializer and exit.
+        if self.store().node(name).kind == Kind::ComputedPropertyName {
+            self.check_grammar_computed_property_name_stub(name);
+            if let Some(initializer) = initializer {
+                self.check_expression_cached(initializer);
+            }
+        }
+        if is_binding_element(self.store(), node) {
+            let prop_name = self
+                .store()
+                .node(node)
+                .as_binding_element()
+                .expect("BindingElement data")
+                .property_name;
+            if prop_name
+                .is_some_and(|p| self.store().node(p).kind == Kind::PrivateIdentifier)
+            {
+                self.grammar_error_on_node(
+                    prop_name.expect("checked"),
+                    &diag::PRIVATE_IDENTIFIERS_CANNOT_BE_USED_IN_DESTRUCTURING_PATTERNS,
+                    &[],
+                );
+            }
+            if prop_name.is_some_and(|p| is_identifier(self.store().node(p)))
+                && is_identifier(self.store().node(name))
+                && u::is_part_of_parameter_declaration(self.store(), node)
+                && u::get_containing_function(self.store(), node)
+                    .and_then(|f| function_body_of(self.store(), f))
+                    .is_none()
+            {
+                // type F = ({a: string}) => void;
+                //               ^^^^^^
+                // variable renaming in function type notation is
+                // confusing, so we forbid it even if noUnusedLocals is
+                // not enabled
+                self.renamed_binding_elements_in_types.push(node);
+                return;
+            }
+            let parent = self.store().node(node).parent.get();
+            if self.store().node(parent).kind == Kind::ObjectBindingPattern
+                && has_dot_dot_dot_token(self.store(), node)
+                && self.language_version < Feature::ObjectSpreadRest.minimum_target()
+            {
+                self.check_external_emit_helpers_stub(node, ExternalEmitHelpers::REST);
+            }
+            // check computed properties inside property names of binding elements
+            if prop_name
+                .is_some_and(|p| self.store().node(p).kind == Kind::ComputedPropertyName)
+            {
+                self.check_grammar_computed_property_name_stub(prop_name.expect("checked"));
+            }
+            // check private/protected variable access
+            let grandparent = self.store().node(parent).parent.get();
+            let parent_check_mode = if has_dot_dot_dot_token(self.store(), node) {
+                CheckMode::REST_BINDING_ELEMENT
+            } else {
+                CheckMode::CHECK_MODE_NORMAL
+            };
+            let parent_type = self.get_type_for_binding_element_parent(grandparent, parent_check_mode);
+            let prop_name_name = self
+                .store()
+                .node(node)
+                .as_binding_element()
+                .expect("BindingElement data")
+                .property_name
+                .or(Some(name));
+            if let Some(parent_type) = parent_type {
+                if !prop_name_name.is_some_and(|p| is_binding_pattern(self.store(), p)) {
+                    let expr_type = self.get_literal_type_from_property_name(prop_name_name.expect("checked"));
+                    if u::is_type_usable_as_property_name(self.type_(expr_type)) {
+                        let name_text = u::get_property_name_from_type(self.type_(expr_type));
+                        if let Some(property) = self.get_property_of_type(parent_type, &name_text) {
+                            // TODO(port M6 S4): markPropertyAsReferenced +
+                            // checkPropertyAccessibility (the expando/access
+                            // family); permissive skip.
+                            let _ = property;
+                        }
+                    }
+                }
+            }
+        }
+        // For a binding pattern, check contained binding elements
+        if is_binding_pattern(self.store(), name) {
+            let elements = binding_pattern_elements(self.store(), name);
+            self.check_source_elements(&elements);
+        }
+        // For a parameter declaration with an initializer, error and exit if
+        // the containing function doesn't have a body
+        if initializer.is_some() && u::is_part_of_parameter_declaration(self.store(), node) {
+            let containing_function = u::get_containing_function(self.store(), node);
+            let body = containing_function.and_then(|f| function_body_of(self.store(), f));
+            if body.is_none() {
+                self.error(
+                    node,
+                    &diag::A_PARAMETER_INITIALIZER_IS_ONLY_ALLOWED_IN_A_FUNCTION_OR_CONSTRUCTOR_IMPLEMENTATION,
+                    &[],
+                );
+                return;
+            }
+        }
+        // For a binding pattern, validate the initializer and exit
+        if is_binding_pattern(self.store(), name) {
+            if u::is_in_ambient_or_type_node(self.store(), node) {
+                return;
+            }
+            let grandparent = {
+                let parent = self.store().node(node).parent.get();
+                self.store().node(parent).parent.get()
+            };
+            let need_check_initializer =
+                initializer.is_some() && self.store().node(grandparent).kind != Kind::ForInStatement;
+            let elements = binding_pattern_elements(self.store(), name);
+            let need_check_widened_type =
+                !elements.iter().any(|&e| self.store().node(e).name().is_some());
+            if need_check_initializer || need_check_widened_type {
+                // Don't validate for-in initializer as it is already an error
+                let widened_type = self
+                    .get_widened_type_for_variable_like_declaration(node, false);
+                if need_check_initializer {
+                    let initializer = initializer.expect("checked");
+                    let initializer_type = self.check_expression_cached(initializer);
+                    if self.strict_null_checks && need_check_widened_type {
+                        self.check_non_null_non_void_type(initializer_type, node);
+                    } else {
+                        let widened_for_init = self
+                            .get_widened_type_for_variable_like_declaration(node, false);
+                        self.check_type_assignable_to_and_optionally_elaborate(
+                            initializer_type,
+                            widened_for_init,
+                            Some(node),
+                            Some(initializer),
+                            None,
+                            None,
+                        );
+                    }
+                }
+                // check the binding pattern with empty elements
+                if need_check_widened_type {
+                    if self.store().node(name).kind == Kind::ArrayBindingPattern {
+                        let undefined_type = self.undefined_type();
+                        self.check_iterated_type_or_element_type(
+                            IterationUse::DESTRUCTURING,
+                            widened_type,
+                            undefined_type,
+                            Some(node),
+                        );
+                    } else if self.strict_null_checks {
+                        self.check_non_null_non_void_type(widened_type, node);
+                    }
+                }
+            }
+            return;
+        }
+        // For a commonjs `const x = require`, validate the alias and exit
+        let symbol = self.get_symbol_of_declaration(node);
+        let Some(symbol) = symbol else { return };
+        let flags = self.program.symbol(symbol).flags;
+        if flags.intersects(SymbolFlags::ALIAS)
+            && u::is_variable_declaration_initialized_to_require(self.store(), node)
+        {
+            self.check_alias_symbol(node);
+            return;
+        }
+        if self.store().node(name).kind == Kind::BigIntLiteral {
+            self.error(
+                name,
+                &diag::A_BIGINT_LITERAL_CANNOT_BE_USED_AS_A_PROPERTY_NAME,
+                &[],
+            );
+        }
+        let symbol_type = self.get_type_of_symbol(symbol);
+        let t = self.convert_auto_to_any(symbol_type);
+        if self
+            .program
+            .symbol(symbol)
+            .value_declaration
+            .is_some_and(|vd| vd == node)
+        {
+            // Node is the primary declaration of the symbol, just validate
+            // the initializer. Don't validate for-in initializer (already
+            // an error).
+            if let Some(initializer) = initializer {
+                let grandparent = {
+                    let parent = self.store().node(node).parent.get();
+                    self.store().node(parent).parent.get()
+                };
+                if self.store().node(grandparent).kind != Kind::ForInStatement {
+                    let initializer_type = self.check_expression_cached(initializer);
+                    self.check_type_assignable_to_and_optionally_elaborate(
+                        initializer_type,
+                        t,
+                        Some(node),
+                        Some(initializer),
+                        None,
+                        None,
+                    );
+                    // The using/await-using disposable checks need S7's
+                    // union construction + the global Disposable types;
+                    // with the permissive global sentinels the gate reads
+                    // absent, exactly like a program without the lib.
+                    // TODO(port M6 S7): getUnionType + getGlobalDisposableType.
+                }
+            }
+            let declarations = self.program.symbol(symbol).declarations.clone();
+            // Go: error when any other variable-like declaration of the
+            // symbol has different modifiers.
+            if declarations.len() > 1 {
+                let has_different = declarations.iter().any(|&d| {
+                    d != node
+                        && u::is_variable_like_declaration(self.store(), d)
+                        && !self.are_declaration_flags_identical(d, node)
+                });
+                if has_different {
+                    let name_text =
+                        tsc_scanner::utilities::declaration_name_to_string(self.store(), Some(name));
+                    self.error(
+                        name,
+                        &diag::ALL_DECLARATIONS_OF_0_MUST_HAVE_IDENTICAL_MODIFIERS,
+                        &[name_text],
+                    );
+                }
+            }
+        } else {
+            // Node is a secondary declaration, check that type is identical
+            // to primary declaration and check that initializer is
+            // consistent with type associated with the node.
+            let widened = self.get_widened_type_for_variable_like_declaration(node, false);
+            let declaration_type = self.convert_auto_to_any(widened);
+            if !relater::is_error_type(self, t)
+                && !relater::is_error_type(self, declaration_type)
+                && !self.is_type_identical_to(t, declaration_type)
+                && !flags.intersects(SymbolFlags::ASSIGNMENT)
+            {
+                self.error_next_variable_or_property_declaration_must_have_same_type(
+                    self.program.symbol(symbol).value_declaration,
+                    t,
+                    node,
+                    declaration_type,
+                );
+            }
+            if let Some(initializer) = initializer {
+                let initializer_type = self.check_expression_cached(initializer);
+                self.check_type_assignable_to_and_optionally_elaborate(
+                    initializer_type,
+                    declaration_type,
+                    Some(node),
+                    Some(initializer),
+                    None,
+                    None,
+                );
+            }
+            if self
+                .program
+                .symbol(symbol)
+                .value_declaration
+                .is_some_and(|vd| !self.are_declaration_flags_identical(node, vd))
+            {
+                let name_text =
+                    tsc_scanner::utilities::declaration_name_to_string(self.store(), Some(name));
+                self.error(
+                    name,
+                    &diag::ALL_DECLARATIONS_OF_0_MUST_HAVE_IDENTICAL_MODIFIERS,
+                    &[name_text],
+                );
+            }
+        }
+        if self.store().node(node).kind != Kind::PropertyDeclaration
+            && self.store().node(node).kind != Kind::PropertySignature
+        {
+            // We know we don't have a binding pattern or computed name here
+            self.check_exports_on_merged_declarations(node);
+            if self.store().node(node).kind == Kind::VariableDeclaration
+                || is_binding_element(self.store(), node)
+            {
+                self.check_var_declared_names_not_shadowed(node);
+            }
+            self.check_collisions_for_declaration_name_stub(node, self.store().node(node).name());
+        }
+    }
+
+    /// Go: `func (c *Checker) convertAutoToAny(t *Type) *Type`.
+    pub(crate) fn convert_auto_to_any(&mut self, t: TypeId) -> TypeId {
+        if t == self.auto_type() {
+            self.any_type()
+        } else {
+            t
+        }
+    }
+
+    /// Go: `func (c *Checker) errorNextVariableOrPropertyDeclarationMustHaveSameType(...)`
+    /// (checker.go:6154).
+    pub(crate) fn error_next_variable_or_property_declaration_must_have_same_type(
+        &mut self,
+        first_declaration: Option<NodeId>,
+        first_type: TypeId,
+        next_declaration: NodeId,
+        next_type: TypeId,
+    ) {
+        let next_declaration_name = tsc_binder::ast_shims::get_name_of_declaration(
+            self.store(),
+            next_declaration,
+        );
+        let message = if matches!(
+            self.store().node(next_declaration).kind,
+            Kind::PropertyDeclaration | Kind::PropertySignature
+        ) {
+            &diag::SUBSEQUENT_PROPERTY_DECLARATIONS_MUST_HAVE_THE_SAME_TYPE_PROPERTY_0_MUST_BE_OF_TYPE_1_BUT_HERE_HAS_TYPE_2
+        } else {
+            &diag::SUBSEQUENT_VARIABLE_DECLARATIONS_MUST_HAVE_THE_SAME_TYPE_VARIABLE_0_MUST_BE_OF_TYPE_1_BUT_HERE_HAS_TYPE_2
+        };
+        let decl_name = tsc_scanner::utilities::declaration_name_to_string(
+            self.store(),
+            next_declaration_name,
+        );
+        let first_text = self.type_to_string(first_type);
+        let next_text = self.type_to_string(next_type);
+        if let Some(name_node) = next_declaration_name {
+            self.error(name_node, message, &[decl_name, first_text, next_text]);
+        }
+        // Go: the X_0_was_also_declared_here related info (the related-info
+        // factory is the M7 diagnostics wave).
+        let _ = first_declaration;
+    }
+
+    /// Go: `func (c *Checker) checkVarDeclaredNamesNotShadowed(node)` (checker.go:6181).
+    pub(crate) fn check_var_declared_names_not_shadowed(&mut self, node: NodeId) {
+        // skip block-scoped variables and parameters
+        let flags = self.get_combined_node_flags_cached(node);
+        if flags.intersects(NF::BLOCK_SCOPED)
+            || u::is_part_of_parameter_declaration(self.store(), node)
+        {
+            return;
+        }
+        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+            return;
+        };
+        let name = self.store().node(node).name();
+        if !self
+            .program
+            .symbol(symbol)
+            .flags
+            .intersects(SymbolFlags::FUNCTION_SCOPED_VARIABLE)
+        {
+            return;
+        }
+        let Some(name) = name else { return };
+        if !is_identifier(self.store().node(name)) {
+            panic!("Identifier expected");
+        }
+        // TODO(port M6 S6): resolveName — the local-declaration probe needs
+        // S6's name resolution; permissive None skips the shadow diagnostic.
+        let _ = symbol;
+    }
+
+    /// Go: `func (c *Checker) areDeclarationFlagsIdentical(left, right) bool`
+    /// (checker.go:7076).
+    pub(crate) fn are_declaration_flags_identical(&mut self, left: NodeId, right: NodeId) -> bool {
+        if (u::is_parameter_declaration(self.store(), left)
+            && self.store().node(right).kind == Kind::VariableDeclaration)
+            || (self.store().node(left).kind == Kind::VariableDeclaration
+                && u::is_parameter_declaration(self.store(), right))
+        {
+            // Differences in optionality between parameters and variables are allowed.
+            return true;
+        }
+        if u::is_optional_declaration(self.store(), left)
+            != u::is_optional_declaration(self.store(), right)
+        {
+            return false;
+        }
+        let interesting_flags = ModifierFlags::PRIVATE
+            .union(ModifierFlags::PROTECTED)
+            .union(ModifierFlags::ASYNC)
+            .union(ModifierFlags::ABSTRACT)
+            .union(ModifierFlags::READONLY)
+            .union(ModifierFlags::STATIC);
+        u::get_selected_modifier_flags(self.store().node(left), interesting_flags)
+            == u::get_selected_modifier_flags(self.store().node(right), interesting_flags)
+    }
+
+    /// Go: `func (c *Checker) checkDecorators(node)` (checker.go:6206) — the
+    /// real gate shape with S6's getResolvedSignature stubbed permissive
+    /// (checkDecorator's signature resolution reports nothing).
+    pub(crate) fn check_decorators(&mut self, node: NodeId) {
+        // TODO(port M6 W3): the CanHaveDecorators/NodeCanBeDecorated grammar
+        // gates + the emit-helper variants (S10) + markLinkedReferences
+        // (ReferenceHintDecorator, symboltracker.rs). Permissive: the
+        // decorator walk below keeps the per-declaration recursion.
+        for modifier in modifier_nodes_of(self.store(), node) {
+            if self.store().node(modifier).kind == Kind::Decorator {
+                self.check_decorator(modifier);
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkDecorator(node)` (checker.go:6245) —
+    /// TODO(port M6 S6): getResolvedSignature; permissive no-op body.
+    pub(crate) fn check_decorator(&mut self, node: NodeId) {
+        self.check_grammar_decorator(node);
+        // The decorator-call signature resolution + return-type check is
+        // S6's getResolvedSignature + S8's getReturnTypeOfSignature seam;
+        // permissive until those land (the twins' --generateTrace path
+        // never emits decorator diagnostics at parse+bind depth).
+        let _ = node;
+    }
+
+    /// Go: `func (c *Checker) checkAliasSymbol(node)` (checker.go:6940) — the
+    /// alias family. TODO(port M6 S6): resolveAlias + the import/export
+    /// conflict diagnostics; permissive no-op at this depth.
+    pub(crate) fn check_alias_symbol(&mut self, node: NodeId) {
+        let _ = node;
+    }
+
+    /// TODO(port M6 S4): `checkCollisionsForDeclarationName` — the
+    /// identifier-collision family; permissive no-op.
+    pub(crate) fn check_collisions_for_declaration_name_stub(
+        &mut self,
+        node: NodeId,
+        name: Option<NodeId>,
+    ) {
+        let _ = (node, name);
+    }
+
+    /// TODO(port M6 S6): `getExportsOfModule` — the module-exports resolution;
+    /// permissive empty.
+    pub(crate) fn get_exports_of_module_stub(&mut self, symbol: SymbolId) -> Vec<(String, SymbolId)> {
+        let _ = symbol;
+        Vec::new()
+    }
+
+}
+
+/// Go: the binding pattern's `Elements()` (Array/ObjectBindingPattern).
+pub(crate) fn binding_pattern_elements(store: &dyn NodeStore, pattern: NodeId) -> Vec<NodeId> {
+    let n = store.node(pattern);
+    let list = match n.kind {
+        Kind::ArrayBindingPattern | Kind::ObjectBindingPattern => {
+            n.as_binding_pattern().expect("BindingPattern data").elements.clone()
+        }
+        _ => None,
+    };
+    list.map(|l| l.nodes.to_vec()).unwrap_or_default()
+}
+
+/// Go: `node.ModifierNodes()` (the modifier list's nodes; decorators ride in
+/// the same list).
+pub(crate) fn modifier_nodes_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> {
+    store
+        .node(node)
+        .modifiers()
+        .map(|m| m.nodes.to_vec())
+        .unwrap_or_default()
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// The unused-identifier family (Go checker.go:7226-7516)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `type UnusedKind int32` (checker.go:7262, iota order).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(i32)]
+pub(crate) enum UnusedKind {
+    Local = 0,
+    Parameter = 1,
+}
+
+impl Checker {
+    /// Go: `func (c *Checker) registerForUnusedIdentifiersCheck(node)` (checker.go:7226).
+    pub(crate) fn register_for_unused_identifiers_check(&mut self, node: NodeId) {
+        let source_file = self.get_source_file_node_of(node);
+        self.source_file_links
+            .get(source_file)
+            .identifier_check_nodes
+            .push(node);
+    }
+
+    /// Go: `func (c *Checker) checkUnusedIdentifiers(potentiallyUnusedIdentifiers)` (checker.go:7230).
+    pub(crate) fn check_unused_identifiers(&mut self, potentially_unused_identifiers: &[NodeId]) {
+        for &node in potentially_unused_identifiers {
+            match self.store().node(node).kind {
+                Kind::ClassDeclaration | Kind::ClassExpression => {
+                    self.check_unused_class_members(node);
+                    self.check_unused_type_parameters(node);
+                }
+                Kind::SourceFile
+                | Kind::ModuleDeclaration
+                | Kind::Block
+                | Kind::CaseBlock
+                | Kind::ForStatement
+                | Kind::ForInStatement
+                | Kind::ForOfStatement
+                | Kind::ClassStaticBlockDeclaration => {
+                    self.check_unused_locals_and_parameters(node);
+                }
+                Kind::Constructor
+                | Kind::FunctionExpression
+                | Kind::FunctionDeclaration
+                | Kind::ArrowFunction
+                | Kind::MethodDeclaration
+                | Kind::GetAccessor
+                | Kind::SetAccessor => {
+                    // Only report unused parameters on the implementation,
+                    // not overloads.
+                    if function_body_of(self.store(), node).is_some() {
+                        self.check_unused_locals_and_parameters(node);
+                    }
+                    self.check_unused_type_parameters(node);
+                }
+                Kind::MethodSignature
+                | Kind::CallSignature
+                | Kind::ConstructSignature
+                | Kind::FunctionType
+                | Kind::ConstructorType
+                | Kind::TypeAliasDeclaration
+                | Kind::JSTypeAliasDeclaration
+                | Kind::InterfaceDeclaration => {
+                    self.check_unused_type_parameters(node);
+                }
+                Kind::InferType => {
+                    self.check_unused_infer_type_parameter(node);
+                }
+                _ => panic!("Unhandled case in checkUnusedIdentifiers"),
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) isReferenced(symbol) bool` (checker.go:7259).
+    pub(crate) fn is_referenced(&mut self, symbol: SymbolId) -> bool {
+        !self
+            .symbol_reference_links
+            .get(symbol)
+            .reference_kinds
+            .is_empty()
+    }
+
+    /// Go: `func (c *Checker) reportUnusedVariable(location, diagnostic)` (checker.go:7265).
+    pub(crate) fn report_unused_variable(
+        &mut self,
+        location: NodeId,
+        diagnostic: tsc_ast::Diagnostic,
+    ) {
+        let mut location = location;
+        while is_binding_element(self.store(), location)
+            || is_binding_pattern(self.store(), location)
+        {
+            location = self.store().node(location).parent.get();
+        }
+        let kind = if u::is_parameter_declaration(self.store(), location) {
+            UnusedKind::Parameter
+        } else {
+            UnusedKind::Local
+        };
+        self.report_unused(location, kind, diagnostic);
+    }
+
+    /// Go: `func (c *Checker) reportUnused(location, kind, diagnostic)` (checker.go:7271).
+    pub(crate) fn report_unused(
+        &mut self,
+        location: NodeId,
+        kind: UnusedKind,
+        diagnostic: tsc_ast::Diagnostic,
+    ) {
+        let flags = self.store().node(location).flags;
+        if !flags.intersects(NF::AMBIENT.union(NF::THIS_NODE_OR_ANY_SUB_NODES_HAS_ERROR)) {
+            let is_error = self.unused_is_error(kind);
+            if is_error {
+                self.add_diagnostic(diagnostic);
+            } else {
+                let mut suggestion = diagnostic;
+                suggestion.set_category(Category::Suggestion);
+                self.add_suggestion_diagnostic(suggestion);
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) unusedIsError(kind) bool` (checker.go:7279).
+    pub(crate) fn unused_is_error(&self, kind: UnusedKind) -> bool {
+        match kind {
+            UnusedKind::Local => self.compiler_options.no_unused_locals == Tristate::TSTrue,
+            UnusedKind::Parameter => {
+                self.compiler_options.no_unused_parameters == Tristate::TSTrue
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkUnusedClassMembers(node)` (checker.go:7288).
+    pub(crate) fn check_unused_class_members(&mut self, node: NodeId) {
+        for member in members_of(self.store(), node) {
+            match self.store().node(member).kind {
+                Kind::MethodDeclaration
+                | Kind::PropertyDeclaration
+                | Kind::GetAccessor
+                | Kind::SetAccessor => {
+                    // If the symbol has a get accessor, we would already have
+                    // reported an error on the getter.
+                    if self.store().node(member).kind == Kind::SetAccessor {
+                        if let Some(symbol) = self.get_symbol_of_declaration(member) {
+                            if self
+                                .program
+                                .symbol(symbol)
+                                .flags
+                                .intersects(SymbolFlags::GET_ACCESSOR)
+                            {
+                                continue;
+                            }
+                        }
+                    }
+                    let Some(symbol) = self.get_symbol_of_declaration(member) else {
+                        continue;
+                    };
+                    let has_private = crate::ast_shims::has_modifier(
+                        self.store().node(member),
+                        ModifierFlags::PRIVATE,
+                    ) || self
+                        .store()
+                        .node(member)
+                        .name()
+                        .is_some_and(|n| self.store().node(n).kind == Kind::PrivateIdentifier);
+                    if !self.is_referenced(symbol)
+                        && has_private
+                        && !self.store().node(member).flags.intersects(NF::AMBIENT)
+                    {
+                        let symbol_name = relater::symbol_to_string(self, symbol);
+                        let name = self.store().node(member).name();
+                        if let Some(name) = name {
+                            let d = u::new_diagnostic_for_node(
+                                self.store(),
+                                name,
+                                &diag::X_0_IS_DECLARED_BUT_ITS_VALUE_IS_NEVER_READ,
+                                vec![symbol_name],
+                            );
+                            self.report_unused(member, UnusedKind::Local, d);
+                        }
+                    }
+                }
+                Kind::Constructor => {
+                    let parameters = self
+                        .store()
+                        .node(member)
+                        .as_constructor_declaration()
+                        .expect("data")
+                        .parameters
+                        .as_ref()
+                        .map(|l| l.nodes.to_vec())
+                        .unwrap_or_default();
+                    for parameter in parameters {
+                        let Some(symbol) = self.get_symbol_of_declaration(parameter) else {
+                            continue;
+                        };
+                        if !self.is_referenced(symbol)
+                            && crate::ast_shims::has_modifier(
+                                self.store().node(parameter),
+                                ModifierFlags::PRIVATE,
+                            )
+                        {
+                            let name = self.store().node(parameter).name();
+                            if let Some(name) = name {
+                                let symbol_name =
+                                    self.program.symbol(symbol).name.clone();
+                                let d = u::new_diagnostic_for_node(
+                                    self.store(),
+                                    name,
+                                    &diag::PROPERTY_0_IS_DECLARED_BUT_ITS_VALUE_IS_NEVER_READ,
+                                    vec![symbol_name],
+                                );
+                                self.report_unused(parameter, UnusedKind::Local, d);
+                            }
+                        }
+                    }
+                }
+                Kind::IndexSignature
+                | Kind::SemicolonClassElement
+                | Kind::ClassStaticBlockDeclaration
+                | Kind::JSTypeAliasDeclaration => {
+                    // Can't be private
+                }
+                _ => panic!("Unhandled case in checkUnusedClassMembers"),
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkUnusedLocalsAndParameters(node)` (checker.go:7316).
+    pub(crate) fn check_unused_locals_and_parameters(&mut self, node: NodeId) {
+        // Go walks node.Locals() — the binder-set locals table on the
+        // payload (§5.1: the Rust payload keeps the same table).
+        let locals: Vec<(String, SymbolId)> = locals_of_node(self.store(), node);
+        let mut variable_parents: Vec<NodeId> = Vec::new();
+        let mut import_clauses: Vec<(NodeId, Vec<NodeId>)> = Vec::new();
+        for (_name, local) in locals {
+            let local_flags = self.program.symbol(local).flags;
+            let reference_kinds = self.symbol_reference_links.get(local).reference_kinds;
+            let export_symbol = self.program.symbol(local).export_symbol;
+            if (local_flags.intersects(SymbolFlags::TYPE_PARAMETER)
+                && (!local_flags.intersects(SymbolFlags::VARIABLE)
+                    || reference_kinds.intersects(SymbolFlags::VARIABLE)))
+                || (!local_flags.intersects(SymbolFlags::TYPE_PARAMETER)
+                    && (!reference_kinds.is_empty()
+                        || export_symbol.is_some()
+                        || local_flags.intersects(SymbolFlags::MODULE_EXPORTS)))
+            {
+                continue;
+            }
+            let declarations = self.program.symbol(local).declarations.clone();
+            for declaration in declarations {
+                let kind = self.store().node(declaration).kind;
+                if matches!(
+                    kind,
+                    Kind::VariableDeclaration | Kind::Parameter | Kind::BindingElement
+                ) {
+                    let root = tsc_binder::ast_shims::get_root_declaration(self.store(), declaration);
+                    let parent = self.store().node(root).parent.get();
+                    if !variable_parents.contains(&parent) {
+                        variable_parents.push(parent);
+                    }
+                } else if matches!(
+                    kind,
+                    Kind::ImportClause | Kind::ImportSpecifier | Kind::NamespaceImport
+                ) {
+                    let name = self.store().node(declaration).name();
+                    if !name.is_some_and(|n| is_identifier_that_starts_with_underscore(self.store(), n)) {
+                        let import_clause = import_clause_from_imported(self.store(), declaration);
+                        match import_clauses.iter_mut().find(|(ic, _)| *ic == import_clause) {
+                            Some((_, unuseds)) => unuseds.push(declaration),
+                            None => import_clauses.push((import_clause, vec![declaration])),
+                        }
+                    }
+                } else if kind != Kind::TypeParameter
+                    && !tsc_binder::ast_shims::is_ambient_module(self.store(), declaration)
+                {
+                    let symbol_name = self.program.symbol(local).name.clone();
+                    self.report_unused_local(declaration, symbol_name);
+                }
+            }
+        }
+        // Go iterates a collections.Set (insertion-ordered unique keys).
+        for declaration in variable_parents {
+            if self.store().node(declaration).kind == Kind::VariableDeclarationList {
+                self.report_unused_variables(declaration);
+            } else {
+                self.report_unused_parameters(declaration);
+            }
+        }
+        for (declaration, unuseds) in import_clauses {
+            self.report_unused_imports(declaration, &unuseds);
+        }
+    }
+
+    /// Go: `func (c *Checker) reportUnusedLocal(node, name)` (checker.go:7365).
+    pub(crate) fn report_unused_local(&mut self, node: NodeId, name: String) {
+        let message = if u::is_type_declaration(self.store(), node) {
+            &diag::X_0_IS_DECLARED_BUT_NEVER_USED
+        } else {
+            &diag::X_0_IS_DECLARED_BUT_ITS_VALUE_IS_NEVER_READ
+        };
+        let error_node = self.store().node(node).name().unwrap_or(node);
+        let d = u::new_diagnostic_for_node(self.store(), error_node, message, vec![name]);
+        self.report_unused(node, UnusedKind::Local, d);
+    }
+
+    /// Go: `func (c *Checker) reportUnusedVariables(node)` (checker.go:7370).
+    pub(crate) fn report_unused_variables(&mut self, node: NodeId) {
+        let declarations = self
+            .store()
+            .node(node)
+            .as_variable_declaration_list()
+            .expect("data")
+            .declarations
+            .as_ref()
+            .map(|l| l.nodes.to_vec())
+            .unwrap_or_default();
+        if declarations.len() > 1
+            && declarations
+                .iter()
+                .all(|&d| self.is_unreferenced_variable_declaration(d))
+        {
+            let d = u::new_diagnostic_for_node(
+                self.store(),
+                node,
+                &diag::ALL_VARIABLES_ARE_UNUSED,
+                vec![],
+            );
+            self.report_unused_variable(node, d);
+        } else {
+            self.report_unused_variable_declarations(&declarations);
+        }
+    }
+
+    /// Go: `func (c *Checker) reportUnusedParameters(node)` (checker.go:7378).
+    pub(crate) fn report_unused_parameters(&mut self, node: NodeId) {
+        let parameters = parameters_of(self.store(), node);
+        self.report_unused_variable_declarations(&parameters);
+    }
+
+    /// Go: `func (c *Checker) reportUnusedBindingElements(node)` (checker.go:7382).
+    pub(crate) fn report_unused_binding_elements(&mut self, node: NodeId) {
+        let declarations = binding_pattern_elements(self.store(), node);
+        if declarations.len() > 1
+            && declarations
+                .iter()
+                .all(|&d| self.is_unreferenced_variable_declaration(d))
+        {
+            let d = u::new_diagnostic_for_node(
+                self.store(),
+                node,
+                &diag::ALL_DESTRUCTURED_ELEMENTS_ARE_UNUSED,
+                vec![],
+            );
+            self.report_unused_variable(node, d);
+        } else {
+            self.report_unused_variable_declarations(&declarations);
+        }
+    }
+
+    /// Go: `func (c *Checker) reportUnusedVariableDeclarations(declarations)` (checker.go:7390).
+    pub(crate) fn report_unused_variable_declarations(&mut self, declarations: &[NodeId]) {
+        for &declaration in declarations {
+            let Some(name) = self.store().node(declaration).name() else {
+                continue;
+            };
+            if u::is_parameter_property_declaration(
+                self.store(),
+                declaration,
+                self.store().node(declaration).parent.get(),
+            ) || u::is_this_parameter(self.store(), declaration)
+            {
+                continue;
+            }
+            if is_binding_pattern(self.store(), name) {
+                self.report_unused_binding_elements(name);
+            } else if self.is_unreferenced_variable_declaration(declaration) {
+                let name_text = tsc_ast::node_text(self.store(), name).to_string();
+                let d = u::new_diagnostic_for_node(
+                    self.store(),
+                    name,
+                    &diag::X_0_IS_DECLARED_BUT_ITS_VALUE_IS_NEVER_READ,
+                    vec![name_text],
+                );
+                self.report_unused_variable(declaration, d);
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) isUnreferencedVariableDeclaration(node) bool` (checker.go:7404).
+    pub(crate) fn is_unreferenced_variable_declaration(&mut self, node: NodeId) -> bool {
+        let Some(name) = self.store().node(node).name() else {
+            return true;
+        };
+        if is_binding_pattern(self.store(), name) {
+            return binding_pattern_elements(self.store(), name)
+                .iter()
+                .all(|&e| self.is_unreferenced_variable_declaration(e));
+        }
+        if let Some(symbol) = self.get_symbol_of_declaration(node) {
+            if self
+                .symbol_reference_links
+                .get(symbol)
+                .reference_kinds
+                .intersects(SymbolFlags::VARIABLE)
+            {
+                return false;
+            }
+        }
+        if is_binding_element(self.store(), node)
+            && self.store().node(self.store().node(node).parent.get()).kind
+                == Kind::ObjectBindingPattern
+        {
+            // In `{ a, ...b }, `a` is considered used since it removes a
+            // property from `b`. `b` may still be unused though.
+            let parent = self.store().node(node).parent.get();
+            let elements = binding_pattern_elements(self.store(), parent);
+            if let Some(&last) = elements.last() {
+                if node != last && has_dot_dot_dot_token(self.store(), last) {
+                    return false;
+                }
+            }
+        }
+        if (u::is_parameter_declaration(self.store(), node)
+            || (self.store().node(node).kind == Kind::VariableDeclaration
+                && (self
+                    .store()
+                    .node(self.store().node(node).parent.get())
+                    .kind
+                    == Kind::ForInStatement
+                    || self
+                        .store()
+                        .node(self.store().node(node).parent.get())
+                        .kind
+                        == Kind::ForOfStatement))
+            || self.get_combined_node_flags_cached(node).intersects(NF::USING))
+            || (is_binding_element(self.store(), node) && {
+                let parent = self.store().node(node).parent.get();
+                self.store().node(parent).kind == Kind::ObjectBindingPattern
+                    && self
+                        .store()
+                        .node(node)
+                        .as_binding_element()
+                        .expect("data")
+                        .property_name
+                        .is_none()
+            })
+        {
+            if is_identifier_that_starts_with_underscore(self.store(), name) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Go: `func (c *Checker) reportUnusedImports(node, unuseds)` (checker.go:7442).
+    pub(crate) fn report_unused_imports(&mut self, node: NodeId, unuseds: &[NodeId]) {
+        let mut declaration_count = usize::from(self.store().node(node).name().is_some());
+        let named_bindings = self
+            .store()
+            .node(node)
+            .as_import_clause()
+            .expect("data")
+            .named_bindings;
+        if let Some(named_bindings) = named_bindings {
+            if self.store().node(named_bindings).kind == Kind::NamespaceImport {
+                declaration_count += 1;
+            } else {
+                declaration_count += binding_pattern_elements(self.store(), named_bindings).len();
+            }
+        }
+        if declaration_count > 1 && declaration_count == unuseds.len() {
+            let parent = self.store().node(node).parent.get();
+            let d = u::new_diagnostic_for_node(
+                self.store(),
+                parent,
+                &diag::ALL_IMPORTS_IN_IMPORT_DECLARATION_ARE_UNUSED,
+                vec![],
+            );
+            self.report_unused(node, UnusedKind::Local, d);
+        } else {
+            for &unused in unuseds {
+                let name_text = self
+                    .store()
+                    .node(unused)
+                    .name()
+                    .map(|n| tsc_ast::node_text(self.store(), n).to_string())
+                    .unwrap_or_default();
+                self.report_unused_local(unused, name_text);
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkUnusedInferTypeParameter(node)` (checker.go:7481).
+    pub(crate) fn check_unused_infer_type_parameter(&mut self, node: NodeId) {
+        let type_parameter = self
+            .store()
+            .node(node)
+            .as_infer_type_node()
+            .expect("data")
+            .type_parameter;
+        if self.is_unreferenced_type_parameter(type_parameter) {
+            let name = self.store().node(type_parameter).name();
+            if let Some(name) = name {
+                let name_text = tsc_ast::node_text(self.store(), name).to_string();
+                let d = u::new_diagnostic_for_node(
+                    self.store(),
+                    name,
+                    &diag::X_0_IS_DECLARED_BUT_NEVER_USED,
+                    vec![name_text],
+                );
+                self.report_unused(node, UnusedKind::Parameter, d);
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkUnusedTypeParameters(node)` (checker.go:7490).
+    pub(crate) fn check_unused_type_parameters(&mut self, node: NodeId) {
+        // Go: allDeclarationsInSameSourceFile(getSymbolOfDeclaration(node)).
+        if let Some(symbol) = self.get_symbol_of_declaration(node) {
+            if !all_declarations_in_same_source_file(self.store(), symbol) {
+                return;
+            }
+        }
+        // Go: node.TypeParameterList() — the syntactic list; the payloads
+        // keep the parsed type_parameters list (TypeParameterList is the
+        // reparse view; the parsed list is the same nodes at check depth).
+        let type_parameter_list = type_parameters_of(self.store(), node);
+        if type_parameter_list.is_empty() {
+            return;
+        }
+        if type_parameter_list.len() > 1
+            && type_parameter_list
+                .iter()
+                .all(|&tp| self.is_unreferenced_type_parameter(tp))
+        {
+            let first = type_parameter_list[0];
+            let last = type_parameter_list[type_parameter_list.len() - 1];
+            let file = self.get_source_file_node_of(node);
+            let loc = tsc_core::text::TextRange::new(
+                self.store().node(first).pos(),
+                self.store().node(last).end(),
+            );
+            // Go: ast.NewDiagnostic(file, loc, All_type_parameters_are_unused)
+            // — the no-node diagnostic factory; PORT: pinned to the first
+            // type parameter's location (the M7 diagnostics wave carries the
+            // raw-location factory).
+            let d = u::new_diagnostic_for_node(
+                self.store(),
+                first,
+                &diag::ALL_TYPE_PARAMETERS_ARE_UNUSED,
+                vec![],
+            );
+            let _ = (file, loc);
+            self.report_unused(node, UnusedKind::Parameter, d);
+        } else {
+            for type_parameter in type_parameter_list {
+                if self.is_unreferenced_type_parameter(type_parameter) {
+                    let name = self.store().node(type_parameter).name();
+                    if let Some(name) = name {
+                        let name_text = tsc_ast::node_text(self.store(), name).to_string();
+                        let d = u::new_diagnostic_for_node(
+                            self.store(),
+                            name,
+                            &diag::X_0_IS_DECLARED_BUT_NEVER_USED,
+                            vec![name_text],
+                        );
+                        self.report_unused(node, UnusedKind::Parameter, d);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) isUnreferencedTypeParameter(typeParameter) bool` (checker.go:7513).
+    pub(crate) fn is_unreferenced_type_parameter(&mut self, type_parameter: NodeId) -> bool {
+        let Some(symbol) = self.get_symbol_of_declaration(type_parameter) else {
+            return false;
+        };
+        let symbol = self.get_merged_symbol(symbol);
+        !self
+            .symbol_reference_links
+            .get(symbol)
+            .reference_kinds
+            .intersects(SymbolFlags::TYPE_PARAMETER)
+            && self
+                .store()
+                .node(type_parameter)
+                .name()
+                .is_some_and(|n| !is_identifier_that_starts_with_underscore(self.store(), n))
+    }
+
+    /// Go: `func (c *Checker) checkUnusedRenamedBindingElements()` (checker.go:7518).
+    pub(crate) fn check_unused_renamed_binding_elements(&mut self) {
+        for node in std::mem::take(&mut self.renamed_binding_elements_in_types) {
+            let Some(symbol) = self.get_symbol_of_declaration(node) else {
+                continue;
+            };
+            if self.symbol_reference_links.get(symbol).reference_kinds.is_empty() {
+                let wrapping_declaration =
+                    crate::ast_shims::walk_up_binding_elements_and_patterns(self.store(), node);
+                let name = self.store().node(node).name();
+                let property_name = self
+                    .store()
+                    .node(node)
+                    .as_binding_element()
+                    .expect("data")
+                    .property_name;
+                if let Some(name) = name {
+                    let name_text =
+                        tsc_scanner::utilities::declaration_name_to_string(self.store(), Some(name));
+                    let property_text = tsc_scanner::utilities::declaration_name_to_string(
+                        self.store(),
+                        property_name,
+                    );
+                    let d = u::new_diagnostic_for_node(
+                        self.store(),
+                        name,
+                        &diag::X_0_IS_AN_UNUSED_RENAMING_OF_1_DID_YOU_INTEND_TO_USE_IT_AS_A_TYPE_ANNOTATION,
+                        vec![name_text, property_text],
+                    );
+                    // Go attaches the "we can only write a type…" related
+                    // info when the wrapping parameter lacks a type
+                    // annotation (the related-info factory is the M7
+                    // diagnostics wave).
+                    let _ = wrapping_declaration;
+                    self.add_diagnostic(d);
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkExportsOnMergedDeclarations(node)` (checker.go:7110).
+    pub(crate) fn check_exports_on_merged_declarations(&mut self, node: NodeId) {
+        // If localSymbol is defined on node then node itself is exported -
+        // check is required.
+        let mut symbol = local_symbol_of(self.store(), node);
+        if symbol.is_none() {
+            // Local symbol is undefined => this declaration is non-exported.
+            // However, symbol might contain other declarations that are exported.
+            let Some(s) = self.get_symbol_of_declaration(node) else {
+                return;
+            };
+            if self.program.symbol(s).export_symbol.is_none() {
+                // This is a pure local symbol (all declarations are
+                // non-exported) - no need to check anything.
+                return;
+            }
+            symbol = Some(s);
+        }
+        let Some(symbol) = symbol else { return };
+        let declarations = self.program.symbol(symbol).declarations.clone();
+        if declarations.len() < 2 || !self.merged_exports_checked.insert(symbol) {
+            return;
+        }
+        let mut exported_declaration_spaces = DeclarationSpaces::NONE;
+        let mut non_exported_declaration_spaces = DeclarationSpaces::NONE;
+        let mut default_exported_declaration_spaces = DeclarationSpaces::NONE;
+        for &d in &declarations {
+            let declaration_spaces = self.get_declaration_spaces(d);
+            let effective_declaration_flags =
+                self.get_effective_declaration_flags(d, ModifierFlags::EXPORT.union(ModifierFlags::DEFAULT));
+            if effective_declaration_flags.intersects(ModifierFlags::EXPORT) {
+                if effective_declaration_flags.intersects(ModifierFlags::DEFAULT) {
+                    default_exported_declaration_spaces =
+                        default_exported_declaration_spaces.union(declaration_spaces);
+                } else {
+                    exported_declaration_spaces =
+                        exported_declaration_spaces.union(declaration_spaces);
+                }
+            } else {
+                non_exported_declaration_spaces =
+                    non_exported_declaration_spaces.union(declaration_spaces);
+            }
+        }
+        // Spaces for anything not declared a 'default export'.
+        let non_default_exported_declaration_spaces =
+            exported_declaration_spaces.union(non_exported_declaration_spaces);
+        let common_declaration_spaces_for_exports_and_locals =
+            exported_declaration_spaces & non_exported_declaration_spaces;
+        let common_declaration_spaces_for_default_and_non_default =
+            default_exported_declaration_spaces & non_default_exported_declaration_spaces;
+        if !common_declaration_spaces_for_exports_and_locals.is_empty()
+            || !common_declaration_spaces_for_default_and_non_default.is_empty()
+        {
+            // declaration spaces for exported and non-exported declarations
+            // intersect
+            for &d in &declarations {
+                let declaration_spaces = self.get_declaration_spaces(d);
+                let name = tsc_binder::ast_shims::get_name_of_declaration(self.store(), d);
+                let Some(name) = name else { continue };
+                // Only error on the declarations that contributed to the
+                // intersecting spaces.
+                if !(declaration_spaces & common_declaration_spaces_for_default_and_non_default).is_empty()
+                {
+                    let name_text = tsc_scanner::utilities::declaration_name_to_string(
+                        self.store(),
+                        Some(name),
+                    );
+                    self.error(
+                        name,
+                        &diag::MERGED_DECLARATION_0_CANNOT_INCLUDE_A_DEFAULT_EXPORT_DECLARATION_CONSIDER_ADDING_A_SEPARATE_EXPORT_DEFAULT_0_DECLARATION_INSTEAD,
+                        &[name_text],
+                    );
+                } else if !(declaration_spaces & common_declaration_spaces_for_exports_and_locals).is_empty()
+                {
+                    let name_text = tsc_scanner::utilities::declaration_name_to_string(
+                        self.store(),
+                        Some(name),
+                    );
+                    self.error(
+                        name,
+                        &diag::INDIVIDUAL_DECLARATIONS_IN_MERGED_DECLARATION_0_MUST_BE_ALL_EXPORTED_OR_ALL_LOCAL,
+                        &[name_text],
+                    );
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) getDeclarationSpaces(node) DeclarationSpaces`
+    /// (checker.go:7171).
+    pub(crate) fn get_declaration_spaces(&mut self, node: NodeId) -> DeclarationSpaces {
+        match self.store().node(node).kind {
+            Kind::InterfaceDeclaration
+            | Kind::TypeAliasDeclaration
+            | Kind::JSTypeAliasDeclaration
+            | Kind::JSDocTypedefTag
+            | Kind::JSDocCallbackTag => DeclarationSpaces::EXPORT_TYPE,
+            Kind::ModuleDeclaration => {
+                if tsc_binder::ast_shims::is_ambient_module(self.store(), node)
+                    || tsc_binder::ast_shims::get_module_instance_state(self.store(), node)
+                        != tsc_binder::ast_shims::ModuleInstanceState::NonInstantiated
+                {
+                    DeclarationSpaces::EXPORT_NAMESPACE.union(DeclarationSpaces::EXPORT_VALUE)
+                } else {
+                    DeclarationSpaces::EXPORT_NAMESPACE
+                }
+            }
+            Kind::ClassDeclaration | Kind::EnumDeclaration | Kind::EnumMember => {
+                DeclarationSpaces::EXPORT_TYPE.union(DeclarationSpaces::EXPORT_VALUE)
+            }
+            Kind::SourceFile => DeclarationSpaces::EXPORT_TYPE
+                .union(DeclarationSpaces::EXPORT_VALUE)
+                .union(DeclarationSpaces::EXPORT_NAMESPACE),
+            Kind::ExportAssignment | Kind::BinaryExpression => {
+                let expression = if self.store().node(node).kind == Kind::ExportAssignment {
+                    self.store()
+                        .node(node)
+                        .as_export_assignment()
+                        .expect("data")
+                        .expression
+                } else {
+                    self.store()
+                        .node(node)
+                        .as_binary_expression()
+                        .expect("data")
+                        .right
+                };
+                // Export assigned entity name expressions act as aliases and
+                // should fall through, otherwise they export values.
+                if !u::is_entity_name_expression(self.store(), expression)
+                    || self
+                        .get_symbol_of_declaration(node)
+                        .is_none_or(|s| !self.program.symbol(s).flags.intersects(SymbolFlags::ALIAS))
+                {
+                    return DeclarationSpaces::EXPORT_VALUE;
+                }
+                // The below options all declare an Alias, which is allowed
+                // to merge with other values within the importing module.
+                self.get_declaration_spaces_of_alias(node)
+            }
+            Kind::ImportEqualsDeclaration | Kind::NamespaceImport | Kind::ImportClause => {
+                self.get_declaration_spaces_of_alias(node)
+            }
+            Kind::VariableDeclaration
+            | Kind::BindingElement
+            | Kind::FunctionDeclaration
+            | Kind::ImportSpecifier => DeclarationSpaces::EXPORT_VALUE,
+            Kind::MethodSignature | Kind::PropertySignature => DeclarationSpaces::EXPORT_TYPE,
+            _ => panic!(
+                "Unhandled case in getDeclarationSpaces: {}",
+                self.store().node(node).kind_string()
+            ),
+        }
+    }
+
+    /// Go: getDeclarationSpaces' alias fall-through — the target's
+    /// declaration spaces (resolveAlias is S6; permissive the symbol's own
+    /// declarations — TODO(port M6 S6)).
+    fn get_declaration_spaces_of_alias(&mut self, node: NodeId) -> DeclarationSpaces {
+        let mut result = DeclarationSpaces::NONE;
+        // TODO(port M6 S6): resolveAlias — the target declaration spaces;
+        // permissive: the alias's own symbol carries none (Go's resolveAlias
+        // stub returns the symbol itself, whose declarations re-enter here).
+        let _ = node;
+        result
+    }
+
+    /// Go: `func (c *Checker) checkTypeParameter(node)` (checker.go:2674) —
+    /// TODO(port M6 S3 type-node batch): the full type-parameter check
+    /// (constraint defaults + reserved names); permissive until that
+    /// batch lands.
+    pub(crate) fn check_type_parameter(&mut self, node: NodeId) {
+        let _ = node;
+    }
+
+    /// Go: `func (c *Checker) checkTypeParameters(typeParameterDeclarations)` (checker.go:7205).
+    pub(crate) fn check_type_parameters(&mut self, type_parameter_declarations: &[NodeId]) {
+        let mut seen_default = false;
+        for (i, &node) in type_parameter_declarations.iter().enumerate() {
+            self.check_type_parameter(node);
+            let default_type_node = self
+                .store()
+                .node(node)
+                .as_type_parameter_declaration()
+                .expect("data")
+                .default_type;
+            if let Some(default_type_node) = default_type_node {
+                seen_default = true;
+                self.check_type_parameters_not_referenced(
+                    default_type_node,
+                    type_parameter_declarations,
+                    i,
+                );
+            } else if seen_default {
+                self.error(
+                    node,
+                    &diag::REQUIRED_TYPE_PARAMETERS_MAY_NOT_FOLLOW_OPTIONAL_TYPE_PARAMETERS,
+                    &[],
+                );
+            }
+            for &other in type_parameter_declarations.iter().take(i) {
+                if node_symbol_of(self.store(), other)
+                    .is_some_and(|s| node_symbol_of(self.store(), node) == Some(s))
+                {
+                    let name = self.store().node(node).name();
+                    if let Some(name) = name {
+                        let name_text = tsc_scanner::utilities::declaration_name_to_string(
+                            self.store(),
+                            Some(name),
+                        );
+                        self.error(name, &diag::DUPLICATE_IDENTIFIER_0, &[name_text]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkTypeParametersNotReferenced(root, typeParameters, index)`
+    /// (checker.go:7238).
+    pub(crate) fn check_type_parameters_not_referenced(
+        &mut self,
+        root: NodeId,
+        type_parameters: &[NodeId],
+        index: usize,
+    ) {
+        // Go's visitor: type references whose type-parameter target appears
+        // at/after `index` error. TODO(port M6 S5): getTypeFromTypeReference
+        // — the reference resolution is S5's; permissive skip.
+        let _ = (root, type_parameters, index);
+    }
+
+    /// Go: `func (c *Checker) checkTypeNameIsReserved(name, message)` (checker.go:7099).
+    pub(crate) fn check_type_name_is_reserved(&mut self, name: NodeId, message: &'static Message) {
+        // TS 1.0 spec (April 2014): 3.6.1 — the predefined type keywords are
+        // reserved and cannot be used as names of user defined types.
+        let text = tsc_ast::node_text(self.store(), name).to_string();
+        if matches!(
+            text.as_str(),
+            "any" | "unknown" | "never" | "number" | "bigint" | "boolean" | "string" | "symbol"
+                | "void" | "object" | "undefined"
+        ) {
+            self.error(name, message, &[text]);
+        }
+    }
+}
+
+// Go: `DeclarationSpaces` (checker.go — the bit set).
+define_flags!(DeclarationSpaces, u32);
+
+impl DeclarationSpaces {
+    pub const EXPORT_VALUE: DeclarationSpaces = DeclarationSpaces(1 << 0);
+    pub const EXPORT_TYPE: DeclarationSpaces = DeclarationSpaces(1 << 1);
+    pub const EXPORT_NAMESPACE: DeclarationSpaces = DeclarationSpaces(1 << 2);
+
+    /// Go: `flags &^ other` (AND NOT — the bits of self not in other).
+    pub const fn difference(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+}
+
+/// Go: `func isIdentifierThatStartsWithUnderscore(node) bool` (checker.go:7474).
+fn is_identifier_that_starts_with_underscore(store: &dyn NodeStore, node: NodeId) -> bool {
+    is_identifier(store.node(node)) && {
+        let text = tsc_ast::node_text(store, node);
+        !text.is_empty() && text.as_bytes()[0] == b'_'
+    }
+}
+
+/// Go: `func importClauseFromImported(node) *Node` (checker.go:7478).
+fn import_clause_from_imported(store: &dyn NodeStore, node: NodeId) -> NodeId {
+    match store.node(node).kind {
+        Kind::ImportClause => node,
+        Kind::NamespaceImport => store.node(node).parent.get(),
+        _ => {
+            let parent = store.node(node).parent.get();
+            store.node(parent).parent.get()
+        }
+    }
+}
+
+/// Go: `func allDeclarationsInSameSourceFile(symbol) bool` (checker.go:7489).
+fn all_declarations_in_same_source_file(store: &dyn NodeStore, symbol: SymbolId) -> bool {
+    // Go: symbol.Declarations — the checker-side symbol payload read.
+    let _ = (store, symbol);
+    // The program symbol table is the §5.5 seam; the S2 symbol payload
+    // carries declarations through Checker::program.
+    true
+}
+
+/// The node's locals table for the unused-identifiers walk (the binder-set
+/// SymbolTable on the LocalsContainer payloads).
+fn locals_of_node(store: &dyn NodeStore, node: NodeId) -> Vec<(String, SymbolId)> {
+    let n = store.node(node);
+    let table: Option<&tsc_ast::SymbolTable> = match n.kind {
+        Kind::SourceFile => Some(&n.as_source_file().expect("data").locals),
+        Kind::ModuleDeclaration => Some(&n.as_module_declaration().expect("data").locals),
+        Kind::Block => Some(&n.as_block().expect("data").locals),
+        Kind::CaseBlock => Some(&n.as_case_block().expect("data").locals),
+        Kind::ForStatement => Some(&n.as_for_statement().expect("data").locals),
+        Kind::ForInStatement | Kind::ForOfStatement => Some(
+            &n.as_for_in_or_of_statement()
+                .expect("data")
+                .locals,
+        ),
+        Kind::ClassStaticBlockDeclaration => Some(
+            &n.as_class_static_block_declaration()
+                .expect("data")
+                .locals,
+        ),
+        Kind::Constructor => Some(&n.as_constructor_declaration().expect("data").locals),
+        Kind::FunctionDeclaration => Some(&n.as_function_declaration().expect("data").locals),
+        Kind::FunctionExpression => Some(&n.as_function_expression().expect("data").locals),
+        Kind::ArrowFunction => Some(&n.as_arrow_function().expect("data").locals),
+        Kind::MethodDeclaration | Kind::MethodSignature => {
+            Some(&n.as_method_declaration().expect("data").locals)
+        }
+        Kind::GetAccessor => Some(&n.as_get_accessor_declaration().expect("data").locals),
+        Kind::SetAccessor => Some(&n.as_set_accessor_declaration().expect("data").locals),
+        _ => None,
+    };
+    table
+        .map(|t| t.entries().map(|(k, v)| (k.clone(), *v)).collect())
+        .unwrap_or_default()
+}
+
+/// Go: `node.Symbol()` — the binder-set node symbol (payload field).
+pub(crate) fn node_symbol_of(store: &dyn NodeStore, node: NodeId) -> Option<SymbolId> {
+    let n = store.node(node);
+    match n.kind {
+        Kind::ClassDeclaration => n.as_class_declaration().expect("data").symbol,
+        Kind::ClassExpression => n.as_class_expression().expect("data").symbol,
+        Kind::InterfaceDeclaration => n.as_interface_declaration().expect("data").symbol,
+        Kind::TypeAliasDeclaration => n.as_type_alias_declaration().expect("data").symbol,
+        Kind::EnumDeclaration => n.as_enum_declaration().expect("data").symbol,
+        Kind::EnumMember => n.as_enum_member().expect("data").symbol,
+        Kind::ModuleDeclaration => n.as_module_declaration().expect("data").symbol,
+        Kind::ImportEqualsDeclaration => n.as_import_equals_declaration().expect("data").symbol,
+        Kind::ImportClause => n.as_import_clause().expect("data").symbol,
+        Kind::ImportSpecifier => n.as_import_specifier().expect("data").symbol,
+        Kind::NamespaceImport => n.as_namespace_import().expect("data").symbol,
+        Kind::ExportSpecifier => n.as_export_specifier().expect("data").symbol,
+        Kind::VariableDeclaration => n.as_variable_declaration().expect("data").symbol,
+        Kind::BindingElement => n.as_binding_element().expect("data").symbol,
+        Kind::Parameter => n.as_parameter_declaration().expect("data").symbol,
+        Kind::FunctionDeclaration => n.as_function_declaration().expect("data").symbol,
+        Kind::FunctionExpression => n.as_function_expression().expect("data").symbol,
+        Kind::ArrowFunction => n.as_arrow_function().expect("data").symbol,
+        Kind::MethodDeclaration | Kind::MethodSignature => {
+            n.as_method_declaration().expect("data").symbol
+        }
+        Kind::GetAccessor => n.as_get_accessor_declaration().expect("data").symbol,
+        Kind::SetAccessor => n.as_set_accessor_declaration().expect("data").symbol,
+        Kind::Constructor => n.as_constructor_declaration().expect("data").symbol,
+        Kind::PropertyDeclaration => n.as_property_declaration().expect("data").symbol,
+        Kind::PropertySignature => {
+            n.as_property_signature_declaration().expect("data").symbol
+        }
+        Kind::ClassStaticBlockDeclaration => {
+            n.as_class_static_block_declaration().expect("data").symbol
+        }
+        Kind::TypeParameter => n.as_type_parameter_declaration().expect("data").symbol,
+        Kind::SourceFile => n.as_source_file().expect("data").symbol,
+        Kind::ExportDeclaration => n.as_export_declaration().expect("data").symbol,
+        Kind::ExportAssignment => n.as_export_assignment().expect("data").symbol,
+        Kind::ImportDeclaration => n.as_import_declaration().expect("data").symbol,
+        _ => None,
+    }
+}
+
+/// Go: `node.LocalSymbol()` — the binder-set local symbol payload field.
+fn local_symbol_of(store: &dyn NodeStore, node: NodeId) -> Option<SymbolId> {
+    let n = store.node(node);
+    match n.kind {
+        Kind::ClassDeclaration => n.as_class_declaration().expect("data").local_symbol,
+        Kind::ClassExpression => n.as_class_expression().expect("data").local_symbol,
+        Kind::InterfaceDeclaration => n.as_interface_declaration().expect("data").local_symbol,
+        Kind::TypeAliasDeclaration => n.as_type_alias_declaration().expect("data").local_symbol,
+        Kind::EnumDeclaration => n.as_enum_declaration().expect("data").local_symbol,
+        Kind::ModuleDeclaration => n.as_module_declaration().expect("data").local_symbol,
+        Kind::ImportEqualsDeclaration => {
+            n.as_import_equals_declaration().expect("data").local_symbol
+        }
+        Kind::ImportClause => n.as_import_clause().expect("data").local_symbol,
+        Kind::ImportSpecifier => n.as_import_specifier().expect("data").local_symbol,
+        Kind::NamespaceImport => n.as_namespace_import().expect("data").local_symbol,
+        Kind::ExportSpecifier => n.as_export_specifier().expect("data").local_symbol,
+        Kind::VariableDeclaration => n.as_variable_declaration().expect("data").local_symbol,
+        Kind::BindingElement => n.as_binding_element().expect("data").local_symbol,
+        Kind::FunctionDeclaration => n.as_function_declaration().expect("data").local_symbol,
+        _ => None,
+    }
+}
+

@@ -3338,6 +3338,81 @@ impl Checker {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Declaration-kind predicates (Go ast/utilities.go) — thin routes onto the
+// binder/ast shims plus the two local kind-matches that had no Rust home yet.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `func IsPartOfParameterDeclaration(node *Node) bool`.
+pub fn is_part_of_parameter_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
+    tsc_binder::ast_shims::is_part_of_parameter_declaration(store, node)
+}
+
+/// Go: `func IsParameterDeclaration(node *Node) bool`.
+pub fn is_parameter_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
+    tsc_ast::ast_generated::is_parameter_declaration(store.node(node))
+}
+
+/// Go: `func IsVariableLike(node *Node) bool` (ast/utilities.go:3108).
+pub fn is_variable_like_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
+    matches!(
+        store.node(node).kind,
+        Kind::BindingElement
+            | Kind::EnumMember
+            | Kind::Parameter
+            | Kind::PropertyAssignment
+            | Kind::PropertyDeclaration
+            | Kind::PropertySignature
+            | Kind::ShorthandPropertyAssignment
+            | Kind::VariableDeclaration
+    )
+}
+
+/// Go: `func IsTypeDeclaration(node *Node) bool` — routed to spine's port.
+pub fn is_type_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
+    crate::spine::is_type_declaration(store, node)
+}
+
+/// Go: `func IsParameterPropertyDeclaration(node, parent) bool`.
+pub fn is_parameter_property_declaration(
+    store: &dyn NodeStore,
+    node: NodeId,
+    parent: NodeId,
+) -> bool {
+    tsc_binder::ast_shims::is_parameter_property_declaration(store, node, parent)
+}
+
+/// Go: `func IsThisParameter(node *Node) bool`.
+pub fn is_this_parameter(store: &dyn NodeStore, node: NodeId) -> bool {
+    crate::ast_shims::is_this_parameter(store, node)
+}
+
+/// Go: `func IsEntityNameExpression(node *Node) bool`.
+pub fn is_entity_name_expression(store: &dyn NodeStore, node: NodeId) -> bool {
+    tsc_binder::ast_shims::is_entity_name_expression(store, node)
+}
+
+/// Go: `func IsVariableDeclarationInitializedToRequire(node *Node) bool`.
+pub fn is_variable_declaration_initialized_to_require(
+    store: &dyn NodeStore,
+    node: NodeId,
+) -> bool {
+    tsc_binder::ast_shims::is_variable_declaration_initialized_to_require(store, node)
+}
+
+/// Go: `func GetContainingFunction(node *Node) *Node` — nearest function-like
+/// ancestor (function-like kinds mirror statements::is_function_like).
+pub fn get_containing_function(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    let mut current = store.node(node).parent.get();
+    while current != NodeId::NONE {
+        if crate::statements::is_function_like(store, current) {
+            return Some(current);
+        }
+        current = store.node(current).parent.get();
+    }
+    None
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Unit tests (ported where Go has direct coverage; Go's utilities_test.go is
 // the printer/emitter harness, so the pins here are Go-comment-verified).
 // ────────────────────────────────────────────────────────────────────────────
