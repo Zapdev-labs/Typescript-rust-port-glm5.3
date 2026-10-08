@@ -1541,3 +1541,59 @@ line" + the walk/position contracts); tsc-compiler 7 lib + 5 integration
 divergence 81 → **1** (gap 2's asyncArrowFunction_allowJs TS8009 alone);
 fixture twin byte-identical 9/9 match; program-matrix twin byte-identical
 (15 records); see rust/CONFORMANCE.md for the climb re-measurement.
+
+## M6 Wave 2 — the engines (relater + inference + tracer/tracing)
+
+Two worker sessions (the first landed relater.rs + tracer.rs and drove the
+compile loop from 52 errors to zero; the resumed session landed inference.rs
++ the tracing port + the trace-parity proof). Files rode the auto-checkpoints
+where noted; final state is e8d9adc098.
+
+- **relater.rs (~8,760 ln)** — the complete relater.go assignability engine:
+  `isRelatedTo` + the structured-type relation ladder, variance, the
+  mapper-parameterized recursions, comparability, excess-property checks.
+  ~40 hand-applied borrow restructurings, all Go-shaped (pre-cloned
+  constituent lists for closure iteration, hoisted nested calls, Option
+  reborrows through `as_deref_mut()`, snapshot locals around simultaneous
+  &mut/by-value args). Correctness finds: a not-yet-registered
+  `SignatureId` guard (Go nil-signature semantics) in
+  `get_type_predicate_of_signature`; the exports test flipped with the real
+  relater wired.
+- **inference.rs (3,368 ln)** — the full inference.go port: InferenceKey, the
+  value-stack state pool (Go's intrusively-linked free list → `Vec`,
+  `clear_for_pool` resets exactly Go's fields — priority and contravariant
+  survive), the inferTypes/inferFromTypes ladder (union two-pass,
+  intersection reduction, the structural switch, all tuple middle-arity arms
+  incl. variadic middles), the newInferenceContext family, and the real
+  `getInferredType` (covariant/contravariant + prefer-covariant policy;
+  NO_DEFAULT→silentNever / ANY_DEFAULT→any / else unknown — and the
+  signature-less fall-through to unknownType lives INSIDE the
+  `n.signature != nil` branch, pinned by test).
+- **InferencePriority is a signed i32, not a flag set** — CIRCULARITY=-1
+  sorts below every value and the engine `min()`s over it. The W1-era
+  provisional seams had wrong bits (NO_CONSTRAINTS|ALWAYS_STRICT are
+  `1<<9|1<<10`); corrected when the real engine landed and the
+  conditional-vs-conditional relater arm rewired through it.
+- **tracer.rs (590) + tracing.rs (1,118)** — the trace machinery.
+  `marshal_legend` had to adopt Go's `json.MarshalIndent` form (2-space
+  indent, `": "` separators) — the compact form was the one byte-divergence;
+  trace.json matched after the tracer test locked the observable contract.
+- The W1 `InferenceContext`/`InferenceInfo` todo_shapes stubs are replaced
+  with `pub use crate::inference::{…}` (the mapper's three-field contract —
+  type_parameter/is_fixed/inferred_type — kept); `checker.rs` gains
+  `free_inference_states` + the reverse-mapped caches and drops the W1
+  `get_inferred_type`/`infer_from_intra_expression_sites` stubs.
+
+**Stub directions bannered for the S waves**: S7 (getSimplifiedType,
+instantiateTypeWorker, createTuple/TypeReference/ArrayType identities, the
+reverse-mapped family, filterType), W3 (skipDirectInferenceNodes,
+getContextualType drain), S5 (bigint literal parsing), S4
+(declaration-ancestor walk), S10 (index info).
+
+**Validation**: tsc-checker 74 lib + 7 integration (+13 new: the priority
+ladder values incl. the CIRCULARITY sentinel, pool round-trip, invokeOnce
+guard, clone/filter contracts, covariant+contravariant resolution through
+getInferredType, the tracer fixture test); workspace clippy zero; workspace
+tests all green; dump/symbols/program twins byte-identical; **Go-reference
+trace byte-diff EMPTY** (trace.json + legend.json, deterministic mode, the
+same event sequence as tracer_test.go's TestTracerPushPreservesEndArgMutations).
