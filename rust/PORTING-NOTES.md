@@ -1279,3 +1279,139 @@ compiler crate depends on the other two plus outputpaths' host trait).
   regressions). The workspace enforces no-unsafe-code — the crate contains
   none (`with_task_read` was rewritten checkout/put-back instead of the
   unsafe alias Go's shared pointer admits).
+
+## M5 gate — the `program` parity twin (bench-harness program_seam, go-driver, two compiler fixes)
+
+Closes the M5 gate (SPEC §8 M5: "`tsc <file>` on a trivial program loads,
+binds, parses `lib.d.ts`, and reports *parse-level* diagnostics
+(checker not required)") as a byte-diffable harness — and becomes the
+parity rail the M6 checker milestone rides: a new `program` subcommand on
+BOTH drivers — `go-bench program --corpus <dir> | --file <path>` /
+`tsc-bench program --corpus <dir> | --file <path>`. For every parseable
+script file in the corpus (the `symbols` twin's walk rule — same skip
+dirs, every file whose scriptKind is known, raw-path sort), each driver
+builds a ONE-FILE `Program` exactly the way tsc/internal/compiler's
+program_test.go drives it, binds it, and emits one NDJSON line per root;
+`diff` is the verdict.
+
+**Call shape (both sides)**: `vfstest.FromMap` seeded with the corpus
+tree (all known-scriptKind files at their real absolute paths) + a
+synthetic tsconfig `<corpus>/__program__.tsconfig.json` with text
+`{"compilerOptions":{"target":"esnext"},"files":["<root>"]}` →
+`bundled.WrapFS` (the lib.d.ts overlay) → `GetParsedCommandLineOfConfig-
+File` over the same FS (PORT: Go's tests also construct configs via
+`tsoptions.NewParsedCommandLine(&opts, files, ...)`; the Rust tsoptions
+has no such constructor (`file_names` is not pub), so BOTH drivers take
+the written-tsconfig route program_test.rs established — same dataflow
+through the M4 config surface; the synthetic config mirrors Go's
+`CompilerOptions{Target: ScriptTargetESNext}` corpus shape) →
+`NewCompilerHost` over a **counting FS wrapper** (driver-local, identical
+both sides, records every DISTINCT successfully-read path — the "loads
+... parses lib.d.ts" half of the gate made countable) → `NewProgram` →
+`BindSourceFiles`. Corpus mode seeds the whole walked tree so in-matrix
+imports resolve inside the VFS; `--file` mode seeds only that file
+(showconfig's dual-mode shape). Case sensitivity: CaseSensitive on BOTH
+drivers (unlike Go's TestProgram corpus — machine-independent parity).
+Exit codes agree: 0 ok, 1 unreadable root, 2 usage/unknown script kind.
+
+**Record format** (one line per root; fields both sides emit
+identically): `{"file":"...","ok":true,"config_errors":N,"loaded":N,
+"parsed":N,"bound":N,"symbols":N,"duplicates":N,"parse_diag":[...],
+"program_errors":M,"unresolved":K,"shape_hash":"<16 hex>"}` —
+`config_errors` = `GetConfigFileParsingDiagnostics` length; `loaded` =
+distinct host-FS reads (lib chain + program files + package.json
+probes); `parsed` = `GetSourceFiles` (program order, also folded into
+the hash); `bound` = files with `IsBound()` after `BindSourceFiles`;
+`symbols` = the binder's per-file `SymbolCount` summed (Go's
+`Program.SymbolCount()` adds the checker's count through
+`ForEachCheckerParallel` — checker-scope, M6 — so BOTH sides sum the
+binder count instead, PORT-noted); `duplicates` =
+`DuplicateSourceFiles` length; `parse_diag` = ONLY parse-level
+diagnostics per file (the SPEC gate) in the dump twin's record shape
+plus a `file` key, in program file order then per-file
+`Diagnostics()`→`JSDiagnostics()` order — i.e.
+`GetSyntacticDiagnostics`' core concat; Go additionally appends
+`getAdditionalJSSyntacticDiagnostics` for unchecked-JS files (deferred
+in the port with the visitor/SubtreeFacts surface), so BOTH drivers
+emit the raw parser+JSDoc set — no checker-level or JS-extras fields
+exist in the record (the M6 boundary rule: agree by construction, note
+the extension); `program_errors` = `GetProgramDiagnostics` (option
+verification + include-processor GLOBAL diagnostics);
+`unresolved` = `GetUnresolvedImports` (count in the line, sorted names
+in the hash). shape_hash: FNV-1a 64 over the fold lines documented at
+program_seam's `hash_lines` (`file=`/`config_errors=`/`loaded=` +
+sorted `loadedfile=`/`parsed=` + program-order `programfile=`/
+`bound=`/`symbols=`/`duplicates=`/`diag=<file>|<key>|<code>|<pos>|
+<end>|<args joined \x01>`/`program_errors=`/`unresolved=` + sorted
+`unresolvedname=`; vectors — including published FNV-1a "a"/"b"/
+"foobar" and order-sensitivity checks — in the module's tests).
+Panics (program build/bind) emit ok:false lines; any ok:false IS a
+finding (the matrix is panic-free). Default options NOTE: with
+`{"target":"esnext"}` and module unset, the parsed config's effective
+moduleResolution is Bundler, so `resolveJsonModule` defaults TRUE —
+`.json` roots are therefore VALID programs (99 esnext libs + root)
+and relative `./data.json` imports resolve; both sides construct the
+same config, so parity holds by construction (empirically confirmed).
+
+**Two real compiler-crate divergences found by the twin (fixed
+mirroring Go, program.rs):**
+- `get_unresolved_imports` (Go `extractUnresolvedImports`): the port
+  guarded the sweep with `!uses_uri_style_node_core_modules` AND
+  `!skip_type_checking(file)` — NEITHER exists in Go, and Go never
+  SETS `p.usesUriStyleNodeCoreModules` (it stays the zero Tristate
+  forever), so the port's guard made `get_unresolved_imports` return
+  `[]` unconditionally. The twin's missing-import fixture (bare
+  `totally-missing-package`) surfaced it: Go K=1, port K=0. Fixed to
+  Go's unfiltered every-file sweep (program.rs, PORT note at the site).
+- `get_program_diagnostics` (Go `GetProgramDiagnostics`): the port
+  folded the include processor's FULL collection
+  (`get_diagnostics()` = global + per-file) where Go folds only
+  `GetGlobalDiagnostics()`, and concatenated in a different order —
+  file-scoped include diagnostics (referenced-location diagnostics
+  attached through `processingDiagnostic.toDiagnostic`'s
+  `diagnosticAt` path) would leak into the program set. Fixed to Go's
+  exact shape: programDiagnostics, contentMapperDiagnostics, then the
+  include processor's GLOBAL diagnostics, through
+  `sort_and_deduplicate_diagnostics` (program.rs, PORT note at the
+  site; `contentMapperOptionDiagnostics` is the not-ported
+  content-mapper seam — empty, matching Go's nil-project case).
+
+**Fixtures committed** under rust/bench/gates/program-matrix/ (15
+roots): trivial `let x = 1;`; parse-error (2 diagnostics, args
+exercised); in-matrix import (`./imported`); `/// <reference
+lib="es2020" />` lib pull; bare missing-module import (resolution
+failure — unresolved=1); UMD-global (`export as namespace` + global
+augmentation); empty file; relative `./data.json` import + the
+`.json` root itself; JSDoc typedefs/callback/malformed types (the
+reparse path); JSX; a `.d.ts`-only root; and a jsconfig-companion
+directory (jsconfig.json — a JSON root — beside a .ts file). No
+checker-crate surface is touched anywhere.
+
+**Validation** (local, `CARGO_TARGET_DIR="$HOME/.cargo-target/m5gate"`,
+`CARGO_INCREMENTAL=0 RUSTFLAGS="-C debuginfo=0"`;
+`GOTMPDIR/GOCACHE=$HOME/.m5gate-scratch` — /tmp is quota-limited on this
+box): matrix runs byte-identical `go-bench program` vs `tsc-bench
+program` (diff empty, 15/15 lines ok:true) and determinism double-runs
+byte-identical on both drivers; `--file` mode byte-identical + exit
+codes agree (0/1/2); real-world spot checks byte-identical over
+`packages/typescript/lib` (5 roots: .js/.cjs/.d.ts/.d.cts) and
+`packages/typescript/scripts` (2 real .ts roots, one pulling an
+in-dir import); `cargo test -p bench-harness -p tsc-compiler -p
+tsc-bundled -p tsc-outputpaths` green (29 + 7+4 + 2 + 5; the 5 new
+program_seam tests include hand-verified FNV-1a vectors for the new
+fold); `cargo clippy -p bench-harness -p tsc-compiler --all-targets`
+zero warnings in both crates; `go vet` (GOTOOLCHAIN=auto) clean on the
+go-driver; dump/showconfig/resolvereact/symbols quick regressions
+(fixtures + tsconfig-matrix + resolver-matrix corpora) all still
+byte-identical.
+
+**M6 extension notes**: the twin deliberately emits NO checker-level
+fields — `Program.SymbolCount()`'s checker half, semantic diagnostics,
+`GetSemanticDiagnostics`/TS2307-style unresolved-import diagnostics,
+and the unchecked-JS `getAdditionalJSSyntacticDiagnostics` extras are
+checker-wave surfaces (the last also needs the visitor/SubtreeFacts
+port). M6 should extend the record with: checker diagnostics per file
+(keyed by file, dump shape), checker symbol/type counts, and — once
+the AST-config wave lands — real-dir runs driven by a project's OWN
+tsconfig (the twin currently synthesizes its config; a real tsconfig
+needs `ConfigFile` syntax positioning for option diagnostics).

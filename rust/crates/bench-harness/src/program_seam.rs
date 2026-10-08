@@ -143,6 +143,8 @@ pub fn run_program(args: &[String]) {
     let mut line = String::with_capacity(512);
     if !file.is_empty() {
         // --file mode: one root, seeded alone (showconfig's dual-mode shape).
+        // Exit codes match the Go driver: unreadable file → 1, unknown
+        // script kind → 2 (both drivers' rule, PORT-noted).
         let abs = std::path::absolute(&file)
             .unwrap_or_else(|err| {
                 eprintln!("tsc-bench: resolving file path: {err}");
@@ -150,9 +152,25 @@ pub fn run_program(args: &[String]) {
             })
             .to_string_lossy()
             .into_owned();
-        let Some(root) = index_single_file(&abs) else {
+        let data = match std::fs::read(Path::new(&abs)) {
+            Ok(data) => data,
+            Err(err) => {
+                eprintln!("tsc-bench: reading {abs}: {err}");
+                std::process::exit(1);
+            }
+        };
+        let file_name = rooted_file_path_from_absolute(&abs);
+        let script_kind = crate::parse::script_kind_from_file_name(&file_name);
+        if script_kind == tsc_core::scriptkind::ScriptKind::Unknown {
             eprintln!("tsc-bench program: {abs} is not a parseable script file");
             std::process::exit(2);
+        }
+        let root = BenchFile {
+            bytes: data.len() as i64,
+            text: String::from_utf8_lossy(&data).into_owned(),
+            path_key: CaseSensitivity::CaseSensitive.path_key(&file_name.as_path()),
+            script_kind,
+            file_name,
         };
         let seed = vec![bench_file_clone(&root)];
         let dir = parent_dir_string(root.file_name.as_string());
@@ -205,24 +223,6 @@ fn parse_cli(args: &[String]) -> Result<Vec<(String, String)>, String> {
         i += 1;
     }
     Ok(out)
-}
-
-/// Indexes the `--file` root alone (unknown scriptKind / unreadable → None).
-fn index_single_file(abs: &str) -> Option<BenchFile> {
-    let path = Path::new(abs);
-    let data = std::fs::read(path).ok()?;
-    let file_name = rooted_file_path_from_absolute(abs);
-    let script_kind = crate::parse::script_kind_from_file_name(&file_name);
-    if script_kind == tsc_core::scriptkind::ScriptKind::Unknown {
-        return None;
-    }
-    Some(BenchFile {
-        bytes: data.len() as i64,
-        text: String::from_utf8_lossy(&data).into_owned(),
-        path_key: CaseSensitivity::CaseSensitive.path_key(&file_name.as_path()),
-        script_kind,
-        file_name,
-    })
 }
 
 /// Clones a `BenchFile` for the `--file` seed list (a fresh handle; the
@@ -346,6 +346,21 @@ struct ParseDiagRecord<'a> {
     diagnostic: &'a tsc_ast::Diagnostic,
 }
 
+/// The record fields the shape_hash folds (built per root; grouping them
+/// keeps `hash_lines` under the too-many-arguments lint).
+struct HashInput<'a> {
+    root: &'a str,
+    config_errors: usize,
+    loaded: &'a [String],
+    program_files: &'a [String],
+    bound: usize,
+    symbols: i64,
+    duplicates: usize,
+    parse_diags: &'a [ParseDiagRecord<'a>],
+    program_errors: usize,
+    unresolved: &'a [String],
+}
+
 /// The exact byte stream the shape_hash folds (the recipe both drivers
 /// MUST reproduce — see the tests for FNV-1a vectors):
 ///
@@ -366,41 +381,24 @@ struct ParseDiagRecord<'a> {
 /// unresolved=K\n
 /// unresolvedname=<name>\n     (sorted)
 /// ```
-fn hash_lines(
-    root: &str,
-    config_errors: usize,
-    loaded: &[String],
-    program_files: &[String],
-    bound: usize,
-    symbols: i64,
-    duplicates: usize,
-    parse_diags: &[ParseDiagRecord<'_>],
-    program_errors: usize,
-    unresolved: &[String],
-) -> Vec<String> {
+fn hash_lines(input: &HashInput<'_>) -> Vec<String> {
     let mut lines = vec![
-        format!("file={root}\n"),
-        format!("config_errors={config_errors}\n"),
-        format!("loaded={}\n", loaded.len()),
+        format!("file={}\n", input.root),
+        format!("config_errors={}\n", input.config_errors),
+        format!("loaded={}\n", input.loaded.len()),
     ];
-    for name in loaded {
+    for name in input.loaded {
         lines.push(format!("loadedfile={name}\n"));
     }
-    lines.push(format!("parsed={}\n", program_files.len()));
-    for name in program_files {
+    lines.push(format!("parsed={}\n", input.program_files.len()));
+    for name in input.program_files {
         lines.push(format!("programfile={name}\n"));
     }
-    lines.push(format!("bound={bound}\n"));
-    lines.push(format!("symbols={symbols}\n"));
-    lines.push(format!("duplicates={duplicates}\n"));
-    for record in parse_diags {
+    lines.push(format!("bound={}\n", input.bound));
+    lines.push(format!("symbols={}\n", input.symbols));
+    lines.push(format!("duplicates={}\n", input.duplicates));
+    for record in input.parse_diags {
         let d = record.diagnostic;
-        let args = d
-            .message_args()
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("\u{1}");
         lines.push(format!(
             "diag={}|{}|{}|{}|{}|{}\n",
             record.file,
@@ -408,12 +406,12 @@ fn hash_lines(
             d.code(),
             d.pos(),
             d.end(),
-            args
+            d.message_args().join("\u{1}")
         ));
     }
-    lines.push(format!("program_errors={program_errors}\n"));
-    lines.push(format!("unresolved={}\n", unresolved.len()));
-    for name in unresolved {
+    lines.push(format!("program_errors={}\n", input.program_errors));
+    lines.push(format!("unresolved={}\n", input.unresolved.len()));
+    for name in input.unresolved {
         lines.push(format!("unresolvedname={name}\n"));
     }
     lines
@@ -490,18 +488,18 @@ fn emit_program_line(line: &mut String, corpus_abs: &str, root: &BenchFile, seed
     let mut loaded = counting.loaded_names();
     loaded.sort();
 
-    let lines = hash_lines(
-        root.file_name.as_string(),
+    let lines = hash_lines(&HashInput {
+        root: root.file_name.as_string(),
         config_errors,
-        &loaded,
-        &program_files,
+        loaded: &loaded,
+        program_files: &program_files,
         bound,
         symbols,
         duplicates,
-        &parse_diags,
+        parse_diags: &parse_diags,
         program_errors,
-        &unresolved,
-    );
+        unresolved: &unresolved,
+    });
     let hash = shape_hash(&lines);
 
     // ── The NDJSON line (field order is the contract). ──
@@ -656,18 +654,18 @@ mod tests {
     fn program_hash_recipe_vectors() {
         // Hand-computed (independently of this crate's fold) over the
         // documented line set:
-        let lines = hash_lines(
-            "/corpus/trivial.ts",
-            0,
-            &[],
-            &[],
-            0,
-            0,
-            0,
-            &[],
-            0,
-            &[],
-        );
+        let lines = hash_lines(&HashInput {
+            root: "/corpus/trivial.ts",
+            config_errors: 0,
+            loaded: &[],
+            program_files: &[],
+            bound: 0,
+            symbols: 0,
+            duplicates: 0,
+            parse_diags: &[],
+            program_errors: 0,
+            unresolved: &[],
+        });
         assert_eq!(lines.len(), 9);
         assert_eq!(shape_hash(&lines), "de8c587ddb1d7276");
 
@@ -682,18 +680,18 @@ mod tests {
             file: "/corpus/bad.ts",
             diagnostic: d,
         };
-        let lines = hash_lines(
-            "/corpus/trivial.ts",
-            0,
-            &[],
-            &[],
-            0,
-            0,
-            0,
-            &[record],
-            1,
-            &["some-missing-package".to_string()],
-        );
+        let lines = hash_lines(&HashInput {
+            root: "/corpus/trivial.ts",
+            config_errors: 0,
+            loaded: &[],
+            program_files: &[],
+            bound: 0,
+            symbols: 0,
+            duplicates: 0,
+            parse_diags: &[record],
+            program_errors: 1,
+            unresolved: &["some-missing-package".to_string()],
+        });
         // the diag fold line carries the diagnostic's real key/args
         assert!(lines
             .iter()
@@ -771,10 +769,11 @@ mod tests {
             build_bound_program("/corpus", &root, std::slice::from_ref(&root));
         let files = program.get_source_files();
         assert_eq!(program.get_config_file_parsing_diagnostics().len(), 0);
-        // the esnext default lib chain is fully loaded (96 files) + the root
-        assert_eq!(files.len(), 97);
+        // the esnext default lib chain is fully loaded (99 files — the
+        // esnextLibs list program_test.go asserts) + the root
+        assert_eq!(files.len(), 100);
         assert_eq!(files[0].file_name().as_string(), "bundled:///libs/lib.es5.d.ts");
-        assert_eq!(files[96].file_name().as_string(), "/corpus/trivial.ts");
+        assert_eq!(files[99].file_name().as_string(), "/corpus/trivial.ts");
         // every file bound, symbols allocated, parse diagnostics clean
         let mut bound = 0;
         let mut symbols = 0i64;
@@ -783,7 +782,7 @@ mod tests {
             bound += 1;
             symbols += i64::from(file.payload().symbol_count);
         }
-        assert_eq!(bound, 97);
+        assert_eq!(bound, 100);
         assert!(symbols > 0);
         assert!(program.get_program_diagnostics().is_empty());
         assert!(program.get_unresolved_imports().is_empty());
@@ -793,7 +792,7 @@ mod tests {
         loaded.sort();
         assert!(loaded.contains(&"bundled:///libs/lib.es5.d.ts".to_string()));
         assert!(loaded.contains(&"/corpus/trivial.ts".to_string()));
-        assert!(loaded.len() >= 97);
+        assert!(loaded.len() >= 100);
     }
 
     // ── (d) the missing-import fixture shape ──

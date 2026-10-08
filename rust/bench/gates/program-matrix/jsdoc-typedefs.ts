@@ -6,4 +6,5 @@
  * @returns {Num}
  */
 /** @typedef {(} broken */
+/** @type {number */
 export const doc = 1;
