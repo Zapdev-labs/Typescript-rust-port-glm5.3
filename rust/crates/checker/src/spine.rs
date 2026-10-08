@@ -789,14 +789,7 @@ impl Checker {
             tr.push(Phase::Check, "checkSourceFile", &args, true)
         });
         // `links` borrows the store — snapshot the flag through a scope.
-        let already_type_checked = {
-            let links = self.source_file_links.get(source_file);
-            if links.type_checked {
-                true
-            } else {
-                false
-            }
-        };
+        let already_type_checked = self.source_file_links.get(source_file).type_checked;
         if !already_type_checked {
             // Grammar checking.
             self.check_grammar_source_file(source_file); // TODO(port M6 W3): grammarchecks.go's file pass (diagnostic-only).
@@ -888,12 +881,12 @@ impl Checker {
         // (source_file.rs header); permissive: nothing to check until it
         // lands. TODO(port M6 W3): the JSDoc-comment loop + tag walk.
         let kind = self.store().node(node).kind;
+        // Go's shape: the two outer conditions gate the inner call.
         if !self.within_unreachable_code
             && self.compiler_options.allow_unreachable_code != Tristate::TSTrue
+            && self.check_source_element_unreachable(node)
         {
-            if self.check_source_element_unreachable(node) {
-                self.within_unreachable_code = true;
-            }
+            self.within_unreachable_code = true;
         }
         match kind {
             Kind::TypeParameter => { /* TODO(port M6 S3): checkTypeParameter */ }
@@ -1038,6 +1031,9 @@ impl Checker {
                 // TODO(upstream, Go): enable this code once we support region diagnostics again.
                 let first = offset;
                 let mut last = offset;
+                // Go: `for i := offset + 1; i < len(statements); i++` — the
+                // index drives both the node read and `last`.
+                #[allow(clippy::needless_range_loop)]
                 for i in offset + 1..statements.len() {
                     let next_node = statements[i];
                     if !binder_shims::is_potentially_executable_node(self.store(), next_node)
@@ -1589,7 +1585,11 @@ impl Checker {
             if tsc_ast::utilities::is_entity_name_expression(self.store(), node) {
                 let node_text = u::entity_name_to_string(self.store(), node);
                 if is_identifier(self.store().node(node)) && node_text == "undefined" {
-                    self.error(node, &THE_VALUE_0_CANNOT_BE_USED_HERE, &[node_text.clone()]);
+                    self.error(
+                        node,
+                        &THE_VALUE_0_CANNOT_BE_USED_HERE,
+                        std::slice::from_ref(&node_text),
+                    );
                     return non_null_type;
                 }
                 if node_text.len() < 100 {
@@ -2836,10 +2836,7 @@ impl Checker {
         } else {
             None
         };
-        let symbol = self.get_global_symbol_stub(name, SymbolFlags::TYPE_ALIAS, diagnostic);
-        let Some(symbol) = symbol else {
-            return None;
-        };
+        let symbol = self.get_global_symbol_stub(name, SymbolFlags::TYPE_ALIAS, diagnostic)?;
         // Resolve the declared type of the symbol. This resolves type
         // parameters for the type alias so that we can check arity.
         // TODO(port M6 S2): getDeclaredTypeOfSymbol + the typeAliasLinks
@@ -3318,9 +3315,10 @@ mod tests {
             .as_variable_declaration_list()
             .expect("VariableDeclarationList data")
             .declarations
+            .as_ref()
+            .expect("declarations")
             .nodes[0];
         let arrow = crate::ast_shims::initializer_of(c.store(), decl).expect("initializer");
-        drop(store);
         c.check_node_deferred(arrow);
         assert_eq!(
             c.source_file_links.get(file).deferred_nodes.size(),
@@ -3384,10 +3382,11 @@ mod tests {
         let merged = c.globals.get("console").copied();
         assert!(merged.is_some(), "script locals merge into globals");
         // valueSymbolLinks seeds (Go's initializeChecker tail).
-        let undefined_links = c.value_symbol_links.get(c.undefined_symbol());
-        assert_eq!(undefined_links.resolved_type, Some(c.undefined_widening_type()));
-        let unknown_links = c.value_symbol_links.get(c.unknown_symbol());
-        assert_eq!(unknown_links.resolved_type, Some(c.error_type()));
+        let undefined_resolved = c.value_symbol_links.get(c.undefined_symbol()).resolved_type;
+        assert_eq!(undefined_resolved, Some(c.undefined_widening_type()));
+        let unknown_resolved =
+            c.value_symbol_links.get(c.unknown_symbol.expect("unknownSymbol")).resolved_type;
+        assert_eq!(unknown_resolved, Some(c.error_type()));
         // globalThis's resolved type is an anonymous object type.
         let global_this = c.global_this_symbol.expect("globalThisSymbol");
         let links = c.value_symbol_links.get(global_this);
@@ -3416,17 +3415,21 @@ mod tests {
     }
 
     /// The getGlobal* resolver table: seeded per Go's NewChecker, memoized,
-    /// and answering the no-lib fallback (emptyObjectType/nil symbol).
+    /// and answering the no-lib fallback (emptyObjectType/emptyGenericType
+    /// per arity / nil symbol).
     #[test]
     fn global_resolvers_memoize_the_no_lib_answer() {
         let mut c = spine_checker("");
-        assert_eq!(c.get_global_promise_type(), c.empty_object_type());
+        // Promise: arity 1 (Go checker.go:1092) → the empty generic type.
+        assert_eq!(c.get_global_promise_type(), c.empty_generic_type());
         // Memoized: the second call returns the same TypeId without
         // re-resolution (Go's core.Memoize).
-        assert_eq!(c.get_global_promise_type(), c.empty_object_type());
-        assert_eq!(c.get_global_promise_type_checked(), c.empty_object_type());
-        // 1-arity type resolvers fall to emptyGenericType (Go's arity arm).
-        assert_eq!(c.get_global_promise_type(), c.empty_object_type());
+        assert_eq!(c.get_global_promise_type(), c.empty_generic_type());
+        assert_eq!(
+            c.get_global_promise_type_checked(),
+            c.empty_generic_type()
+        );
+        assert_eq!(c.get_global_promise_like_type(), c.empty_generic_type());
         // Symbol resolvers answer None (Go's nil).
         assert_eq!(c.get_global_record_symbol(), None);
         assert_eq!(c.get_global_promise_constructor_symbol(), None);
@@ -3508,8 +3511,8 @@ mod tests {
         let c = spine_checker("");
         // Distinct anonymous placeholders (Go creates one per field).
         assert_ne!(c.empty_object_type(), c.empty_generic_type());
-        assert_ne!(c.empty_object_type(), c.any_function_type());
-        assert!(c.type_(c.any_function_type()).object_flags.intersects(ObjectFlags::NON_INFERRABLE_TYPE));
+        assert_ne!(c.empty_object_type(), c.any_function_type.expect("anyFunctionType"));
+        assert!(c.type_(c.any_function_type.expect("anyFunctionType")).object_flags.intersects(ObjectFlags::NON_INFERRABLE_TYPE));
         assert!(c.type_(c.empty_object_type()).object_flags.intersects(ObjectFlags::ANONYMOUS));
         // The signature family.
         let any_signature = c.any_signature.expect("anySignature");
@@ -3575,6 +3578,8 @@ mod tests {
                     .as_variable_declaration_list()
                     .expect("VariableDeclarationList data")
                     .declarations
+                    .as_ref()
+                    .expect("declarations")
                     .nodes[0],
             )
         };

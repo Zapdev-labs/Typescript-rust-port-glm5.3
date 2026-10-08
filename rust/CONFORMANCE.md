@@ -66,6 +66,41 @@ twin-run conventions).
 
 ## Measured numbers
 
+### 2026-10-08 — gap-2 closure (the TS8009 .js-unit parse diagnostics)
+
+**Twin parity (the wave's gate): the 300-case slice is now byte-identical
+on all 384 records (100%)** — the gap-2 residual (1 divergent record,
+`asyncArrowFunction_allowJs.ts`) is closed.
+
+**Root cause** (corrected by this wave): the M6-DISPATCH note said "Go's
+CHECKER emits TS8009"; verified false — Go emits
+`The_0_modifier_can_only_be_used_in_TypeScript_files` ONLY from the
+parser's `checkJSSyntax` (parser.go:6873, the modifier arm) and from
+tsoptions, with the condition
+`ast.ModifierToFlag(kind)&ast.ModifierFlagsJavaScript == 0` (the .js-LEGAL
+modifiers — export/static/accessor/async/default — are EXEMPT). There is
+no checker-side emission site. The Rust parser's port had the condition
+**inverted** (`ModifierFlags.intersects(JAVASCRIPT)`, erroring on exactly
+the JS-legal set), producing 4 spurious TS8009s on
+`async/es2017/asyncArrowFunction/asyncArrowFunction_allowJs.ts` (an
+`async` arrow in a `.js` unit). The fix inverts the two conditions in
+`crates/parser/src/parser.rs` (class/method + variable/property arms,
+PORT-noted against conformance gap 2).
+
+| driver | records | match | mismatch | missing-baseline | panic |
+|--------|---------|-------|----------|------------------|-------|
+| Rust   | 384 | 143 (37.2%) | 163 | 78 | 0 |
+| Go twin| 384 | 143 (37.2%) | 163 | 78 | 0 |
+
+Twin records byte-identical: **384/384 (100%)**; both drivers double-run
+deterministic. The fixture matrix twin (9 records), the program gate
+(15 records), and the `dump` (13 records) / `symbols` (15 records) twins
+all stay byte-identical. Climb % unchanged (37.2%): the closed gap
+removed divergent Rust-only diagnostics the *reference baselines* never
+carried (they are rendered from full checker depth, still the unwired
+boundary) — parity first, exactly as the gap-1 wave traded climb for
+truthfulness.
+
 ### 2026-10-08 — gap-1 closure (removed-option diagnostics + the
 ### AST-config-node surface)
 
@@ -127,6 +162,7 @@ program` over `rust/bench/gates/program-matrix` — byte-identical
 |------|--------|----------|-------|
 | first green slice | fixture matrix twin identical + climb ≥ 50% | matrix identical; 55.5% (pre gap-1) | **PASS** |
 | gap-1 closure | twin divergence ≤ gap 2's residual on the 300-slice | 1 divergent record (gap 2 only) | **PASS** |
+| gap-2 closure (M6 S1) | twin divergence 0 on the 300-slice | 384/384 byte-identical | **PASS** |
 | M6 done | climb ≥ 90% on the 300-case slice | 37.2% at parse+bind (twin-parity first; re-measures at full depth with the checker waves) | blocked (below) |
 
 A test is counted "pass" in the legacy table only when its full baseline
@@ -147,11 +183,16 @@ single-`.errors.txt` slice at parse+bind depth.
    (`convertConfigFileToObject`) stay deferred to the full AST-config
    wave — the plug points are PORT-noted in
    `crates/compiler/src/program.rs::verify_compiler_options`.
-2. **JS parse-diagnostic scope (TS8009)** — the Rust parser reports
-   `'async' modifier can only be used in TypeScript files` for `.js`
-   units at parse depth where Go emits it from the checker
-   (`asyncArrowFunction_allowJs`, 1 record, 4 diagnostics). **The sole
-   residual twin divergence (383/384 identical).**
+2. ~~**JS parse-diagnostic scope (TS8009)**~~ — **CLOSED (M6 S1 wave)**:
+   the divergence was not a checker/parser scope split (Go's checker never
+   emits TS8009; verified — the only emission sites are the parser's
+   `checkJSSyntax` modifier arm and tsoptions). The Rust parser's port had
+   the JS-legal-modifier exemption **inverted**
+   (`ModifierFlags.intersects(JAVASCRIPT)` vs Go's `& JavaScript == 0`),
+   erroring on exactly the .js-LEGAL modifiers (async/export/static/
+   accessor/default). Fixed in `crates/parser/src/parser.rs` (both
+   modifier arms, PORT-noted); the 300-slice twin is now 384/384
+   byte-identical.
 3. ~~**Include-reason matched-spec arms**~~ — **CLOSED (rode the same
    wave)**: `GetMatchedFileSpec`/`GetMatchedIncludeSpec` are ported on
    `ParsedCommandLine` (the as-written specs: `file_spec_by_path`,

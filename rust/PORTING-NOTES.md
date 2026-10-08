@@ -1597,3 +1597,95 @@ getInferredType, the tracer fixture test); workspace clippy zero; workspace
 tests all green; dump/symbols/program twins byte-identical; **Go-reference
 trace byte-diff EMPTY** (trace.json + legend.json, deterministic mode, the
 same event sequence as tracer_test.go's TestTracerPushPreservesEndArgMutations).
+
+## M6 S1 — the checker entry & expression spine (checker.go 2240–2585 + 7539–8060 + 14222–14310 + NewChecker tail)
+
+`rust/crates/checker/src/spine.rs` (new, ~3,590 ln) carries the slice (SPEC
+§4.2's checker.go→checker.rs map is honored through the module-head PORT
+note: checker.rs holds the spike core; the S1 wave rides spine.rs, later
+S-waves continue per-slice). Small supporting edits rode it:
+`utilities.rs` (`is_canceled`/`check_not_canceled` — Go's ctx becomes a
+host-set `Checker::canceled` flag), `inference.rs`
+(`is_skip_direct_inference_node` reads the now-real
+`skip_direct_inference_nodes` OrderedSet; `is_from_inference_blocked_source`
+made real), `todo_shapes.rs` (`FlowLoopInfo`).
+
+- **checkSourceFile family + the unreachable machinery** (2240–2528):
+  full statement dispatch (~55 arms, every leaf bannered with its owning
+  slice — S3/W3 for statement arms, S4/W5 for expression arms);
+  `checkSourceElementUnreachable`'s region scan (reportedUnreachableNodes
+  dedupe, parent-statement forward scan), `withinUnreachableCode`
+  save/restore through checkSourceElement.
+- **Deferred nodes (M6-DISPATCH risk 2) — drain fidelity**: Go's drain is a
+  LIVE index loop over `OrderedSet.Keys` ("We use a for loop here to ensure
+  we enumerate new items added during iteration"), with the set REPLACED
+  after the loop. The Rust OrderedSet can't mutate under a borrowed
+  iteration, so `check_deferred_nodes` takes the set into a FIFO and, after
+  each node, re-pulls whatever the drain queued into the fresh set —
+  identical enumeration order and end state (empty set), pinned by test.
+- **The expression spine** (7539–8060): getTypeOfExpression (flowTypeCache
+  + flowInvocationCount gate — the flow engine is W3, so the cache stays
+  cold exactly like Go on flow-free expressions), getQuickTypeOfExpression
+  (literal arm real; call/new/await arms are optimizations routed through
+  S-bannered stubs), checkNonNullExpression/Type/WithReporter (S10 PORT
+  note: Go's getTypeFacts flow lattice → the pure-flags facts; the
+  undefined/null SPLIT bits don't exist in the relater's carried TypeFacts
+  yet — the reporter folds to the combined IS_UNDEFINED_OR_NULL message
+  until S10 re-bases the bits), checkExpressionWithContextualType (the
+  contextual/inference stacks push/pop Go-shaped),
+  instantiateTypeWithSingleGenericCallSignature (reachable prefix exact;
+  the deep tail bannered S8/S9), checkExpressionWorker (~45 arms; the
+  spike's literal/keyword arms ride unchanged).
+- **Diagnostics entries** (14222–14310): the REAL bodies for
+  error/addDiagnostic/addSuggestionDiagnostic/errorOrSuggestion/
+  errorAndMaybeSuggestAwait (the spike's W1 no-op stubs deleted from
+  checker.rs); `DiagnosticsCollection` (ast/diagnostic.go) ported checker-
+  locally (tsc-checker can't depend on tsc-compiler's copy — the compiler
+  depends on the checker; hoist note: moves to ast when that port lands).
+  PORT: the entries store the diagnostic's file NAME (resolved at Add
+  time), keeping the comparator/Get methods checker-free — the call-site
+  borrows need it; Go's diagnosticIndex map collapses to a same-location-
+  key bucket scan (same observable Add semantics).
+- **initializeChecker** (1309–1470): globals merge from script-file locals
+  (ambient module symbols deferred; pattern ambient modules; module
+  augmentations — global first, then non-global, Go's comment-ordering),
+  addUndefinedToGlobalsOrErrorOnRedeclaration (the `globalThis`
+  redeclaration diagnostic — DECLARATION_NAME_CONFLICTS_WITH_BUILT_IN_
+  GLOBAL_IDENTIFIER_0), the valueSymbolLinks seeds (undefined/arguments/
+  unknown/globalThis), and the special global types through
+  getGlobalType/getGlobalStrictFunctionType (answering
+  emptyObjectType/emptyGenericType per arity under the S6 resolveName
+  stub). The 52-entry getGlobal* resolver table (Go's globalResolvers func
+  fields, incl. the upstream `Contxt` typo) is memoized per resolver id
+  through GLOBAL_RESOLVER_TABLE + accessor macros.
+- **NewChecker tail wiring (checker.rs)**: the seeding lands AFTER the
+  spike's intrinsic/marker creation (the type-id order pin holds);
+  new_signature/new_object_type/new_anonymous_type are spine.rs's S7/S8
+  seams (empty members → MEMBERS_RESOLVED, the note explains why that is
+  Go's exact answer for these calls); the signatures arena gains the
+  dummy slot 0 (id == index, matching the types arena + the existing
+  `signatures[sig.0]` convention); noTypePredicate seeds
+  `"<<unresolved>>"`/anyType; the for-check marker pair mirrors the
+  relater pair; the booleanType union construction stays PANICKING (the
+  S7 gate demo pin holds).
+- **Gap 2 (TS8009) — CLOSED, and the dispatch note corrected**: Go emits
+  TS8009 ONLY from the parser (checkJSSyntax's modifier arm, parser.go
+  6873) and tsoptions — there is NO checker-side site (verified by grep);
+  the condition is `ModifierToFlag(kind)&ModifierFlagsJavaScript == 0`
+  (the .js-LEGAL modifiers — export/static/accessor/async/default — are
+  exempt). The Rust parser had it INVERTED (`.intersects(JAVASCRIPT)`,
+  erroring on exactly the legal set) — fixed in
+  crates/parser/src/parser.rs's two modifier arms (PORT-noted).
+
+**Validation**: tsc-checker 86 lib (+12 spine pins: typeChecked flip,
+deferred queue/drain/live-addition ordering, globals merge + link seeds,
+globalThis redeclaration, resolver memoization, unreachable report+dedupe
+via getDiagnostics — TSUnknown options route TS7027 through
+addErrorOrSuggestion's suggestion arm exactly as Go's code does —,
+error-or-suggestion routing, the ctor-family pins, deferred-diagnostic
+drain, checkExpressionEx literal) + 7 integration; tsc-parser 15 (+2
+ignored); workspace tests all green; clippy zero on both crates; twins
+byte-identical: fixture matrix 9/9, program 15, dump 13, symbols 15, and
+the 300-slice **384/384 records byte-identical (gap-2 divergence 1 → 0)**;
+climb stays 37.2% (parity first; the removed diagnostics were Rust-only
+vs the reference — see rust/CONFORMANCE.md).
