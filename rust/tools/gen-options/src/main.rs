@@ -21,7 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use serde::Deserialize;
@@ -42,7 +42,7 @@ enum EnumValue {
 #[serde(untagged)]
 enum Stringer {
     /// Go: `stringer: "name"` — display text is the member name.
-    ByName,
+    ByName(String),
     /// Pre-resolved from an options.ts `enumMaps` entry: member name → display.
     Map(HashMap<String, String>),
 }
@@ -53,11 +53,11 @@ struct EnumMember {
     value: EnumValue,
     #[serde(default)]
     comment: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "trailingComment")]
     trailing_comment: Option<String>,
     /// Only on ModuleKind members: the ModuleResolutionKind they imply
     /// (Go: `ModuleKindToModuleResolutionKind` map entries).
-    #[serde(default)]
+    #[serde(default, rename = "moduleResolution")]
     module_resolution: Option<String>,
 }
 
@@ -71,10 +71,10 @@ struct EnumDef {
 
 /// A stored struct field. `name` is the tsconfig/CLI name; `goName` overrides
 /// options.ts `fieldName()` capitalization when present.
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct Field {
     name: String,
-    #[serde(default)]
+    #[serde(default, rename = "goName")]
     go_name: Option<String>,
     /// Go field type string, after generate-options.ts `goType()` mapping.
     #[serde(rename = "type")]
@@ -83,7 +83,10 @@ struct Field {
     section: Option<String>,
     #[serde(default)]
     deprecated: bool,
+    /// Mirrored for provenance only; the Go core output does not mark
+    /// internal fields (they are plain fields after the section comment).
     #[serde(default)]
+    #[allow(dead_code)]
     internal: bool,
     #[serde(default)]
     comment: Option<String>,
@@ -207,7 +210,11 @@ fn validate(model: &Model) {
         // display text for each).
         if let Some(stringer) = &enum_def.stringer {
             match stringer {
-                Stringer::ByName => {}
+                Stringer::ByName(name) => {
+                    if name != "name" {
+                        fail(format!("unknown stringer kind {name:?}"));
+                    }
+                }
                 Stringer::Map(map) => {
                     for member in &enum_def.members {
                         if matches!(member.value, EnumValue::Number(n) if n != 0)
@@ -335,12 +342,17 @@ fn emit_doc_comments(out: &mut String, field: &Field) {
     }
 }
 
-fn emit_struct(out: &mut String, model: &Model, name: &str, doc: &str, fields: &[Field]) {
+fn emit_struct(out: &mut String, name: &str, doc: &str, fields: &[Field]) {
+    // PluginImport also derives PartialEq/Eq: Go compares Plugins slices with
+    // slices.Equal (== on the whole struct value); Vec<PluginImport> equality
+    // requires PartialEq on the element type.
+    let derives = if name == "PluginImport" {
+        "#[derive(Clone, Debug, Default, PartialEq, Eq)]"
+    } else {
+        "#[derive(Clone, Debug, Default)]"
+    };
     let _ = writeln!(out, "{doc}");
-    let _ = writeln!(
-        out,
-        "#[derive(Clone, Debug, Default)]\npub struct {name} {{"
-    );
+    let _ = writeln!(out, "{derives}\npub struct {name} {{");
     for field in fields {
         let Some(ty) = &field.ty else {
             fail(format!("field {} has no type", field_name(field)));
@@ -354,7 +366,6 @@ fn emit_struct(out: &mut String, model: &Model, name: &str, doc: &str, fields: &
         );
     }
     let _ = writeln!(out, "}}\n");
-    let _ = model; // used only by callers that need enum lookup
 }
 
 fn emit_equals(out: &mut String, fields: &[Field]) {
@@ -431,7 +442,7 @@ fn emit_enums(out: &mut String, model: &Model) {
                 .as_deref()
                 .map(|c| format!(" // {c}"))
                 .unwrap_or_default();
-            let _ = writeln!(out, "{prefix}    {} = {value}{trailing},", member.name);
+            let _ = writeln!(out, "{prefix}    {} = {value},{trailing}", member.name);
         }
         let _ = writeln!(out, "}}\n");
 
@@ -454,7 +465,7 @@ fn emit_enums(out: &mut String, model: &Model) {
                 enum_def.name, member.name
             );
         }
-        let _ = writeln!(out, "            _ => None,\n        }\n    }}");
+        let _ = writeln!(out, "            _ => None,\n        }}\n    }}");
 
         // Value-alias members (e.g. ScriptTargetLatest = ScriptTargetESNext)
         // become associated consts; Rust enums cannot share discriminants.
@@ -534,7 +545,7 @@ fn emit_stringers(out: &mut String, model: &Model) {
                     continue;
                 }
                 EnumValue::Number(_) | EnumValue::Alias(_) => match stringer {
-                    Stringer::ByName => member.name.clone(),
+                    Stringer::ByName(_) => member.name.clone(),
                     Stringer::Map(map) => map
                         .get(&member.name)
                         .unwrap_or_else(|| {
@@ -699,9 +710,16 @@ mod options_generated_test {{
             .find(|f| f.ty.as_deref() == Some(ty))
             .unwrap_or_else(|| fail(format!("no compiler option of type {ty:?} to test")))
     };
+    let find_named = |name: &str| -> &Field {
+        model
+            .compiler_options
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| fail(format!("no compiler option named {name:?} to test")))
+    };
     let tristate = find("Tristate");
     let target = find("ScriptTarget");
-    let strings = find("[]string");
+    let strings = find_named("lib");
     let opt_int = find("*int");
     let paths = find("*collections.OrderedMap[string, []string]");
     let t = snake_case(&field_name(tristate));
@@ -715,11 +733,13 @@ mod options_generated_test {{
     fn clone_and_equals_match_go() {{
         // Baseline: the generated Clone/Equals in options_generated.go —
         // clones are value-equal; any differing field breaks Equals.
-        let mut options = CompilerOptions::default();
-        options.{t} = Tristate::TSTrue;
-        options.{tgt} = ScriptTarget::ES2020;
-        options.{vec} = vec!["lib.es2015.d.ts".to_string()];
-        options.{num} = Some(2);
+        let options = CompilerOptions {{
+            {t}: Tristate::TSTrue,
+            {tgt}: ScriptTarget::ES2020,
+            {vec}: vec!["lib.es2015.d.ts".to_string()],
+            {num}: Some(2),
+            ..CompilerOptions::default()
+        }};
 
         let clone = options.clone();
         assert!(options.equals(&clone));
@@ -787,7 +807,7 @@ fn generate(model: &Model) -> String {
 use std::fmt;
 
 use tsc_collections::OrderedMap;
-use tsc_tspath::{RootedDirectoryPath, RootedFilePath, RootedPath, SourceMapLocation};
+use tsc_tspath::{{RootedDirectoryPath, RootedFilePath, RootedPath, SourceMapLocation}};
 
 use crate::tristate::Tristate;
 
@@ -800,7 +820,6 @@ use crate::tristate::Tristate;
 
     emit_struct(
         &mut out,
-        model,
         "PluginImport",
         "/// Go: `type PluginImport struct { Name string }`.",
         &model.plugin_import_fields,
@@ -808,7 +827,6 @@ use crate::tristate::Tristate;
 
     emit_struct(
         &mut out,
-        model,
         "CompilerOptions",
         "/// CompilerOptions contains the compiler options exposed by the API.",
         &model.compiler_options,
@@ -826,7 +844,6 @@ use crate::tristate::Tristate;
 
     emit_struct(
         &mut out,
-        model,
         "TypeAcquisition",
         "/// Go: `type TypeAcquisition struct`.",
         &model.type_acquisition,
@@ -834,10 +851,11 @@ use crate::tristate::Tristate;
 
     // BuildOptions: stored fields only, ordered by buildOptionFieldOrder
     // (Go: `orderByName(buildOptions, options.buildOptionFieldOrder, ...)`).
-    let mut build_fields: Vec<&Field> = model
+    let mut build_fields: Vec<Field> = model
         .build_options
         .iter()
         .filter(|f| f.go_name.is_some())
+        .cloned()
         .collect();
     build_fields.sort_by_key(|f| {
         model
@@ -848,7 +866,6 @@ use crate::tristate::Tristate;
     });
     emit_struct(
         &mut out,
-        model,
         "BuildOptions",
         "/// Go: `type BuildOptions struct`.",
         &build_fields,

@@ -85,3 +85,31 @@ conversion zero-cost but introduces unsafe into a green M1 crate mid-flight.
 Revisit if Phase B program-level profiling shows `path_key` on a hot path —
 then prefer restructuring the bench/real callers to use owned conversions or
 a view type over unsafe punning. Raw outputs: ~/bench-results/phase0 (rig).
+
+## 2026-10-07 tools/gen-options + crates/core — options_generated.go/compileroptions.go port
+- `gen-options` mirrors what `generate-options.ts` emits into
+  `core/options_generated.go` from a hand-mirrored data file
+  (`tools/gen-options/data/options-model.json`, subset of
+  `tools/scripts/tsc/options.ts`; provenance + re-verify steps in
+  `data/README.md`). Go output is never an input (SPEC §6); it is the parity
+  baseline for the generated tests.
+- Go slice nil-vs-empty collapses: option list fields are plain `Vec`s, so
+  `Equals`'s `(a == nil) != (b == nil) || !slices.Equal(a, b)` reduces to
+  `a != b`, and `GetEffectiveTypeRoots` treats an explicitly empty
+  `typeRoots` as unset. `*int` -> `Option<i64>` (Go int is 64-bit here);
+  `Paths` keeps nil-ness exactly via `Option<OrderedMap>`.
+- `ScriptTargetLatest`/`LatestStandard` (same-discriminant Go value aliases)
+  become associated consts (`ScriptTarget::Latest`), `#[allow]`ing
+  `non_upper_case_globals` for Go-parity names; likewise the free
+  `ResolutionMode*` consts in compileroptions.rs.
+- Go's panicking `String()` stringers (ModuleResolutionKind, JsxEmit) become
+  `Display` impls that panic on the zero value identically; `from_i32`
+  replaces Go's untyped-int round-trip.
+- `ModuleKindToModuleResolutionKind` map -> `Option`-returning fn (Go map
+  lookup on a missing key yields the zero value, which no caller relies on).
+- `EmptyCompilerOptions` (shared zero pointer) -> `empty_compiler_options()`
+  returning a fresh default (not `Sync`, no static).
+- `noCopy` embed and json tags dropped (no Rust counterpart).
+- Derived `PartialOrd`/`Ord` on the option enums equal the numeric order
+  (generator-validated: member values monotonic in declaration order), so
+  Go's int32 range checks port directly to variant comparisons.

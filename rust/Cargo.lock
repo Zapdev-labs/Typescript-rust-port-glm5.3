@@ -42,6 +42,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gen-options"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -199,6 +207,7 @@ name = "tsc-core"
 version = "0.0.0"
 dependencies = [
  "tsc-collections",
+ "tsc-tspath",
 ]
 
 [[package]]

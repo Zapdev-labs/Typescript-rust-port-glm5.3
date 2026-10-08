@@ -7,3 +7,10 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# bfs.go imports tsc/internal/collections (OrderedMap, SyncSet, MapEntry).
+tsc-collections = { path = "../collections" }
+# options_generated.go + compileroptions.go import tsc/internal/tspath
+# (RootedFilePath/RootedDirectoryPath/RootedPath/SourceMapLocation).
+tsc-tspath = { path = "../tspath" }
