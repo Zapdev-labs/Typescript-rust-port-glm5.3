@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "strict": true
+  },
+  "references": [
+    { "path": "../01-plain" },
+    { "path": "./self", "circular": true }
+  ]
+}

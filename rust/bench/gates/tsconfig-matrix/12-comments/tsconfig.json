@@ -1,0 +1,11 @@
+// leading comment
+{
+  /* block comment */
+  "compilerOptions": {
+    "target": "es2019", // trailing comment
+    "strict": true,
+  },
+  "exclude": [
+    "node_modules",
+  ] // trailing
+}

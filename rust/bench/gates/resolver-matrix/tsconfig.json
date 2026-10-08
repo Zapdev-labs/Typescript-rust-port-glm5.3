@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "module": "esnext",
+    "target": "esnext",
+    "paths": { "mapped": ["./src/mapped.ts"] }
+  }
+}

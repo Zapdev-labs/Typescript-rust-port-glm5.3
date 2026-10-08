@@ -1,0 +1,6 @@
+{
+  "extends": "./shared-base/base.json",
+  "compilerOptions": {
+    "outDir": "dist"
+  }
+}

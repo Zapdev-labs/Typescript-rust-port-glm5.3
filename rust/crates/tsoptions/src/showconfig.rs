@@ -35,8 +35,14 @@ pub struct TSConfig {
 }
 
 impl TSConfig {
-    /// The deterministic JSON form (Go: `json.Marshal(tsconfig)` with 4-space
-    /// indent — `npx tsc --showConfig` output shape).
+    /// The deterministic JSON form — Go: `json.MarshalIndentWrite(w, tsConfig,
+    /// "", "    ")` (tsc/internal/execute/tsc.go:425, i.e. `tsc --showConfig`).
+    ///
+    /// PORT (found by the showconfig parity twin): the previous port used a
+    /// 2-space indent and skipped `compilerOptions` when empty — but Go's
+    /// TSConfig marshals with a 4-space indent and the non-omitzero
+    /// `CompilerOptions` map is ALWAYS emitted (an empty map renders as
+    /// `"compilerOptions": {}`). Both now mirror Go byte-for-byte.
     pub fn marshal(&self) -> String {
         let mut out = String::new();
         out.push_str("{\n");
@@ -46,14 +52,15 @@ impl TSConfig {
                 out.push_str(",\n");
             }
             *first = false;
-            out.push_str("  ");
+            out.push_str("    ");
             out.push_str(&serde_json::json!(key).to_string());
             out.push_str(": ");
         };
-        if !self.compiler_options.is_empty() {
-            push_key(&mut out, &mut first, "compilerOptions");
-            out.push_str(&marshal_value_map(&self.compiler_options, 1));
-        }
+        // Go: `CompilerOptions *OrderedMap json:"compilerOptions"` — no
+        // omitzero; ConvertToTSConfig always sets it, so the key is always
+        // emitted ({} for an empty map, exactly like encoding/json/v2).
+        push_key(&mut out, &mut first, "compilerOptions");
+        out.push_str(&marshal_value_map(&self.compiler_options, 1));
         if !self.references.is_empty() {
             push_key(&mut out, &mut first, "references");
             out.push_str(&marshal_value_list(&self.references, 1));
@@ -83,7 +90,7 @@ impl TSConfig {
 }
 
 fn indent(depth: usize) -> String {
-    "  ".repeat(depth)
+    "    ".repeat(depth)
 }
 
 fn marshal_string_list(values: &[String], depth: usize) -> String {

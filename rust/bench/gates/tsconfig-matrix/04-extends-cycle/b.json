@@ -1,0 +1,6 @@
+{
+  "extends": "./a.json",
+  "compilerOptions": {
+    "target": "es2020"
+  }
+}

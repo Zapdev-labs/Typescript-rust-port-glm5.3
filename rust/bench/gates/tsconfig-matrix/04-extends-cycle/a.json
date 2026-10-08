@@ -1,0 +1,6 @@
+{
+  "extends": "./b.json",
+  "compilerOptions": {
+    "strict": true
+  }
+}

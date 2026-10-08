@@ -1,0 +1,6 @@
+{
+  "extends": "./level2.json",
+  "compilerOptions": {
+    "declaration": true
+  }
+}

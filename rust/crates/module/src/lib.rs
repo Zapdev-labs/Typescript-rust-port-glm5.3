@@ -50,6 +50,7 @@ pub use util::{
     node_module_package_root_for_file, parse_package_name, try_get_js_extension_for_file,
     try_get_js_extension_for_file_name, unmangle_scoped_package_name,
 };
+pub use vfsmatch::{SpecMatcher, Usage, UNLIMITED_DEPTH, new_spec_matcher, read_directory};
 
 #[cfg(test)]
 mod resolver_internal_test;

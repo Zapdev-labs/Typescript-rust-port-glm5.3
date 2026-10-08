@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "es2021",
+    "module": "amd",
+    "moduleResolution": "node",
+    "strict": true,
+    "noImplicitAny": false,
+    "incremental": true,
+    "maxNodeModuleJsDepth": 2,
+    "types": ["node", "jest"],
+    "lib": ["es2021", "dom"],
+    "rootDirs": ["src", "gen"],
+    "paths": { "@/*": ["src/*"], "empty": [] },
+    "jsx": "react-jsx",
+    "newLine": "lf",
+    "outDir": "dist"
+  }
+}

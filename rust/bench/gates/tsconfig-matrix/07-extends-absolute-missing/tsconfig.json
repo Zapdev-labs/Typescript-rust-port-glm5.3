@@ -1,0 +1,6 @@
+{
+  "extends": "/nonexistent-absolute/base.json",
+  "compilerOptions": {
+    "strict": true
+  }
+}

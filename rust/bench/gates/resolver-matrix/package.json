@@ -1,0 +1,11 @@
+{
+  "name": "selfpkg",
+  "version": "1.2.3",
+  "exports": {
+    ".": "./src/self.ts",
+    "./sub": "./src/sub.ts"
+  },
+  "imports": {
+    "#dep": "./deps/dep.js"
+  }
+}

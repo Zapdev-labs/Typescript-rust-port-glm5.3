@@ -388,6 +388,7 @@ dependencies = [
  "tsc-glob",
  "tsc-json",
  "tsc-locale",
+ "tsc-module",
  "tsc-scanner",
  "tsc-stringutil",
  "tsc-tspath",

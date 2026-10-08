@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "outDir": "dist"
+  },
+  "include": ["src/**/*", "bad/**/..", "recursive/**"],
+  "exclude": ["node_modules", "dist"]
+}

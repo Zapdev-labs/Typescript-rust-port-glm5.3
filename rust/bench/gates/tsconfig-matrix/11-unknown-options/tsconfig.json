@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "strick": true,
+    "totallyMadeUp": 42,
+    "strict": true
+  }
+}

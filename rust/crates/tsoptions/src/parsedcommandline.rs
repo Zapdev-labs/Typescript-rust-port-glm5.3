@@ -13,7 +13,7 @@ use tsc_ast::Diagnostic;
 use tsc_core::options_generated::{BuildOptions, CompilerOptions, TypeAcquisition};
 use tsc_tspath::{CaseSensitivity, PathPattern, RootedDirectoryPath, RootedFilePath, RootedPath};
 
-use crate::tsconfigparsing::{ConfigFileSpecs, ParsedCompilerOptions, ProjectReference, DEFAULT_INCLUDE_SPEC};
+use crate::tsconfigparsing::{ConfigFileSpecs, ParsedCompilerOptions, ProjectReference};
 
 /// Go: `type ParsedCommandLine struct` (the fields the M4 surface consumes).
 #[derive(Clone, Debug, Default)]
@@ -24,8 +24,9 @@ pub struct ParsedCommandLine {
     pub type_acquisition: TypeAcquisition,
     /// Go: `buildOptions *core.BuildOptions`.
     pub build_options: BuildOptions,
-    /// Go: `fileNames []tspath.RootedFilePath` — empty in the M4 wave (file
-    /// enumeration is the glob/vfs wave; see tsconfigparsing.rs PORT notes).
+    /// Go: `fileNames []tspath.RootedFilePath` — the glob-enumerated + literal
+    /// file list (getFileNamesFromConfigSpecs; ported with the showconfig
+    /// parity twin — see tsconfigparsing.rs PORT notes).
     pub(crate) file_names: Vec<RootedFilePath>,
     /// Go: `baseDirectory tspath.RootedDirectoryPath`.
     pub base_directory: RootedDirectoryPath,
@@ -37,11 +38,24 @@ pub struct ParsedCommandLine {
     pub compile_on_save: Option<bool>,
     /// Go: `configFileName tspath.RootedFilePath`.
     pub config_file_name: RootedFilePath,
-    /// The raw validated include/exclude/files specs (Go: `configFileSpecs`
-    /// is built during parse; the port defers to `config_file_specs()`).
-    pub(crate) raw_include_specs: Option<Vec<PathPattern>>,
-    pub(crate) raw_exclude_specs: Option<Vec<PathPattern>>,
-    pub(crate) raw_files_specs: Vec<PathPattern>,
+    /// Go: `configFileSpecs.validatedIncludeSpecs` — post-${configDir}
+    /// substitution; `None` mirrors Go's nil slice (include absent).
+    pub(crate) validated_include_specs: Option<Vec<PathPattern>>,
+    /// Go: `configFileSpecs.validatedExcludeSpecs` (`None` = absent).
+    pub(crate) validated_exclude_specs: Option<Vec<PathPattern>>,
+    /// Go: `configFileSpecs.validatedFilesSpec` (post-substitution).
+    pub(crate) validated_files_specs: Vec<tsc_tspath::FileSpec>,
+    /// Go: `configFileSpecs.validatedFileNames` — the files-list entries
+    /// resolved against the config directory (literal files are included
+    /// verbatim with no existence check, exactly as in Go).
+    pub(crate) validated_file_names: Vec<RootedFilePath>,
+    /// Go: `configFileSpecs.includeSpecs`/`excludeSpecs` — the raw spec
+    /// values as merged into the config (extends rewrite included), kept
+    /// for the No-inputs diagnostic's JSON arguments.
+    pub(crate) raw_include_spec_values: Vec<String>,
+    pub(crate) raw_exclude_spec_values: Vec<String>,
+    /// Go: `configFileSpecs.isDefaultIncludeSpec`.
+    pub(crate) is_default_include_spec: bool,
     /// Go: `errors []*ast.Diagnostic`.
     pub errors: Vec<Diagnostic>,
     /// Go: `raw any` — the option map the command-line parser produced
@@ -87,24 +101,22 @@ impl ParsedCommandLine {
 
     /// Go: `func (c *ParsedCommandLine) getConfigFileSpecs() *configFileSpecs`.
     ///
-    /// Builds the validated specs view: include defaults to `["**/*"]`
-    /// exactly as in Go's parse worker when neither files nor include are
-    /// present.
+    /// The worker-computed validated specs (see tsconfigparsing.rs); the
+    /// include list is `["**/*"]` exactly when the default include was
+    /// applied (Go: `isDefaultIncludeSpec`).
     pub fn config_file_specs(&self) -> Option<ConfigFileSpecs> {
-        let has_files = !self.raw_files_specs.is_empty();
-        let (validated_include_specs, is_default_include_spec) = match &self.raw_include_specs {
-            Some(specs) => (specs.clone(), false),
-            None if !has_files => (vec![PathPattern::from(DEFAULT_INCLUDE_SPEC)], true),
-            None => (Vec::new(), false),
-        };
         Some(ConfigFileSpecs {
-            validated_include_specs,
-            validated_exclude_specs: self
-                .raw_exclude_specs
+            validated_include_specs: self
+                .validated_include_specs
                 .clone()
                 .unwrap_or_default(),
-            validated_files_specs: Vec::new(),
-            is_default_include_spec,
+            validated_exclude_specs: self
+                .validated_exclude_specs
+                .clone()
+                .unwrap_or_default(),
+            validated_files_specs: self.validated_files_specs.clone(),
+            validated_file_names: self.validated_file_names.clone(),
+            is_default_include_spec: self.is_default_include_spec,
         })
     }
 

@@ -82,12 +82,13 @@ fn test_showconfig_runner_is_deterministic() {
     let first = run_showconfig(config_text, "/project");
     let second = run_showconfig(config_text, "/project");
     assert_eq!(first, second, "showconfig output must be deterministic");
-    assert!(first.starts_with("{\n  \"compilerOptions\": {"), "{first}");
+    // 4-space indent — Go: json.MarshalIndentWrite(w, tsConfig, "", "    ").
+    assert!(first.starts_with("{\n    \"compilerOptions\": {"), "{first}");
     // Paths serialize relative to the config file, module-specifier style
     // ("./dist" — Go's serializeCompilerOptionPath behavior).
     assert!(first.contains("\"outDir\": \"./dist\""), "{first}");
     assert!(
-        first.contains("\"rootDirs\": [\n      \"./src\",\n      \"./gen\"\n    ]"),
+        first.contains("\"rootDirs\": [\n            \"./src\",\n            \"./gen\"\n        ]"),
         "{first}"
     );
     // An explicitly provided value (noImplicitAny: false) is not overridden
@@ -97,14 +98,14 @@ fn test_showconfig_runner_is_deterministic() {
     assert!(first.contains("\"useDefineForClassFields\": false"), "{first}");
     assert!(first.contains("\"target\": \"es2020\""), "{first}");
     assert!(first.contains("\"module\": \"commonjs\""), "{first}");
-    assert!(first.contains("\"types\": [\n      \"node\",\n      \"jest\"\n    ]"), "{first}");
-    assert!(first.contains("\"paths\": {\n      \"@/*\": [\n        \"src/*\"\n      ]\n    }"), "{first}");
+    assert!(first.contains("\"types\": [\n            \"node\",\n            \"jest\"\n        ]"), "{first}");
+    assert!(first.contains("\"paths\": {\n            \"@/*\": [\n                \"src/*\"\n            ]\n        }"), "{first}");
     // incremental is emitted; tsBuildInfoFile is a compile-time computation
     // and is not part of Go's implied-options table, so it stays absent.
     assert!(first.contains("\"incremental\": true"), "{first}");
     // The spec arrays pass through.
-    assert!(first.contains("\"include\": [\n    \"src/**/*\"\n  ]"), "{first}");
-    assert!(first.contains("\"exclude\": [\n    \"node_modules\",\n    \"dist\"\n  ]"), "{first}");
+    assert!(first.contains("\"include\": [\n        \"src/**/*\"\n    ]"), "{first}");
+    assert!(first.contains("\"exclude\": [\n        \"node_modules\",\n        \"dist\"\n    ]"), "{first}");
     assert!(first.ends_with("}"), "{first}");
 }
 
@@ -145,7 +146,15 @@ fn test_showconfig_extends_merge() {
         None,
         None,
     );
-    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors.len());
+    assert!(
+        parsed.errors.len() == 1,
+        "expected exactly the No-inputs diagnostic (the fixture fs has no .ts \
+         files), got {:?}",
+        parsed.errors
+            .iter()
+            .map(|e| e.message_key())
+            .collect::<Vec<_>>()
+    );
     let options = parsed.compiler_options();
     // The extends target is inherited; outDir is overridden; strict carries.
     assert_eq!(options.target, tsc_core::options_generated::ScriptTarget::ES2019);

@@ -302,6 +302,70 @@ fn parse_segments(s: &str) -> Vec<Segment> {
     result
 }
 
+// SpecMatcher wraps multiple glob patterns for matching paths.
+//
+// Go: `type SpecMatcher struct` + `func NewSpecMatcher[T PathPatternInput]`
+// (tsc/internal/vfs/vfsmatch/vfsmatch.go:672-725). PORT: added when the
+// tsoptions parity twin needed it (getFileNamesFromConfigSpecs constructs
+// one per include-spec list) — the second consumer the module crate's PORT
+// note anticipated. The Go generic is instantiated with `tspath.PathPattern`
+// and `string` by its two call sites, so the port takes `&str`-like specs
+// via `AsRef<str>`; hoist into tsc-vfs unchanged when that wave lands.
+pub struct SpecMatcher {
+    patterns: Vec<GlobPattern>,
+}
+
+impl SpecMatcher {
+    /// Go: `func (m *SpecMatcher) MatchString(path string) bool`.
+    pub fn match_string(&self, path: &str) -> bool {
+        self.patterns.iter().any(|p| p.matches(path))
+    }
+
+    /// Go: `func (m *SpecMatcher) MatchFileName(path tspath.RootedFilePath) bool`.
+    pub fn match_file_name(&self, path: &RootedFilePath) -> bool {
+        self.match_string(path.as_string())
+    }
+
+    /// Go: `func (m *SpecMatcher) MatchIndex(path string) int` — the index
+    /// of the first matching pattern, or -1.
+    pub fn match_index(&self, path: &str) -> i32 {
+        for (i, p) in self.patterns.iter().enumerate() {
+            if p.matches(path) {
+                return i as i32;
+            }
+        }
+        -1
+    }
+
+    /// Go: `func (m *SpecMatcher) MatchFileNameIndex(path tspath.RootedFilePath) int`.
+    pub fn match_file_name_index(&self, path: &RootedFilePath) -> i32 {
+        self.match_index(path.as_string())
+    }
+}
+
+/// Go: `func NewSpecMatcher[T PathPatternInput](specs []T, basePath, usage, caseSensitivity) *SpecMatcher` —
+/// None when no spec compiles (Go returns nil).
+pub fn new_spec_matcher<S: AsRef<str>>(
+    specs: &[S],
+    base_path: &RootedDirectoryPath,
+    usage: Usage,
+    case_sensitivity: CaseSensitivity,
+) -> Option<SpecMatcher> {
+    if specs.is_empty() {
+        return None;
+    }
+    let mut patterns = Vec::with_capacity(specs.len());
+    for spec in specs {
+        if let Some(p) = compile_glob_pattern(spec.as_ref(), base_path, usage, case_sensitivity) {
+            patterns.push(p);
+        }
+    }
+    if patterns.is_empty() {
+        return None;
+    }
+    Some(SpecMatcher { patterns })
+}
+
 impl GlobPattern {
     // matches returns true if path matches this pattern.
     // Parity helper; kept for API parity.

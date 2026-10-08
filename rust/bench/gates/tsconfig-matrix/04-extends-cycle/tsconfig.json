@@ -1,0 +1,6 @@
+{
+  "extends": "./a.json",
+  "compilerOptions": {
+    "outDir": "dist"
+  }
+}

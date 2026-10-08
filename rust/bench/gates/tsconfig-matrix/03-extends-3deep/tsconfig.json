@@ -1,0 +1,6 @@
+{
+  "extends": "./level1.json",
+  "compilerOptions": {
+    "sourceMap": true
+  }
+}
