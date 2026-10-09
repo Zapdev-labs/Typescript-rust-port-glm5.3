@@ -1910,3 +1910,38 @@ FULL conformance corpus (7,567 records): twin divergence drops
 **528 → 382 with ZERO new divergences** (146 out-of-slice records fixed
 by the routes/arms — the residual is the notifier wave's positioned
 unknown-option diagnostics).
+
+## Program-layer perf wave — collectFiles determinism + parallel BindSourceFiles
+
+Two fixes from the Phase B program race (see BENCHMARKS.md's first Phase B
+entries):
+
+- **`files_parser.rs` — collectFiles now follows Go's `if
+  task.loadedTask != nil { task = task.loadedTask }`** (the claim task is
+  the group's loaded winner, so a multi-parent file claims at the FIRST
+  DFS site). The pre-fix form read the ALIAS task's own `loaded` (false),
+  skipped, and left the claim to whichever parent's task object won the
+  PARALLEL LOAD RACE — the program order was run-to-run nondeterministic
+  (5 runs / 5 outputs on packages/typescript/src) and diverged from Go on
+  every multi-import corpus (the 125-record program twin never matched;
+  the small program-matrix fixtures never exposed it — their import graphs
+  have no multi-parent files). The include-reason redirect keeps the
+  pre-follow task (Go captures `includeReason` before the reassignment,
+  mirrored). Twins after the fix: program-matrix 15/15, symbols
+  5,935-file conformance sweep, conformance 300-slice 384/384, and the
+  packages/typescript/src program twin — ALL byte-identical.
+- **`program.rs` — `BindSourceFiles` is parallel** (Go's
+  `core.NewWorkGroup(p.SingleThreaded())` → scoped threads over
+  text-weighted contiguous chunks of `files`; Go's queue balances per
+  file on the scheduler, so the chunk cut points follow cumulative TEXT
+  SIZE — equal-count chunks straggled on the big lib `.d.ts` files).
+  Determinism is Go's own (per-file binder, files order unchanged, no
+  twin output reads the raw lazy node/symbol ids — symbols_seam
+  canonicalizes); the SingleThreaded option and the <8-file break-even
+  gate the parallel arm; `IsBound` skips mirror Go. Bind on the program
+  corpus: 3108 ms serial → 1900 ms parallel (Go parallel 1134 ms — the
+  remaining gap is allocator-bound, see BENCHMARKS.md's tcmalloc data).
+- **bench-harness + go-driver — `TSC_BENCH_PROFILE=1`** accumulates the
+  five phase timers (seed/config/program/bind/record) to STDERR on both
+  drivers (identical phases, same env var; the NDJSON contract
+  untouched). PORT-noted at the instrumentation site.

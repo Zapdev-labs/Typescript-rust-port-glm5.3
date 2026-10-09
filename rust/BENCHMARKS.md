@@ -224,3 +224,55 @@ on the rig). Diagnostics must be byte-identical (modulo
 | date | tool | wall median | peak RSS | diag parity | rust/go |
 |---|---|---|---|---|---|
 | — | — | — | — | — | — |
+
+## Phase B — program race (first timing entries; 2026-10-09, workstation)
+
+Environment NOTE: these are workstation measurements (16-core, load avg ~2),
+not the quiet-rig protocol — the rig entries remain the official record;
+these land the first Phase B numbers + the two perf/correctness findings
+that came out of the race.
+
+**Corpus: `packages/typescript/src` (125 roots, 2.2 MB, one program per
+root, target esnext — 96-entry default lib set parsed per program).**
+
+| date | git (rust) | phase | rust | go | rust/go |
+|---|---|---|---|---|---|
+| 2026-10-09 | (pre) sequential binds | program+bind | 7.47 s | 3.43 s | 2.18× |
+| 2026-10-09 | parallel binds + collectFiles fix | program+bind | 6.50 s | 3.44 s | 1.89× |
+
+Phase split (env `TSC_BENCH_PROFILE=1`, both drivers instrumented
+identically, medians of repeated runs): seed 52 ms / config 6 ms /
+program 3121 ms / bind 1900 ms / record 20 ms (rust) vs seed 112 ms /
+config 7 ms / program 2202 ms / bind 1134 ms / record ~0 (go). Rust's map
+FS seeding is FASTER than Go's (Go sorts FromMap keys; 0.53×).
+
+**Finding 1 — the program twin was NONDETERMINISTIC (a pre-existing
+correctness bug, fixed): `collectFiles` did not follow Go's
+`if task.loadedTask != nil { task = task.loadedTask }` reassignment, so a
+file reachable from multiple import sites claimed at whichever parent's
+task object won the PARALLEL LOAD RACE — the program order (and the
+twin's `program_files` fold) varied run to run AND diverged from Go on
+this corpus (5 runs, 5 outputs; the 125-record twin never matched). With
+the follow (filesparser.rs), three consecutive runs are byte-identical to
+the Go driver. The 300-slice/program-matrix/conformance-matrix/symbols
+twins were insensitive (verified all green after the fix; the symbols
+twin — 5,935 conformance files — additionally proves the PARALLEL BINDS
+are output-identical).**
+
+**Finding 2 — parallel `BindSourceFiles`** (Go's `core.NewWorkGroup`):
+scoped threads over text-weighted contiguous chunks (equal-count chunks
+straggle on the big lib `.d.ts` files). Bind: 3108 ms (serial) → 1900 ms
+(parallel). The speedup plateaus ~1.6× on 16 cores (4→8→16 CPUs nearly
+identical — the bind is allocation/pointer-chasing heavy, not lock-
+serialized; LD_PRELOAD tcmalloc improves BOTH phases ~15-20% (program
+3445→2762 ms, bind 1870→1687 ms) — the allocator is a real lever for the
+next hardening pass (Go ships a tcmalloc-class allocator; the Rust
+binary links plain glibc malloc). Remaining program-phase gap (1.42×) is
+parse-dominated (the parse race on this corpus: 1.18× t=1).
+
+Next perf leads: (1) the allocator (mimalloc as the binary's
+GlobalAlloc — a bench-harness-only dependency, the port crates stay
+allocator-agnostic), (2) `as_path()` String clones on the path-key hot
+paths (M1's 0.83× RootedFilePathToPathKey note), (3) the text
+double-copy (vfs read_file's owned String + the parser's stored copy —
+Go shares immutable strings).
