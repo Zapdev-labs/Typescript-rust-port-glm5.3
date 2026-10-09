@@ -3085,9 +3085,8 @@ pub(crate) fn function_body_of(store: &dyn NodeStore, node: NodeId) -> Option<No
         Kind::FunctionDeclaration => n.as_function_declaration().expect("data").body,
         Kind::FunctionExpression => n.as_function_expression().expect("data").body,
         Kind::ArrowFunction => n.as_arrow_function().expect("data").body,
-        Kind::MethodDeclaration | Kind::MethodSignature => {
-            n.as_method_declaration().expect("data").body
-        }
+        Kind::MethodDeclaration => n.as_method_declaration().expect("data").body,
+        Kind::MethodSignature => None, // Go: method signatures have no body
         Kind::GetAccessor => n.as_get_accessor_declaration().expect("data").body,
         Kind::SetAccessor => n.as_set_accessor_declaration().expect("data").body,
         _ => None,
@@ -3428,8 +3427,12 @@ pub(crate) fn type_parameters_of(store: &dyn NodeStore, node: NodeId) -> Vec<Nod
         Kind::FunctionDeclaration => n.as_function_declaration().expect("data").type_parameters.as_ref(),
         Kind::FunctionExpression => n.as_function_expression().expect("data").type_parameters.as_ref(),
         Kind::ArrowFunction => n.as_arrow_function().expect("data").type_parameters.as_ref(),
-        Kind::MethodDeclaration | Kind::MethodSignature => {
-            n.as_method_declaration().expect("data").type_parameters.as_ref()
+        Kind::MethodDeclaration => n.as_method_declaration().expect("data").type_parameters.as_ref(),
+        Kind::MethodSignature => {
+            n.as_method_signature_declaration()
+                .expect("data")
+                .type_parameters
+                .as_ref()
         }
         Kind::Constructor => n.as_constructor_declaration().expect("data").type_parameters.as_ref(),
         Kind::GetAccessor => n.as_get_accessor_declaration().expect("data").type_parameters.as_ref(),
@@ -3462,9 +3465,8 @@ pub(crate) fn signature_type_node(store: &dyn NodeStore, node: NodeId) -> Option
         Kind::FunctionDeclaration => n.as_function_declaration().expect("data").type_,
         Kind::FunctionExpression => n.as_function_expression().expect("data").type_,
         Kind::ArrowFunction => n.as_arrow_function().expect("data").type_,
-        Kind::MethodDeclaration | Kind::MethodSignature => {
-            n.as_method_declaration().expect("data").type_
-        }
+        Kind::MethodDeclaration => n.as_method_declaration().expect("data").type_,
+        Kind::MethodSignature => n.as_method_signature_declaration().expect("data").type_,
         Kind::Constructor => n.as_constructor_declaration().expect("data").type_,
         Kind::GetAccessor => n.as_get_accessor_declaration().expect("data").type_,
         Kind::SetAccessor => n.as_set_accessor_declaration().expect("data").type_,
@@ -3997,11 +3999,8 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkAliasSymbol(node)` (checker.go:6940) — the
-    /// alias family. TODO(port M6 S6): resolveAlias + the import/export
-    /// conflict diagnostics; permissive no-op at this depth.
-    pub(crate) fn check_alias_symbol(&mut self, node: NodeId) {
-        let _ = node;
-    }
+    /// REAL body landed with batch 6 (the alias family); see the batch-6
+    /// section below.
 
     /// TODO(port M6 S4): `checkCollisionsForDeclarationName` — the
     /// identifier-collision family; permissive no-op.
@@ -4979,9 +4978,8 @@ fn locals_of_node(store: &dyn NodeStore, node: NodeId) -> Vec<(String, SymbolId)
         Kind::FunctionDeclaration => Some(&n.as_function_declaration().expect("data").locals),
         Kind::FunctionExpression => Some(&n.as_function_expression().expect("data").locals),
         Kind::ArrowFunction => Some(&n.as_arrow_function().expect("data").locals),
-        Kind::MethodDeclaration | Kind::MethodSignature => {
-            Some(&n.as_method_declaration().expect("data").locals)
-        }
+        Kind::MethodDeclaration => Some(&n.as_method_declaration().expect("data").locals),
+        Kind::MethodSignature => Some(&n.as_method_signature_declaration().expect("data").locals),
         Kind::GetAccessor => Some(&n.as_get_accessor_declaration().expect("data").locals),
         Kind::SetAccessor => Some(&n.as_set_accessor_declaration().expect("data").locals),
         _ => None,
@@ -5013,9 +5011,8 @@ pub(crate) fn node_symbol_of(store: &dyn NodeStore, node: NodeId) -> Option<Symb
         Kind::FunctionDeclaration => n.as_function_declaration().expect("data").symbol,
         Kind::FunctionExpression => n.as_function_expression().expect("data").symbol,
         Kind::ArrowFunction => n.as_arrow_function().expect("data").symbol,
-        Kind::MethodDeclaration | Kind::MethodSignature => {
-            n.as_method_declaration().expect("data").symbol
-        }
+        Kind::MethodDeclaration => n.as_method_declaration().expect("data").symbol,
+        Kind::MethodSignature => n.as_method_signature_declaration().expect("data").symbol,
         Kind::GetAccessor => n.as_get_accessor_declaration().expect("data").symbol,
         Kind::SetAccessor => n.as_set_accessor_declaration().expect("data").symbol,
         Kind::Constructor => n.as_constructor_declaration().expect("data").symbol,
@@ -6309,8 +6306,9 @@ impl Checker {
             let _ = attributes;
         }
         self.check_type_reference_or_import(node);
-        // Go: checkImportAttributes(node) — lands with the import/export
-        // batch (checker.go:5460).
+        // Go: checkImportAttributes(node) (checker.go:5460) — wired to the
+        // batch-5 body.
+        self.check_import_attributes(node);
     }
 
     /// Go: `func (c *Checker) checkNamedTupleMember(node)` (checker.go:3386).
@@ -9452,4 +9450,1626 @@ fn get_local_index_declaration(
 #[allow(dead_code)] // lands with the import/export batch (Go 5420-5943)
 fn symbol_name(c: &Checker, symbol: SymbolId) -> String {
     c.program_symbol(symbol).name.clone()
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// M6 S3 batch 5 — the import/export family (Go checker.go:5420-5943). Same
+// Go-name/shape discipline. Permissive seams (bannered inline):
+//   * program.GetEmitModuleFormatOfFile / GetImpliedNodeFormatForEmit — the
+//     checker's Program trait doesn't expose per-file emit format yet
+//     (TODO(port M6 S?): the seam approximates with checker.module_kind).
+//   * GetEmitSyntaxForModuleSpecifierExpression — permissive never-CommonJS.
+//   * getResolutionModeOverride — compiler-crate seam; permissive None.
+//   * isOnlyImportableAsDefault / markLinkedReferences / getTypeOnlyAliasEx /
+//     addTypeOnlyDeclarationRelatedInfo — permissive; S6/reference seams.
+//   * resolveEntityName — routes to the S6 permissive resolve_name.
+// ────────────────────────────────────────────────────────────────────────────
+
+use tsc_core::options_generated::ModuleKind;
+
+impl Checker {
+    /// Go: `func (c *Checker) checkImportDeclaration(node)` (checker.go:5420).
+    pub(crate) fn check_import_declaration(&mut self, node: NodeId) {
+        let diagnostic: &'static Message = if tsc_ast::utilities::is_in_js_file(self.store().node(node)) {
+            &diag::AN_IMPORT_DECLARATION_CAN_ONLY_BE_USED_AT_THE_TOP_LEVEL_OF_A_MODULE
+        } else {
+            &diag::AN_IMPORT_DECLARATION_CAN_ONLY_BE_USED_AT_THE_TOP_LEVEL_OF_A_NAMESPACE_OR_MODULE
+        };
+        if self.check_grammar_module_element_context(node, diagnostic) {
+            // If we hit an import declaration in an illegal context, just
+            // bail out to avoid cascading errors.
+            self.check_external_module_name_in_global_scope(node);
+            return;
+        }
+        if !self.check_grammar_modifiers(node) && self.store().node(node).modifiers().is_some() {
+            self.grammar_error_on_first_token(node, &diag::AN_IMPORT_DECLARATION_CANNOT_HAVE_MODIFIERS, &[]);
+        }
+        if self.check_external_import_or_export_declaration(node) {
+            let (attributes, import_clause, module_specifier) = {
+                let d = self
+                    .store()
+                    .node(node)
+                    .as_import_declaration()
+                    .expect("ImportDeclaration data");
+                (d.attributes, d.import_clause, d.module_specifier)
+            };
+            let mut resolved_module: Option<SymbolId> = None;
+            let import_clause_ok = import_clause
+                .is_some_and(|clause| !self.check_grammar_import_clause(clause));
+            if import_clause_ok {
+                let clause = import_clause.expect("checked");
+                let (clause_name, named_bindings, clause_is_type_only) = {
+                    let d = self
+                        .store()
+                        .node(clause)
+                        .as_import_clause()
+                        .expect("ImportClause data");
+                    (d.name, d.named_bindings, d.phase_modifier == Some(Kind::TypeKeyword))
+                };
+                if clause_name.is_some() {
+                    self.check_import_binding(clause);
+                }
+                let mut needs_import_star = false;
+                if let Some(named_bindings) = named_bindings {
+                    if tsc_ast::is_namespace_import(self.store().node(named_bindings)) {
+                        self.check_import_binding(named_bindings);
+                        if self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS {
+                            // import * as ns from "foo";
+                            needs_import_star = true;
+                            self.check_external_emit_helpers_stub(
+                                node,
+                                ExternalEmitHelpers::IMPORT_STAR,
+                            );
+                        }
+                    } else {
+                        let attributes_type = self.get_type_from_import_attributes(attributes);
+                        resolved_module = self.resolve_external_module_name(
+                            module_specifier,
+                            attributes_type,
+                        );
+                        if resolved_module.is_some() {
+                            let elements = self
+                                .store()
+                                .node(named_bindings)
+                                .as_named_imports()
+                                .and_then(|d| d.elements.clone())
+                                .map(|l| l.nodes.to_vec())
+                                .unwrap_or_default();
+                            for binding in elements {
+                                self.check_import_binding(binding);
+                            }
+                        }
+                    }
+                }
+                if clause_name.is_some()
+                    && !needs_import_star
+                    && self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS
+                {
+                    // import d from "foo";
+                    self.check_external_emit_helpers_stub(
+                        node,
+                        ExternalEmitHelpers::IMPORT_DEFAULT,
+                    );
+                }
+
+                if !clause_is_type_only
+                    && ModuleKind::Node18 <= self.module_kind
+                    && self.module_kind <= ModuleKind::NodeNext
+                    && self.is_only_importable_as_default_stub(module_specifier, resolved_module)
+                    && !has_type_json_import_attribute(self.store(), node)
+                {
+                    // TODO(port M6 S6): hasTypeJsonImportAttribute reads the
+                    // attribute table above; the message arg is Go's
+                    // c.moduleKind.String().
+                    self.error(
+                        module_specifier,
+                        &diag::IMPORTING_A_JSON_FILE_INTO_AN_ECMASCRIPT_MODULE_REQUIRES_A_TYPE_COLON_JSON_IMPORT_ATTRIBUTE_WHEN_MODULE_IS_SET_TO_0,
+                        &[module_kind_string(self.module_kind)],
+                    );
+                }
+            } else if self.compiler_options.no_unchecked_side_effect_imports == Tristate::TSTrue
+                && import_clause.is_none()
+            {
+                let ignore_errors = self.compiler_options.no_check == Tristate::TSTrue;
+                // TODO(port M6 S6): resolveExternalModuleNameWorker's
+                // errorMessage plumbing — routed through the permissive
+                // resolveExternalModuleName (no error emitted yet).
+                let _ = ignore_errors;
+                let attributes_type = self.get_type_from_import_attributes(attributes);
+                self.resolve_external_module_name(module_specifier, attributes_type);
+            }
+        }
+        self.check_import_attributes(node);
+    }
+
+    /// Go: `func (c *Checker) checkExternalImportOrExportDeclaration(node) bool`
+    /// (checker.go:5460).
+    pub(crate) fn check_external_import_or_export_declaration(&mut self, node: NodeId) -> bool {
+        let Some(module_name) = get_external_module_name(self.store(), node) else {
+            // Should be a parse error.
+            return false;
+        };
+        if tsc_ast::utilities::node_is_missing(self.store().node(module_name)) {
+            return false;
+        }
+        if !tsc_ast::is_string_literal(self.store().node(module_name)) {
+            self.error(module_name, &diag::STRING_LITERAL_EXPECTED, &[]);
+            return false;
+        }
+        let parent = self.store().node(node).parent.get();
+        let in_ambient_external_module = tsc_ast::is_module_block(self.store().node(parent))
+            && tsc_binder::ast_shims::is_ambient_module(
+                self.store(),
+                self.store().node(parent).parent.get(),
+            );
+        if !tsc_ast::is_source_file(self.store().node(parent)) && !in_ambient_external_module {
+            let message = if tsc_ast::is_export_declaration(self.store().node(node)) {
+                &diag::EXPORT_DECLARATIONS_ARE_NOT_PERMITTED_IN_A_NAMESPACE
+            } else {
+                &diag::IMPORT_DECLARATIONS_IN_A_NAMESPACE_CANNOT_REFERENCE_A_MODULE
+            };
+            self.error(module_name, message, &[]);
+            return false;
+        }
+        if in_ambient_external_module
+            && tsc_tspath::is_external_module_name_relative(&module_name_text(
+                self.store(),
+                module_name,
+            ))
+        {
+            // we have already reported errors on top level imports/exports in
+            // external module augmentations in checkModuleDeclaration
+            // no need to do this again.
+            if !u::is_top_level_in_external_module_augmentation(self.store(), node) {
+                // TypeScript 1.0 spec (April 2013): 12.1.6
+                // An ExternalImportDeclaration in an AmbientExternalModuleDeclaration may reference
+                // other external modules only through top - level external module names.
+                // Relative external module names are not permitted.
+                self.error(
+                    node,
+                    &diag::IMPORT_OR_EXPORT_DECLARATION_IN_AN_AMBIENT_MODULE_DECLARATION_CANNOT_REFERENCE_MODULE_THROUGH_RELATIVE_MODULE_NAME,
+                    &[],
+                );
+                return false;
+            }
+        }
+        if !tsc_ast::is_import_equals_declaration(self.store().node(node)) {
+            if let Some(attributes) = get_import_attributes(self.store(), node) {
+                if self.check_grammar_import_attribute_values(attributes) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Go: `func (c *Checker) checkImportBinding(node)` (checker.go:5498).
+    pub(crate) fn check_import_binding(&mut self, node: NodeId) {
+        let name = self.store().node(node).name();
+        self.check_collisions_for_declaration_name_stub(node, name);
+        self.check_alias_symbol(node);
+        if tsc_ast::is_import_specifier(self.store().node(node)) {
+            let (property_name, property_name_or_name) = {
+                let d = self
+                    .store()
+                    .node(node)
+                    .as_import_specifier()
+                    .expect("ImportSpecifier data");
+                (d.property_name, d.property_name.unwrap_or(d.name))
+            };
+            self.check_module_export_name(property_name, true /*allowStringLiteral*/);
+            if tsc_binder::ast_shims::module_export_name_is_default(
+                self.store(),
+                property_name_or_name,
+            ) && self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS
+            {
+                self.check_external_emit_helpers_stub(
+                    node,
+                    ExternalEmitHelpers::IMPORT_DEFAULT,
+                );
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkModuleExportName(name, allowStringLiteral)` (checker.go:5512).
+    pub(crate) fn check_module_export_name(
+        &mut self,
+        name: Option<NodeId>,
+        allow_string_literal: bool,
+    ) {
+        let Some(name) = name else { return };
+        if self.store().node(name).kind != Kind::StringLiteral {
+            return;
+        }
+        if !allow_string_literal {
+            self.grammar_error_on_node(name, &diag::IDENTIFIER_EXPECTED, &[]);
+        } else if self.module_kind == ModuleKind::ES2015 || self.module_kind == ModuleKind::ES2020 {
+            // Go: !ast.GetSourceFileOfNode(name).IsDeclarationFile.
+            let is_declaration_file = tsc_ast::utilities::get_source_file_of_node(
+                self.store(),
+                name,
+            )
+            .is_some_and(|f| {
+                f.node(f.as_node_id())
+                    .as_source_file()
+                    .expect("SourceFile data")
+                    .is_declaration_file
+            });
+            if !is_declaration_file {
+                self.grammar_error_on_node(
+                    name,
+                    &diag::STRING_LITERAL_IMPORT_AND_EXPORT_NAMES_ARE_NOT_SUPPORTED_WHEN_THE_MODULE_FLAG_IS_SET_TO_ES2015_OR_ES2020,
+                    &[],
+                );
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkImportAttributes(declaration)` (checker.go:5532).
+    pub(crate) fn check_import_attributes(&mut self, declaration: NodeId) {
+        let Some(node) = get_import_attributes(self.store(), declaration) else {
+            return;
+        };
+        let import_attributes_type = self.get_global_import_attributes_type_checked();
+        let empty_object_type = self.empty_object_type();
+        if import_attributes_type != empty_object_type {
+            let attributes_type = self
+                .get_type_from_import_attributes(Some(node))
+                .expect("ImportAttributes present");
+            let undefined_type = self.get_nullable_type(import_attributes_type, TypeFlags::UNDEFINED);
+            self.check_type_assignable_to(attributes_type, undefined_type, Some(node), None);
+        }
+        let is_type_only = is_exclusively_type_only_import_or_export(self.store(), declaration)
+            || tsc_ast::is_import_type_node(self.store().node(declaration));
+        // TODO(port M6 S?): getResolutionModeOverride (the compiler-crate
+        // ImportAttributesNode seam); permissive none — the X_resolution_mode
+        // grammar error rests until the seam lands.
+        let has_override = false;
+        if is_type_only {
+            return; // Other grammar checks do not apply to type-only imports with import attributes
+        }
+
+        if !self.module_kind.supports_import_attributes() {
+            self.grammar_error_on_node(
+                node,
+                &diag::IMPORT_ATTRIBUTES_ARE_ONLY_SUPPORTED_WHEN_THE_MODULE_OPTION_IS_SET_TO_ESNEXT_NODE18_NODE20_NODENEXT_OR_PRESERVE,
+                &[],
+            );
+            return;
+        }
+
+        // TODO(port M6 S?): getEmitSyntaxForModuleSpecifierExpression — the
+        // per-specifier emit-syntax seam; permissive never-CommonJS so the
+        // CommonJS grammar error rests until the seam lands.
+        let emits_common_js_require = false;
+        if emits_common_js_require {
+            self.grammar_error_on_node(
+                node,
+                &diag::IMPORT_ATTRIBUTES_ARE_NOT_ALLOWED_ON_STATEMENTS_THAT_COMPILE_TO_COMMONJS_REQUIRE_CALLS,
+                &[],
+            );
+            return;
+        }
+
+        if has_override {
+            self.grammar_error_on_node(
+                node,
+                &diag::X_RESOLUTION_MODE_CAN_ONLY_BE_SET_FOR_TYPE_ONLY_IMPORTS,
+                &[],
+            );
+        }
+    }
+
+    /// Go: `func (c *Checker) getTypeFromImportAttributes(node) *Type` (checker.go:5564).
+    pub(crate) fn get_type_from_import_attributes(
+        &mut self,
+        node: Option<NodeId>,
+    ) -> Option<TypeId> {
+        let node = node?;
+        if tsc_ast::is_import_attributes(self.store().node(node)) {
+            Some(self.check_import_attributes_expression(node))
+        } else {
+            Some(self.check_expression_cached(node))
+        }
+    }
+
+    /// Go: `func (c *Checker) checkImportAttributesExpression(node) *Type` (checker.go:5573).
+    pub(crate) fn check_import_attributes_expression(&mut self, node: NodeId) -> TypeId {
+        let cached = self.type_node_links.get(node).resolved_type;
+        if let Some(t) = cached {
+            return t;
+        }
+        let symbol = self.new_symbol(
+            SymbolFlags::OBJECT_LITERAL,
+            tsc_ast::INTERNAL_SYMBOL_NAME_IMPORT_ATTRIBUTES,
+        );
+        let attributes = self
+            .store()
+            .node(node)
+            .as_import_attributes()
+            .expect("ImportAttributes data")
+            .attributes
+            .clone()
+            .map(|l| l.nodes.to_vec())
+            .unwrap_or_default();
+        let mut members = tsc_ast::SymbolTable::default();
+        for attribute in attributes {
+            let (name_text, value) = {
+                let d = self
+                    .store()
+                    .node(attribute)
+                    .as_import_attribute()
+                    .expect("ImportAttribute data");
+                (tsc_ast::node_text(self.store(), d.name).to_string(), d.value)
+            };
+            let member = self.new_symbol(SymbolFlags::PROPERTY, &name_text);
+            let value_type = self.check_expression_cached(value);
+            let regular = self.get_regular_type_of_literal_type(value_type);
+            self.value_symbol_links.get(member).resolved_type = Some(regular);
+            members.set(name_text.clone(), member);
+        }
+        let t = self.new_anonymous_type_with_members(Some(symbol), members);
+        // Go: t.objectFlags |= ObjectFlagsObjectLiteral | ObjectFlagsNonInferrableType.
+        // TODO(port M6 S?): the objectFlags OR on the arena row — the
+        // anonymous-literal object-flags seam; permissive unset until then.
+        // Go: links.resolvedType = t
+        self.type_node_links.get(node).resolved_type = Some(t);
+        t
+    }
+
+    /// Go: `func (c *Checker) getImportAttributesTypeForModuleSpecifier(moduleSpecifier) *Type`
+    /// (checker.go:5593).
+    #[allow(dead_code)] // lands with S6's resolveExternalModuleName call sites
+    #[allow(clippy::wrong_self_convention)]
+    pub(crate) fn get_import_attributes_type_for_module_specifier(
+        &mut self,
+        module_specifier: NodeId,
+    ) -> Option<TypeId> {
+        let parent = self.store().node(module_specifier).parent.get();
+        let parent_kind = self.store().node(parent).kind;
+        // Go: ast.IsImportDeclarationOrJSImportDeclaration(parent) ||
+        // ast.IsExportDeclaration(parent)
+        if parent_kind == Kind::ImportDeclaration
+            || parent_kind == Kind::JSImportDeclaration
+            || parent_kind == Kind::ExportDeclaration
+        {
+            return self.get_type_from_import_attributes(get_import_attributes(self.store(), parent));
+        }
+        if parent_kind == Kind::LiteralType
+            && self
+                .store()
+                .node(self.store().node(parent).parent.get())
+                .kind
+                == Kind::ImportType
+        {
+            let grandparent = self.store().node(parent).parent.get();
+            return self.get_type_from_import_attributes(get_import_attributes(self.store(), grandparent));
+        }
+        if parent_kind == Kind::CallExpression {
+            let arguments = self
+                .store()
+                .node(parent)
+                .as_call_expression()
+                .and_then(|d| d.arguments.clone())
+                .map(|l| l.nodes.to_vec())
+                .unwrap_or_default();
+            if arguments.len() > 1 {
+                let options = arguments[1];
+                let options_type = self.check_expression_cached(options);
+                return self.get_type_of_property_of_type(options_type, "with");
+            }
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) checkImportEqualsDeclaration(node)` (checker.go:5614).
+    pub(crate) fn check_import_equals_declaration(&mut self, node: NodeId) {
+        let diagnostic: &'static Message = if tsc_ast::utilities::is_in_js_file(self.store().node(node)) {
+            &diag::AN_IMPORT_DECLARATION_CAN_ONLY_BE_USED_AT_THE_TOP_LEVEL_OF_A_MODULE
+        } else {
+            &diag::AN_IMPORT_DECLARATION_CAN_ONLY_BE_USED_AT_THE_TOP_LEVEL_OF_A_NAMESPACE_OR_MODULE
+        };
+        if self.check_grammar_module_element_context(node, diagnostic) {
+            self.check_external_module_name_in_global_scope(node);
+            return; // If we hit an import declaration in an illegal context, just bail out to avoid cascading errors.
+        }
+        self.check_grammar_modifiers(node);
+        if self.should_check_erasable_syntax(node)
+            && !self.store().node(node).flags.intersects(NF::AMBIENT)
+        {
+            self.error(
+                node,
+                &diag::THIS_SYNTAX_IS_NOT_ALLOWED_WHEN_ERASABLESYNTAXONLY_IS_ENABLED,
+                &[],
+            );
+        }
+        let (is_type_only, module_reference) = {
+            let d = self
+                .store()
+                .node(node)
+                .as_import_equals_declaration()
+                .expect("ImportEqualsDeclaration data");
+            (d.is_type_only, d.module_reference)
+        };
+        if is_internal_module_import_equals_declaration(self.store(), node)
+            || self.check_external_import_or_export_declaration(node)
+        {
+            self.check_import_binding(node);
+            // TODO(port M6 S?): markLinkedReferences (ReferenceHintExportImportEquals)
+            // — the reference-marking seam; permissive no-op.
+            if !tsc_ast::is_external_module_reference(self.store().node(module_reference)) {
+                let Some(symbol) = self.get_symbol_of_declaration(node) else {
+                    return;
+                };
+                let target = self.resolve_alias(symbol);
+                if target != self.unknown_symbol() {
+                    let target_flags = self.get_symbol_flags(target);
+                    if target_flags.intersects(SymbolFlags::VALUE) {
+                        // Target is a value symbol, check that it is not
+                        // hidden by a local declaration with the same name
+                        let module_name = get_first_identifier(self.store(), module_reference);
+                        // TODO(port M6 S6): resolveEntityName — routed to the
+                        // permissive resolveName; the hidden-module error
+                        // rests until S6's real resolution lands.
+                        let resolved = self.resolve_name(
+                            &tsc_ast::node_text(self.store(), module_name).to_string(),
+                            module_name,
+                            SymbolFlags::VALUE.union(SymbolFlags::NAMESPACE),
+                            false,
+                        );
+                        let resolved_is_namespace = resolved.is_some_and(|s| {
+                            self.get_symbol_flags(s).intersects(SymbolFlags::NAMESPACE)
+                        });
+                        if !resolved_is_namespace {
+                            let name_text =
+                                tsc_scanner::utilities::declaration_name_to_string(
+                                    self.store(),
+                                    Some(module_name),
+                                );
+                            self.error(
+                                module_name,
+                                &diag::MODULE_0_IS_HIDDEN_BY_A_LOCAL_DECLARATION_WITH_THE_SAME_NAME,
+                                &[name_text],
+                            );
+                        }
+                    }
+                    if target_flags.intersects(SymbolFlags::TYPE) {
+                        let name = self.store().node(node).name();
+                        if let Some(name) = name {
+                            self.check_type_name_is_reserved(
+                                name,
+                                &diag::IMPORT_NAME_CANNOT_BE_0,
+                            );
+                        }
+                    }
+                }
+                if is_type_only {
+                    self.grammar_error_on_node(node, &diag::AN_IMPORT_ALIAS_CANNOT_USE_IMPORT_TYPE, &[]);
+                }
+            } else if ModuleKind::ES2015 <= self.module_kind
+                && self.module_kind <= ModuleKind::ESNext
+                && !is_type_only
+                && !self.store().node(node).flags.intersects(NF::AMBIENT)
+            {
+                // Import equals declaration cannot be emitted as ESM
+                self.grammar_error_on_node(
+                    node,
+                    &diag::IMPORT_ASSIGNMENT_CANNOT_BE_USED_WHEN_TARGETING_ECMASCRIPT_MODULES_CONSIDER_USING_IMPORT_ASTERISK_AS_NS_FROM_MOD_IMPORT_A_FROM_MOD_IMPORT_D_FROM_MOD_OR_ANOTHER_MODULE_FORMAT_INSTEAD,
+                    &[],
+                );
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkExportDeclaration(node)` (checker.go:5666).
+    pub(crate) fn check_export_declaration(&mut self, node: NodeId) {
+        let diagnostic: &'static Message = if tsc_ast::utilities::is_in_js_file(self.store().node(node)) {
+            &diag::AN_EXPORT_DECLARATION_CAN_ONLY_BE_USED_AT_THE_TOP_LEVEL_OF_A_MODULE
+        } else {
+            &diag::AN_EXPORT_DECLARATION_CAN_ONLY_BE_USED_AT_THE_TOP_LEVEL_OF_A_NAMESPACE_OR_MODULE
+        };
+        if self.check_grammar_module_element_context(node, diagnostic) {
+            self.check_external_module_name_in_global_scope(node);
+            return; // If we hit an export in an illegal context, just bail out to avoid cascading errors.
+        }
+        let (export_clause, module_specifier, is_type_only) = {
+            let d = self
+                .store()
+                .node(node)
+                .as_export_declaration()
+                .expect("ExportDeclaration data");
+            (d.export_clause, d.module_specifier, d.is_type_only)
+        };
+        let _ = is_type_only;
+        if !self.check_grammar_modifiers(node) && self.store().node(node).modifiers().is_some() {
+            self.grammar_error_on_first_token(node, &diag::AN_EXPORT_DECLARATION_CANNOT_HAVE_MODIFIERS, &[]);
+        }
+        self.check_grammar_export_declaration(node);
+        if module_specifier.is_none() || self.check_external_import_or_export_declaration(node) {
+            if export_clause.is_some()
+                && !tsc_ast::is_namespace_export(
+                    self.store().node(export_clause.expect("checked")),
+                )
+            {
+                // export { x, y }
+                // export { x, y } from "foo"
+                let elements = self
+                    .store()
+                    .node(export_clause.expect("checked"))
+                    .as_named_exports()
+                    .and_then(|d| d.elements.clone())
+                    .map(|l| l.nodes.to_vec())
+                    .unwrap_or_default();
+                for binding in elements {
+                    self.check_export_specifier(binding);
+                }
+                let parent = self.store().node(node).parent.get();
+                let in_ambient_external_module = tsc_ast::is_module_block(self.store().node(parent))
+                    && tsc_binder::ast_shims::is_ambient_module(
+                        self.store(),
+                        self.store().node(parent).parent.get(),
+                    );
+                let in_ambient_namespace_declaration = !in_ambient_external_module
+                    && tsc_ast::is_module_block(self.store().node(parent))
+                    && module_specifier.is_none()
+                    && self.store().node(node).flags.intersects(NF::AMBIENT);
+                if !tsc_ast::is_source_file(self.store().node(parent))
+                    && !in_ambient_external_module
+                    && !in_ambient_namespace_declaration
+                {
+                    self.error(
+                        node,
+                        &diag::EXPORT_DECLARATIONS_ARE_NOT_PERMITTED_IN_A_NAMESPACE,
+                        &[],
+                    );
+                }
+            } else {
+                // export * from "foo"
+                // export * as ns from "foo";
+                let attributes_type = self.get_type_from_import_attributes(get_import_attributes(
+                    self.store(),
+                    node,
+                ));
+                let module_symbol = module_specifier
+                    .and_then(|specifier| self.resolve_external_module_name(specifier, attributes_type));
+                let module_symbol_has_export_assignment = module_symbol
+                    .is_some_and(|symbol| u::has_export_assignment_symbol(self.program_symbol(symbol)));
+                if module_symbol.is_some() && module_symbol_has_export_assignment {
+                    let specifier = module_specifier.expect("module symbol resolved");
+                    let module_symbol = module_symbol.expect("checked");
+                    let symbol_text = relater::symbol_to_string(self, module_symbol);
+                    self.error(
+                        specifier,
+                        &diag::MODULE_0_USES_EXPORT_AND_CANNOT_BE_USED_WITH_EXPORT_ASTERISK,
+                        &[symbol_text],
+                    );
+                } else if let Some(export_clause) = export_clause {
+                    self.check_alias_symbol(export_clause);
+                    let name = self.store().node(export_clause).name();
+                    self.check_module_export_name(name, true /*allowStringLiteral*/);
+                }
+                if self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS {
+                    if export_clause.is_some() {
+                        // export * as ns from "foo";
+                        self.check_external_emit_helpers_stub(
+                            node,
+                            ExternalEmitHelpers::IMPORT_STAR,
+                        );
+                    } else {
+                        // export * from "foo"
+                        self.check_external_emit_helpers_stub(
+                            node,
+                            ExternalEmitHelpers::EXPORT_STAR,
+                        );
+                    }
+                }
+            }
+        }
+        self.check_import_attributes(node);
+    }
+
+    /// Go: `func (c *Checker) checkExternalModuleNameInGlobalScope(node)` (checker.go:5741).
+    pub(crate) fn check_external_module_name_in_global_scope(&mut self, node: NodeId) {
+        let enclosing_container = u::get_enclosing_container(self.store(), node);
+        let container_is_source_file = enclosing_container.is_some_and(|container| {
+            self.store().node(container).kind == Kind::SourceFile
+        });
+        if !container_is_source_file
+            || (is_import_declaration_or_js_import_declaration(self.store(), node)
+                && self
+                    .store()
+                    .node(node)
+                    .as_import_declaration()
+                    .map(|d| d.import_clause.is_none())
+                    .unwrap_or(false))
+        {
+            return;
+        }
+        if let Some(module_name) = get_external_module_name(self.store(), node) {
+            let attributes = get_import_attributes(self.store(), node);
+            let import_attributes_type = self.get_type_from_import_attributes(attributes);
+            self.resolve_external_module_name(module_name, import_attributes_type);
+        }
+    }
+
+    /// Go: `func (c *Checker) checkExportSpecifier(node)` (checker.go:5766).
+    pub(crate) fn check_export_specifier(&mut self, node: NodeId) {
+        self.check_alias_symbol(node);
+        let (property_name, name) = {
+            let d = self
+                .store()
+                .node(node)
+                .as_export_specifier()
+                .expect("ExportSpecifier data");
+            (d.property_name, d.name)
+        };
+        // Go: node.Parent.Parent.ModuleSpecifier() — ExportSpecifier →
+        // NamedExports → ExportDeclaration.
+        let module_specifier = self
+            .store()
+            .node(self.store().node(node).parent.get())
+            .parent
+            .get();
+        let has_module_specifier = self
+            .store()
+            .node(module_specifier)
+            .as_export_declaration()
+            .map(|d| d.module_specifier.is_some())
+            .unwrap_or(false);
+        self.check_module_export_name(property_name, has_module_specifier);
+        self.check_module_export_name(Some(name), true /*allowStringLiteral*/);
+
+        let property_name_or_name = property_name.unwrap_or(name);
+        if !has_module_specifier {
+            if self.store().node(property_name_or_name).kind == Kind::StringLiteral {
+                return; // Skip for invalid syntax like this: export { "x" }
+            }
+            // find immediate value referenced by exported name (SymbolFlags.Alias is set so we don't chase down aliases)
+            let exported_name_text =
+                tsc_ast::node_text(self.store(), property_name_or_name).to_string();
+            let symbol = self.resolve_name(
+                &exported_name_text,
+                property_name_or_name,
+                SymbolFlags::VALUE
+                    .union(SymbolFlags::TYPE)
+                    .union(SymbolFlags::NAMESPACE)
+                    .union(SymbolFlags::ALIAS),
+                false /*excludeGlobals*/,
+            );
+            let symbol_is_global = symbol.is_some_and(|symbol| {
+                symbol == self.undefined_symbol()
+                    || self.global_this_symbol == Some(symbol)
+                    || {
+                        // Go: symbol.Declarations != nil &&
+                        // ast.IsGlobalSourceFile(ast.GetDeclarationContainer(symbol.Declarations[0]))
+                        // TODO(port M6 S?): GetDeclarationContainer — approximated by
+                        // the enclosing container walk.
+                        let declarations = self.program_symbol(symbol).declarations.clone();
+                        declarations.first().is_some_and(|&first| {
+                            u::get_enclosing_container(self.store(), first)
+                                .is_some_and(|container| {
+                                    u::is_global_source_file(self.store(), container)
+                                })
+                        })
+                    }
+            });
+            if symbol_is_global {
+                self.error(
+                    property_name_or_name,
+                    &diag::CANNOT_EXPORT_0_ONLY_LOCAL_DECLARATIONS_CAN_BE_EXPORTED_FROM_A_MODULE,
+                    &[exported_name_text],
+                );
+            }
+            // TODO(port M6 S?): markLinkedReferences (ReferenceHintExportSpecifier)
+            // — the reference-marking seam; permissive no-op.
+        } else if self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS
+            && tsc_binder::ast_shims::module_export_name_is_default(
+                self.store(),
+                property_name_or_name,
+            )
+        {
+            self.check_external_emit_helpers_stub(node, ExternalEmitHelpers::IMPORT_DEFAULT);
+        }
+    }
+
+    /// Go: `func (c *Checker) checkExportAssignment(node)` (checker.go:5803).
+    pub(crate) fn check_export_assignment(&mut self, node: NodeId) {
+        let (is_export_equals, type_node, expression) = {
+            let d = self
+                .store()
+                .node(node)
+                .as_export_assignment()
+                .expect("ExportAssignment data");
+            (d.is_export_equals, d.type_, d.expression)
+        };
+        // Always check the exported expression so its identifiers are
+        // resolved even when the export assignment is misplaced (grammar
+        // error), keeping diagnostics stable regardless of traversal order.
+        let expr_type = self.check_expression_cached(expression);
+        let illegal_context_message: &'static Message = if is_export_equals {
+            &diag::AN_EXPORT_ASSIGNMENT_MUST_BE_AT_THE_TOP_LEVEL_OF_A_FILE_OR_MODULE_DECLARATION
+        } else {
+            &diag::A_DEFAULT_EXPORT_MUST_BE_AT_THE_TOP_LEVEL_OF_A_FILE_OR_MODULE_DECLARATION
+        };
+        if self.check_grammar_module_element_context(node, illegal_context_message) {
+            return; // If we hit an export assignment in an illegal context, just bail out to avoid cascading errors.
+        }
+        if self.should_check_erasable_syntax(node)
+            && is_export_equals
+            && !self.store().node(node).flags.intersects(NF::AMBIENT)
+        {
+            self.error(
+                node,
+                &diag::THIS_SYNTAX_IS_NOT_ALLOWED_WHEN_ERASABLESYNTAXONLY_IS_ENABLED,
+                &[],
+            );
+        }
+        if is_contained_by_namespace(self.store(), node) {
+            // TODO(danielr): should these be grammar errors?
+            if is_export_equals {
+                self.error(node, &diag::AN_EXPORT_ASSIGNMENT_CANNOT_BE_USED_IN_A_NAMESPACE, &[]);
+            } else {
+                self.error(
+                    node,
+                    &diag::A_DEFAULT_EXPORT_CAN_ONLY_BE_USED_IN_AN_ECMASCRIPT_STYLE_MODULE,
+                    &[],
+                );
+            }
+            return;
+        }
+        if !self.check_grammar_modifiers(node) && self.store().node(node).modifiers().is_some() {
+            self.grammar_error_on_first_token(node, &diag::AN_EXPORT_ASSIGNMENT_CANNOT_HAVE_MODIFIERS, &[]);
+        }
+        let is_illegal_export_default_in_cjs = !is_export_equals
+            && !self.store().node(node).flags.intersects(NF::AMBIENT)
+            && self.compiler_options.verbatim_module_syntax == Tristate::TSTrue
+            && self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS;
+        if is_identifier(self.store().node(expression)) {
+            let id = expression;
+            let id_text = tsc_ast::node_text(self.store(), id).to_string();
+            // TODO(port M6 S6): resolveEntityName(id, SymbolFlagsAll, true
+            // ignoreErrors, true dontResolveAlias, node) — routed to the
+            // permissive resolveName.
+            let sym = self
+                .resolve_name(
+                    &id_text,
+                    id,
+                    SymbolFlags::ALL,
+                    false,
+                )
+                .map(|symbol| self.get_export_symbol_of_value_symbol_if_exported(symbol));
+            if let Some(sym) = sym {
+                // TODO(port M6 S?): markLinkedReferences (ReferenceHintExportAssignment).
+                // TODO(port M6 S6): getTypeOnlyAliasDeclarationEx — routed to
+                // the permissive S6 stub (None).
+                let type_only_declaration = self.get_type_only_alias_declaration(sym);
+                let sym_flags = self.get_symbol_flags(sym);
+                if sym_flags.intersects(SymbolFlags::VALUE) {
+                    // However if it is a value, we need to check it's being used correctly
+                    if !is_illegal_export_default_in_cjs
+                        && !self.store().node(node).flags.intersects(NF::AMBIENT)
+                        && self.compiler_options.verbatim_module_syntax == Tristate::TSTrue
+                        && type_only_declaration.is_some()
+                    {
+                        let message = if is_export_equals {
+                            &diag::AN_EXPORT_DECLARATION_MUST_REFERENCE_A_REAL_VALUE_WHEN_VERBATIMMODULESYNTAX_IS_ENABLED_BUT_0_RESOLVES_TO_A_TYPE_ONLY_DECLARATION
+                        } else {
+                            &diag::AN_EXPORT_DEFAULT_MUST_REFERENCE_A_REAL_VALUE_WHEN_VERBATIMMODULESYNTAX_IS_ENABLED_BUT_0_RESOLVES_TO_A_TYPE_ONLY_DECLARATION
+                        };
+                        self.error(id, message, std::slice::from_ref(&id_text));
+                    }
+                } else if !is_illegal_export_default_in_cjs
+                    && !self.store().node(node).flags.intersects(NF::AMBIENT)
+                    && self.compiler_options.verbatim_module_syntax == Tristate::TSTrue
+                {
+                    let message = if is_export_equals {
+                        &diag::AN_EXPORT_DECLARATION_MUST_REFERENCE_A_VALUE_WHEN_VERBATIMMODULESYNTAX_IS_ENABLED_BUT_0_ONLY_REFERS_TO_A_TYPE
+                    } else {
+                        &diag::AN_EXPORT_DEFAULT_MUST_REFERENCE_A_VALUE_WHEN_VERBATIMMODULESYNTAX_IS_ENABLED_BUT_0_ONLY_REFERS_TO_A_TYPE
+                    };
+                    self.error(id, message, std::slice::from_ref(&id_text));
+                }
+                if !is_illegal_export_default_in_cjs
+                    && !self.store().node(node).flags.intersects(NF::AMBIENT)
+                    && self.compiler_options.get_isolated_modules()
+                    && !sym_flags.intersects(SymbolFlags::VALUE)
+                {
+                    let non_local_meanings = self.get_symbol_flags_ex(
+                        sym,
+                        false /*excludeTypeOnlyMeanings*/,
+                        true /*excludeLocalMeanings*/,
+                    );
+                    let type_only_declaration_source_file_is_other = type_only_declaration
+                        .is_some_and(|declaration| {
+                            tsc_ast::utilities::get_source_file_of_node(self.store(), declaration)
+                                .map(|f| f.as_node_id())
+                                != tsc_ast::utilities::get_source_file_of_node(self.store(), node)
+                                    .map(|f| f.as_node_id())
+                        });
+                    if sym_flags.intersects(SymbolFlags::ALIAS)
+                        && non_local_meanings.intersects(SymbolFlags::TYPE)
+                        && !non_local_meanings.intersects(SymbolFlags::VALUE)
+                        && (type_only_declaration.is_none()
+                            || type_only_declaration_source_file_is_other)
+                    {
+                        // import { SomeType } from "./someModule";
+                        // export default SomeType; OR
+                        // export = SomeType;
+                        let message = if is_export_equals {
+                            &diag::X_0_RESOLVES_TO_A_TYPE_AND_MUST_BE_MARKED_TYPE_ONLY_IN_THIS_FILE_BEFORE_RE_EXPORTING_WHEN_1_IS_ENABLED_CONSIDER_USING_IMPORT_TYPE_WHERE_0_IS_IMPORTED
+                        } else {
+                            &diag::X_0_RESOLVES_TO_A_TYPE_AND_MUST_BE_MARKED_TYPE_ONLY_IN_THIS_FILE_BEFORE_RE_EXPORTING_WHEN_1_IS_ENABLED_CONSIDER_USING_EXPORT_TYPE_0_AS_DEFAULT
+                        };
+                        let flag_name = self.get_isolated_modules_like_flag_name();
+                        self.error(id, message, &[id_text.clone(), flag_name]);
+                    } else if type_only_declaration.is_some()
+                        && type_only_declaration_source_file_is_other
+                    {
+                        // import { SomeTypeOnlyValue } from "./someModule";
+                        // export default SomeTypeOnlyValue; OR
+                        // export = SomeTypeOnlyValue;
+                        let message = if is_export_equals {
+                            &diag::X_0_RESOLVES_TO_A_TYPE_ONLY_DECLARATION_AND_MUST_BE_MARKED_TYPE_ONLY_IN_THIS_FILE_BEFORE_RE_EXPORTING_WHEN_1_IS_ENABLED_CONSIDER_USING_IMPORT_TYPE_WHERE_0_IS_IMPORTED
+                        } else {
+                            &diag::X_0_RESOLVES_TO_A_TYPE_ONLY_DECLARATION_AND_MUST_BE_MARKED_TYPE_ONLY_IN_THIS_FILE_BEFORE_RE_EXPORTING_WHEN_1_IS_ENABLED_CONSIDER_USING_EXPORT_TYPE_0_AS_DEFAULT
+                        };
+                        // TODO(port M6 S?): addTypeOnlyDeclarationRelatedInfo —
+                        // the related-info elaboration seam; permissive: the
+                        // base error only.
+                        let flag_name = self.get_isolated_modules_like_flag_name();
+                        self.error(id, message, &[id_text.clone(), flag_name]);
+                    }
+                }
+            }
+        }
+        if is_illegal_export_default_in_cjs {
+            self.error(
+                node,
+                get_verbatim_module_syntax_error_message(self.store(), node),
+                &[],
+            );
+        }
+        let mut container = self.store().node(node).parent.get();
+        if !tsc_ast::is_source_file(self.store().node(container)) {
+            container = self.store().node(container).parent.get();
+        }
+        self.check_external_module_exports(container);
+        if type_node != NodeId::NONE && self.store().node(node).kind == Kind::ExportAssignment {
+            let t = self.get_type_from_type_node(type_node);
+            self.check_type_assignable_to_and_optionally_elaborate(
+                expr_type,
+                t,
+                Some(expression),
+                Some(expression),
+                None /*headMessage*/,
+                None /*diagnosticOutput*/,
+            );
+        }
+        if self.store().node(node).flags.intersects(NF::AMBIENT)
+            && !u::is_entity_name_expression(self.store(), expression)
+        {
+            self.grammar_error_on_node(
+                expression,
+                &diag::THE_EXPRESSION_OF_AN_EXPORT_ASSIGNMENT_MUST_BE_AN_IDENTIFIER_OR_QUALIFIED_NAME_IN_AN_AMBIENT_CONTEXT,
+                &[],
+            );
+        }
+        if is_export_equals {
+            // Forbid export= in esm implementation files, and esm mode declaration files
+            // TODO(port M6 S?): program.GetImpliedNodeFormatForEmit — the
+            // per-file implied-format seam; approximated by the configured
+            // module_kind.
+            let implied_node_format = self.module_kind;
+            if ModuleKind::ES2015 <= self.module_kind
+                && self.module_kind != ModuleKind::Preserve
+                && ((self.store().node(node).flags.intersects(NF::AMBIENT)
+                    && implied_node_format == ModuleKind::ESNext)
+                    || (!self.store().node(node).flags.intersects(NF::AMBIENT)
+                        && implied_node_format != ModuleKind::CommonJS))
+            {
+                // export assignment is not supported in es6 modules
+                self.grammar_error_on_node(
+                    node,
+                    &diag::EXPORT_ASSIGNMENT_CANNOT_BE_USED_WHEN_TARGETING_ECMASCRIPT_MODULES_CONSIDER_USING_EXPORT_DEFAULT_OR_ANOTHER_MODULE_FORMAT_INSTEAD,
+                    &[],
+                );
+            } else if self.module_kind == ModuleKind::System
+                && !self.store().node(node).flags.intersects(NF::AMBIENT)
+            {
+                // system modules does not support export assignment
+                self.grammar_error_on_node(
+                    node,
+                    &diag::EXPORT_ASSIGNMENT_IS_NOT_SUPPORTED_WHEN_MODULE_FLAG_IS_SYSTEM,
+                    &[],
+                );
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) isOnlyImportableAsDefault(moduleSpecifier, moduleSymbol, importAttributesType) bool`
+    /// (checker.go — S6's module resolution). Permissive false until S6.
+    fn is_only_importable_as_default_stub(
+        &mut self,
+        _module_specifier: NodeId,
+        _resolved_module: Option<SymbolId>,
+    ) -> bool {
+        false
+    }
+
+    /// Go: `c.program.GetEmitModuleFormatOfFile(ast.GetSourceFileOfNode(node))`
+    /// — the per-file emit-format seam. TODO(port M6 S?): the checker's
+    /// Program trait doesn't expose the per-file emit format; approximated
+    /// by the configured module_kind (identical whenever the file carries no
+    /// format-implying extension/package context).
+    fn get_emit_module_format_of_file_seam(&self, _node: NodeId) -> ModuleKind {
+        self.module_kind
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Free helpers for the import/export batch.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `ast.GetExternalModuleName(node)` — the import/export/module-specifier
+/// accessor (the parser's pub(crate) twin isn't visible to the checker).
+pub(crate) fn get_external_module_name(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    match &store.node(node).data {
+        tsc_ast::NodeData::ImportDeclaration(d) => Some(d.module_specifier),
+        tsc_ast::NodeData::ExportDeclaration(d) => d.module_specifier,
+        tsc_ast::NodeData::ImportEqualsDeclaration(d) => {
+            if tsc_ast::is_external_module_reference(store.node(d.module_reference)) {
+                Some(
+                    store
+                        .node(d.module_reference)
+                        .as_external_module_reference()
+                        .expect("ExternalModuleReference data")
+                        .expression,
+                )
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Go: `ast.GetImportAttributes(node)`.
+pub(crate) fn get_import_attributes(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    match &store.node(node).data {
+        tsc_ast::NodeData::ImportDeclaration(d) => d.attributes,
+        tsc_ast::NodeData::ExportDeclaration(d) => d.attributes,
+        tsc_ast::NodeData::ImportTypeNode(d) => d.attributes,
+        tsc_ast::NodeData::ModuleDeclaration(d) => d.attributes,
+        _ => None,
+    }
+}
+
+/// Go: `hasTypeJsonImportAttribute(node)` (checker.go:5526).
+fn has_type_json_import_attribute(store: &dyn NodeStore, node: NodeId) -> bool {
+    let attributes = match &store.node(node).data {
+        tsc_ast::NodeData::ImportDeclaration(d) => d.attributes,
+        _ => None,
+    };
+    let Some(attributes) = attributes else { return false };
+    let nodes = store
+        .node(attributes)
+        .as_import_attributes()
+        .and_then(|d| d.attributes.clone())
+        .map(|l| l.nodes.to_vec())
+        .unwrap_or_default();
+    nodes.iter().any(|&attr| {
+        let d = store.node(attr).as_import_attribute().expect("ImportAttribute data");
+        tsc_ast::node_text(store, d.name) == "type"
+            && tsc_binder::ast_shims::is_string_literal_like(store.node(d.value))
+            && tsc_ast::node_text(store, d.value) == "json"
+    })
+}
+
+/// Go: `ast.IsImportDeclarationOrJSImportDeclaration(node)`.
+pub(crate) fn is_import_declaration_or_js_import_declaration(
+    store: &dyn NodeStore,
+    node: NodeId,
+) -> bool {
+    matches!(store.node(node).kind, Kind::ImportDeclaration | Kind::JSImportDeclaration)
+}
+
+/// Go: `ast.IsExclusivelyTypeOnlyImportOrExport(node)` — the type-only walk
+/// (the compiler-crate twin isn't visible to the checker).
+fn is_exclusively_type_only_import_or_export(store: &dyn NodeStore, node: NodeId) -> bool {
+    match store.node(node).kind {
+        Kind::ImportDeclaration => store
+            .node(node)
+            .as_import_declaration()
+            .and_then(|d| d.import_clause)
+            .is_some_and(|clause| {
+                store
+                    .node(clause)
+                    .as_import_clause()
+                    .map(|d| d.phase_modifier == Some(Kind::TypeKeyword))
+                    .unwrap_or(false)
+            }),
+        Kind::ExportDeclaration => store
+            .node(node)
+            .as_export_declaration()
+            .map(|d| d.is_type_only)
+            .unwrap_or(false),
+        Kind::ImportEqualsDeclaration => store
+            .node(node)
+            .as_import_equals_declaration()
+            .map(|d| d.is_type_only)
+            .unwrap_or(false),
+        Kind::ImportClause => store
+            .node(node)
+            .as_import_clause()
+            .map(|d| d.phase_modifier == Some(Kind::TypeKeyword))
+            .unwrap_or(false),
+        Kind::ImportSpecifier => store
+            .node(node)
+            .as_import_specifier()
+            .map(|d| d.is_type_only)
+            .unwrap_or(false),
+        Kind::ExportSpecifier => store
+            .node(node)
+            .as_export_specifier()
+            .map(|d| d.is_type_only)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Go: `ast.GetFirstIdentifier(node)` — the leftmost entity-name leaf.
+fn get_first_identifier(store: &dyn NodeStore, node: NodeId) -> NodeId {
+    let mut current = node;
+    loop {
+        match store.node(current).kind {
+            Kind::QualifiedName => {
+                let d = store
+                    .node(current)
+                    .as_qualified_name()
+                    .expect("QualifiedName data");
+                current = d.left;
+            }
+            _ => return current,
+        }
+    }
+}
+
+/// Go: `isContainedByNamespace(node)` (checker.go:5795).
+fn is_contained_by_namespace(store: &dyn NodeStore, node: NodeId) -> bool {
+    let mut container = store.node(node).parent.get();
+    if !tsc_ast::is_source_file(store.node(container)) {
+        container = store.node(container).parent.get();
+    }
+    store.node(container).kind == Kind::ModuleDeclaration
+        && !tsc_binder::ast_shims::is_ambient_module(store, container)
+}
+
+/// Go: `getVerbatimModuleSyntaxErrorMessage(node)` (checker.go:5889).
+fn get_verbatim_module_syntax_error_message(
+    store: &dyn NodeStore,
+    node: NodeId,
+) -> &'static Message {
+    let file_name = tsc_ast::utilities::get_source_file_of_node(store, node)
+        .map(|f| f.file_name().as_string().to_string())
+        .unwrap_or_default();
+    // Check if the file is .cts or .cjs (CommonJS-specific extensions)
+    if file_name.ends_with(".cts") || file_name.ends_with(".cjs") {
+        return &diag::ECMASCRIPT_IMPORTS_AND_EXPORTS_CANNOT_BE_WRITTEN_IN_A_COMMONJS_FILE_UNDER_VERBATIMMODULESYNTAX;
+    }
+    // For .ts, .tsx, .js, etc.
+    &diag::ECMASCRIPT_IMPORTS_AND_EXPORTS_CANNOT_BE_WRITTEN_IN_A_COMMONJS_FILE_UNDER_VERBATIMMODULESYNTAX_ADJUST_THE_TYPE_FIELD_IN_THE_NEAREST_PACKAGE_JSON_TO_MAKE_THIS_FILE_AN_ECMASCRIPT_MODULE_OR_ADJUST_YOUR_VERBATIMMODULESYNTAX_MODULE_AND_MODULERESOLUTION_SETTINGS_IN_TYPESCRIPT
+}
+
+/// The module-specifier literal's text (Go: moduleName.Text()).
+fn module_name_text(store: &dyn NodeStore, module_name: NodeId) -> String {
+    tsc_ast::node_text(store, module_name).to_string()
+}
+
+/// Go: `func (i ModuleKind) String() string` (modulekind_stringer_generated.go)
+/// — the exact stringer table (None..ES2022 contiguous, ESNext..Node20,
+/// NodeNext..Preserve).
+fn module_kind_string(kind: ModuleKind) -> String {
+    match kind {
+        ModuleKind::None => "None",
+        ModuleKind::CommonJS => "CommonJS",
+        ModuleKind::AMD => "AMD",
+        ModuleKind::UMD => "UMD",
+        ModuleKind::System => "System",
+        ModuleKind::ES2015 => "ES2015",
+        ModuleKind::ES2020 => "ES2020",
+        ModuleKind::ES2022 => "ES2022",
+        ModuleKind::ESNext => "ESNext",
+        ModuleKind::Node16 => "Node16",
+        ModuleKind::Node18 => "Node18",
+        ModuleKind::Node20 => "Node20",
+        ModuleKind::NodeNext => "NodeNext",
+        ModuleKind::Preserve => "Preserve",
+    }
+    .to_string()
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// M6 S3 batch 6 — the alias family: the REAL checkAliasSymbol body (Go
+// checker.go:6937) + checkTypeAliasDeclaration (checker.go:7079) +
+// the intrinsicTypeKinds table. Permissive seams (bannered inline):
+//   * getMergedSymbol — S6 identity stub (typeofsymbol.rs).
+//   * resolveAliasWithDeprecationCheck/isDeprecatedSymbol/addDeprecatedSuggestion
+//     — the deprecation family is S6/S10; permissive.
+//   * addTypeOnlyDeclarationRelatedInfo — the related-info elaboration seam.
+//   * program.GetEmitModuleFormatOfFile / GetProjectReferenceFromOutputDts —
+//     per-file program seams; approximated permissively.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `type IntrinsicTypeKind int32` + `var intrinsicTypeKinds map[string]IntrinsicTypeKind`
+/// (checker.go:2069 region).
+fn intrinsic_type_kind_of(name: &str) -> Option<()> {
+    match name {
+        "Uppercase" | "Lowercase" | "Capitalize" | "Uncapitalize" | "NoInfer" => Some(()),
+        _ => None,
+    }
+}
+
+impl Checker {
+    /// Go: `func (c *Checker) checkAliasSymbol(node)` (checker.go:6937) — the
+    /// REAL body, replacing the S6 permissive no-op.
+    pub(crate) fn check_alias_symbol(&mut self, node: NodeId) {
+        let Some(initial_symbol) = self.get_symbol_of_declaration(node) else {
+            return;
+        };
+        let target = self.resolve_alias(initial_symbol);
+        if target == self.unknown_symbol() {
+            return;
+        }
+        // For external modules, `symbol` represents the local symbol for an
+        // alias. This local symbol will merge any other local declarations
+        // (excluding other aliases) and symbol.flags will contain a combined
+        // representation for all merged declarations. Based on symbol.flags
+        // we can compute a set of excluded meanings (meanings that the
+        // resolved alias should not have, otherwise it will conflict with
+        // some local declaration). Note that in addition to normal flags we
+        // include matching SymbolFlags.Export* in order to prevent
+        // collisions with declarations that were exported from the current
+        // module (they still contribute to local names).
+        let merged = {
+            let s = self.program_symbol(initial_symbol);
+            s.export_symbol.unwrap_or(initial_symbol)
+        };
+        let symbol = self.get_merged_symbol(merged);
+        let target_flags = self.get_symbol_flags(target);
+        // A type-only import/export will already have a grammar error in a
+        // JS file, so no need to issue more errors within.
+        if tsc_ast::utilities::is_in_js_file(self.store().node(node))
+            && !target_flags.intersects(SymbolFlags::VALUE)
+            && !is_type_only_import_or_export_declaration(self.store(), node)
+        {
+            // Go: core.OrElse(node.PropertyNameOrName(), node)
+            let error_node = property_name_or_name(self.store(), node).unwrap_or(node);
+            if tsc_ast::is_export_specifier(self.store().node(node)) {
+                let _diag = self.error(
+                    error_node,
+                    &diag::TYPES_CANNOT_APPEAR_IN_EXPORT_DECLARATIONS_IN_JAVASCRIPT_FILES,
+                    &[],
+                );
+                // TODO(port M6 S6): the source-file Exports lookup for the
+                // "automatically exported here" related info — rests until
+                // S6's export-table resolution lands.
+            } else {
+                let identifier_text = if is_identifier(self.store().node(error_node)) {
+                    tsc_ast::node_text(self.store(), error_node).to_string()
+                } else {
+                    self.program_symbol(symbol).name.clone()
+                };
+                let mut specifier_text = "...".to_string();
+                if let Some(module_specifier) = try_get_module_specifier_from_declaration(
+                    self.store(),
+                    node,
+                ) {
+                    specifier_text = tsc_ast::node_text(self.store(), module_specifier).to_string();
+                }
+                let mut import_text = format!("import(\"{specifier_text}\")");
+                if tsc_ast::is_import_specifier(self.store().node(node)) {
+                    import_text = format!("{import_text}.{identifier_text}");
+                }
+                self.error(
+                    error_node,
+                    &diag::X_0_IS_A_TYPE_AND_CANNOT_BE_IMPORTED_IN_JAVASCRIPT_FILES_USE_1_IN_A_JSDOC_TYPE_ANNOTATION,
+                    &[identifier_text, import_text],
+                );
+            }
+            return;
+        }
+        let symbol_flags = self.program_symbol(symbol).flags;
+        let excluded_meanings = {
+            let mut meanings = SymbolFlags::NONE;
+            if symbol_flags
+                .intersects(SymbolFlags::VALUE.union(SymbolFlags::EXPORT_VALUE))
+            {
+                meanings = meanings.union(SymbolFlags::VALUE);
+            }
+            if symbol_flags.intersects(SymbolFlags::TYPE) {
+                meanings = meanings.union(SymbolFlags::TYPE);
+            }
+            if symbol_flags.intersects(SymbolFlags::NAMESPACE) {
+                meanings = meanings.union(SymbolFlags::NAMESPACE);
+            }
+            meanings
+        };
+        if target_flags.intersects(excluded_meanings) {
+            let message = if tsc_ast::is_export_specifier(self.store().node(node)) {
+                &diag::EXPORT_DECLARATION_CONFLICTS_WITH_EXPORTED_DECLARATION_OF_0
+            } else {
+                &diag::IMPORT_DECLARATION_CONFLICTS_WITH_LOCAL_DECLARATION_OF_0
+            };
+            let symbol_text = relater::symbol_to_string(self, symbol);
+            self.error(node, message, &[symbol_text]);
+        } else if !tsc_ast::is_export_specifier(self.store().node(node)) {
+            // Look at 'compilerOptions.isolatedModules' and not
+            // 'getIsolatedModules(...)' (which considers 'verbatimModuleSyntax')
+            // here because 'verbatimModuleSyntax' will already have an error
+            // for importing a type without 'import type'.
+            let appears_valuey_to_transpiler = self.compiler_options.isolated_modules
+                == Tristate::TSTrue
+                && !is_contained_by_type_only_import_or_export(self.store(), node);
+            if appears_valuey_to_transpiler
+                && symbol_flags
+                    .intersects(SymbolFlags::VALUE.union(SymbolFlags::EXPORT_VALUE))
+            {
+                let symbol_text = relater::symbol_to_string(self, symbol);
+                let flag_name = self.get_isolated_modules_like_flag_name();
+                self.error(
+                    node,
+                    &diag::IMPORT_0_CONFLICTS_WITH_LOCAL_VALUE_SO_MUST_BE_DECLARED_WITH_A_TYPE_ONLY_IMPORT_WHEN_ISOLATEDMODULES_IS_ENABLED,
+                    &[symbol_text, flag_name],
+                );
+            }
+        }
+        if self.compiler_options.get_isolated_modules()
+            && !is_type_only_import_or_export_declaration(self.store(), node)
+            && !self.store().node(node).flags.intersects(NF::AMBIENT)
+        {
+            // TODO(port M6 S6): getTypeOnlyAliasDeclaration — the S6 stub
+            // (None) until the typeOnlyDeclaration scan lands.
+            let type_only_alias = self.get_type_only_alias_declaration(symbol);
+            let is_type = !target_flags.intersects(SymbolFlags::VALUE);
+            if is_type || type_only_alias.is_some() {
+                match self.store().node(node).kind {
+                    Kind::ImportClause | Kind::ImportSpecifier | Kind::ImportEqualsDeclaration => {
+                        if self.compiler_options.verbatim_module_syntax == Tristate::TSTrue {
+                            let name = property_name_or_name(self.store(), node)
+                                .expect("An ImportClause with a symbol should have a name");
+                            let name_text = tsc_ast::node_text(self.store(), name).to_string();
+                            let message =
+                                if is_internal_module_import_equals_declaration(self.store(), node) {
+                                    &diag::AN_IMPORT_ALIAS_CANNOT_RESOLVE_TO_A_TYPE_OR_TYPE_ONLY_DECLARATION_WHEN_VERBATIMMODULESYNTAX_IS_ENABLED
+                                } else if is_type {
+                                    &diag::X_0_IS_A_TYPE_AND_MUST_BE_IMPORTED_USING_A_TYPE_ONLY_IMPORT_WHEN_VERBATIMMODULESYNTAX_IS_ENABLED
+                                } else {
+                                    &diag::X_0_RESOLVES_TO_A_TYPE_ONLY_DECLARATION_AND_MUST_BE_IMPORTED_USING_A_TYPE_ONLY_IMPORT_WHEN_VERBATIMMODULESYNTAX_IS_ENABLED
+                                };
+                            // TODO(port M6 S?): addTypeOnlyDeclarationRelatedInfo
+                            // — the related-info elaboration seam; base error only.
+                            self.error(node, message, &[name_text]);
+                        }
+                        if is_type
+                            && self.store().node(node).kind == Kind::ImportEqualsDeclaration
+                            && crate::ast_shims::has_modifier(
+                                self.store().node(node),
+                                ModifierFlags::EXPORT,
+                            )
+                        {
+                            let flag_name = self.get_isolated_modules_like_flag_name();
+                            self.error(
+                                node,
+                                &diag::CANNOT_USE_EXPORT_IMPORT_ON_A_TYPE_OR_TYPE_ONLY_NAMESPACE_WHEN_0_IS_ENABLED,
+                                &[flag_name],
+                            );
+                        }
+                    }
+                    Kind::ExportSpecifier => {
+                        // Don't allow re-exporting an export that will be
+                        // elided when `--isolatedModules` is set. The
+                        // exception is that
+                        // `import type { A } from './a'; export { A }` is
+                        // allowed because single-file analysis can determine
+                        // that the export should be dropped.
+                        let different_source_file = type_only_alias.is_some_and(|alias| {
+                            tsc_ast::utilities::get_source_file_of_node(self.store(), alias)
+                                .map(|f| f.as_node_id())
+                                != tsc_ast::utilities::get_source_file_of_node(self.store(), node)
+                                    .map(|f| f.as_node_id())
+                        });
+                        if self.compiler_options.verbatim_module_syntax == Tristate::TSTrue
+                            || different_source_file
+                        {
+                            let name = property_name_or_name(self.store(), node)
+                                .unwrap_or(node);
+                            let name_text =
+                                tsc_ast::node_text(self.store(), name).to_string();
+                            let flag_name = self.get_isolated_modules_like_flag_name();
+                            // TODO(port M6 S?): addTypeOnlyDeclarationRelatedInfo
+                            // — the related-info elaboration seam; base error only.
+                            if is_type {
+                                self.error(
+                                    node,
+                                    &diag::RE_EXPORTING_A_TYPE_WHEN_0_IS_ENABLED_REQUIRES_USING_EXPORT_TYPE,
+                                    &[flag_name],
+                                );
+                            } else {
+                                self.error(
+                                    node,
+                                    &diag::X_0_RESOLVES_TO_A_TYPE_ONLY_DECLARATION_AND_MUST_BE_RE_EXPORTED_USING_A_TYPE_ONLY_RE_EXPORT_WHEN_1_IS_ENABLED,
+                                    &[name_text, flag_name],
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if self.compiler_options.verbatim_module_syntax == Tristate::TSTrue
+                && !tsc_ast::is_import_equals_declaration(self.store().node(node))
+                && !tsc_ast::utilities::is_in_js_file(self.store().node(node))
+                && self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS
+            {
+                self.error(
+                    node,
+                    get_verbatim_module_syntax_error_message(self.store(), node),
+                    &[],
+                );
+            } else if self.module_kind == ModuleKind::Preserve
+                && !tsc_ast::is_import_equals_declaration(self.store().node(node))
+                && self.store().node(node).kind != Kind::VariableDeclaration
+                && self.store().node(node).kind != Kind::BindingElement
+                && self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS
+            {
+                // In `--module preserve`, ESM input syntax emits ESM output
+                // syntax, but there will be times when we look at the
+                // `impliedNodeFormat` of this file and decide it's CommonJS
+                // (i.e., currently, only if the file extension is .cjs/.cts).
+                // To avoid that inconsistency, we disallow ESM syntax in
+                // files that are unambiguously CommonJS in this mode.
+                self.error(
+                    node,
+                    &diag::ECMASCRIPT_MODULE_SYNTAX_IS_NOT_ALLOWED_IN_A_COMMONJS_MODULE_WHEN_MODULE_IS_SET_TO_PRESERVE,
+                    &[],
+                );
+            }
+            if self.compiler_options.verbatim_module_syntax == Tristate::TSTrue
+                && !is_type_only_import_or_export_declaration(self.store(), node)
+                && !self.store().node(node).flags.intersects(NF::AMBIENT)
+                && target_flags.intersects(SymbolFlags::CONST_ENUM)
+            {
+                let const_enum_declaration =
+                    self.program_symbol(target).value_declaration;
+                if let Some(const_enum_declaration) = const_enum_declaration {
+                    if self
+                        .store()
+                        .node(const_enum_declaration)
+                        .flags
+                        .intersects(NF::AMBIENT)
+                    {
+                        // TODO(port M6 S?): program.GetProjectReferenceFromOutputDts
+                        // — the project-reference redirect seam; permissive
+                        // None (Go's nil redirect keeps the error path).
+                        let should_preserve = self.compiler_options.should_preserve_const_enums();
+                        if !should_preserve {
+                            let flag_name = self.get_isolated_modules_like_flag_name();
+                            self.error(
+                                node,
+                                &diag::CANNOT_ACCESS_AMBIENT_CONST_ENUMS_WHEN_0_IS_ENABLED,
+                                &[flag_name],
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        if tsc_ast::is_import_specifier(self.store().node(node)) {
+            // TODO(port M6 S6/S10): resolveAliasWithDeprecationCheck +
+            // isDeprecatedSymbol + addDeprecatedSuggestion — the deprecation
+            // family; permissive.
+        }
+    }
+
+    /// Go: `func (c *Checker) checkTypeAliasDeclaration(node)` (checker.go:7079).
+    pub(crate) fn check_type_alias_declaration(&mut self, node: NodeId) {
+        // Grammar checking
+        self.check_grammar_modifiers(node);
+        let (name, type_parameters, type_node) = {
+            let d = self
+                .store()
+                .node(node)
+                .as_type_alias_declaration()
+                .expect("TypeAliasDeclaration data");
+            (d.name, d.type_parameters.clone(), d.type_)
+        };
+        let name_text = tsc_ast::node_text(self.store(), name).to_string();
+        self.check_type_name_is_reserved(name, &diag::TYPE_ALIAS_NAME_CANNOT_BE_0);
+        let parent = self.store().node(node).parent.get();
+        if !container_allows_block_scoped_variable(self.store(), parent) {
+            self.grammar_error_on_node(
+                node,
+                &diag::X_0_DECLARATIONS_CAN_ONLY_BE_DECLARED_INSIDE_A_BLOCK,
+                &["type".to_string()],
+            );
+        }
+        self.check_exports_on_merged_declarations(node);
+
+        let type_parameters = type_parameters
+            .as_ref()
+            .map(|l| l.nodes.to_vec())
+            .unwrap_or_default();
+        self.check_type_parameters(&type_parameters);
+        if type_node != NodeId::NONE && self.store().node(type_node).kind == Kind::IntrinsicKeyword
+        {
+            let is_builtin_iterator_return =
+                type_parameters.is_empty() && name_text == "BuiltinIteratorReturn";
+            let is_intrinsic_type_kind =
+                type_parameters.len() == 1 && intrinsic_type_kind_of(&name_text).is_some();
+            if !is_builtin_iterator_return && !is_intrinsic_type_kind {
+                self.error(
+                    type_node,
+                    &diag::THE_INTRINSIC_KEYWORD_CAN_ONLY_BE_USED_TO_DECLARE_COMPILER_PROVIDED_INTRINSIC_TYPES,
+                    &[],
+                );
+            }
+            // The `intrinsic` keyword is a leaf type node with no child nodes
+            // to check, so skipping the checkSourceElement below visits
+            // nothing.
+            return;
+        }
+        self.check_source_element(Some(type_node));
+        self.register_for_unused_identifiers_check(node);
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Free helpers for the alias batch.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `ast.IsTypeOnlyImportOrExportDeclaration(node)` — reads the type-only
+/// markers the parser laid down on the import/export payloads.
+fn is_type_only_import_or_export_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
+    match store.node(node).kind {
+        Kind::ImportDeclaration => store
+            .node(node)
+            .as_import_declaration()
+            .and_then(|d| d.import_clause)
+            .is_some_and(|clause| {
+                store
+                    .node(clause)
+                    .as_import_clause()
+                    .map(|d| d.phase_modifier == Some(Kind::TypeKeyword))
+                    .unwrap_or(false)
+            }),
+        Kind::ImportEqualsDeclaration => store
+            .node(node)
+            .as_import_equals_declaration()
+            .map(|d| d.is_type_only)
+            .unwrap_or(false),
+        Kind::ExportDeclaration => store
+            .node(node)
+            .as_export_declaration()
+            .map(|d| d.is_type_only)
+            .unwrap_or(false),
+        Kind::ImportSpecifier => store
+            .node(node)
+            .as_import_specifier()
+            .map(|d| d.is_type_only)
+            .unwrap_or(false),
+        Kind::ExportSpecifier => store
+            .node(node)
+            .as_export_specifier()
+            .map(|d| d.is_type_only)
+            .unwrap_or(false),
+        Kind::ImportClause => store
+            .node(node)
+            .as_import_clause()
+            .map(|d| d.phase_modifier == Some(Kind::TypeKeyword))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Go: `ast.FindAncestor(node, ast.IsTypeOnlyImportOrExportDeclaration) != nil`
+/// — walks the parent chain for a type-only import/export.
+fn is_contained_by_type_only_import_or_export(store: &dyn NodeStore, node: NodeId) -> bool {
+    let mut current = node;
+    loop {
+        if is_type_only_import_or_export_declaration(store, current) {
+            return true;
+        }
+        let parent = store.node(current).parent.get();
+        if parent == NodeId::NONE {
+            return false;
+        }
+        current = parent;
+    }
+}
+
+/// Go: `node.PropertyNameOrName()` — ImportSpecifier/ExportSpecifier and the
+/// name-bearing declarations.
+fn property_name_or_name(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    match store.node(node).kind {
+        Kind::ImportSpecifier => store
+            .node(node)
+            .as_import_specifier()
+            .map(|d| d.property_name.unwrap_or(d.name)),
+        Kind::ExportSpecifier => store
+            .node(node)
+            .as_export_specifier()
+            .map(|d| d.property_name.unwrap_or(d.name)),
+        _ => store.node(node).name(),
+    }
+}
+
+/// Go: `TryGetModuleSpecifierFromDeclaration(declaration)` (utilities.go) —
+/// the module specifier of an import/`import=`/export declaration.
+fn try_get_module_specifier_from_declaration(
+    store: &dyn NodeStore,
+    node: NodeId,
+) -> Option<NodeId> {
+    get_external_module_name(store, node)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// M6 S3 batch 6b — the deferred function-expression/object-literal-method
+// check (Go checker.go:10437, dispatched from checkDeferredNode at 2560).
+// ────────────────────────────────────────────────────────────────────────────
+
+impl Checker {
+    /// Go: `func (c *Checker) checkFunctionExpressionOrObjectLiteralMethodDeferred(node)`
+    /// (checker.go:10437).
+    pub(crate) fn check_function_expression_or_object_literal_method_deferred(
+        &mut self,
+        node: NodeId,
+    ) {
+        let function_flags = tsc_ast::functionflags::get_function_flags(self.store(), node);
+        let return_type = self.get_return_type_from_annotation(node);
+        self.check_all_code_paths_in_non_void_function_return_or_throw(node, return_type);
+        let body = function_body_of(self.store(), node);
+        if let Some(body) = body {
+            let type_node = signature_type_node(self.store(), node);
+            if type_node.is_none() {
+                // There are some checks that are only performed in
+                // getReturnTypeFromBody, that may produce errors we need.
+                // An example is the noImplicitAny errors resulting from
+                // widening the return expression of a function. Because
+                // checking of function expression bodies is deferred, there
+                // was never an appropriate time to do this during the main
+                // walk of the file (see the comment at the top of
+                // checkFunctionExpressionBodies). So it must be done now.
+                // TODO(port M6 S2/S8): getReturnTypeOfSignature(
+                // getSignatureFromDeclaration(node)) — the deferred
+                // signature-resolution seam (getSignatureFromDeclaration is
+                // the S8 permissive None); rests until S2/S8 land.
+            }
+            if self.store().node(body).kind == Kind::Block {
+                self.check_source_element(Some(body));
+            } else {
+                // From within an async function you can return either a
+                // non-promise value or a promise. Any Promise/A+ compatible
+                // implementation will always assimilate any foreign promise,
+                // so we should not be checking assignability of a promise to
+                // the return type. Instead, we need to check assignability of
+                // the awaited type of the expression body against the promised
+                // type of its return type annotation.
+                let expr_type = self.check_expression(body);
+                if let Some(return_type) = return_type {
+                    let return_or_promised_type =
+                        self.unwrap_return_type(return_type, function_flags);
+                    if let Some(return_or_promised_type) = return_or_promised_type {
+                        self.check_return_expression(
+                            node,
+                            return_or_promised_type,
+                            body,
+                            Some(body),
+                            expr_type,
+                            false,
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

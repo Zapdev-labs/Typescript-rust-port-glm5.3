@@ -811,8 +811,9 @@ impl Checker {
                 .source_file_of(source_file)
                 .is_some_and(binder_shims::is_external_or_common_js_module);
             if is_external_module {
-                // TODO(port M6 S6): checkExternalModuleExports (the module-exports registration).
-                self.check_external_module_exports_stub(source_file);
+                // PORT (M6 S3): the real checkExternalModuleExports body
+                // (checker.go:5906) landed with statements.rs batch 5.
+                self.check_external_module_exports(source_file);
                 self.register_for_unused_identifiers_check(source_file);
             }
             let is_declaration_file = self
@@ -1052,7 +1053,7 @@ impl Checker {
                 self.check_interface_declaration(node);
             }
             Kind::TypeAliasDeclaration | Kind::JSTypeAliasDeclaration => {
-                /* TODO(port M6 S3): checkTypeAliasDeclaration */
+                self.check_type_alias_declaration(node);
             }
             Kind::EnumDeclaration => {
                 self.check_enum_declaration(node);
@@ -1064,13 +1065,17 @@ impl Checker {
                 self.check_module_declaration(node);
             }
             Kind::ImportDeclaration | Kind::JSImportDeclaration => {
-                /* TODO(port M6 S3): checkImportDeclaration */
+                self.check_import_declaration(node);
             }
             Kind::ImportEqualsDeclaration => {
-                /* TODO(port M6 S3): checkImportEqualsDeclaration */
+                self.check_import_equals_declaration(node);
             }
-            Kind::ExportDeclaration => { /* TODO(port M6 S3): checkExportDeclaration */ }
-            Kind::ExportAssignment => { /* TODO(port M6 S3): checkExportAssignment */ }
+            Kind::ExportDeclaration => {
+                self.check_export_declaration(node);
+            }
+            Kind::ExportAssignment => {
+                self.check_export_assignment(node);
+            }
             Kind::EmptyStatement | Kind::DebuggerStatement => {
                 // TODO(port M6 W3): checkGrammarStatementInAmbientContext (grammarchecks.go).
             }
@@ -1251,11 +1256,8 @@ impl Checker {
         let _ = source_file;
     }
 
-    /// TODO(port M6 S6): `checkExternalModuleExports` — the module-exports
-    /// registration on the file symbol.
-    fn check_external_module_exports_stub(&mut self, source_file: NodeId) {
-        let _ = source_file;
-    }
+    // Go: `checkExternalModuleExports` — the real body lives in
+    // statements.rs (batch 5, checker.go:5906); the S6 stub was removed.
 
     // ────────────────────────────────────────────────────────────────────────
     // The deferred-nodes machinery (Go checker.go:2528-2583; risk 2)
@@ -1364,7 +1366,7 @@ impl Checker {
                 let _ = self.resolve_untyped_call_stub(node);
             }
             Kind::FunctionExpression | Kind::ArrowFunction | Kind::MethodDeclaration | Kind::MethodSignature => {
-                // TODO(port M6 S3): checkFunctionExpressionOrObjectLiteralMethodDeferred.
+                self.check_function_expression_or_object_literal_method_deferred(node);
             }
             Kind::GetAccessor | Kind::SetAccessor => {
                 self.check_accessor_declaration(node);

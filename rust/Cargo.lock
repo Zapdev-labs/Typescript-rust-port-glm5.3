@@ -244,6 +244,7 @@ dependencies = [
  "tsc-parser",
  "tsc-scanner",
  "tsc-stringutil",
+ "tsc-tspath",
 ]
 
 [[package]]

@@ -144,3 +144,65 @@ fn s3_binding_pattern_parameter_initializer_in_signature_reports_2371() {
         "expected TS 2371 for the binding-pattern parameter initializer"
     );
 }
+
+#[test]
+fn s3_duplicate_constructor_reports_duplicate_identifier() {
+    // Go: checkClassLikeDeclaration → checkObjectTypeForDuplicateDeclarations
+    // (checker.go:3240) — the class member duplicate walk (the S10
+    // index-info seams stay permissive; this path is real). NOTE: the
+    // const/non-const enum merge (TS 2473) rests on the binder's
+    // declaration-merge coverage for mixed const enums — outside the S3
+    // checker slice.
+    let (mut c, file) = check_file("class C { constructor() {} constructor() {} }\n");
+    let diagnostics = c.get_file_diagnostics(file);
+    assert!(
+        diagnostics.iter().any(|d| d.code() == 2392),
+        "expected TS 2392 (duplicate identifier) for the second constructor, got: {:?}",
+        diagnostics.iter().map(|d| d.code()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn s3_type_alias_reserved_name_reports_type_alias_name() {
+    // Go: checkTypeAliasDeclaration → checkTypeNameIsReserved
+    // (checker.go:7095/7103) — the predefined type keywords are reserved.
+    let (mut c, file) = check_file("type string = 1;\n");
+    let diagnostics = c.get_file_diagnostics(file);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code() == 2457),
+        "expected the reserved type-alias-name error (TS 2457), got: {:?}",
+        diagnostics.iter().map(|d| d.code()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn s3_import_equals_in_namespace_reports_cannot_reference_a_module() {
+    // Go: checkImportEqualsDeclaration → checkExternalImportOrExportDeclaration
+    // (checker.go:5614/5475) — external module references inside a namespace.
+    let (mut c, file) = check_file("namespace N { import x = require(\"y\"); }\n");
+    let diagnostics = c.get_file_diagnostics(file);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code() == 1147),
+        "expected the namespace import-references-module error (TS 1147), got: {:?}",
+        diagnostics.iter().map(|d| d.code()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn s3_export_assignment_in_namespace_reports_cannot_be_used_in_a_namespace() {
+    // Go: checkExportAssignment's isContainedByNamespace arm
+    // (checker.go:5839) — export= inside a namespace.
+    let (mut c, file) = check_file("namespace N { export = 1; }\n");
+    let diagnostics = c.get_file_diagnostics(file);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code() == 1063),
+        "expected the export-assignment-in-namespace error (TS 1063), got: {:?}",
+        diagnostics.iter().map(|d| d.code()).collect::<Vec<_>>()
+    );
+}

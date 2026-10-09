@@ -30,7 +30,11 @@ pub fn initializer_of(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
         tsc_ast::NodeData::ParameterDeclaration(d) => d.initializer,
         tsc_ast::NodeData::BindingElement(d) => d.initializer,
         tsc_ast::NodeData::EnumMember(d) => d.initializer,
-        tsc_ast::NodeData::PropertySignatureDeclaration(d) => Some(d.initializer),
+        // PORT (M6 S3): PropertySignatureDeclaration.initializer is a
+        // NodeId sentinel (not Option); NodeId::NONE is Go's nil.
+        tsc_ast::NodeData::PropertySignatureDeclaration(d) => {
+            (d.initializer != NodeId::NONE).then_some(d.initializer)
+        }
         tsc_ast::NodeData::PropertyDeclaration(d) => d.initializer,
         tsc_ast::NodeData::PropertyAssignment(d) => Some(d.initializer),
         tsc_ast::NodeData::JsxAttribute(d) => d.initializer,
@@ -523,6 +527,14 @@ pub fn parameters_of(store: &dyn NodeStore, fun: NodeId) -> &[NodeId] {
         tsc_ast::NodeData::FunctionExpression(d) => list(&d.parameters),
         tsc_ast::NodeData::ArrowFunction(d) => list(&d.parameters),
         tsc_ast::NodeData::FunctionTypeNode(d) => list(&d.parameters),
+        // PORT (M6 S3): interface method signatures flow here via
+        // checkSignatureDeclaration (Go reads them through the same
+        // SignatureDeclaration interface).
+        tsc_ast::NodeData::MethodSignatureDeclaration(d) => list(&d.parameters),
+        tsc_ast::NodeData::CallSignatureDeclaration(d) => list(&d.parameters),
+        tsc_ast::NodeData::ConstructSignatureDeclaration(d) => list(&d.parameters),
+        tsc_ast::NodeData::IndexSignatureDeclaration(d) => list(&d.parameters),
+        tsc_ast::NodeData::ConstructorTypeNode(d) => list(&d.parameters),
         _ => panic!("Node has no FunctionLikeData"),
     }
 }
