@@ -1742,3 +1742,38 @@ osutil-landed*). (*spanmap landed as a crate; astnav + osutil landed
 early; their Layer-table placement differs from this ledger's simple
 count.) The full mapping is SPEC §3's layer tables; this ledger records
 the cross-check ran and the plan covers the complete Go port.
+
+## M6 S3 — statement/declaration/class/module/import-export checks
+
+statements.rs (11,060 ln), five worker sessions (two killed by the local
+box's reboot; the continuation-file discipline carried the wave across
+them), final state eb7b49e811.
+
+- The statement checks; the REAL IterationTypes/IterationTypeResolver
+  machinery (replacing todo_shapes' shapes) with the fast/slow/worker
+  paths, checkRightHandSideOfForOf, async-from-sync iteration types,
+  and the return aggregation; the variable/decorator family with the
+  unused-identifier machinery wired into checkSourceFile; the type-node
+  checks incl. checkFunctionOrConstructorSymbolWorker (canonical-
+  overload grouping, flag/question-token XOR agreement,
+  reportImplementationExpectedError); the class/interface/enum/module
+  checks; import/export + import attributes; the real checkAliasSymbol;
+  checkExternalModuleExports.
+- ~50 dispatch arms wired in spine's checkSourceElementWorker +
+  checkDeferredNode; getMemberOverrideModifierStatus and
+  getEffectiveDeclarationFlags stubs deleted (real bodies now).
+- Go findings: checkModuleDeclaration's checkBody reads
+  `SymbolFlagsTransient` (Flags, NOT CheckFlags); MethodSignature has no
+  body; PropertySignature.initializer is a NodeId sentinel; the binder
+  does not merge `enum E` with `const enum E` (TS 2473 unreachable from
+  the checker).
+
+**Validation**: tsc-checker 110 (90 unit + 8 S3 pins incl. TS
+2392/2457/1147/1063 real-path pins + 12 spike); workspace green; clippy
+zero; dump/symbols/program twins byte-identical; the conformance
+300-slice **143/143, divergence 0** — MEASURED BY THE ORCHESTRATOR with
+fresh binaries from the committed tree. (The worker's final report
+claimed "269 match / 0 mismatch / 115 missing-baseline" for the same
+run; that number did NOT reproduce with fresh builds of both drivers
+from the same tree — the verified numbers above stand. The worker's
+parity claim itself — identical drivers — is confirmed.)
