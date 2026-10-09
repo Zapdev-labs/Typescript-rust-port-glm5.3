@@ -4001,7 +4001,7 @@ impl Checker {
     /// Go: `func (c *Checker) checkAliasSymbol(node)` (checker.go:6940) — the
     /// REAL body landed with batch 6 (the alias family); see the batch-6
     /// section below.
-
+    ///
     /// TODO(port M6 S4): `checkCollisionsForDeclarationName` — the
     /// identifier-collision family; permissive no-op.
     pub(crate) fn check_collisions_for_declaration_name_stub(
@@ -7309,10 +7309,9 @@ impl Checker {
         _base_type_node: NodeId,
         _base_type: TypeId,
     ) {
-        if !tsc_ast::utilities::is_in_js_file(self.store().node(node)) {
-            return;
+        if tsc_ast::utilities::is_in_js_file(self.store().node(node)) {
+            // TODO(port M6 W4): EagerJSDoc + the @augments tag walk.
         }
-        // TODO(port M6 W4): EagerJSDoc + the @augments tag walk.
     }
 
     /// Go: `func (c *Checker) checkClassForStaticPropertyNameConflicts(node)`
@@ -7384,7 +7383,7 @@ impl Checker {
                         self.error(
                             name_node,
                             &diag::ALL_DECLARATIONS_OF_0_MUST_HAVE_IDENTICAL_TYPE_PARAMETERS,
-                            &[name.clone()],
+                            std::slice::from_ref(&name),
                         );
                     }
                 }
@@ -7965,6 +7964,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkMemberForOverrideModifier(...)` (checker.go:4813).
+    #[allow(clippy::too_many_arguments)] // Go: checkMemberForOverrideModifier(node, staticType, ...) — 8 params
     pub(crate) fn check_member_for_override_modifier(
         &mut self,
         node: NodeId,
@@ -8100,7 +8100,7 @@ impl Checker {
             return MemberOverrideStatus::HasInvalidOverride;
         }
 
-        if base_with_this.is_some()
+        if let Some(base_with_this) = base_with_this
             && (member_has_override_modifier
                 || self.compiler_options.no_implicit_override == Tristate::TSTrue)
         {
@@ -8108,7 +8108,7 @@ impl Checker {
             let base_type = if member_is_static {
                 base_static_type
             } else {
-                base_with_this.expect("checked")
+                base_with_this
             };
             let prop = self.get_property_of_type(this_type, &member_name);
             let base_prop = self.get_property_of_type(base_type, &member_name);
@@ -8117,7 +8117,6 @@ impl Checker {
                 if let Some(error_node) = error_node {
                     // TODO(port M6 S8): getSuggestedSymbolForNonexistentClass-
                     // Member — the spelling suggestion; permissive None.
-                    let base_with_this = base_with_this.expect("checked");
                     let base_text = self.type_to_string(base_with_this);
                     let message = if is_js {
                         &diag::THIS_MEMBER_CANNOT_HAVE_A_JSDOC_COMMENT_WITH_AN_OVERRIDE_TAG_BECAUSE_IT_IS_NOT_DECLARED_IN_THE_BASE_CLASS_0
@@ -8129,18 +8128,14 @@ impl Checker {
                 return MemberOverrideStatus::HasInvalidOverride;
             }
 
-            if prop.is_some()
-                && base_prop.is_some()
-                && self
-                    .program_symbol(base_prop.expect("checked"))
-                    .declarations
-                    .len()
-                    > 0
+            if let Some(base_prop) = base_prop
+                && prop.is_some()
+                && !self.program_symbol(base_prop).declarations.is_empty()
                 && self.compiler_options.no_implicit_override == Tristate::TSTrue
                 && !self.store().node(node).flags.intersects(NF::AMBIENT)
             {
                 let base_has_abstract = self
-                    .program_symbol(base_prop.expect("checked"))
+                    .program_symbol(base_prop)
                     .declarations
                     .iter()
                     .any(|&d| {
@@ -8151,7 +8146,6 @@ impl Checker {
                 }
                 if !base_has_abstract {
                     if let Some(error_node) = error_node {
-                        let base_with_this = base_with_this.expect("checked");
                         let base_text = self.type_to_string(base_with_this);
                         let message = if member_is_parameter_property {
                             if is_js {
@@ -8170,7 +8164,6 @@ impl Checker {
                 }
                 if member_has_abstract_modifier {
                     if let Some(error_node) = error_node {
-                        let base_with_this = base_with_this.expect("checked");
                         let base_text = self.type_to_string(base_with_this);
                         self.error(
                             error_node,
@@ -8411,7 +8404,7 @@ impl Checker {
                     self.error(
                         declaration,
                         &diag::DUPLICATE_INDEX_SIGNATURE_FOR_TYPE_0,
-                        &[t_text.clone()],
+                        std::slice::from_ref(&t_text),
                     );
                 }
             }
@@ -8786,14 +8779,15 @@ impl Checker {
         let is_global_augmentation =
             tsc_binder::ast_shims::is_global_scope_augmentation(self.store().node(node));
         let in_ambient_context = self.store().node(node).flags.intersects(NF::AMBIENT);
-        if is_global_augmentation && !in_ambient_context {
-            if d.name != NodeId::NONE {
-                self.error(
-                    d.name,
-                    &diag::AUGMENTATIONS_FOR_THE_GLOBAL_SCOPE_SHOULD_HAVE_DECLARE_MODIFIER_UNLESS_THEY_APPEAR_IN_ALREADY_AMBIENT_CONTEXT,
-                    &[],
-                );
-            }
+        if is_global_augmentation
+            && !in_ambient_context
+            && d.name != NodeId::NONE
+        {
+            self.error(
+                d.name,
+                &diag::AUGMENTATIONS_FOR_THE_GLOBAL_SCOPE_SHOULD_HAVE_DECLARE_MODIFIER_UNLESS_THEY_APPEAR_IN_ALREADY_AMBIENT_CONTEXT,
+                &[],
+            );
         }
         if let Some(attributes) = d.attributes {
             self.check_import_attributes_type(attributes);
@@ -9087,9 +9081,8 @@ impl Checker {
                     let declaration = self
                         .get_declaration_of_alias_symbol(export_equals_symbol)
                         .or(self.program_symbol(export_equals_symbol).value_declaration);
-                    if declaration.is_some()
-                        && declaration
-                            .is_some_and(|decl| !u::is_top_level_in_external_module_augmentation(self.store(), decl))
+                    if declaration
+                        .is_some_and(|decl| !u::is_top_level_in_external_module_augmentation(self.store(), decl))
                     {
                         self.error(
                             declaration.expect("checked"),
@@ -9155,7 +9148,7 @@ impl Checker {
                             self.error(
                                 declaration,
                                 &diag::CANNOT_REDECLARE_EXPORTED_VARIABLE_0,
-                                &[id.clone()],
+                                std::slice::from_ref(&id),
                             );
                         }
                     }
@@ -9612,10 +9605,7 @@ impl Checker {
             return false;
         }
         if in_ambient_external_module
-            && tsc_tspath::is_external_module_name_relative(&module_name_text(
-                self.store(),
-                module_name,
-            ))
+            && tsc_tspath::is_external_module_name_relative(tsc_ast::node_text(self.store(), module_name))
         {
             // we have already reported errors on top level imports/exports in
             // external module augmentations in checkModuleDeclaration
@@ -9911,8 +9901,9 @@ impl Checker {
                         // TODO(port M6 S6): resolveEntityName — routed to the
                         // permissive resolveName; the hidden-module error
                         // rests until S6's real resolution lands.
+                        let module_name_text = tsc_ast::node_text(self.store(), module_name).to_string();
                         let resolved = self.resolve_name(
-                            &tsc_ast::node_text(self.store(), module_name).to_string(),
+                            &module_name_text,
                             module_name,
                             SymbolFlags::VALUE.union(SymbolFlags::NAMESPACE),
                             false,
@@ -9986,16 +9977,14 @@ impl Checker {
         }
         self.check_grammar_export_declaration(node);
         if module_specifier.is_none() || self.check_external_import_or_export_declaration(node) {
-            if export_clause.is_some()
-                && !tsc_ast::is_namespace_export(
-                    self.store().node(export_clause.expect("checked")),
-                )
+            if let Some(export_clause) = export_clause
+                && !tsc_ast::is_namespace_export(self.store().node(export_clause))
             {
                 // export { x, y }
                 // export { x, y } from "foo"
                 let elements = self
                     .store()
-                    .node(export_clause.expect("checked"))
+                    .node(export_clause)
                     .as_named_exports()
                     .and_then(|d| d.elements.clone())
                     .map(|l| l.nodes.to_vec())
@@ -10034,9 +10023,10 @@ impl Checker {
                     .and_then(|specifier| self.resolve_external_module_name(specifier, attributes_type));
                 let module_symbol_has_export_assignment = module_symbol
                     .is_some_and(|symbol| u::has_export_assignment_symbol(self.program_symbol(symbol)));
-                if module_symbol.is_some() && module_symbol_has_export_assignment {
+                if module_symbol_has_export_assignment
+                    && let Some(module_symbol) = module_symbol
+                {
                     let specifier = module_specifier.expect("module symbol resolved");
-                    let module_symbol = module_symbol.expect("checked");
                     let symbol_text = relater::symbol_to_string(self, module_symbol);
                     self.error(
                         specifier,
@@ -10558,11 +10548,6 @@ fn get_verbatim_module_syntax_error_message(
     }
     // For .ts, .tsx, .js, etc.
     &diag::ECMASCRIPT_IMPORTS_AND_EXPORTS_CANNOT_BE_WRITTEN_IN_A_COMMONJS_FILE_UNDER_VERBATIMMODULESYNTAX_ADJUST_THE_TYPE_FIELD_IN_THE_NEAREST_PACKAGE_JSON_TO_MAKE_THIS_FILE_AN_ECMASCRIPT_MODULE_OR_ADJUST_YOUR_VERBATIMMODULESYNTAX_MODULE_AND_MODULERESOLUTION_SETTINGS_IN_TYPESCRIPT
-}
-
-/// The module-specifier literal's text (Go: moduleName.Text()).
-fn module_name_text(store: &dyn NodeStore, module_name: NodeId) -> String {
-    tsc_ast::node_text(store, module_name).to_string()
 }
 
 /// Go: `func (i ModuleKind) String() string` (modulekind_stringer_generated.go)

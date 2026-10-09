@@ -575,7 +575,7 @@ impl Checker {
     /// Go: `func (c *Checker) GetMemberOverrideModifierStatus(...)` — the
     /// real body landed with M6 S3's class-member checks
     /// (statements.rs::get_member_override_modifier_status).
-
+    ///
     /// Go: `func (c *Checker) GetRestTypeOfSignature(sig *Signature) *Type` →
     /// `c.getRestTypeOfSignature(sig)` (checker.go — S8).
     pub fn get_rest_type_of_signature(&mut self, sig: SignatureId) -> Option<TypeId> {
