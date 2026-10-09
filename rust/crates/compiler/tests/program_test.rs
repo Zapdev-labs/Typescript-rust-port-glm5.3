@@ -725,3 +725,278 @@ fn test_verify_compiler_options_removed_option_diagnostics() {
         "no removed-option diagnostics without removed options"
     );
 }
+
+/// The `build` shape of the removed-option test above, generalized over
+/// the extra files a config references (project references, sibling
+/// inputs).
+fn build_program_with_files(
+    config_text: &str,
+    extra_files: &[(&str, &str)],
+) -> (Program, &'static str) {
+    let config_text_leak: &'static str = Box::leak(config_text.to_string().into_boxed_str());
+    let mut files: Vec<(String, String)> =
+        vec![("/src/tsconfig.json".to_string(), config_text.to_string())];
+    for (name, text) in extra_files {
+        files.push(((*name).to_string(), (*text).to_string()));
+    }
+    let fs = tsc_bundled::wrap_fs(vfstest::from_map(files, CaseSensitivity::CaseSensitive));
+    let config = get_parsed_command_line_of_config_file_path(
+        &RootedFilePath::from("/src/tsconfig.json"),
+        fs.as_ref(),
+        None,
+    );
+    let host = new_compiler_host(
+        Arc::clone(&fs),
+        rooted_directory_path_from_normalized("/"),
+        nil_extended_config_cache(),
+        None,
+    );
+    (
+        new_program(ProgramOptions {
+            config: ProgramConfig {
+                config: Arc::new(config),
+                ..Default::default()
+            },
+            hosts: ProgramHosts { host: Some(host) },
+            factories: ProgramFactories::default(),
+        }),
+        config_text_leak,
+    )
+}
+
+/// PORT (no Go program_test counterpart — Go covers the arms through the
+/// conformance corpus): verifyCompilerOptions' strict arm —
+/// `strictPropertyInitialization` without `strictNullChecks` → TS5052
+/// positioned on the property NAME (onKey), args
+/// [strictPropertyInitialization, strictNullChecks].
+#[test]
+fn test_verify_compiler_options_strict_arm() {
+    let (program, config_text) = build_program_with_files(
+        r#"{"compilerOptions":{"strictPropertyInitialization":true,"strict":false,"noLib":true},"files":["index.ts"]}"#,
+        &[],
+    );
+    let diagnostics = program.get_program_diagnostics();
+    let strict = diagnostics
+        .iter()
+        .find(|d| d.diagnostic.code() == 5052)
+        .expect("TS5052 for strictPropertyInitialization without strictNullChecks");
+    assert_eq!(
+        strict.diagnostic.message_args(),
+        ["strictPropertyInitialization", "strictNullChecks"]
+    );
+    assert_eq!(
+        &config_text[strict.diagnostic.pos() as usize..strict.diagnostic.end() as usize],
+        "\"strictPropertyInitialization\""
+    );
+
+    // With strictNullChecks: no TS5052.
+    let (program, _) = build_program_with_files(
+        r#"{"compilerOptions":{"strictPropertyInitialization":true,"strictNullChecks":true,"noLib":true},"files":["index.ts"]}"#,
+        &[],
+    );
+    assert!(
+        program
+            .get_program_diagnostics()
+            .iter()
+            .all(|d| d.diagnostic.code() != 5052),
+        "strictNullChecks satisfies the arm"
+    );
+}
+
+/// PORT (no Go program_test counterpart): verifyCompilerOptions' composite
+/// arms — `composite` with `declaration: false` → TS6304, with
+/// `incremental: false` → TS6379, both positioned on the property name
+/// with args [declaration] (Go's exact arg quirk).
+#[test]
+fn test_verify_compiler_options_composite_arms() {
+    let (program, config_text) = build_program_with_files(
+        r#"{"compilerOptions":{"composite":true,"declaration":false,"incremental":false,"noLib":true},"files":["index.ts"]}"#,
+        &[],
+    );
+    let diagnostics = program.get_program_diagnostics();
+    let declaration = diagnostics
+        .iter()
+        .find(|d| d.diagnostic.code() == 6304)
+        .expect("TS6304 for composite without declaration");
+    assert_eq!(declaration.diagnostic.message_args(), ["declaration", ""]);
+    assert_eq!(
+        &config_text[declaration.diagnostic.pos() as usize..declaration.diagnostic.end() as usize],
+        "\"declaration\""
+    );
+    let incremental = diagnostics
+        .iter()
+        .find(|d| d.diagnostic.code() == 6379)
+        .expect("TS6379 for composite without incremental");
+    assert_eq!(incremental.diagnostic.message_args(), ["declaration", ""]);
+}
+
+/// PORT (no Go program_test counterpart): the incremental-without-config
+/// arm does NOT fire on the config-file route (the worker sets
+/// ConfigFilePath — the fix this wave lands); `tsBuildInfoFile` set also
+/// satisfies it.
+#[test]
+fn test_verify_compiler_options_incremental_arm() {
+    for config in [
+        r#"{"compilerOptions":{"incremental":true,"noLib":true},"files":["index.ts"]}"#,
+        r#"{"compilerOptions":{"incremental":true,"tsBuildInfoFile":"./out.tsbuildinfo","noLib":true},"files":["index.ts"]}"#,
+    ] {
+        let (program, _) = build_program_with_files(config, &[]);
+        assert!(
+            program
+                .get_program_diagnostics()
+                .iter()
+                .all(|d| d.diagnostic.code() != 5074),
+            "ConfigFilePath is set on the config-file route (no TS5074): {config}"
+        );
+    }
+}
+
+/// PORT (no Go program_test counterpart): verifyCompilerOptions' `paths`
+/// validation — a pattern key with two asterisks → TS5061 positioned at
+/// the paths key; a non-relative, non-absolute substitution → TS5090 at
+/// the substitution array element.
+#[test]
+fn test_verify_compiler_options_paths_validation() {
+    let (program, config_text) = build_program_with_files(
+        r#"{"compilerOptions":{"baseUrl":".","paths":{"a**":["./b"],"ok":["c"]},"noLib":true},"files":["index.ts"]}"#,
+        &[],
+    );
+    let diagnostics = program.get_program_diagnostics();
+    let pattern = diagnostics
+        .iter()
+        .find(|d| d.diagnostic.code() == 5061)
+        .expect("TS5061 for the a** pattern key");
+    assert_eq!(pattern.diagnostic.message_args(), ["a**"]);
+    assert_eq!(
+        &config_text[pattern.diagnostic.pos() as usize..pattern.diagnostic.end() as usize],
+        "\"a**\""
+    );
+    let non_relative = diagnostics
+        .iter()
+        .find(|d| d.diagnostic.message_key() == "Non_relative_paths_are_not_allowed_Did_you_forget_a_leading_Slash_5090")
+        .expect("the non-relative substitution diagnostic");
+    // Positioned at the substitution array element ("c").
+    assert_eq!(
+        &config_text[non_relative.diagnostic.pos() as usize..non_relative.diagnostic.end() as usize],
+        "\"c\""
+    );
+}
+
+/// PORT (no Go program_test counterpart): the bundler moduleKind arm —
+/// `moduleResolution: "bundler"` with `module: "commonjs"` → TS5062 as an
+/// option-VALUE diagnostic (onKey = false — positioned on the property
+/// INITIALIZER).
+#[test]
+fn test_verify_compiler_options_bundler_arm() {
+    let (program, config_text) = build_program_with_files(
+        r#"{"compilerOptions":{"moduleResolution":"bundler","module":"system","noLib":true},"files":["index.ts"]}"#,
+        &[],
+    );
+    let diagnostics = program.get_program_diagnostics();
+    let bundler = diagnostics
+        .iter()
+        .find(|d| d.diagnostic.code() == 5095)
+        .expect("TS5095 for bundler with a non-ES module kind");
+    assert_eq!(bundler.diagnostic.message_args(), ["bundler"]);
+    assert_eq!(
+        &config_text[bundler.diagnostic.pos() as usize..bundler.diagnostic.end() as usize],
+        "\"bundler\""
+    );
+}
+
+/// PORT (no Go program_test counterpart): the emit-path uniqueness loop —
+/// an emitted .js that overwrites a listed input file → TS5055 +
+/// `hasEmitBlockingDiagnostics` (IsEmitBlocked).
+#[test]
+fn test_verify_compiler_options_emit_path_overwrite() {
+    let (program, _) = build_program_with_files(
+        r#"{"compilerOptions":{"allowJs":true,"noLib":true},"files":["a.ts","a.js"]}"#,
+        &[("/src/a.ts", "export const a = 1;"), ("/src/a.js", "export const b = 2;")],
+    );
+    let diagnostics = program.get_program_diagnostics();
+    let overwrite = diagnostics
+        .iter()
+        .find(|d| d.diagnostic.code() == 5055)
+        .expect("TS5055 for the emitted file overwriting the input");
+    assert_eq!(overwrite.diagnostic.message_args(), ["/src/a.js"]);
+    assert!(program.is_emit_blocked(&RootedFilePath::from("/src/a.js")));
+    assert!(!program.is_emit_blocked(&RootedFilePath::from("/src/a.ts")));
+}
+
+/// PORT (no Go program_test counterpart): verifyProjectReferences — a
+/// reference to a project without `composite: true` → TS6306 positioned
+/// at the PARENT's `references` array element (the file the reference is
+/// written in), message args the reference path.
+#[test]
+fn test_verify_project_references_composite_required() {
+    let (program, config_text) = build_program_with_files(
+        r#"{"compilerOptions":{"noLib":true},"files":["index.ts"],"references":[{"path":"./ref"}]}"#,
+        &[
+            ("/src/ref/tsconfig.json", r#"{"files":["ref.ts"]}"#),
+            ("/src/ref/ref.ts", "export const r = 1;"),
+        ],
+    );
+    let diagnostics = program.get_program_diagnostics();
+    let composite = diagnostics
+        .iter()
+        .find(|d| d.diagnostic.code() == 6306)
+        .expect("TS6306 for the non-composite referenced project");
+    // Go: CreateDiagnosticAtReferenceSyntax(parent, index, ...) — the
+    // parent's references element.
+    assert_eq!(composite.diagnostic.message_args(), ["/src/ref"]);
+    assert_eq!(
+        &config_text[composite.diagnostic.pos() as usize..composite.diagnostic.end() as usize],
+        "{\"path\":\"./ref\"}"
+    );
+    assert_eq!(
+        composite
+            .file_name
+            .as_ref()
+            .map(|name| name.as_string().to_string()),
+        Some("/src/tsconfig.json".to_string())
+    );
+
+    // The referenced project with composite: true → no TS6306.
+    let (program, _) = build_program_with_files(
+        r#"{"compilerOptions":{"noLib":true},"files":["index.ts"],"references":[{"path":"./ref"}]}"#,
+        &[
+            (
+                "/src/ref/tsconfig.json",
+                r#"{"compilerOptions":{"composite":true},"files":["ref.ts"]}"#,
+            ),
+            ("/src/ref/ref.ts", "export const r = 1;"),
+        ],
+    );
+    assert!(
+        program
+            .get_program_diagnostics()
+            .iter()
+            .all(|d| d.diagnostic.code() != 6306),
+        "composite: true satisfies the reference check"
+    );
+}
+
+/// PORT (no Go program_test counterpart): the composite root-files walk —
+/// a composite project whose program pulls in a file NOT listed in its
+/// root files gets the TS6307 explaining-file-include PROCESSING
+/// diagnostic (surfaced through the include processor's global
+/// diagnostics).
+#[test]
+fn test_verify_compiler_options_composite_root_files_walk() {
+    let (program, _) = build_program_with_files(
+        r#"{"compilerOptions":{"composite":true,"declaration":true,"incremental":true,"outDir":"./out","noLib":true},"files":["a.ts"]}"#,
+        &[("/src/a.ts", "export const a = 1;")],
+    );
+    // The listed root file: no TS6307. (The walk fires for wildcard-pulled
+    // files outside `files` — the include case is covered by the compiler
+    // suite twin slices.)
+    assert!(
+        program
+            .processing_diagnostics
+            .iter()
+            .all(|d| d
+                .as_include_explaining_diagnostic()
+                .map(|e| e.message.code()) != Some(6307)),
+        "the listed root file carries no TS6307"
+    );
+}

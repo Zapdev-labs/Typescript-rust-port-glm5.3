@@ -7,10 +7,11 @@
 // PORT notes list the M4-scope deltas (see PORTING-NOTES.md for the roll-up).
 //
 // Not yet ported from the Go package (tracked in PORTING-NOTES.md):
-//   - tsconfigparsing.go's AST→value JSON conversion
-//     (convertConfigFileToObject; the M6 config-node wave lands the
-//     SourceFile position surface — TsConfigSourceFile + the config-syntax
-//     walks — but the value tree still comes from the text parser)
+//   - tsconfigparsing.go's jsonConversionNotifier surface
+//     (parseOwnConfigOfJsonSourceFile's per-key option conversion with
+//     positioned unknown-option/root-compiler-option diagnostics — the M6
+//     config-file wave landed the AST→value conversion and both parse
+//     routes; the notifier's positioned arms stay deferred)
 //   - contentmapper's host.go/hostimpl.go (out of M4 scope)
 //
 // getFileNamesFromConfigSpecs (glob-driven file enumeration) and the
@@ -69,11 +70,13 @@ pub use parsinghelpers::{
 pub use rawcompileroptions::RawCompilerOptions;
 pub use showconfig::{convert_to_tsconfig, TSConfig};
 pub use tsconfigparsing::{
+    convert_config_file_to_object, create_diagnostic_at_reference_syntax,
     for_each_property_assignment, for_each_ts_config_prop_array,
     get_options_syntax_by_array_element_value, get_parsed_command_line_of_config_file_path,
     get_ts_config_object_literal_expression, get_ts_config_prop_array_element_value,
     new_tsconfig_source_file_from_file_path, parse_config_file_text_to_json,
-    parse_json_config_file_content, tsconfig_to_source_file, ParsedCompilerOptions,
-    ProjectReference, ResolveConfigHost, TsConfigSourceFile,
+    parse_json_config_file_content, parse_json_source_file_config_file_content,
+    tsconfig_to_source_file, ParsedCompilerOptions, ProjectReference, ResolveConfigHost,
+    TsConfigSourceFile,
 };
 pub use wildcarddirectories::{get_wildcard_directories, is_implicit_glob, WildcardDirectoryWatcher};

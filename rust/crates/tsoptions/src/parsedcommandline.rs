@@ -76,6 +76,19 @@ pub struct ParsedCommandLine {
     pub(crate) is_default_include_spec: bool,
     /// Go: `errors []*ast.Diagnostic`.
     pub errors: Vec<Diagnostic>,
+    /// Go: each `errors` diagnostic's own `File()` — the config file the
+    /// diagnostic was created against (the main config, an extended
+    /// config's file) or `None` for a fileless compiler diagnostic.
+    ///
+    /// PORT (file pairing): `tsc_ast::Diagnostic` cannot resolve its file
+    /// (the parser's `file_id = 0` gap — diagnostics_collection.rs), and
+    /// Go's `GetConfigFileParsingDiagnostics` consumers render each
+    /// diagnostic under ITS OWN file (an extended config's parse errors
+    /// belong to the extended file, not the extending one). The config-file
+    /// route records the pairing here, parallel to `errors` (same length;
+    /// entries beyond the recorded prefix pair with the config file name —
+    /// the pre-wave behavior, kept for the command-line route).
+    pub error_files: Vec<Option<RootedFilePath>>,
     /// Go: `raw any` — the option map the command-line parser produced
     /// (tsconfig parsing leaves it zero).
     pub raw: tsc_collections::OrderedMap<String, crate::commandlineoption::CompilerOptionsValue>,
@@ -201,8 +214,65 @@ impl ParsedCommandLine {
         })
     }
 
+    /// Go: `func (p *ParsedCommandLine) GetBuildInfoFileName() tspath.RootedFilePath`
+    /// — `outputpaths.GetBuildInfoFileName(p.CompilerOptions(), p.caseSensitivity)`.
+    pub fn get_build_info_file_name(&self) -> RootedFilePath {
+        tsc_outputpaths::get_build_info_file_name(self.compiler_options(), self.case_sensitivity)
+    }
+
+    /// Go: `func (p *ParsedCommandLine) GetConfigFileParsingDiagnostics() []*ast.Diagnostic`
+    /// — `ConfigFile != nil` → `concat(ConfigFile.SourceFile.Diagnostics(), Errors)`,
+    /// else `Errors`.
+    ///
+    /// PORT (file pairing): each returned diagnostic pairs with the config
+    /// file it was created against — the config file's own parse diagnostics
+    /// with the config file, `errors` with [`Self::error_files`] (falling
+    /// back to the config file name where the route recorded no pairing —
+    /// the command-line route's diagnostics render under the config file,
+    /// the pre-wave behavior).
+    pub fn get_config_file_parsing_diagnostics(&self) -> Vec<(Option<RootedFilePath>, Diagnostic)> {
+        let mut result: Vec<(Option<RootedFilePath>, Diagnostic)> = Vec::new();
+        if let Some(config_file) = &self.config_file {
+            let file = config_file.lock_source_file();
+            for diagnostic in file.diagnostics() {
+                result.push((Some(file.file_name().clone()), diagnostic.clone()));
+            }
+        }
+        for (index, diagnostic) in self.errors.iter().enumerate() {
+            let file_name = self
+                .error_files
+                .get(index)
+                .cloned()
+                .unwrap_or(Some(self.config_file_name.clone()));
+            result.push((file_name, diagnostic.clone()));
+        }
+        result
+    }
+
+    /// Go: `func (p *ParsedCommandLine) ResolvedProjectReferencePaths() []tspath.RootedFilePath`
+    /// — `core.ResolveProjectReferencePath` per declared reference (the
+    /// CONFIG FILE each reference resolves to), Go-memoized (a pure
+    /// function of the declared list — computed per call here).
+    pub fn resolved_project_reference_paths(&self) -> Vec<RootedFilePath> {
+        self.project_references
+            .iter()
+            .map(|reference| resolve_config_file_name_of_project_reference(&reference.path))
+            .collect()
+    }
+
     /// Go: `func (c *ParsedCommandLine) BaseDirectory()`.
     pub fn base_directory(&self) -> &RootedDirectoryPath {
         &self.base_directory
     }
+}
+
+/// Go: `func ResolveConfigFileNameOfProjectReference(path tspath.RootedPath) tspath.RootedFilePath`
+/// (core/projectreference.go) — a `.json` path as-is, else the path with
+/// DIRECTORY INTENT (Go's `RootedDirectoryPathFromPath` is an identity
+/// cast — no component stripping) resolved against `tsconfig.json`.
+fn resolve_config_file_name_of_project_reference(path: &RootedFilePath) -> RootedFilePath {
+    if path.extension_is(tsc_tspath::EXTENSION_JSON) {
+        return path.clone();
+    }
+    tsc_tspath::rooted_directory_path_from_path(path.as_path()).resolve_file("tsconfig.json")
 }

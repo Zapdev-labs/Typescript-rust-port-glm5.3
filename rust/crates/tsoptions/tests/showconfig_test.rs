@@ -33,9 +33,10 @@ pub fn run_showconfig(config_text: &str, config_directory: &str) -> String {
     ));
     let base_path = rooted_directory_path_from_absolute(config_directory);
 
-    let (json, mut errors) = parse_config_file_text_to_json(config_text);
+    let path_key = CaseSensitivity::CaseSensitive.path_key(&config_file_path.as_path());
+    let (json, mut errors) =
+        parse_config_file_text_to_json(&config_file_path, path_key, config_text);
     assert!(errors.is_empty(), "parse errors: {errors:?}");
-    let json = json.expect("parse result");
     let parsed: ParsedCommandLine = parse_json_config_file_content(
         &json,
         fs.as_ref(),
@@ -52,9 +53,11 @@ pub fn run_showconfig(config_text: &str, config_directory: &str) -> String {
 }
 
 fn parse_map(text: &str) -> tsc_collections::OrderedMap<String, CompilerOptionsValue> {
-    let (json, errors) = parse_config_file_text_to_json(text);
+    let config_file_path = rooted_file_path_from_absolute("/tsconfig.json");
+    let path_key = CaseSensitivity::CaseSensitive.path_key(&config_file_path.as_path());
+    let (json, errors) = parse_config_file_text_to_json(&config_file_path, path_key, text);
     assert!(errors.is_empty());
-    let CompilerOptionsValue::Object(map) = json.expect("parse result") else {
+    let CompilerOptionsValue::Object(map) = json else {
         panic!("not an object");
     };
     map
@@ -134,10 +137,11 @@ fn test_showconfig_extends_merge() {
     );
     let config_file_path = rooted_file_path_from_absolute("/project/tsconfig.json");
     let base_path = rooted_directory_path_from_absolute("/project");
-    let (json, errors) = parse_config_file_text_to_json(config_text);
+    let path_key = CaseSensitivity::CaseSensitive.path_key(&config_file_path.as_path());
+    let (json, errors) = parse_config_file_text_to_json(&config_file_path, path_key, config_text);
     assert!(errors.is_empty());
     let parsed = parse_json_config_file_content(
-        &json.expect("parse result"),
+        &json,
         fs.as_ref(),
         &base_path,
         None,

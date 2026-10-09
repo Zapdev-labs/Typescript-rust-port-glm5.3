@@ -220,9 +220,9 @@ fn emit_showconfig_line(line: &mut String, path: &Path, fs: &dyn Fs) {
     let base_path = file_name.directory();
     let path_key = fs.case_sensitivity().path_key(&file_name.as_path());
     let (json, text_diags) =
-        tsc_tsoptions::tsconfigparsing::parse_config_file_text_to_json(&text);
+        tsc_tsoptions::tsconfigparsing::parse_config_file_text_to_json(&file_name, path_key, &text);
     let parsed = tsc_tsoptions::tsconfigparsing::parse_json_config_file_content(
-        &json.unwrap_or(tsc_tsoptions::CompilerOptionsValue::Null),
+        &json,
         fs,
         &base_path,
         None,
@@ -234,7 +234,7 @@ fn emit_showconfig_line(line: &mut String, path: &Path, fs: &dyn Fs) {
     let error_count = text_diags.len() + parsed.errors.len();
     let tsconfig = tsc_tsoptions::showconfig::convert_to_tsconfig(&parsed, &file_name);
     let out = tsconfig.marshal();
-    let _ = path_key;
+
     line.push_str("\"ok\":true,\"out\":\"");
     json_escape(&out, line);
     line.push_str("\",\"errors\":");
@@ -418,9 +418,10 @@ fn project_compiler_options(dir: &Path, fs: &dyn Fs) -> CompilerOptions {
         let Some(text) = fs.read_file(&file_name) else {
             break;
         };
-        let (json, _diags) = tsc_tsoptions::tsconfigparsing::parse_config_file_text_to_json(&text);
+        let path_key = fs.case_sensitivity().path_key(&file_name.as_path());
+        let (json, _diags) = tsc_tsoptions::tsconfigparsing::parse_config_file_text_to_json(&file_name, path_key, &text);
         let parsed = tsc_tsoptions::tsconfigparsing::parse_json_config_file_content(
-            &json.unwrap_or(tsc_tsoptions::CompilerOptionsValue::Null),
+            &json,
             fs,
             &file_name.directory(),
             None,

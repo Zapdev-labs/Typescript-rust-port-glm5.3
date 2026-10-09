@@ -51,11 +51,10 @@ fn parse_task(
         // Go: `t.resolved.ParseInputOutputNames()` — the AST-config wave (see
         // the file header).
         tasks[task_index].resolved = Some(Arc::clone(&resolved));
-        let sub_references: Vec<RootedFilePath> = resolved
-            .project_references()
-            .iter()
-            .map(|r| r.path.clone())
-            .collect();
+        // Go: `if subReferences := t.resolved.ResolvedProjectReferencePaths();
+        // len(subReferences) > 0 { t.subTasks = ... }` — the sub-reference
+        // CONFIG FILE paths.
+        let sub_references: Vec<RootedFilePath> = resolved.resolved_project_reference_paths();
         if !sub_references.is_empty() {
             tasks[task_index].sub_tasks = create_project_reference_parse_tasks(
                 tasks,

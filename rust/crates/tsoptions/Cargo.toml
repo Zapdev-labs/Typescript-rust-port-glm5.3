@@ -19,8 +19,14 @@ tsc-contentmapper = { path = "../contentmapper" }
 tsc-core = { path = "../core" }
 tsc-diagnostics = { path = "../diagnostics" }
 tsc-glob = { path = "../glob" }
+# Go's convertPropertyValueToJson calls jsnum.FromString for numeric literals
+# (the M6 config-file route's AST→value conversion).
+tsc-jsnum = { path = "../jsnum" }
 tsc-json = { path = "../json" }
 tsc-locale = { path = "../locale" }
+# Go's parsedcommandline.go calls outputpaths.GetBuildInfoFileName
+# (ParsedCommandLine.GetBuildInfoFileName — the M6 verifyCompilerOptions wave).
+tsc-outputpaths = { path = "../outputpaths" }
 # Go's tsconfigparsing parses the config text as a JSON SourceFile through
 # the parser package (NewTsconfigSourceFileFromFilePath — the M6 config-node
 # diagnostic surface).

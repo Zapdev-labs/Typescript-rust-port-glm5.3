@@ -108,6 +108,13 @@ impl CompilerHost for CompilerHostImpl {
         // AST-config-path plumbing (not ported) and the extended-config
         // cache is consulted inside the same crate where it is installed.
         let _ = &self.extended_config_cache;
+        // Go: tryReadFile — an unreadable config is UNRECOVERABLE:
+        // GetParsedCommandLineOfConfigFilePath returns (nil, errors), so
+        // the resolved reference is NIL (verifyProjectReferences'
+        // config == nil arm reports File_0_not_found). PORT: the route
+        // itself keeps the single-result shape its other callers need;
+        // the pre-check reproduces Go's readFile failure exactly.
+        let _config_file_text = self.fs.read_file(file_name)?;
         Some(Arc::new(tsc_tsoptions::get_parsed_command_line_of_config_file_path(
             file_name,
             self.fs.as_ref(),

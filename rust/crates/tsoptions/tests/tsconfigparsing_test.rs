@@ -27,11 +27,12 @@ fn test_spec_validation_errors() {
     let base_path = rooted_directory_path_from_absolute("/project");
     let config_file_path = rooted_file_path_from_absolute("/project/tsconfig.json");
 
+    let path_key = CaseSensitivity::CaseSensitive.path_key(&config_file_path.as_path());
     let text = r#"{ "include": ["src/**"] }"#;
-    let (json, errors) = parse_config_file_text_to_json(text);
+    let (json, errors) = parse_config_file_text_to_json(&config_file_path, path_key.clone(), text);
     assert!(errors.is_empty());
     let parsed = parse_json_config_file_content(
-        &json.expect("parse"),
+        &json,
         fs.as_ref(),
         &base_path,
         None,
@@ -43,10 +44,10 @@ fn test_spec_validation_errors() {
     assert!(!parsed.errors.is_empty(), "trailing recursion must error");
 
     let text = r#"{ "include": ["src/**/../a.ts"] }"#;
-    let (json, errors) = parse_config_file_text_to_json(text);
+    let (json, errors) = parse_config_file_text_to_json(&config_file_path, path_key.clone(), text);
     assert!(errors.is_empty());
     let parsed = parse_json_config_file_content(
-        &json.expect("parse"),
+        &json,
         fs.as_ref(),
         &base_path,
         None,
@@ -76,10 +77,12 @@ fn test_extends_cycle_detection() {
     );
     let base_path = rooted_directory_path_from_absolute("/project");
     let config_file_path = rooted_file_path_from_absolute("/project/tsconfig.json");
-    let (json, errors) = parse_config_file_text_to_json(r#"{ "extends": "./base.json" }"#);
+    let path_key = CaseSensitivity::CaseSensitive.path_key(&config_file_path.as_path());
+    let (json, errors) =
+        parse_config_file_text_to_json(&config_file_path, path_key, r#"{ "extends": "./base.json" }"#);
     assert!(errors.is_empty());
     let parsed = parse_json_config_file_content(
-        &json.expect("parse"),
+        &json,
         fs.as_ref(),
         &base_path,
         None,
@@ -130,10 +133,12 @@ fn test_extends_module_specifier_seam() {
     let base_path = rooted_directory_path_from_absolute("/project");
     let config_file_path = rooted_file_path_from_absolute("/project/tsconfig.json");
     let host = ResolvingHost;
-    let (json, errors) = parse_config_file_text_to_json(r#"{ "extends": "@tsconfig/spec" }"#);
+    let path_key = CaseSensitivity::CaseSensitive.path_key(&config_file_path.as_path());
+    let (json, errors) =
+        parse_config_file_text_to_json(&config_file_path, path_key, r#"{ "extends": "@tsconfig/spec" }"#);
     assert!(errors.is_empty());
     let parsed = parse_json_config_file_content(
-        &json.expect("parse"),
+        &json,
         fs.as_ref(),
         &base_path,
         None,

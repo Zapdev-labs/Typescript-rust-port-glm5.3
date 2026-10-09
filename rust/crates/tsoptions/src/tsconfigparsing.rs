@@ -395,39 +395,388 @@ pub fn get_options_syntax_by_array_element_value(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// JSON text → CompilerOptionsValue (ordered)
+// AST → value conversion (Go: tsconfigparsing.go's convertConfigFileToObject/
+// convertToJson/convertPropertyValueToJson/convertObjectLiteralExpressionToJson/
+// convertArrayLiteralExpressionToJson/isDoubleQuotedString — the M6
+// config-file wave: the config-file route's VALUES come from the config AST
+// now, and the conversion's span-carrying diagnostics (the `?` token, the
+// non-property-assignment elements) ride `ParsedCommandLine.errors` exactly
+// like Go's)
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Go: `func ParseConfigFileTextToJson(fileName, path, jsonText) (any, []*ast.Diagnostic)` —
-/// the values side; diagnostics degrade per the module PORT notes (Go's come
-/// from parsing the file as a JSON SourceFile; the port reports the text
-/// parser's error as a raw diagnostic).
-pub fn parse_config_file_text_to_json(
-    json_text: &str,
-) -> (Option<CompilerOptionsValue>, Vec<tsc_ast::Diagnostic>) {
-    match parse_json_text(json_text) {
-        Ok(value) => (Some(value), Vec::new()),
-        Err(error) => (
-            None,
-            vec![json_parse_error_diagnostic(&error)],
-        ),
+/// Go: `func isDoubleQuotedString(node *ast.Node) bool` = `ast.IsStringLiteral(node)`
+/// — trivially true at its only call site (the conversion's StringLiteral arm
+/// already matched the kind); kept verbatim so the arm reads like Go's. The
+/// unquoted-string diagnostics come from the JSON PARSE (ScriptKindJSON),
+/// riding the config SourceFile — never from the conversion.
+fn is_double_quoted_string(node: &tsc_ast::Node) -> bool {
+    tsc_ast::is_string_literal(node)
+}
+
+/// Go: `func IsComputedNonLiteralName(name) bool` (ast/utilities.go) — the
+/// crate-local shim (the ast crate's PORT gap; see ast_shims.rs).
+fn is_computed_non_literal_name(store: &dyn tsc_ast::NodeStore, name: tsc_ast::NodeId) -> bool {
+    let node = store.node(name);
+    if node.kind != tsc_ast::Kind::ComputedPropertyName {
+        return false;
+    }
+    let expression = node
+        .as_computed_property_name()
+        .expect("ComputedPropertyName data")
+        .expression;
+    let expression_node = store.node(expression);
+    !(tsc_ast::is_string_literal_like(expression_node)
+        || tsc_ast::is_numeric_literal(expression_node))
+}
+
+/// Go: `ast.NewDiagnostic(file, loc, message, args...)` — the RAW-loc form
+/// (vs. `CreateDiagnosticForNodeInSourceFile`'s skip-trivia node range); the
+/// conversion's diagnostics use the node's `Loc` exactly as Go does.
+fn new_diagnostic_at_loc(
+    source_file: &tsc_ast::SourceFile,
+    loc: tsc_core::text::TextRange,
+    message: &'static tsc_diagnostics::Message,
+    args: &[String],
+) -> tsc_ast::Diagnostic {
+    let text = tsc_diagnostics::format(message.text(), args);
+    tsc_ast::Diagnostic::new(
+        Some(source_file.as_node_id()),
+        loc,
+        message.code(),
+        message.category(),
+        "",
+        Some(message),
+        text,
+        message.key(),
+        args.to_vec(),
+    )
+}
+
+/// Go: `float64(jsnum.FromString(text))` — the value carries as `Int` when
+/// integral else `Float`, matching the text parser's shape (the parsed twin
+/// proves both forms; Go's `any` is float64 either way and every downstream
+/// consumer accepts both — PORTING-NOTES).
+fn numeric_literal_value(text: &str, negate: bool) -> CompilerOptionsValue {
+    let number: f64 = tsc_jsnum::from_string(text).0;
+    let number = if negate { -number } else { number };
+    if number.fract() == 0.0 && number.is_finite() && number.abs() < 9.0e15 {
+        CompilerOptionsValue::Int(number as i64)
+    } else {
+        CompilerOptionsValue::Float(number)
     }
 }
 
-/// The text-parser failure form (Go surfaces the first SourceFile parse
-/// diagnostic; the AST-config path is future work — module PORT notes).
-fn json_parse_error_diagnostic(error: &str) -> tsc_ast::Diagnostic {
-    tsc_ast::Diagnostic::new(
-        None,
-        tsc_core::text::TextRange::new(0, 0),
-        0,
-        tsc_diagnostics::Category::Error,
-        "",
-        None,
-        format!("Syntax error while parsing tsconfig: {error}"),
-        "",
-        Vec::new(),
-    )
+/// Go: `func convertConfigFileToObject(sourceFile, jsonConversionNotifier) (any, []*ast.Diagnostic)`.
+///
+/// PORT (notifier residual): Go's `jsonConversionNotifier` (the per-key
+/// option-typed conversion + `parseOwnConfigOfJsonSourceFile`'s
+/// compilerOptions/typeAcquisition/root arms) is NOT ported this wave — both
+/// routes call with the nil notifier, so this is the pure value walk; the
+/// option-typed normalization keeps happening in the shared worker's
+/// convertOptionsFromJson arm. The notifier's positioned unknown-option and
+/// root-compiler-option diagnostics stay deferred to the full AST-config
+/// wave (PORTING-NOTES).
+pub fn convert_config_file_to_object(
+    source_file: &tsc_ast::SourceFile,
+) -> (CompilerOptionsValue, Vec<tsc_ast::Diagnostic>) {
+    let root_expression = source_file
+        .payload()
+        .statements
+        .as_ref()
+        .and_then(|statements| statements.nodes.first())
+        .and_then(|first| crate::ast_shims::expression_of(source_file, *first));
+    if let Some(root_expression) = root_expression {
+        if !tsc_ast::is_object_literal_expression(source_file.node(root_expression)) {
+            let base_file_name = if source_file.file_name().base_name() == "jsconfig.json" {
+                "jsconfig.json"
+            } else {
+                "tsconfig.json"
+            };
+            let errors = vec![crate::errors::create_diagnostic_for_node_in_source_file(
+                source_file,
+                root_expression,
+                &tsc_diagnostics::THE_ROOT_VALUE_OF_A_0_FILE_MUST_BE_AN_OBJECT,
+                &[base_file_name.to_string()],
+            )];
+            // Last-ditch error recovery (Go comment): the JSON parser
+            // synthesizes a top-level array literal for some broken inputs;
+            // the first object-literal element converts instead — Go DROPS
+            // the root diagnostic on this arm (exact mirror).
+            if tsc_ast::is_array_literal_expression(source_file.node(root_expression)) {
+                let elements = source_file
+                    .node(root_expression)
+                    .as_array_literal_expression()
+                    .expect("IsArrayLiteralExpression checked")
+                    .elements
+                    .clone();
+                if let Some(elements) = elements
+                    && let Some(first_object) = elements.nodes.iter().find(|element| {
+                        tsc_ast::is_object_literal_expression(source_file.node(**element))
+                    })
+                {
+                    return convert_to_json(source_file, Some(*first_object));
+                }
+            }
+            return (CompilerOptionsValue::Object(OrderedMap::new()), errors);
+        }
+    }
+    convert_to_json(source_file, root_expression)
+}
+
+/// Go: `func convertToJson(sourceFile, rootExpression, returnValue, jsonConversionNotifier)`
+/// — the `returnValue = true` shape (Go's only reachable form).
+///
+/// PORT: Go's nil-root marker is `struct{}{}` — a non-map value every caller
+/// normalizes to the empty map; the port carries
+/// [`CompilerOptionsValue::Null`] (the same non-map fallback,
+/// PORTING-NOTES).
+fn convert_to_json(
+    source_file: &tsc_ast::SourceFile,
+    root_expression: Option<tsc_ast::NodeId>,
+) -> (CompilerOptionsValue, Vec<tsc_ast::Diagnostic>) {
+    match root_expression {
+        Some(root) => convert_property_value_to_json(source_file, Some(root), None),
+        None => (CompilerOptionsValue::Null, Vec::new()),
+    }
+}
+
+/// Go: `func convertPropertyValueToJson(sourceFile, valueExpression, option, returnValue, jsonConversionNotifier)`.
+///
+/// `value_expression: None` mirrors Go's nil `*ast.Expression` (Kind
+/// `Unknown` on the nil receiver → the error tail at the zero range, Go's
+/// nil-node behavior). `option` is `None` at every call site this wave (the
+/// nil-notifier shape — see [`convert_config_file_to_object`]'s PORT note).
+fn convert_property_value_to_json(
+    source_file: &tsc_ast::SourceFile,
+    value_expression: Option<tsc_ast::NodeId>,
+    option: Option<&'static CommandLineOption>,
+) -> (CompilerOptionsValue, Vec<tsc_ast::Diagnostic>) {
+    let Some(value_expression) = value_expression else {
+        return property_value_conversion_error(source_file, None, option);
+    };
+    let node = source_file.node(value_expression);
+    match node.kind {
+        tsc_ast::Kind::TrueKeyword => (CompilerOptionsValue::Bool(true), Vec::new()),
+        tsc_ast::Kind::FalseKeyword => (CompilerOptionsValue::Bool(false), Vec::new()),
+        // Go: `case ast.KindNullKeyword: // todo: how to manage null` → nil.
+        tsc_ast::Kind::NullKeyword => (CompilerOptionsValue::Null, Vec::new()),
+        tsc_ast::Kind::StringLiteral => {
+            debug_assert!(is_double_quoted_string(node));
+            let text = node
+                .as_string_literal()
+                .expect("StringLiteral data")
+                .text
+                .to_string();
+            (CompilerOptionsValue::Str(text), Vec::new())
+        }
+        tsc_ast::Kind::NumericLiteral => {
+            let text = node
+                .as_numeric_literal()
+                .expect("NumericLiteral data")
+                .text
+                .to_string();
+            (numeric_literal_value(&text, false), Vec::new())
+        }
+        tsc_ast::Kind::PrefixUnaryExpression => {
+            let data = node
+                .as_prefix_unary_expression()
+                .expect("PrefixUnaryExpression data")
+                .clone();
+            if data.operator != tsc_ast::Kind::MinusToken
+                || source_file.node(data.operand).kind != tsc_ast::Kind::NumericLiteral
+            {
+                // Go: `break` — not valid JSON syntax → the error tail.
+                return property_value_conversion_error(
+                    source_file,
+                    Some(value_expression),
+                    option,
+                );
+            }
+            let text = source_file
+                .node(data.operand)
+                .as_numeric_literal()
+                .expect("NumericLiteral data")
+                .text
+                .to_string();
+            (numeric_literal_value(&text, true), Vec::new())
+        }
+        tsc_ast::Kind::ObjectLiteralExpression => {
+            convert_object_literal_expression_to_json(source_file, value_expression, option)
+        }
+        tsc_ast::Kind::ArrayLiteralExpression => {
+            let elements = node
+                .as_array_literal_expression()
+                .expect("ArrayLiteralExpression data")
+                .elements
+                .clone();
+            convert_array_literal_expression_to_json(source_file, elements.as_ref(), option)
+        }
+        _ => property_value_conversion_error(source_file, Some(value_expression), option),
+    }
+}
+
+/// Go: convertPropertyValueToJson's "Not in expected format" tail.
+fn property_value_conversion_error(
+    source_file: &tsc_ast::SourceFile,
+    value_expression: Option<tsc_ast::NodeId>,
+    option: Option<&'static CommandLineOption>,
+) -> (CompilerOptionsValue, Vec<tsc_ast::Diagnostic>) {
+    let loc = value_expression.map_or_else(
+        || tsc_core::text::TextRange::new(0, 0),
+        |node| source_file.node(node).loc,
+    );
+    let diagnostic = match option {
+        Some(option) => new_diagnostic_at_loc(
+            source_file,
+            loc,
+            &tsc_diagnostics::COMPILER_OPTION_0_REQUIRES_A_VALUE_OF_TYPE_1,
+            &[
+                option.name.to_string(),
+                crate::errors::get_compiler_option_value_type_string(option),
+            ],
+        ),
+        None => new_diagnostic_at_loc(
+            source_file,
+            loc,
+            &tsc_diagnostics::PROPERTY_VALUE_CAN_ONLY_BE_STRING_LITERAL_NUMERIC_LITERAL_TRUE_FALSE_NULL_OBJECT_LITERAL_OR_ARRAY_LITERAL,
+            &[],
+        ),
+    };
+    (CompilerOptionsValue::Null, vec![diagnostic])
+}
+
+/// Go: `func convertObjectLiteralExpressionToJson(sourceFile, returnValue, node, objectOption, jsonConversionNotifier)`.
+///
+/// PORT: the notifier's per-key callback is skipped (the nil-notifier
+/// shape); with `objectOption == None` Go's looked-up element option stays
+/// nil (the nil ElementOptions guard), so nested values convert against a
+/// nil option — the `Compiler_option_0_requires_a_value_of_type_1` arm is
+/// unreachable this wave and the parameter is kept for the Go-shape
+/// correspondence (underscore-bound until the notifier wave reads it).
+#[allow(clippy::used_underscore_binding)]
+fn convert_object_literal_expression_to_json(
+    source_file: &tsc_ast::SourceFile,
+    node_id: tsc_ast::NodeId,
+    _object_option: Option<&'static CommandLineOption>,
+) -> (CompilerOptionsValue, Vec<tsc_ast::Diagnostic>) {
+    let data = source_file
+        .node(node_id)
+        .as_object_literal_expression()
+        .expect("IsObjectLiteralExpression checked by the walk producers")
+        .clone();
+    let mut result = OrderedMap::new();
+    let mut errors: Vec<tsc_ast::Diagnostic> = Vec::new();
+    let properties = data.properties.clone().unwrap_or_default();
+    for element in properties.nodes.iter() {
+        let element_node = source_file.node(*element);
+        if !tsc_ast::is_property_assignment(element_node) {
+            errors.push(new_diagnostic_at_loc(
+                source_file,
+                element_node.loc,
+                &tsc_diagnostics::PROPERTY_ASSIGNMENT_EXPECTED,
+                &[],
+            ));
+            continue;
+        }
+        let element_data = element_node
+            .as_property_assignment()
+            .expect("IsPropertyAssignment checked")
+            .clone();
+        if let Some(token) = element_data.postfix_token
+            && source_file.node(token).kind == tsc_ast::Kind::QuestionToken
+        {
+            // Go: `element.QuestionToken()` — the PostfixToken when it is a
+            // `?`; `The_0_modifier...` at the token's Loc.
+            errors.push(new_diagnostic_at_loc(
+                source_file,
+                source_file.node(token).loc,
+                &tsc_diagnostics::THE_0_MODIFIER_CAN_ONLY_BE_USED_IN_TYPESCRIPT_FILES,
+                &["?".to_string()],
+            ));
+        }
+        let key_text = if !is_computed_non_literal_name(source_file, element_data.name) {
+            crate::ast_shims::try_get_text_of_property_name(
+                source_file,
+                element_data.name,
+            )
+        } else {
+            None
+        };
+        let key_text = key_text.unwrap_or_default();
+        let (value, err) =
+            convert_property_value_to_json(source_file, Some(element_data.initializer), None);
+        errors.extend(err);
+        if !key_text.is_empty() {
+            result.set(key_text, value);
+        }
+    }
+    (CompilerOptionsValue::Object(result), errors)
+}
+
+/// Go: `func convertArrayLiteralExpressionToJson(sourceFile, elements, elementOption, returnValue)`.
+///
+/// PORT: the `returnValue = false` validation-only arm is unreachable (both
+/// routes convert); the parameter is dropped.
+fn convert_array_literal_expression_to_json(
+    source_file: &tsc_ast::SourceFile,
+    elements: Option<&tsc_ast::NodeList>,
+    element_option: Option<&'static CommandLineOption>,
+) -> (CompilerOptionsValue, Vec<tsc_ast::Diagnostic>) {
+    let Some(elements) = elements else {
+        // Go: nil Elements → `len(elements) == 0` → the non-nil empty array.
+        return (CompilerOptionsValue::Array(Vec::new()), Vec::new());
+    };
+    if elements.nodes.is_empty() {
+        // Always return an empty array, even if elements is nil (Go comment).
+        return (CompilerOptionsValue::Array(Vec::new()), Vec::new());
+    }
+    let mut errors: Vec<tsc_ast::Diagnostic> = Vec::new();
+    let mut value: Vec<CompilerOptionsValue> = Vec::new();
+    for element in elements.nodes.iter() {
+        let (converted, err) =
+            convert_property_value_to_json(source_file, Some(*element), element_option);
+        errors.extend(err);
+        // Go: `if convertedValue != nil` — nulls filter out of the array.
+        if !converted.is_null() {
+            value.push(converted);
+        }
+    }
+    (CompilerOptionsValue::Array(value), errors)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// JSON text → CompilerOptionsValue (ordered)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `func ParseConfigFileTextToJson(fileName, path, jsonText) (any, []*ast.Diagnostic)`.
+///
+/// The AST route (the M6 config-file wave): the text parses as a JSON
+/// SourceFile and converts through [`convert_config_file_to_object`]; the
+/// conversion errors are REPLACED by the FIRST parse diagnostic when the
+/// parse produced any (Go's exact override — the parse diagnostic carries
+/// the position; the conversion of a broken file would only echo it).
+pub fn parse_config_file_text_to_json(
+    file_name: &RootedFilePath,
+    path_key: PathKey,
+    json_text: &str,
+) -> (CompilerOptionsValue, Vec<tsc_ast::Diagnostic>) {
+    let json_source_file = tsc_parser::parse_source_file(
+        tsc_ast::SourceFileParseOptions {
+            file_name: file_name.clone(),
+            path_key,
+            ..Default::default()
+        },
+        json_text,
+        tsc_core::scriptkind::ScriptKind::JSON,
+    );
+    let (config, errors) = convert_config_file_to_object(&json_source_file);
+    let parse_diagnostics = json_source_file.diagnostics();
+    let errors = if !parse_diagnostics.is_empty() {
+        vec![parse_diagnostics[0].clone()]
+    } else {
+        errors
+    };
+    (config, errors)
 }
 
 /// A minimal order-preserving JSON reader. Numbers surface as Int when
@@ -632,11 +981,111 @@ fn parse_json_string(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
 // Config content parsing
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Go: the worker's `errors []*ast.Diagnostic` — every Go diagnostic carries
+/// its own `File()` (the config file it was created against — the main
+/// config, an extended config's file, or nil for a compiler diagnostic);
+/// the port pairs at push time (see `ParsedCommandLine::error_files`).
+#[derive(Default)]
+pub(crate) struct WorkerErrors {
+    diagnostics: Vec<tsc_ast::Diagnostic>,
+    files: Vec<Option<RootedFilePath>>,
+}
+
+impl WorkerErrors {
+    /// Go: `ast.NewCompilerDiagnostic` — the fileless form (nil `File()`).
+    fn push_compiler(&mut self, diagnostic: tsc_ast::Diagnostic) {
+        self.diagnostics.push(diagnostic);
+        self.files.push(None);
+    }
+
+    /// A diagnostic created against `file` (Go: the diagnostic's `File()`).
+    fn push_for_file(
+        &mut self,
+        diagnostic: tsc_ast::Diagnostic,
+        file: Option<RootedFilePath>,
+    ) {
+        self.diagnostics.push(diagnostic);
+        self.files.push(file);
+    }
+}
+
+/// Go: `func isStringValue(value any) bool`.
+fn is_string_value(value: &CompilerOptionsValue) -> bool {
+    matches!(value, CompilerOptionsValue::Str(_))
+}
+
+/// Go: `reflect.TypeOf(element) == orderedMapType`.
+fn is_object_value(value: &CompilerOptionsValue) -> bool {
+    matches!(value, CompilerOptionsValue::Object(_))
+}
+
+/// Go: the worker's `getPropFromRaw` closure + `propOfRaw` — the raw-prop
+/// read with Go's wrong-value markers. `Some(list)` = Go's non-nil
+/// `sliceValue`; the `""` wrong-value is only reachable on the config-file
+/// route (Go's `else if sourceFile == nil` guard leaves it empty there —
+/// the json route's diagnostics are suppressed exactly as Go's).
+fn get_prop_from_raw(
+    raw_config: &OrderedMap<String, CompilerOptionsValue>,
+    prop: &str,
+    source_file_route: bool,
+    element_type_name: &str,
+    validate_element: impl Fn(&CompilerOptionsValue) -> bool,
+    errors: &mut WorkerErrors,
+) -> (Option<Vec<CompilerOptionsValue>>, &'static str) {
+    let Some(value) = raw_config.get(prop) else {
+        return (None, "no-prop");
+    };
+    if value.is_null() {
+        return (None, "no-prop");
+    }
+    let list = match value {
+        CompilerOptionsValue::Array(list) => list.clone(),
+        // A JSON array of strings parses as StrArray on the command-line
+        // route — the same slice shape (Go's []any).
+        CompilerOptionsValue::StrArray(list) => list
+            .iter()
+            .map(|s| CompilerOptionsValue::Str(s.clone()))
+            .collect(),
+        _ => {
+            if !source_file_route {
+                errors.push_compiler(new_compiler_diagnostic(
+                    &tsc_diagnostics::COMPILER_OPTION_0_REQUIRES_A_VALUE_OF_TYPE_1,
+                    &[prop.to_string(), "Array".to_string()],
+                ));
+                return (None, "not-array");
+            }
+            // Go: the sourceFile route reports nothing and leaves the
+            // wrong-value empty.
+            return (None, "");
+        }
+    };
+    // Go: `if _, ok := result.([]any); ok { if sourceFile == nil &&
+    // !core.Every(result, validateElement) { ... } }`.
+    if !source_file_route && !list.iter().all(validate_element) {
+        errors.push_compiler(new_compiler_diagnostic(
+            &tsc_diagnostics::COMPILER_OPTION_0_REQUIRES_A_VALUE_OF_TYPE_1,
+            &[prop.to_string(), element_type_name.to_string()],
+        ));
+    }
+    (Some(list), "")
+}
+
+/// The string elements of a raw prop list (Go's `isStringValue` filters).
+fn string_values(list: &[CompilerOptionsValue]) -> Vec<String> {
+    list.iter()
+        .filter_map(|value| match value {
+            CompilerOptionsValue::Str(spec) => Some(spec.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Go: `func ParseJsonConfigFileContent(json, fs, basePath, existingOptions, configFileName, resolutionStack, extendedConfigCache) *ParsedCommandLine`.
 ///
 /// `json` is the already-parsed top-level object (Go passes the result of
 /// `ParseConfigFileTextToJson`); `existing_options` seeds the compiler
-/// options exactly as in Go.
+/// options exactly as in Go. The config-file route is
+/// [`parse_json_source_file_config_file_content`]; both share the worker.
 #[allow(clippy::too_many_arguments)]
 pub fn parse_json_config_file_content(
     json: &CompilerOptionsValue,
@@ -648,7 +1097,76 @@ pub fn parse_json_config_file_content(
     extended_config_cache: Option<&ExtendedConfigCache>,
     resolve_config_host: Option<&dyn ResolveConfigHost>,
 ) -> ParsedCommandLine {
-    let mut errors = Vec::new();
+    parse_json_config_file_content_worker(
+        Some(json),
+        None,
+        fs,
+        base_path,
+        existing_options,
+        config_file_name,
+        resolution_stack,
+        extended_config_cache,
+        resolve_config_host,
+    )
+}
+
+/// Go: `func ParseJsonSourceFileConfigFileContent(sourceFile, fs, basePath, existingOptions, existingOptionsRaw, resolutionStack, extendedConfigCache) *ParsedCommandLine`
+/// — the config-file route (the M6 wave): the VALUES come from the config
+/// AST ([`convert_config_file_to_object`]), the conversion's diagnostics
+/// ride `errors`, and the JSON PARSE diagnostics ride the
+/// `TsConfigSourceFile` itself (surfaced through
+/// `ParsedCommandLine::get_config_file_parsing_diagnostics` — Go's concat —
+/// and NOT through `errors`).
+///
+/// PORT (notifier residual): Go's route parses the per-key options through
+/// `parseOwnConfigOfJsonSourceFile`'s notifier (positioned unknown-option
+/// diagnostics, element-typed option values); the port keeps the shared
+/// worker's `convertOptionsFromJson` arm for both routes this wave — the
+/// option diagnostics degrade to the fileless form with the zero range
+/// (PORTING-NOTES).
+#[allow(clippy::too_many_arguments)]
+pub fn parse_json_source_file_config_file_content(
+    source_file: std::sync::Arc<TsConfigSourceFile>,
+    fs: &dyn tsc_vfs::Fs,
+    base_path: &RootedDirectoryPath,
+    existing_options: Option<&CompilerOptions>,
+    config_file_name: &RootedFilePath,
+    resolution_stack: &[PathKey],
+    extended_config_cache: Option<&ExtendedConfigCache>,
+    resolve_config_host: Option<&dyn ResolveConfigHost>,
+) -> ParsedCommandLine {
+    parse_json_config_file_content_worker(
+        None,
+        Some(source_file),
+        fs,
+        base_path,
+        existing_options,
+        config_file_name,
+        resolution_stack,
+        extended_config_cache,
+        resolve_config_host,
+    )
+}
+
+/// Go: `func parseJsonConfigFileContentWorker(json, sourceFile, fs, basePath, existingOptions, existingOptionsRaw, configFileName, resolutionStack, extendedConfigCache) *ParsedCommandLine`.
+#[allow(clippy::too_many_arguments)]
+fn parse_json_config_file_content_worker(
+    json: Option<&CompilerOptionsValue>,
+    source_file: Option<std::sync::Arc<TsConfigSourceFile>>,
+    fs: &dyn tsc_vfs::Fs,
+    base_path: &RootedDirectoryPath,
+    existing_options: Option<&CompilerOptions>,
+    config_file_name: &RootedFilePath,
+    resolution_stack: &[PathKey],
+    extended_config_cache: Option<&ExtendedConfigCache>,
+    resolve_config_host: Option<&dyn ResolveConfigHost>,
+) -> ParsedCommandLine {
+    debug_assert!(
+        json.is_some() != source_file.is_some(),
+        "Go: debug.Assert((json == nil && sourceFile != nil) || (json != nil && sourceFile == nil))"
+    );
+    let source_file_route = source_file.is_some();
+    let mut errors = WorkerErrors::default();
     // Go's No-inputs check compares the CALLER's stack length; the port
     // seeds the stack below, so remember the input length first.
     let resolution_stack_len = resolution_stack.len();
@@ -686,10 +1204,26 @@ pub fn parse_json_config_file_content(
     // length (the port seeds the stack with the config itself above, so
     // `resolution_stack_len` above holds the caller's length).
 
-    // Go: `normalizeJsonValue` + the worker's empty-map fallback for a
-    // non-object root — parsing continues with an empty config.
-    let mut raw_config: OrderedMap<String, CompilerOptionsValue> = match json {
-        CompilerOptionsValue::Object(map) => map.clone(),
+    // The raw top-level object — the json route's passed value (Go:
+    // normalizeJsonValue + the empty-map fallback), the config-file route's
+    // AST conversion (the parse diagnostics ride the SourceFile, NOT
+    // errors; the conversion's own diagnostics DO ride errors — Go's
+    // parseConfig carries them out).
+    let raw_config_source = match (json, &source_file) {
+        (Some(json), _) => json.clone(),
+        (None, Some(source_file)) => {
+            let file = source_file.lock_source_file();
+            let (value, conversion_errors) = convert_config_file_to_object(&file);
+            drop(file);
+            for diagnostic in conversion_errors {
+                errors.push_for_file(diagnostic, Some(config_file_name.clone()));
+            }
+            value
+        }
+        (None, None) => unreachable!("the route assert guarantees one side"),
+    };
+    let mut raw_config: OrderedMap<String, CompilerOptionsValue> = match raw_config_source {
+        CompilerOptionsValue::Object(map) => map,
         _ => OrderedMap::new(),
     };
 
@@ -730,7 +1264,14 @@ pub fn parse_json_config_file_content(
     if let Some(compiler_options_value) = raw_config.get("compilerOptions") {
         let (parsed, conversion_errors) =
             convert_options_from_json_worker(compiler_options_value.clone(), base_path);
-        errors.extend(conversion_errors);
+        // PORT (file pairing): Go's route-positioned option diagnostics
+        // (the notifier residual — see parse_json_source_file_config_file_
+        // content's PORT note) pair with the config file here so the
+        // conformance render keeps the file identity; the positions stay
+        // the zero range until that wave.
+        for diagnostic in conversion_errors {
+            errors.push_for_file(diagnostic, Some(config_file_name.clone()));
+        }
         merge_parsed_compiler_options(
             &mut result.compiler_options,
             Some(&parsed),
@@ -743,40 +1284,114 @@ pub fn parse_json_config_file_content(
         // Parsed in full by the M4 CLI surface; carried through unchanged.
     }
 
-    // ── files/include/exclude: Go's getPropFromRaw + validateSpecs arm ──
+    // Go: `if configFileName != "" && parsedConfig.options != nil {
+    // parsedConfig.options.ConfigFilePath = configFileName }` — feeds
+    // verifyCompilerOptions' tsBuildInfoFile arm and the rootDir-inferred
+    // check.
+    if !config_file_name.is_empty() {
+        result.compiler_options.options.config_file_path = config_file_name.clone();
+    }
 
-    // Go: `fileSpecs := getPropFromRaw("files", isStringValue, "string")` —
-    // Some(list) where Go's propOfRaw.sliceValue is non-nil (the key exists
-    // with a non-null array value).
-    let files_prop = string_array_prop(&raw_config, "files", &mut errors);
-    if let Some(list) = &files_prop {
-        if list.is_empty() {
-            // Go: the empty-files-list diagnostic (The_files_list_in_config_file_0_is_empty)
-            // — only with zero-or-no references and no extends.
-            let references_prop = raw_config.get("references");
-            let has_zero_or_no_references = match references_prop {
-                // Go: "no-prop" (absent or null) or "not-array" (present,
-                // non-array) or an empty array.
-                None | Some(CompilerOptionsValue::Null) => true,
-                Some(CompilerOptionsValue::Array(list)) => list.is_empty(),
-                Some(_) => true,
-            };
-            let has_extends = match raw_config.get("extends") {
-                None | Some(CompilerOptionsValue::Null) => false,
-                Some(_) => true,
-            };
-            if has_zero_or_no_references && !has_extends {
-                errors.push(new_compiler_diagnostic(
+    // ── files/include/exclude/references: Go's getPropFromRaw + the
+    // empty-files / validateSpecs / references arms ──
+
+    // Go: references first (`referencesOfRaw := getPropFromRaw("references", ...)`).
+    let (references_value, references_wrong) = get_prop_from_raw(
+        &raw_config,
+        "references",
+        source_file_route,
+        "object",
+        is_object_value,
+        &mut errors,
+    );
+    // Go: `fileSpecs := getPropFromRaw("files", isStringValue, "string")`.
+    let (files_value, files_wrong) = get_prop_from_raw(
+        &raw_config,
+        "files",
+        source_file_route,
+        "string",
+        is_string_value,
+        &mut errors,
+    );
+    // Go: `if fileSpecs.sliceValue != nil || fileSpecs.wrongValue == ""`
+    // — the empty-files-list arm.
+    if files_value.is_some() || files_wrong.is_empty() {
+        // Go: "no-prop" (absent or null), "not-array" (present, non-array),
+        // or an empty array ⇒ zero-or-no references.
+        let has_zero_or_no_references = references_wrong == "no-prop"
+            || references_wrong == "not-array"
+            || references_value
+                .as_ref()
+                .is_none_or(|references| references.is_empty());
+        let has_extends = match raw_config.get("extends") {
+            None | Some(CompilerOptionsValue::Null) => false,
+            Some(_) => true,
+        };
+        if files_value.as_ref().is_some_and(|files| files.is_empty())
+            && has_zero_or_no_references
+            && !has_extends
+        {
+            if let Some(source_file) = &source_file {
+                // Go: positioned at the `files` property's INITIALIZER,
+                // with the file name ("tsconfig.json" without a config
+                // file name).
+                let file_name_arg = if config_file_name.is_empty() {
+                    "tsconfig.json".to_string()
+                } else {
+                    config_file_name.as_string().to_owned()
+                };
+                let guard = source_file.lock_source_file();
+                let node_value = for_each_ts_config_prop_array(
+                    Some(&*guard),
+                    "files",
+                    |_store, property| {
+                        let initializer = guard
+                            .node(property)
+                            .as_property_assignment()
+                            .expect("IsPropertyAssignment guaranteed by the walk")
+                            .initializer;
+                        // Go: a nil Initializer yields the nil node (the
+                        // compiler-diagnostic fallback).
+                        initializer.is_none().then_some(initializer)
+                    },
+                );
+                errors.push_for_file(
+                    crate::errors::create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
+                        Some(&*guard),
+                        node_value,
+                        &tsc_diagnostics::THE_FILES_LIST_IN_CONFIG_FILE_0_IS_EMPTY,
+                        &[file_name_arg],
+                    ),
+                    Some(config_file_name.clone()),
+                );
+            } else {
+                errors.push_compiler(new_compiler_diagnostic(
                     &tsc_diagnostics::THE_FILES_LIST_IN_CONFIG_FILE_0_IS_EMPTY,
                     &[config_file_name.as_string().to_owned()],
                 ));
             }
         }
     }
-    let include_prop = string_array_prop(&raw_config, "include", &mut errors);
-    let mut exclude_prop = string_array_prop(&raw_config, "exclude", &mut errors);
-    if exclude_prop.is_none() {
-        // Go: outDir/declarationDir imply the exclude list when exclude is absent.
+    let (include_value, _include_wrong) = get_prop_from_raw(
+        &raw_config,
+        "include",
+        source_file_route,
+        "string",
+        is_string_value,
+        &mut errors,
+    );
+    let (mut exclude_value, exclude_wrong) = get_prop_from_raw(
+        &raw_config,
+        "exclude",
+        source_file_route,
+        "string",
+        is_string_value,
+        &mut errors,
+    );
+    if exclude_wrong == "no-prop" {
+        // Go: outDir/declarationDir imply the exclude list when exclude is
+        // absent ("no-prop" only — a wrong-typed exclude keeps Go's
+        // "not-array" marker and does NOT inherit).
         let out_dir = result.compiler_options.options.out_dir.as_string().to_owned();
         let declaration_dir = result
             .compiler_options
@@ -784,35 +1399,47 @@ pub fn parse_json_config_file_content(
             .declaration_dir
             .as_string()
             .to_owned();
-        let mut values: Vec<String> = Vec::new();
+        let mut values: Vec<CompilerOptionsValue> = Vec::new();
         if !out_dir.is_empty() {
-            values.push(out_dir);
+            values.push(CompilerOptionsValue::Str(out_dir));
         }
         if !declaration_dir.is_empty() {
-            values.push(declaration_dir);
+            values.push(CompilerOptionsValue::Str(declaration_dir));
         }
         if !values.is_empty() {
-            exclude_prop = Some(values);
+            // Go resets the wrong-value marker to "" (sliceValue now
+            // non-nil); the marker has no later reader this wave.
+            exclude_value = Some(values);
         }
     }
-    let (include_prop, is_default_include_spec) = match (files_prop.is_none(), include_prop.is_none()) {
-        (true, true) => (Some(vec![DEFAULT_INCLUDE_SPEC.to_string()]), true),
-        _ => (include_prop, false),
-    };
+    let (include_value, is_default_include_spec) =
+        match (files_value.is_none(), include_value.is_none()) {
+            (true, true) => (
+                Some(vec![CompilerOptionsValue::Str(
+                    DEFAULT_INCLUDE_SPEC.to_string(),
+                )]),
+                true,
+            ),
+            _ => (include_value, false),
+        };
+    let include_prop: Option<Vec<String>> = include_value.as_ref().map(|list| string_values(list));
+    let exclude_prop: Option<Vec<String>> = exclude_value.as_ref().map(|list| string_values(list));
 
     // validateSpecs + ${configDir} substitution (include/exclude).
     let mut validated_include_specs: Option<Vec<tsc_tspath::PathPattern>> = None;
     let mut validated_include_specs_before_substitution: Vec<tsc_tspath::PathPattern> = Vec::new();
-    if let Some(include) = &include_prop {
-        let (specs, mut spec_errors) = validate_specs(
-            &CompilerOptionsValue::StrArray(include.clone()),
+    if let Some(include) = &include_value {
+        let specs = validate_specs_route(
+            include,
             true,
+            &source_file,
             "include",
+            config_file_name,
+            &mut errors,
         );
-        errors.append(&mut spec_errors);
         validated_include_specs_before_substitution = specs.clone();
         let substituted = get_substituted_string_array_with_config_dir_template(
-            &include.iter().map(|s| s.as_str().to_string()).collect::<Vec<_>>(),
+            &specs.iter().map(|s| s.as_string().to_owned()).collect::<Vec<_>>(),
             &base_path_for_file_names,
         );
         validated_include_specs = Some(match substituted {
@@ -824,15 +1451,17 @@ pub fn parse_json_config_file_content(
         });
     }
     let mut validated_exclude_specs: Option<Vec<tsc_tspath::PathPattern>> = None;
-    if let Some(exclude) = &exclude_prop {
-        let (specs, mut spec_errors) = validate_specs(
-            &CompilerOptionsValue::StrArray(exclude.clone()),
+    if let Some(exclude) = &exclude_value {
+        let specs = validate_specs_route(
+            exclude,
             false,
+            &source_file,
             "exclude",
+            config_file_name,
+            &mut errors,
         );
-        errors.append(&mut spec_errors);
         let substituted = get_substituted_string_array_with_config_dir_template(
-            &exclude.iter().map(|s| s.as_str().to_string()).collect::<Vec<_>>(),
+            &specs.iter().map(|s| s.as_string().to_owned()).collect::<Vec<_>>(),
             &base_path_for_file_names,
         );
         validated_exclude_specs = Some(match substituted {
@@ -846,14 +1475,18 @@ pub fn parse_json_config_file_content(
 
     // files: Go filters non-strings and converts to FileSpec (NO spec
     // validation — wildcard diagnostics do not apply to the files list).
+    let files_strings: Vec<String> = files_value
+        .as_ref()
+        .map(|list| string_values(list))
+        .unwrap_or_default();
     let mut validated_files_specs: Vec<tsc_tspath::FileSpec> = Vec::new();
     let mut validated_files_specs_before_substitution: Vec<tsc_tspath::FileSpec> = Vec::new();
-    if let Some(files) = &files_prop {
-        for spec in files {
-            validated_files_specs_before_substitution.push(tsc_tspath::to_file_spec(spec));
-        }
+    for spec in &files_strings {
+        validated_files_specs_before_substitution.push(tsc_tspath::to_file_spec(spec));
+    }
+    if !files_strings.is_empty() {
         let substituted = get_substituted_string_array_with_config_dir_template(
-            &files.iter().map(|s| s.as_str().to_string()).collect::<Vec<_>>(),
+            &files_strings,
             &base_path_for_file_names,
         );
         validated_files_specs = match substituted {
@@ -915,7 +1548,8 @@ pub fn parse_json_config_file_content(
     if file_names.is_empty() && can_json_report_no_input_files && resolution_stack_len == 0 {
         let include_specs_json = stringify_json_string_list(include_prop.as_deref().unwrap_or(&[]));
         let exclude_specs_json = stringify_json_string_list(exclude_prop.as_deref().unwrap_or(&[]));
-        errors.push(new_compiler_diagnostic(
+        // Go: the fileless compiler diagnostic on BOTH routes.
+        errors.push_compiler(new_compiler_diagnostic(
             &tsc_diagnostics::NO_INPUTS_WERE_FOUND_IN_CONFIG_FILE_0_SPECIFIED_INCLUDE_PATHS_WERE_1_AND_EXCLUDE_PATHS_WERE_2,
             &[
                 config_file_name.as_string().to_owned(),
@@ -937,24 +1571,61 @@ pub fn parse_json_config_file_content(
     result.raw_exclude_spec_values = exclude_prop.clone().unwrap_or_default();
     result.is_default_include_spec = is_default_include_spec;
 
-    // references (Go: parseProjectReference).
-    if let Some(CompilerOptionsValue::Array(references)) = raw_config.get("references") {
-        for reference in references {
-            if let Some(parsed) = parse_project_reference(reference) {
-                if parsed.has_path && parsed.path_valid {
-                    let resolved = get_normalized_absolute_path(&parsed.path, base_path);
-                    result.project_references.push(ProjectReference {
-                        path: tsc_tspath::rooted_file_path_from_normalized(&resolved),
-                        original_path: parsed.path,
-                        circular: parsed.reference.circular,
-                    });
-                } else if parsed.has_path {
-                    errors.push(new_compiler_diagnostic(
-                        &tsc_diagnostics::FILE_0_NOT_FOUND,
-                        &[String::new()],
-                    ));
-                }
+    // references (Go: the worker's getProjectReferences closure —
+    // parseProjectReference + the three positioned invalid-reference
+    // diagnostics).
+    if let Some(references) = &references_value {
+        for (index, reference) in references.iter().enumerate() {
+            let Some(parsed) = parse_project_reference(reference) else {
+                continue;
+            };
+            if !parsed.has_path || !parsed.path_valid {
+                push_reference_diagnostic(
+                    &mut errors,
+                    create_diagnostic_at_project_reference_property(
+                        source_file.as_deref(),
+                        index,
+                        "path",
+                        &tsc_diagnostics::COMPILER_OPTION_0_REQUIRES_A_VALUE_OF_TYPE_1,
+                        &["reference.path".to_string(), "string".to_string()],
+                    ),
+                    config_file_name,
+                );
+                continue;
             }
+            if parsed.path.is_empty() {
+                push_reference_diagnostic(
+                    &mut errors,
+                    create_diagnostic_at_project_reference_property(
+                        source_file.as_deref(),
+                        index,
+                        "path",
+                        &tsc_diagnostics::COMPILER_OPTION_0_CANNOT_BE_GIVEN_AN_EMPTY_STRING,
+                        &["reference.path".to_string()],
+                    ),
+                    config_file_name,
+                );
+                continue;
+            }
+            if parsed.has_circular && !parsed.circular_valid {
+                push_reference_diagnostic(
+                    &mut errors,
+                    create_diagnostic_at_project_reference_property(
+                        source_file.as_deref(),
+                        index,
+                        "circular",
+                        &tsc_diagnostics::COMPILER_OPTION_0_REQUIRES_A_VALUE_OF_TYPE_1,
+                        &["reference.circular".to_string(), "boolean".to_string()],
+                    ),
+                    config_file_name,
+                );
+            }
+            let resolved = get_normalized_absolute_path(&parsed.path, &base_path_for_file_names);
+            result.project_references.push(ProjectReference {
+                path: tsc_tspath::rooted_file_path_from_normalized(&resolved),
+                original_path: parsed.path,
+                circular: parsed.reference.circular,
+            });
         }
     }
 
@@ -963,8 +1634,57 @@ pub fn parse_json_config_file_content(
         result.compile_on_save = Some(*compile_on_save);
     }
 
-    result.errors = errors;
+    result.errors = errors.diagnostics;
+    result.error_files = errors.files;
+    result.config_file = source_file;
     result
+}
+
+/// The reference diagnostics' pairing — Go's positioned form carries the
+/// config file, the compiler-diagnostic fallback is fileless (the
+/// diagnostic's own `file` marker decides, mirroring Go's `File()`).
+fn push_reference_diagnostic(
+    errors: &mut WorkerErrors,
+    diagnostic: tsc_ast::Diagnostic,
+    config_file_name: &RootedFilePath,
+) {
+    let file = if diagnostic.file().is_some() {
+        Some(config_file_name.clone())
+    } else {
+        None
+    };
+    errors.push_for_file(diagnostic, file);
+}
+
+/// Go: the worker's `validateSpecs` call shape — the positioned spec
+/// diagnostics (the config-file route) pair with the config file; the json
+/// route's degrade to the fileless compiler diagnostic exactly on Go's nil
+/// `jsonSourceFile`.
+fn validate_specs_route(
+    specs: &[CompilerOptionsValue],
+    disallow_trailing_recursion: bool,
+    source_file: &Option<std::sync::Arc<TsConfigSourceFile>>,
+    spec_key: &str,
+    config_file_name: &RootedFilePath,
+    errors: &mut WorkerErrors,
+) -> Vec<tsc_tspath::PathPattern> {
+    let (specs, spec_errors) = match source_file {
+        Some(source_file) => {
+            let guard = source_file.lock_source_file();
+            validate_specs(
+                specs,
+                disallow_trailing_recursion,
+                Some(&*guard),
+                spec_key,
+            )
+            // `guard` drops here; the diagnostics are already built.
+        }
+        None => validate_specs(specs, disallow_trailing_recursion, None, spec_key),
+    };
+    for diagnostic in spec_errors {
+        errors.push_for_file(diagnostic, Some(config_file_name.clone()));
+    }
+    specs
 }
 
 /// Go: `applyExtendedConfig`'s `setPropertyValue` closure — inherits
@@ -1047,50 +1767,6 @@ fn marshal_value_json(value: &CompilerOptionsValue) -> String {
     match value {
         CompilerOptionsValue::Str(s) => s.clone(),
         other => format!("{other:?}"),
-    }
-}
-
-/// Go: `getPropFromRaw(prop, isStringValue, elementTypeName)` — the
-/// string-array extraction. `Some(list)` where Go's `propOfRaw.sliceValue`
-/// is non-nil (key present with a non-null ARRAY value); a present
-/// non-array value pushes Go's `Compiler option '0' requires a value of
-/// type 'Array'` diagnostic and yields `None` (Go's nil sliceValue).
-fn string_array_prop(
-    raw_config: &OrderedMap<String, CompilerOptionsValue>,
-    prop: &str,
-    errors: &mut Vec<tsc_ast::Diagnostic>,
-) -> Option<Vec<String>> {
-    let value = raw_config.get(prop)?;
-    if value.is_null() {
-        return None;
-    }
-    match value {
-        CompilerOptionsValue::StrArray(list) => Some(list.clone()),
-        CompilerOptionsValue::Array(list) => {
-            let strings: Vec<String> = list
-                .iter()
-                .filter_map(|v| match v {
-                    CompilerOptionsValue::Str(s) => Some(s.clone()),
-                    _ => None,
-                })
-                .collect();
-            if strings.len() != list.len() {
-                errors.push(new_compiler_diagnostic(
-                    &tsc_diagnostics::COMPILER_OPTION_0_REQUIRES_A_VALUE_OF_TYPE_1,
-                    &[prop.to_string(), "string".to_string()],
-                ));
-            }
-            Some(strings)
-        }
-        _ => {
-            // Go: not a slice → the "requires a value of type 'Array'"
-            // diagnostic + wrongValue "not-array" (nil sliceValue).
-            errors.push(new_compiler_diagnostic(
-                &tsc_diagnostics::COMPILER_OPTION_0_REQUIRES_A_VALUE_OF_TYPE_1,
-                &[prop.to_string(), "Array".to_string()],
-            ));
-            None
-        }
     }
 }
 
@@ -1579,7 +2255,15 @@ fn convert_options_from_json_worker(
     (parsed, errors)
 }
 
-/// Go: readJsonConfigFile + getExtendedConfig — resolve one `extends` value.
+/// Go: readJsonConfigFile + ParseExtendedConfig + getExtendedConfig —
+/// resolve one `extends` value.
+///
+/// The AST route (the M6 wave): the extended config's text parses as a
+/// `TsConfigSourceFile`; Go's `ParseExtendedConfig` semantics carry exactly —
+/// read errors report and skip the merge; the extended file's JSON PARSE
+/// diagnostics replace the whole conversion (`entry.errors = parseDiagnostics`
+/// — every one of them, skipping the conversion); otherwise the conversion's
+/// own diagnostics ride errors and the extended values merge.
 ///
 /// PORT: Go's getExtendedConfig fully parses the extended config (recursively
 /// resolving its own extends first, then merging its own compilerOptions on
@@ -1597,7 +2281,7 @@ fn read_extended_config(
     resolution_stack: &mut Vec<PathKey>,
     extended_config_cache: Option<&ExtendedConfigCache>,
     resolve_config_host: Option<&dyn ResolveConfigHost>,
-    errors: &mut Vec<tsc_ast::Diagnostic>,
+    errors: &mut WorkerErrors,
 ) -> Option<(
     OrderedMap<String, CompilerOptionsValue>,
     ParsedCompilerOptions,
@@ -1626,11 +2310,14 @@ fn read_extended_config(
 
     let path_key = tsc_tspath::path_key_from_canonical(resolved.as_string());
     if resolution_stack.contains(&path_key) {
-        // Go: the cycle diagnostic (path_in_an_extends_option) — the AST-based
-        // variant text; a raw diagnostic keeps the cycle message.
-        errors.push(json_parse_error_diagnostic(&format!(
-            "circularity detected while resolving configurations: '{extends_path}'"
-        )));
+        // Go: parseConfig's circularity check — the fileless compiler
+        // diagnostic (`Circularity_detected_while_resolving_configuration_Colon_0`,
+        // no arguments); the extended config parses to the empty raw and
+        // does not merge.
+        errors.push_compiler(new_compiler_diagnostic(
+            &tsc_diagnostics::CIRCULARITY_DETECTED_WHILE_RESOLVING_CONFIGURATION_COLON_0,
+            &[],
+        ));
         return None;
     }
     if let Some(cache) = extended_config_cache
@@ -1638,23 +2325,51 @@ fn read_extended_config(
     {
         // PORT: the cache seam stores the raw map (Go caches the parsed
         // command line); the parsed form is rebuilt from it.
-        let (parsed, cache_errors) =
-            convert_options_from_json_worker(map.get("compilerOptions").cloned().unwrap_or(CompilerOptionsValue::Null), &resolved.directory());
-        errors.extend(cache_errors);
+        let (parsed, cache_errors) = convert_options_from_json_worker(
+            map.get("compilerOptions")
+                .cloned()
+                .unwrap_or(CompilerOptionsValue::Null),
+            &resolved.directory(),
+        );
+        for diagnostic in cache_errors {
+            errors.push_for_file(diagnostic, Some(resolved.clone()));
+        }
         return Some((map.clone(), parsed, resolved));
     }
     resolution_stack.push(path_key);
 
+    // Go: `tryReadFile` — the fileless `Cannot_read_file_0` compiler
+    // diagnostic on an unreadable file.
     let text = fs.read_file(&resolved).or_else(|| {
-        errors.push(new_compiler_diagnostic(
-            &tsc_diagnostics::FILE_0_NOT_FOUND,
+        errors.push_compiler(new_compiler_diagnostic(
+            &tsc_diagnostics::CANNOT_READ_FILE_0,
             &[resolved.as_string().to_owned()],
         ));
         None
     })?;
-    let (json, mut parse_errors) = parse_config_file_text_to_json(&text);
-    errors.append(&mut parse_errors);
-    let Some(CompilerOptionsValue::Object(mut map)) = json else {
+
+    // The AST route: NewTsconfigSourceFileFromFilePath + ParseExtendedConfig.
+    let extended_config_file =
+        new_tsconfig_source_file_from_file_path(&resolved, fs.case_sensitivity(), &text);
+    let parse_diagnostics = extended_config_file
+        .lock_source_file()
+        .diagnostics()
+        .to_vec();
+    if !parse_diagnostics.is_empty() {
+        // Go: `entry.errors = parseDiagnostics` — ALL the extended file's
+        // parse diagnostics (the conversion is skipped entirely); each
+        // carries the EXTENDED file's identity.
+        for diagnostic in parse_diagnostics {
+            errors.push_for_file(diagnostic, Some(resolved.clone()));
+        }
+        return None;
+    }
+    let (json, conversion_errors) =
+        convert_config_file_to_object(&extended_config_file.lock_source_file());
+    for diagnostic in conversion_errors {
+        errors.push_for_file(diagnostic, Some(resolved.clone()));
+    }
+    let CompilerOptionsValue::Object(mut map) = json else {
         return None;
     };
 
@@ -1701,7 +2416,9 @@ fn read_extended_config(
     if let Some(compiler_options_value) = map.get("compilerOptions") {
         let (own, conversion_errors) =
             convert_options_from_json_worker(compiler_options_value.clone(), &extended_base);
-        errors.extend(conversion_errors);
+        for diagnostic in conversion_errors {
+            errors.push_for_file(diagnostic, Some(resolved.clone()));
+        }
         merge_parsed_compiler_options(
             &mut parsed,
             Some(&own),
@@ -1750,34 +2467,39 @@ fn resolve_extends_target(
     tsc_tspath::rooted_file_path_from_normalized(&with_tsconfig)
 }
 
-/// Go: `func validateSpecs(specs any, disallowTrailingRecursion bool, specKey string) ([]tspath.PathPattern, []*ast.Diagnostic)`.
+/// Go: `func validateSpecs(specs any, disallowTrailingRecursion bool, jsonSourceFile *ast.SourceFile, specKey string) ([]tspath.PathPattern, []*ast.Diagnostic)`.
+///
+/// The invalid-spec diagnostics position at the matching array element
+/// through `GetTsConfigPropArrayElementValue` when the config source file is
+/// present (`None` degrades to the compiler-diagnostic form exactly on
+/// Go's nil `jsonSourceFile`). Non-string elements skip (Go's `continue`).
 pub fn validate_specs(
-    specs: &CompilerOptionsValue,
+    specs: &[CompilerOptionsValue],
     disallow_trailing_recursion: bool,
+    json_source_file: Option<&tsc_ast::SourceFile>,
     spec_key: &str,
 ) -> (Vec<tsc_tspath::PathPattern>, Vec<tsc_ast::Diagnostic>) {
     let mut errors = Vec::new();
     let mut result = Vec::new();
-    let list = match specs {
-        CompilerOptionsValue::StrArray(arr) => arr.clone(),
-        CompilerOptionsValue::Array(arr) => arr
-            .iter()
-            .filter_map(|v| match v {
-                CompilerOptionsValue::Str(s) => Some(s.clone()),
-                _ => None,
-            })
-            .collect(),
-        CompilerOptionsValue::Str(s) => vec![s.clone()],
-        _ => Vec::new(),
-    };
-    for spec in &list {
-        if let Some(message) = spec_to_diagnostic(spec, disallow_trailing_recursion) {
-            errors.push(new_compiler_diagnostic(message, std::slice::from_ref(spec)));
+    for value in specs {
+        let CompilerOptionsValue::Str(spec) = value else {
             continue;
+        };
+        if let Some(message) = spec_to_diagnostic(spec, disallow_trailing_recursion) {
+            let element =
+                get_ts_config_prop_array_element_value(json_source_file, spec_key, spec);
+            errors.push(
+                crate::errors::create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
+                    json_source_file,
+                    element,
+                    message,
+                    std::slice::from_ref(spec),
+                ),
+            );
+        } else {
+            result.push(to_path_pattern(spec));
         }
-        result.push(to_path_pattern(spec));
     }
-    let _ = spec_key;
     (result, errors)
 }
 
@@ -1825,22 +2547,114 @@ fn invalid_dot_dot_after_recursive_wildcard(s: &str) -> bool {
     last_dot_index.is_some_and(|last_dot| last_dot > wildcard_index)
 }
 
-/// Go: `func GetParsedCommandLineOfConfigFilePath(...)` — the --showConfig
-/// runner's entry: read + parse + resolve one config file.
-///
-/// PORT (M6 config-node wave): like Go's `readJsonConfigFile`, the config
-/// text parses as a JSON SourceFile and rides the result as `config_file`
-/// (`ParsedCommandLine.ConfigFile`) — the node-position surface
-/// `verifyCompilerOptions`'s option diagnostics and the include-reason
-/// related info read. The VALUES still come from the text parser below
-/// (Go's `convertConfigFileToObject` AST→value conversion is the deferred
-/// full AST-config wave; this surface consumes the AST for positions only).
+/// Go: `func CreateDiagnosticAtReferenceSyntax(config *ParsedCommandLine, index int, message, args...) *ast.Diagnostic`
+/// — the `references` array's `index`-th element node, `nil` without a
+/// config file (Go's nil-ConfigFile arm; the caller falls back to the
+/// compiler-diagnostic form).
+pub fn create_diagnostic_at_reference_syntax(
+    config: &ParsedCommandLine,
+    index: usize,
+    message: &'static tsc_diagnostics::Message,
+    args: &[String],
+) -> Option<tsc_ast::Diagnostic> {
+    let config_file = config.config_file.as_ref()?;
+    let guard = config_file.lock_source_file();
+    for_each_ts_config_prop_array(Some(&*guard), "references", |store, property| {
+        let initializer = store
+            .node(property)
+            .as_property_assignment()
+            .expect("IsPropertyAssignment guaranteed by ForEachPropertyAssignment")
+            .initializer;
+        if initializer.is_none() {
+            return None;
+        }
+        let data = store
+            .node(initializer)
+            .as_array_literal_expression()
+            .expect("IsArrayLiteralExpression checked below")
+            .clone();
+        let elements = data.elements?;
+        let value = *elements.nodes.get(index)?;
+        Some(crate::errors::create_diagnostic_for_node_in_source_file(
+            &guard, value, message, args,
+        ))
+    })
+}
+
+/// Go: `func createDiagnosticAtProjectReferenceProperty(sourceFile *TsConfigSourceFile, index int, propertyName string, message, args...) *ast.Diagnostic`
+/// — the `index`-th reference's `propertyName` property INITIALIZER (the
+/// reference OBJECT itself when the property is missing), through
+/// `CreateDiagnosticForNodeInSourceFileOrCompilerDiagnostic` (nil source
+/// file → the fileless compiler form).
+fn create_diagnostic_at_project_reference_property(
+    source_file: Option<&TsConfigSourceFile>,
+    index: usize,
+    property_name: &str,
+    message: &'static tsc_diagnostics::Message,
+    args: &[String],
+) -> tsc_ast::Diagnostic {
+    let guard = source_file.map(|source_file| source_file.lock_source_file());
+    let node = guard.as_ref().and_then(|guard| {
+        for_each_ts_config_prop_array(Some(guard), "references", |store, property| {
+            let initializer = store
+                .node(property)
+                .as_property_assignment()
+                .expect("IsPropertyAssignment guaranteed by ForEachPropertyAssignment")
+                .initializer;
+            if initializer.is_none() {
+                return None;
+            }
+            let data = store
+                .node(initializer)
+                .as_array_literal_expression()
+                .expect("IsArrayLiteralExpression checked below")
+                .clone();
+            let elements = data.elements?;
+            let reference = *elements.nodes.get(index)?;
+            if !tsc_ast::is_object_literal_expression(store.node(reference)) {
+                return None;
+            }
+            let property_node = for_each_property_assignment(
+                store,
+                Some(reference),
+                property_name,
+                "",
+                |store, property| {
+                    let initializer = store
+                        .node(property)
+                        .as_property_assignment()
+                        .expect("IsPropertyAssignment guaranteed by ForEachPropertyAssignment")
+                        .initializer;
+                    initializer.is_none().then_some(initializer)
+                },
+            );
+            property_node.or(Some(reference))
+        })
+    });
+    crate::errors::create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
+        guard.as_deref(),
+        node,
+        message,
+        args,
+    )
+}
+
+/// Go: `func GetParsedCommandLineOfConfigFilePath(configFileName, path, options, optionsRaw, fs, extendedConfigCache) (*ParsedCommandLine, []*ast.Diagnostic)`
+/// — the config-file route (the M6 wave): read + parse the config text as a
+/// `TsConfigSourceFile`, then the source-file route worker. The values come
+/// from the config AST; the parse diagnostics ride the config file
+/// (`GetConfigFileParsingDiagnostics`), the conversion diagnostics ride
+/// `errors` — Go's exact route split.
 pub fn get_parsed_command_line_of_config_file_path(
     config_file_name: &RootedFilePath,
     fs: &dyn tsc_vfs::Fs,
     resolve_config_host: Option<&dyn ResolveConfigHost>,
 ) -> ParsedCommandLine {
     let base_path = config_file_name.directory();
+    // Go: tryReadFile — the fileless `Cannot_read_file_0` compiler
+    // diagnostic on an unreadable file (Go returns the errors unrecoverable;
+    // the port keeps the single-ParsedCommandLine shape the runner/host
+    // consume — the diagnostic rides `errors` with the same message/args).
     let text = match fs.read_file(config_file_name) {
         Some(text) => text,
         None => {
@@ -1850,7 +2664,7 @@ pub fn get_parsed_command_line_of_config_file_path(
                 fs.case_sensitivity(),
             );
             result.errors.push(new_compiler_diagnostic(
-                &tsc_diagnostics::FILE_0_NOT_FOUND,
+                &tsc_diagnostics::CANNOT_READ_FILE_0,
                 &[config_file_name.as_string().to_owned()],
             ));
             return result;
@@ -1861,9 +2675,8 @@ pub fn get_parsed_command_line_of_config_file_path(
         fs.case_sensitivity(),
         &text,
     );
-    let (json, parse_errors) = parse_config_file_text_to_json(&text);
-    let mut result = parse_json_config_file_content(
-        &json.unwrap_or(CompilerOptionsValue::Null),
+    parse_json_source_file_config_file_content(
+        std::sync::Arc::new(config_file),
         fs,
         &base_path,
         None,
@@ -1871,10 +2684,7 @@ pub fn get_parsed_command_line_of_config_file_path(
         &[],
         None,
         resolve_config_host,
-    );
-    result.errors.extend(parse_errors);
-    result.config_file = Some(Arc::new(config_file));
-    result
+    )
 }
 
 /// Kept for the future file-enumeration path (getFileNamesFromConfigSpecs);

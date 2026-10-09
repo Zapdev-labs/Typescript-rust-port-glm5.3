@@ -95,6 +95,13 @@ pub struct ProjectReferenceFileMapper {
 
     /// Go: `realpathDtsToSource collections.SyncMap[tspath.PathKey, *tsoptions.SourceOutputAndProjectReference]`.
     realpath_dts_to_source: Mutex<rustc_hash::FxHashMap<PathKey, Option<Arc<SourceOutputAndProjectReference>>>>,
+    /// Go: `mapper.config` as the range walks' root parent — Go hands the
+    /// root `*tsoptions.ParsedCommandLine` directly as the callback's
+    /// `parent` argument (rangeResolvedProjectReference/
+    /// rangeResolvedProjectReferenceInChildConfig); the port wraps it in
+    /// the ResolvedProjectReference newtype (the orphan-rule shape — see
+    /// the file header), memoized (the wrap is a pure function of config).
+    root_resolved_reference: std::sync::OnceLock<Arc<ResolvedProjectReference>>,
 }
 
 impl ProjectReferenceFileMapper {
@@ -111,7 +118,20 @@ impl ProjectReferenceFileMapper {
             source_to_project_reference: rustc_hash::FxHashMap::default(),
             output_dts_to_project_reference: rustc_hash::FxHashMap::default(),
             realpath_dts_to_source: Mutex::new(rustc_hash::FxHashMap::default()),
+            root_resolved_reference: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The `mapper.config` root parent (Go's direct `*tsoptions.ParsedCommandLine`
+    /// handoff), wrapped in the newtype once and memoized.
+    fn root_resolved_reference(&self) -> Arc<ResolvedProjectReference> {
+        self.root_resolved_reference
+            .get_or_init(|| {
+                Arc::new(ResolvedProjectReference {
+                    config: Arc::clone(&self.config),
+                })
+            })
+            .clone()
     }
 
     /// Go: `func (mapper *projectReferenceFileMapper) resolutionHost(host)`.
@@ -285,10 +305,13 @@ impl ProjectReferenceFileMapper {
             .get(&root_config_path)
             .cloned()
             .unwrap_or_default();
+        // Go: `mapper.rangeResolvedReferenceWorker(refs, f, mapper.config,
+        // seenRef)` — the root ParsedCommandLine is the parent.
+        let root_parent = self.root_resolved_reference();
         self.range_resolved_reference_worker(
             &refs,
             f,
-            None,
+            Some(&root_parent),
             &mut seen_ref,
         )
     }
@@ -361,7 +384,10 @@ impl ProjectReferenceFileMapper {
             .get(&child_path)
             .cloned()
             .unwrap_or_default();
-        self.range_resolved_reference_worker(&refs, f, None, &mut seen_ref)
+        // Go: `mapper.rangeResolvedReferenceWorker(refs, f, mapper.config,
+        // seenRef)` — the ROOT config (not the child) is the parent.
+        let root_parent = self.root_resolved_reference();
+        self.range_resolved_reference_worker(&refs, f, Some(&root_parent), &mut seen_ref)
     }
 }
 
@@ -501,18 +527,9 @@ impl ProjectReferenceFileMapperBuilder {
     }
 
     /// Go: `config.ResolvedProjectReferencePaths()` — the resolved reference
-    /// config paths. PORT: the Rust ParsedCommandLine carries
-    /// `project_references` (the declared references, not the resolved
-    /// configs); the resolved-path list is the declared `path` list until
-    /// the AST-config wave lands `ResolvedProjectReferencePaths`
-    /// (PORTING-NOTES).
+    /// config paths (the tsoptions method this wave ports).
     fn config_resolved_project_reference_paths(&self) -> Vec<RootedFilePath> {
-        self.mapper
-            .config
-            .project_references()
-            .iter()
-            .map(|r| r.path.clone())
-            .collect()
+        self.mapper.config.resolved_project_reference_paths()
     }
 
     /// Go: `mapper.rootConfigPath()` through the embedded mapper.

@@ -438,13 +438,13 @@ impl<'a> FileLoader<'a> {
             self.opts.can_use_project_reference_source(),
         );
         // Go: the builder's host is the compilerResolutionHost.
+        // Go: `p.opts.Config.ResolvedProjectReferencePaths()` — the
+        // reference CONFIG FILE paths (core.ResolveProjectReferencePath),
+        // not the declared reference paths.
         let project_reference_paths: Vec<RootedFilePath> = self
             .opts
             .config
-            .project_references()
-            .iter()
-            .map(|r| r.path.clone())
-            .collect();
+            .resolved_project_reference_paths();
         if !project_reference_paths.is_empty() {
             let host = Arc::clone(&self.host);
             let parser_tasks = {

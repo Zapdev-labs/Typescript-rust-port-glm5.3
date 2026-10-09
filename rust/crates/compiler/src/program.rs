@@ -16,15 +16,21 @@
 //   - `UpdateProgram`/`ReuseProgram` (the incremental watch surface) are not
 //     ported: they need the content-mapper/cachedvfs machinery and Go's
 //     shared `*ast.SourceFile` pointer graph (the port's files are owned).
-//   - `verifyCompilerOptions` ports its REMOVED-OPTION arm through the M6
-//     config-node surface (TS5102/TS5108 positioned on the config file's
-//     AST nodes — the OptionDiagnosticContext machinery); the remaining
-//     Go arms (the strict/composite/paths/jsx/moduleKind checks,
-//     verifyProjectReferences, the emit-path uniqueness loop) stay deferred
-//     to the full AST-config wave — see verify_compiler_options' PORT note
-//     for the plug points. `verifyProjectReferences` is deferred with them.
-//     The `hasEmitBlockingDiagnostics`/`blockEmittingOfFile` surface they
-//     feed is ported so the waves plug in here (PORTING-NOTES).
+//   - `verifyCompilerOptions` ports its FULL arm set through the M6
+//     config-node surface (the gap-5 wave): the removed-option arm
+//     (TS5102/TS5108) through every remaining Go arm — the strict/
+//     isolatedDeclarations/inlineSourceMap/composite/tsBuildInfo checks,
+//     verifyProjectReferences + the composite root-files walk, the
+//     `paths` validation, the sourcemap/declarationDir/lib/jsx/moduleKind
+//     arms, and the emit-path-uniqueness loop (the
+//     `OptionDiagnosticContext` machinery positions them on the config
+//     file's AST nodes). The one residual: Go's per-key option
+//     diagnostics on the config-file route are positioned by
+//     parseOwnConfigOfJsonSourceFile's jsonConversionNotifier (the M6
+//     notifier wave); the port's route-paired forms carry the zero range
+//     until that lands (PORTING-NOTES). `getSourceFilesToEmit`'s
+//     nil-target arm memoizes the FILTERED walk (Go's sourceFilesToEmit,
+//     fixed this wave — it previously returned the unfiltered `files`).
 //   - `collectContentMapperOptionDiagnostics` is the content-mapper seam
 //     (always empty in this wave — see file_loader.rs).
 //   - `tracing` is not ported (no tracing crate yet).
@@ -72,7 +78,9 @@ use crate::file_loader::{
 };
 use crate::host::{CompilerHost, CompilerResolutionHost, HasFileName};
 use crate::include_processor::IncludeProcessor;
-use crate::processing_diagnostic::ProcessingDiagnostic;
+use crate::processing_diagnostic::{
+    IncludeExplainingDiagnostic, ProcessingDiagnostic, ProcessingDiagnosticKind,
+};
 use crate::project_reference_file_mapper::{
     ProjectReferenceFileMapper, SourceOutputAndProjectReference,
 };
@@ -259,6 +267,12 @@ pub struct Program {
     pub uses_uri_style_node_core_modules: Tristate,
     /// Go: `commonSourceDirectory` + `commonSourceDirectoryOnce`.
     common_source_directory: OnceLock<RootedDirectoryPath>,
+    /// Go: `sourceFilesToEmitOnce sync.Once` + `sourceFilesToEmit
+    /// []*ast.SourceFile` — the memoized FILTERED walk (Go's nil-target arm
+    /// runs `getSourceFilesToEmit(p, nil, false, false)` — the
+    /// `sourceFileMayBeEmitted` filter — NOT the raw `p.files`); the port
+    /// memoizes the indexes into `files`.
+    source_files_to_emit: OnceLock<Vec<usize>>,
 }
 
 impl Default for Program {
@@ -297,6 +311,7 @@ impl Default for Program {
             has_emit_blocking_diagnostics: rustc_hash::FxHashSet::default(),
             uses_uri_style_node_core_modules: Tristate::TSUnknown,
             common_source_directory: OnceLock::new(),
+            source_files_to_emit: OnceLock::new(),
         }
     }
 }
@@ -369,6 +384,7 @@ pub fn new_program(opts: ProgramOptions) -> Program {
         has_emit_blocking_diagnostics: rustc_hash::FxHashSet::default(),
         uses_uri_style_node_core_modules: Tristate::TSUnknown,
         common_source_directory: OnceLock::new(),
+        source_files_to_emit: OnceLock::new(),
     };
 
     // Go: verifyCompilerOptions + collectContentMapperOptionDiagnostics —
@@ -1048,17 +1064,22 @@ impl Program {
 
     // ── diagnostics ─────────────────────────────────────────────────────────
 
-    /// Go: `func (p *Program) GetConfigFileParsingDiagnostics()`.
+    /// Go: `func (p *Program) GetConfigFileParsingDiagnostics()`
+    /// — `slices.Clip(p.opts.Config.GetConfigFileParsingDiagnostics())`.
+    ///
+    /// PORT (file pairing): delegates to the parsed config's concat — the
+    /// config file's parse diagnostics paired with the config file, `errors`
+    /// with the file each was created against (see
+    /// `ParsedCommandLine::error_files`; the unpaired command-line route
+    /// keeps the pre-wave config-file pairing).
     pub fn get_config_file_parsing_diagnostics(&self) -> Vec<FileDiagnostic> {
-        // PORT (file ids): the parsed config's diagnostics carry the config
-        // file's identity; the port pairs them with the config file's name.
         self.opts
             .config
-            .errors
-            .iter()
-            .map(|diagnostic| FileDiagnostic {
-                file_name: Some(self.opts.config.config_file_name.clone()),
-                diagnostic: diagnostic.clone(),
+            .get_config_file_parsing_diagnostics()
+            .into_iter()
+            .map(|(file_name, diagnostic)| FileDiagnostic {
+                file_name,
+                diagnostic,
             })
             .collect()
     }
@@ -1302,6 +1323,12 @@ impl Program {
     }
 
     /// Go: `func (p *Program) getSourceFilesToEmit(targetSourceFiles, forceDtsEmit, forceJsEmit)`.
+    ///
+    /// PORT (fixed in the M6 verifyCompilerOptions wave, mirroring Go): the
+    /// nil-target arm previously returned the UNFILTERED `p.files` — Go
+    /// memoizes the FILTERED walk (`getSourceFilesToEmit(p, nil, false,
+    /// false)` runs the `sourceFileMayBeEmitted` filter over
+    /// `host.SourceFiles()`); the emit-path uniqueness loop depends on it.
     pub fn get_source_files_to_emit<'a>(
         &'a self,
         target_source_files: Option<&'a [&'a SourceFile]>,
@@ -1309,8 +1336,12 @@ impl Program {
         force_js_emit: bool,
     ) -> Vec<&'a SourceFile> {
         if target_source_files.is_none() && !force_dts_emit && !force_js_emit {
-            // Go: `if targetSourceFiles == nil && !forceDtsEmit && !forceJsEmit { return p.files }`.
-            return self.files.iter().collect();
+            // Go: `p.sourceFilesToEmitOnce.Do(...)` — the filtered memoize.
+            return self
+                .get_source_files_to_emit_indexes()
+                .iter()
+                .map(|&index| &self.files[index])
+                .collect();
         }
         crate::emitter::get_source_files_to_emit(
             self,
@@ -1318,6 +1349,22 @@ impl Program {
             force_dts_emit,
             force_js_emit,
         )
+    }
+
+    /// Go: the `p.sourceFilesToEmit` memoize — the indexes into `files` of
+    /// the `sourceFileMayBeEmitted`-filtered walk (the emit-path loop's
+    /// input; `getSourceFilesToEmit(nil, false, false)`).
+    pub fn get_source_files_to_emit_indexes(&self) -> &[usize] {
+        self.source_files_to_emit.get_or_init(|| {
+            self.files
+                .iter()
+                .enumerate()
+                .filter(|(_, file)| {
+                    crate::emitter::source_file_may_be_emitted(file, self, false, false)
+                })
+                .map(|(index, _)| index)
+                .collect()
+        })
     }
 
     /// Go: `func (p *Program) SourceFileMayBeEmitted(sourceFile, forceDtsEmit) bool`.
@@ -1384,27 +1431,26 @@ impl Program {
 
     // ── deferred seams ──────────────────────────────────────────────────────
 
-    /// Go: `func (p *Program) verifyCompilerOptions()` — the removed-option
-    /// arm (TS5102/TS5108) through the M6 config-node surface: the same
-    /// diagnostics, messages/args, config-node positions and Go order.
+    /// Go: `func (p *Program) verifyCompilerOptions()` — the FULL arm set
+    /// through the M6 config-node surface (the M6 verifyCompilerOptions
+    /// wave): the removed-option arm plus every remaining Go arm — the
+    /// strict/iso/inline/composite/tsBuildInfo checks, verifyProjectReferences
+    /// plus the composite root-files walk, the `paths` validation, the
+    /// sourcemap/declarationDir/lib/jsx/moduleKind checks, and the
+    /// emit-path-uniqueness loop. Same diagnostics, messages/args,
+    /// config-node positions and Go order.
     ///
-    /// PORT: the REMAINDER of Go's verifyCompilerOptions stays deferred to
-    /// the full AST-config wave. The deferred arms, in Go order, are:
-    /// strictPropertyInitialization/exactOptionalPropertyTypes without
-    /// strictNullChecks; isolatedDeclarations; inlineSourceMap; composite;
-    /// the tsBuildInfoFile/incremental check; verifyProjectReferences plus
-    /// the composite root-files walk; the `paths` validation; the
-    /// sourcemap/declarationDir/lib/jsx/moduleKind arms; and the
-    /// emit-path-uniqueness loop. Their plug point is the
-    /// [`OptionDiagnosticContext`] helpers below — Go's
-    /// `createDiagnosticForOptionName`/`createOptionValueDiagnostic` fold
-    /// onto `create_diagnostic_for_option` (+2/0 leading args); each arm
-    /// is a straight transcription once its non-option dependencies land
-    /// (project references, outputpaths' ForEachEmittedFile, the paths
-    /// object walk).
+    /// PORT (flush boundaries): Go appends into `programDiagnostics` across
+    /// closures that borrow `p` every which way; the port collects per Go
+    /// append-boundary — block A (removed + strict/iso/inline/composite/
+    /// tsBuildInfo), verifyProjectReferences (its own collector — the range
+    /// walk borrows `&self`), the composite walk (processing diagnostics),
+    /// block B (paths + the remaining arms), then the emit-path findings
+    /// (blockEmittingOfFile needs `&mut self`) — and extends in the same
+    /// order.
     fn verify_compiler_options(&mut self) {
         let case_sensitivity = self.case_sensitivity;
-        let diagnostics = {
+        let mut collected: Vec<FileDiagnostic> = {
             let options = self.options();
             let config = &self.opts.config;
             let mut ctx = OptionDiagnosticContext::new(config);
@@ -1462,7 +1508,11 @@ impl Program {
             }
 
             if options.allow_synthetic_default_imports.is_false() {
-                ctx.create_removed_option_diagnostic("allowSyntheticDefaultImports", "false", "");
+                ctx.create_removed_option_diagnostic(
+                    "allowSyntheticDefaultImports",
+                    "false",
+                    "",
+                );
             }
 
             if options.module_resolution == ModuleResolutionKind::Node10 {
@@ -1473,12 +1523,821 @@ impl Program {
                 ctx.create_removed_option_diagnostic("downlevelIteration", "", "");
             }
 
+            // ── Go: the strict/exactOptionalPropertyTypes checks ──
+            if options.strict_property_initialization.is_true()
+                && !options.get_strict_option_value(options.strict_null_checks)
+            {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITHOUT_SPECIFYING_OPTION_1,
+                    "strictPropertyInitialization",
+                    "strictNullChecks",
+                    &[],
+                );
+            }
+            if options.exact_optional_property_types.is_true()
+                && !options.get_strict_option_value(options.strict_null_checks)
+            {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITHOUT_SPECIFYING_OPTION_1,
+                    "exactOptionalPropertyTypes",
+                    "strictNullChecks",
+                    &[],
+                );
+            }
+
+            if options.isolated_declarations.is_true() {
+                if options.get_allow_js() {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITH_OPTION_1,
+                        "allowJs",
+                        "isolatedDeclarations",
+                        &[],
+                    );
+                }
+                if !options.get_emit_declarations() {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITHOUT_SPECIFYING_OPTION_1_OR_OPTION_2,
+                        "isolatedDeclarations",
+                        "declaration",
+                        &["composite".to_string()],
+                    );
+                }
+            }
+
+            if options.inline_source_map.is_true() {
+                if options.source_map.is_true() {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITH_OPTION_1,
+                        "sourceMap",
+                        "inlineSourceMap",
+                        &[],
+                    );
+                }
+                if !options.map_root.as_string().is_empty() {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITH_OPTION_1,
+                        "mapRoot",
+                        "inlineSourceMap",
+                        &[],
+                    );
+                }
+            }
+
+            if options.composite.is_true() {
+                if options.declaration.is_false() {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::COMPOSITE_PROJECTS_MAY_NOT_DISABLE_DECLARATION_EMIT,
+                        "declaration",
+                        "",
+                        &[],
+                    );
+                }
+                if options.incremental.is_false() {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::COMPOSITE_PROJECTS_MAY_NOT_DISABLE_INCREMENTAL_COMPILATION,
+                        "declaration",
+                        "",
+                        &[],
+                    );
+                }
+            }
+
+            if options.ts_build_info_file.as_string().is_empty()
+                && options.incremental.is_true()
+                && options.config_file_path.as_string().is_empty()
+            {
+                ctx.diagnostics.push(ctx.create_compiler_options_diagnostic(
+                    &tsc_diagnostics::OPTION_INCREMENTAL_IS_ONLY_VALID_WITH_A_KNOWN_CONFIGURATION_FILE_LIKE_TSCONFIG_JSON_OR_WHEN_TSBUILDINFOFILE_IS_EXPLICITLY_PROVIDED,
+                    &[],
+                ));
+            }
+
             ctx.diagnostics
         };
+
+        // Go: `p.verifyProjectReferences()`.
+        let (reference_diagnostics, emit_blocking_keys) = self.verify_project_references();
+        collected.extend(reference_diagnostics);
+        self.has_emit_blocking_diagnostics.extend(emit_blocking_keys);
+
+        // Go: the composite root-files walk (addProcessingDiagnostic — the
+        // explaining-file-include machinery, not programDiagnostics).
+        self.processing_diagnostics
+            .extend(self.composite_root_files_walk_diagnostics());
+
+        // ── Go: block B — the paths validation + the remaining arms ──
+        let (block_b_diagnostics, emit_findings) = {
+            let options = self.options();
+            let config = &self.opts.config;
+            let mut ctx = OptionDiagnosticContext::new(config);
+
+            // Go: forEachOptionPathsSyntax + createDiagnosticForOptionPaths +
+            // createDiagnosticForOptionPathKeyValue over options.Paths.
+            if let Some(paths) = &options.paths {
+                for (key, value) in paths.entries() {
+                    // !!! This code does not handle cases where the path
+                    // mappings have the wrong types, as that information is
+                    // mostly lost during the parsing process (Go comment).
+                    if !has_zero_or_one_asterisk_character(key) {
+                        ctx.create_diagnostic_for_option_paths(
+                            true, /*onKey*/
+                            key,
+                            &tsc_diagnostics::PATTERN_0_CAN_HAVE_AT_MOST_ONE_ASTERISK_CHARACTER,
+                            std::slice::from_ref(key),
+                        );
+                    }
+                    // PORT (nil-vs-empty collapse): Go distinguishes a nil
+                    // substitution list (`"paths": {"*": null}`) from an
+                    // empty one — the port's `Vec<String>` cannot, so a
+                    // non-array substitution value reports the
+                    // "shouldn't be an empty array" message instead of
+                    // "should be an array" (PORTING-NOTES).
+                    if value.is_empty() {
+                        ctx.create_diagnostic_for_option_paths(
+                            false, /*onKey*/
+                            key,
+                            &tsc_diagnostics::SUBSTITUTIONS_FOR_PATTERN_0_SHOULDN_T_BE_AN_EMPTY_ARRAY,
+                            std::slice::from_ref(key),
+                        );
+                    }
+                    for (index, subst) in value.iter().enumerate() {
+                        if !has_zero_or_one_asterisk_character(subst) {
+                            ctx.create_diagnostic_for_option_path_key_value(
+                                key,
+                                index,
+                                &tsc_diagnostics::SUBSTITUTION_0_IN_PATTERN_1_CAN_HAVE_AT_MOST_ONE_ASTERISK_CHARACTER,
+                                &[subst.to_string(), key.to_string()],
+                            );
+                        }
+                        if !tsc_tspath::path_is_relative(subst)
+                            && !tsc_tspath::path_is_absolute(subst)
+                        {
+                            ctx.create_diagnostic_for_option_path_key_value(
+                                key,
+                                index,
+                                &tsc_diagnostics::NON_RELATIVE_PATHS_ARE_NOT_ALLOWED_DID_YOU_FORGET_A_LEADING_SLASH,
+                                &[],
+                            );
+                        }
+                    }
+                }
+            }
+
+            if options.source_map.is_false_or_unknown()
+                && options.inline_source_map.is_false_or_unknown()
+            {
+                if options.inline_sources.is_true() {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::OPTION_0_CAN_ONLY_BE_USED_WHEN_EITHER_OPTION_INLINESOURCEMAP_OR_OPTION_SOURCEMAP_IS_PROVIDED,
+                        "inlineSources",
+                        "",
+                        &[],
+                    );
+                }
+                if !options.source_root.as_string().is_empty() {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::OPTION_0_CAN_ONLY_BE_USED_WHEN_EITHER_OPTION_INLINESOURCEMAP_OR_OPTION_SOURCEMAP_IS_PROVIDED,
+                        "sourceRoot",
+                        "",
+                        &[],
+                    );
+                }
+            }
+
+            if !options.map_root.as_string().is_empty()
+                && !(options.source_map.is_true() || options.declaration_map.is_true())
+            {
+                // Error to specify --mapRoot without --sourcemap
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITHOUT_SPECIFYING_OPTION_1_OR_OPTION_2,
+                    "mapRoot",
+                    "sourceMap",
+                    &["declarationMap".to_string()],
+                );
+            }
+
+            if !options.declaration_dir.as_string().is_empty()
+                && !options.get_emit_declarations()
+            {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITHOUT_SPECIFYING_OPTION_1_OR_OPTION_2,
+                    "declarationDir",
+                    "declaration",
+                    &["composite".to_string()],
+                );
+            }
+
+            if options.declaration_map.is_true() && !options.get_emit_declarations() {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITHOUT_SPECIFYING_OPTION_1_OR_OPTION_2,
+                    "declarationMap",
+                    "declaration",
+                    &["composite".to_string()],
+                );
+            }
+
+            if options.lib.is_some() && options.no_lib.is_true() {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITH_OPTION_1,
+                    "lib",
+                    "noLib",
+                    &[],
+                );
+            }
+
+            if (options.isolated_modules.is_true() || options.verbatim_module_syntax.is_true())
+                && options.preserve_const_enums.is_false()
+            {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_PRESERVECONSTENUMS_CANNOT_BE_DISABLED_WHEN_0_IS_ENABLED,
+                    if options.verbatim_module_syntax.is_true() {
+                        "verbatimModuleSyntax"
+                    } else {
+                        "isolatedModules"
+                    },
+                    "preserveConstEnums",
+                    &[],
+                );
+            }
+
+            if !options.out_dir.as_string().is_empty()
+                || !options.root_dir.as_string().is_empty()
+                || !options.source_root.as_string().is_empty()
+                || !options.map_root.as_string().is_empty()
+                || (options.get_emit_declarations()
+                    && !options.declaration_dir.as_string().is_empty())
+            {
+                // !!! sheetal checkSourceFilesBelongToPath - for root Dir and
+                // configFile - explaining why file is in the program (Go
+                // comment; the explaining machinery is the include processor's
+                // surface).
+                let dir = self.common_source_directory();
+                if !options.out_dir.as_string().is_empty()
+                    && dir.as_string().is_empty()
+                    && self
+                        .files
+                        .iter()
+                        .any(|file| file.file_name().root_length() > 1)
+                {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::CANNOT_FIND_THE_COMMON_SUBDIRECTORY_PATH_FOR_THE_INPUT_FILES,
+                        "outDir",
+                        "",
+                        &[],
+                    );
+                }
+            }
+
+            if !options.no_emit.is_true()
+                && !options.composite.is_true()
+                && options.root_dir.as_string().is_empty()
+                && !options.config_file_path.as_string().is_empty()
+                && (!options.out_dir.as_string().is_empty()
+                    || (options.get_emit_declarations()
+                        && !options.declaration_dir.as_string().is_empty())
+                    || !options.out_file.is_empty())
+            {
+                // Check if rootDir inferred changed and issue diagnostic
+                let dir = self.common_source_directory();
+                let emitted_files: Vec<RootedFilePath> = self
+                    .files
+                    .iter()
+                    .filter(|file| {
+                        !file.payload().is_declaration_file
+                            && crate::emitter::source_file_may_be_emitted(file, self, false, false)
+                    })
+                    .map(|file| file.file_name().clone())
+                    .collect();
+                let dir59 = tsc_outputpaths::get_computed_common_source_directory(
+                    &emitted_files,
+                    self.base_directory(),
+                    self.case_sensitivity,
+                );
+                if !dir59.as_string().is_empty()
+                    && self.case_sensitivity.compare_paths(&dir.as_path(), &dir59.as_path())
+                        != 0
+                {
+                    // change in layout
+                    let option1 = if !options.out_file.is_empty() {
+                        "outFile"
+                    } else if !options.out_dir.as_string().is_empty() {
+                        "outDir"
+                    } else {
+                        "declarationDir"
+                    };
+                    let option2 = if options.out_file.is_empty()
+                        && !options.out_dir.as_string().is_empty()
+                    {
+                        "declarationDir"
+                    } else {
+                        ""
+                    };
+                    let mut common_source_directory = dir59.as_string().to_owned();
+                    if let Some(relative_path) = self.case_sensitivity
+                        .relative_path_from_file_to_path(
+                            &options.config_file_path,
+                            &dir59.as_path(),
+                        )
+                    {
+                        common_source_directory =
+                            relative_path.as_module_specifier().as_string().to_owned();
+                    }
+                    let mut diag = ctx.create_diagnostic_for_option(
+                        true, /*onKey*/
+                        option1,
+                        option2,
+                        &tsc_diagnostics::THE_COMMON_SOURCE_DIRECTORY_OF_0_IS_1_THE_ROOTDIR_SETTING_MUST_BE_EXPLICITLY_SET_TO_THIS_OR_ANOTHER_PATH_TO_ADJUST_YOUR_OUTPUT_S_FILE_LAYOUT,
+                        &[
+                            options.config_file_path.base_name().to_owned(),
+                            common_source_directory,
+                        ],
+                    );
+                    diag.diagnostic.add_message_chain(
+                        tsc_tsoptions::new_compiler_diagnostic(
+                            &tsc_diagnostics::VISIT_HTTPS_COLON_SLASH_SLASHAKA_MS_SLASHTS6_FOR_MIGRATION_INFORMATION,
+                            &[],
+                        ),
+                    );
+                    // The pushed copy (Go mutates the shared diagnostic in
+                    // place after the append).
+                    if let Some(last) = ctx.diagnostics.last_mut() {
+                        *last = diag;
+                    }
+                }
+            }
+
+            if options.check_js.is_true() && !options.get_allow_js() {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITHOUT_SPECIFYING_OPTION_1,
+                    "checkJs",
+                    "allowJs",
+                    &[],
+                );
+            }
+
+            if options.emit_declaration_only.is_true() && !options.get_emit_declarations() {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITHOUT_SPECIFYING_OPTION_1_OR_OPTION_2,
+                    "emitDeclarationOnly",
+                    "declaration",
+                    &["composite".to_string()],
+                );
+            }
+
+            if options.emit_decorator_metadata.is_true()
+                && options.experimental_decorators.is_false_or_unknown()
+            {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITHOUT_SPECIFYING_OPTION_1,
+                    "emitDecoratorMetadata",
+                    "experimentalDecorators",
+                    &[],
+                );
+            }
+
+            if !options.jsx_factory.is_empty() {
+                if !options.react_namespace.is_empty() {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITH_OPTION_1,
+                        "reactNamespace",
+                        "jsxFactory",
+                        &[],
+                    );
+                }
+                if options.jsx == tsc_core::options_generated::JsxEmit::ReactJSX
+                    || options.jsx == tsc_core::options_generated::JsxEmit::ReactJSXDev
+                {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WHEN_OPTION_JSX_IS_1,
+                        "jsxFactory",
+                        &options.jsx.to_string(),
+                        &[],
+                    );
+                }
+                if tsc_parser::parse_isolated_entity_name(&options.jsx_factory).is_none() {
+                    ctx.create_option_value_diagnostic(
+                        "jsxFactory",
+                        &tsc_diagnostics::INVALID_VALUE_FOR_JSXFACTORY_0_IS_NOT_A_VALID_IDENTIFIER_OR_QUALIFIED_NAME,
+                        std::slice::from_ref(&options.jsx_factory),
+                    );
+                }
+            } else if !options.react_namespace.is_empty()
+                && !tsc_scanner::utilities::is_identifier_text(
+                    &options.react_namespace,
+                    tsc_core::languagevariant::LanguageVariant::Standard,
+                )
+            {
+                ctx.create_option_value_diagnostic(
+                    "reactNamespace",
+                    &tsc_diagnostics::INVALID_VALUE_FOR_REACTNAMESPACE_0_IS_NOT_A_VALID_IDENTIFIER,
+                    std::slice::from_ref(&options.react_namespace),
+                );
+            }
+
+            if !options.jsx_fragment_factory.is_empty() {
+                if options.jsx_factory.is_empty() {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WITHOUT_SPECIFYING_OPTION_1,
+                        "jsxFragmentFactory",
+                        "jsxFactory",
+                        &[],
+                    );
+                }
+                if options.jsx == tsc_core::options_generated::JsxEmit::ReactJSX
+                    || options.jsx == tsc_core::options_generated::JsxEmit::ReactJSXDev
+                {
+                    ctx.create_diagnostic_for_option_name(
+                        &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WHEN_OPTION_JSX_IS_1,
+                        "jsxFragmentFactory",
+                        &options.jsx.to_string(),
+                        &[],
+                    );
+                }
+                if tsc_parser::parse_isolated_entity_name(&options.jsx_fragment_factory)
+                    .is_none()
+                {
+                    ctx.create_option_value_diagnostic(
+                        "jsxFragmentFactory",
+                        &tsc_diagnostics::INVALID_VALUE_FOR_JSXFRAGMENTFACTORY_0_IS_NOT_A_VALID_IDENTIFIER_OR_QUALIFIED_NAME,
+                        std::slice::from_ref(&options.jsx_fragment_factory),
+                    );
+                }
+            }
+
+            if !options.react_namespace.is_empty()
+                && (options.jsx == tsc_core::options_generated::JsxEmit::ReactJSX
+                    || options.jsx == tsc_core::options_generated::JsxEmit::ReactJSXDev)
+            {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WHEN_OPTION_JSX_IS_1,
+                    "reactNamespace",
+                    &options.jsx.to_string(),
+                    &[],
+                );
+            }
+
+            if !options.jsx_import_source.is_empty()
+                && options.jsx == tsc_core::options_generated::JsxEmit::React
+            {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CANNOT_BE_SPECIFIED_WHEN_OPTION_JSX_IS_1,
+                    "jsxImportSource",
+                    &options.jsx.to_string(),
+                    &[],
+                );
+            }
+
+            let module_kind = options.get_emit_module_kind();
+
+            if options.allow_importing_ts_extensions.is_true()
+                && !(options.no_emit.is_true()
+                    || options.emit_declaration_only.is_true()
+                    || options.rewrite_relative_import_extensions.is_true())
+            {
+                ctx.create_option_value_diagnostic(
+                    "allowImportingTsExtensions",
+                    &tsc_diagnostics::OPTION_ALLOWIMPORTINGTSEXTENSIONS_CAN_ONLY_BE_USED_WHEN_ONE_OF_NOEMIT_EMITDECLARATIONONLY_OR_REWRITERELATIVEIMPORTEXTENSIONS_IS_SET,
+                    &[],
+                );
+            }
+
+            let module_resolution = options.get_module_resolution_kind();
+            if options.resolve_package_json_exports.is_true()
+                && !module_resolution_supports_package_json_exports_and_imports(module_resolution)
+            {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CAN_ONLY_BE_USED_WHEN_MODULERESOLUTION_IS_SET_TO_NODE16_NODENEXT_OR_BUNDLER,
+                    "resolvePackageJsonExports",
+                    "",
+                    &[],
+                );
+            }
+            if options.resolve_package_json_imports.is_true()
+                && !module_resolution_supports_package_json_exports_and_imports(module_resolution)
+            {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CAN_ONLY_BE_USED_WHEN_MODULERESOLUTION_IS_SET_TO_NODE16_NODENEXT_OR_BUNDLER,
+                    "resolvePackageJsonImports",
+                    "",
+                    &[],
+                );
+            }
+            if options.custom_conditions.is_some()
+                && !module_resolution_supports_package_json_exports_and_imports(module_resolution)
+            {
+                ctx.create_diagnostic_for_option_name(
+                    &tsc_diagnostics::OPTION_0_CAN_ONLY_BE_USED_WHEN_MODULERESOLUTION_IS_SET_TO_NODE16_NODENEXT_OR_BUNDLER,
+                    "customConditions",
+                    "",
+                    &[],
+                );
+            }
+
+            if module_resolution == ModuleResolutionKind::Bundler
+                && !emit_module_kind_is_non_node_esm(module_kind)
+                && module_kind != ModuleKind::Preserve
+                && module_kind != ModuleKind::CommonJS
+            {
+                ctx.create_option_value_diagnostic(
+                    "moduleResolution",
+                    &tsc_diagnostics::OPTION_0_CAN_ONLY_BE_USED_WHEN_MODULE_IS_SET_TO_PRESERVE_COMMONJS_OR_ES2015_OR_LATER,
+                    &["bundler".to_string()],
+                );
+            }
+
+            if (ModuleKind::Node16..=ModuleKind::NodeNext).contains(&module_kind)
+                && !(ModuleResolutionKind::Node16..=ModuleResolutionKind::NodeNext)
+                    .contains(&module_resolution)
+            {
+                let module_kind_name = module_kind_string(module_kind);
+                let module_resolution_name = match tsc_core::options_generated::module_kind_to_module_resolution_kind(module_kind) {
+                    Some(resolution) => resolution.to_string(),
+                    None => "Node16".to_string(),
+                };
+                ctx.create_option_value_diagnostic(
+                    "moduleResolution",
+                    &tsc_diagnostics::OPTION_MODULERESOLUTION_MUST_BE_SET_TO_0_OR_LEFT_UNSPECIFIED_WHEN_OPTION_MODULE_IS_SET_TO_1,
+                    &[module_resolution_name, module_kind_name],
+                );
+            } else if (ModuleResolutionKind::Node16..=ModuleResolutionKind::NodeNext)
+                .contains(&module_resolution)
+                && !(ModuleKind::Node16..=ModuleKind::NodeNext).contains(&module_kind)
+            {
+                let module_resolution_name = module_resolution.to_string();
+                ctx.create_option_value_diagnostic(
+                    "module",
+                    &tsc_diagnostics::OPTION_MODULE_MUST_BE_SET_TO_0_WHEN_OPTION_MODULERESOLUTION_IS_SET_TO_1,
+                    &[module_resolution_name.clone(), module_resolution_name],
+                );
+            }
+
+            // ── Go: the emit-path uniqueness loop (verifyEmitFilePath +
+            // ForEachEmittedFile) — the findings collect here and apply
+            // after the ctx borrows end (blockEmittingOfFile needs
+            // `&mut self`). ──
+            let mut emit_findings: Vec<EmitPathFinding> = Vec::new();
+            if !options.no_emit.is_true() && !options.suppress_output_path_check.is_true() {
+                let mut emit_files_seen: rustc_hash::FxHashSet<PathKey> =
+                    rustc_hash::FxHashSet::default();
+                let output_paths_host = ProgramOutputPathsHost { program: self };
+                let verify_emit_file_path = |emit_file_name: &RootedFilePath,
+                                             emit_files_seen: &mut rustc_hash::FxHashSet<PathKey>,
+                                             emit_findings: &mut Vec<EmitPathFinding>| {
+                    if emit_file_name.as_string().is_empty() {
+                        return;
+                    }
+                    let emit_file_path = self.path_key_for_file_name(emit_file_name);
+                    // Report error if the output overwrites input file
+                    if self.files_by_path.contains_key(&emit_file_path) {
+                        let mut diag = FileDiagnostic::compiler_diagnostic(
+                            &tsc_diagnostics::CANNOT_WRITE_FILE_0_BECAUSE_IT_WOULD_OVERWRITE_INPUT_FILE,
+                            &[emit_file_name.as_string().to_owned()],
+                        );
+                        if ctx.config_file_path().as_string().is_empty() {
+                            // The program is from either an inferred project
+                            // or an external project
+                            diag.diagnostic.add_message_chain(
+                                tsc_tsoptions::new_compiler_diagnostic(
+                                    &tsc_diagnostics::ADDING_A_TSCONFIG_JSON_FILE_WILL_HELP_ORGANIZE_PROJECTS_THAT_CONTAIN_BOTH_TYPESCRIPT_AND_JAVASCRIPT_FILES_LEARN_MORE_AT_HTTPS_COLON_SLASH_SLASHAKA_MS_SLASHTSCONFIG,
+                                    &[],
+                                ),
+                            );
+                        }
+                        emit_findings.push(EmitPathFinding {
+                            emit_file_name: emit_file_name.clone(),
+                            diagnostic: diag,
+                        });
+                    }
+
+                    // Report error if multiple files write into same file
+                    if emit_files_seen.contains(&emit_file_path) {
+                        // Already seen the same emit file - report error
+                        emit_findings.push(EmitPathFinding {
+                            emit_file_name: emit_file_name.clone(),
+                            diagnostic: FileDiagnostic::compiler_diagnostic(
+                                &tsc_diagnostics::CANNOT_WRITE_FILE_0_BECAUSE_IT_WOULD_BE_OVERWRITTEN_BY_MULTIPLE_INPUT_FILES,
+                                &[emit_file_name.as_string().to_owned()],
+                            ),
+                        });
+                    } else {
+                        emit_files_seen.insert(emit_file_path);
+                    }
+                };
+                // PORT: outputpaths::for_each_emitted_file's `&[F]` cannot
+                // express the memoized indexes (the orphan rule — F is
+                // outputpaths' trait); the loop inlines over
+                // `get_output_paths_for` exactly like Go's ForEachEmittedFile.
+                for &index in self.get_source_files_to_emit_indexes() {
+                    let output_paths = tsc_outputpaths::get_output_paths_for(
+                        &self.files[index],
+                        options,
+                        &output_paths_host,
+                        tsc_outputpaths::ForceEmitPaths::default(),
+                    );
+                    verify_emit_file_path(
+                        output_paths.js_file_path(),
+                        &mut emit_files_seen,
+                        &mut emit_findings,
+                    );
+                    verify_emit_file_path(
+                        output_paths.source_map_file_path(),
+                        &mut emit_files_seen,
+                        &mut emit_findings,
+                    );
+                    verify_emit_file_path(
+                        output_paths.declaration_file_path(),
+                        &mut emit_files_seen,
+                        &mut emit_findings,
+                    );
+                    verify_emit_file_path(
+                        output_paths.declaration_map_path(),
+                        &mut emit_files_seen,
+                        &mut emit_findings,
+                    );
+                }
+                verify_emit_file_path(
+                    &self.opts.config.get_build_info_file_name(),
+                    &mut emit_files_seen,
+                    &mut emit_findings,
+                );
+            }
+
+            (ctx.diagnostics, emit_findings)
+        };
+        collected.extend(block_b_diagnostics);
+        for finding in emit_findings {
+            self.block_emitting_of_file(&finding.emit_file_name, finding.diagnostic);
+        }
         self.program_diagnostics
             .lock()
             .expect("programDiagnostics poisoned")
-            .extend(diagnostics);
+            .extend(collected);
+    }
+
+    /// Go: `func (p *Program) verifyProjectReferences()`.
+    ///
+    /// PORT (borrows): Go appends into `programDiagnostics` and
+    /// `hasEmitBlockingDiagnostics` inside the range walk; the walk borrows
+    /// `&self`, so the diagnostics and the blocking keys collect locally
+    /// and the caller applies them (same order).
+    fn verify_project_references(
+        &self,
+    ) -> (Vec<FileDiagnostic>, Vec<PathKey>) {
+        let build_info_file_name = if !self
+            .options()
+            .suppress_output_path_check
+            .is_true()
+        {
+            self.opts.config.get_build_info_file_name()
+        } else {
+            RootedFilePath::default()
+        };
+        let mut diagnostics: Vec<FileDiagnostic> = Vec::new();
+        let mut emit_blocking_keys: Vec<PathKey> = Vec::new();
+        let mut callback = |_path: &PathKey,
+                            config: Option<&Arc<crate::project_reference_file_mapper::ResolvedProjectReference>>,
+                            parent: Option<&Arc<crate::project_reference_file_mapper::ResolvedProjectReference>>,
+                            index: usize|
+         -> bool {
+                // Go: `ref := parent.ProjectReferences()[index]`.
+                // !!! Deprecated in 5.0 and removed since 5.5
+                // verifyRemovedProjectReference(ref, parent, index); (Go comment)
+                let Some(parent) = parent else {
+                    return true;
+                };
+                let ref_path = &parent
+                    .config
+                    .project_references()
+                    .get(index)
+                    .map(|reference| reference.path.clone())
+                    .unwrap_or_default();
+                let create_diagnostic_for_reference =
+                    |message: &'static tsc_diagnostics::Message,
+                     args: &[String],
+                     diagnostics: &mut Vec<FileDiagnostic>| {
+                        // Go: `createDiagnosticForReference(parent, index,
+                        // ...)` — CreateDiagnosticAtReferenceSyntax reads
+                        // the PARENT config's `references` array (the file
+                        // the reference is WRITTEN in), the compiler-
+                        // diagnostic form without a config file.
+                        let diagnostic = match tsc_tsoptions::create_diagnostic_at_reference_syntax(
+                            &parent.config, index, message, args,
+                        ) {
+                            Some(diagnostic) => diagnostic,
+                            // Go: the compiler-diagnostic fallback (nil
+                            // config file or no node — fileless).
+                            None => tsc_tsoptions::new_compiler_diagnostic(message, args),
+                        };
+                        let file_name = if diagnostic.file().is_some() {
+                            Some(parent.config.config_file_name.clone())
+                        } else {
+                            None
+                        };
+                        diagnostics.push(FileDiagnostic {
+                            file_name,
+                            diagnostic,
+                        });
+                    };
+                if config.is_none() {
+                    create_diagnostic_for_reference(
+                        &tsc_diagnostics::FILE_0_NOT_FOUND,
+                        &[ref_path.as_string().to_owned()],
+                        &mut diagnostics,
+                    );
+                    return true;
+                }
+                let ref_options = config
+                    .expect("config checked")
+                    .config
+                    .compiler_options();
+                if !ref_options.composite.is_true() || ref_options.no_emit.is_true() {
+                    // Go: `if len(parent.FileNames()) > 0`.
+                    if !parent.config.file_names().is_empty() {
+                        if !ref_options.composite.is_true() {
+                            create_diagnostic_for_reference(
+                                &tsc_diagnostics::REFERENCED_PROJECT_0_MUST_HAVE_SETTING_COMPOSITE_COLON_TRUE,
+                                &[ref_path.as_string().to_owned()],
+                                &mut diagnostics,
+                            );
+                        }
+                        if ref_options.no_emit.is_true() {
+                            create_diagnostic_for_reference(
+                                &tsc_diagnostics::REFERENCED_PROJECT_0_MAY_NOT_DISABLE_EMIT,
+                                &[ref_path.as_string().to_owned()],
+                                &mut diagnostics,
+                            );
+                        }
+                    }
+                }
+                if !build_info_file_name.as_string().is_empty()
+                    && build_info_file_name.as_string()
+                        == config
+                            .expect("config checked")
+                            .config
+                            .get_build_info_file_name()
+                            .as_string()
+                {
+                    create_diagnostic_for_reference(
+                        &tsc_diagnostics::CANNOT_WRITE_FILE_0_BECAUSE_IT_WILL_OVERWRITE_TSBUILDINFO_FILE_GENERATED_BY_REFERENCED_PROJECT_1,
+                        &[
+                            build_info_file_name.as_string().to_owned(),
+                            ref_path.as_string().to_owned(),
+                        ],
+                        &mut diagnostics,
+                    );
+                    emit_blocking_keys.push(self.path_key_for_file_name(&build_info_file_name));
+                }
+                true
+        };
+        self.range_resolved_project_reference(&mut callback);
+        (diagnostics, emit_blocking_keys)
+    }
+
+    /// Go: verifyCompilerOptions' composite root-files walk — the
+    /// explaining-file-include PROCESSING diagnostics for program files not
+    /// listed in a composite project's root file list.
+    fn composite_root_files_walk_diagnostics(&self) -> Vec<ProcessingDiagnostic> {
+        if !self.options().composite.is_true() {
+            return Vec::new();
+        }
+        let config_file_path = {
+            // Go: the `configFilePath()` memoize — the config source file's
+            // name ("" without one).
+            match &self.opts.config.config_file {
+                Some(config_file) => config_file.lock_source_file().file_name().clone(),
+                None => RootedFilePath::default(),
+            }
+        };
+        let mut root_paths: rustc_hash::FxHashSet<PathKey> = rustc_hash::FxHashSet::default();
+        for file_name in self.opts.config.file_names() {
+            root_paths.insert(self.case_sensitivity.path_key(&file_name.as_path()));
+        }
+        let mut diagnostics = Vec::new();
+        for file in &self.files {
+            // PORT (CanonicalSourceFile): Go prefers the canonical source
+            // file's path key (`file.CanonicalSourceFile()`) — the
+            // content-mapper surface, nil this wave; the port reads the
+            // file's own key (PORTING-NOTES).
+            let root_path = file.path_key();
+            if crate::emitter::source_file_may_be_emitted(file, self, false, false)
+                && !root_paths.contains(root_path)
+            {
+                diagnostics.push(ProcessingDiagnostic {
+                    kind: ProcessingDiagnosticKind::ExplainingFileInclude,
+                    reason: None,
+                    explanation: Some(IncludeExplainingDiagnostic {
+                        file: file.path_key().clone(),
+                        diagnostic_reason: None,
+                        message: &tsc_diagnostics::FILE_0_IS_NOT_LISTED_WITHIN_THE_FILE_LIST_OF_PROJECT_1_PROJECTS_MUST_LIST_ALL_FILES_OR_USE_AN_INCLUDE_PATTERN,
+                        args: vec![
+                            file.file_name().as_string().to_owned(),
+                            config_file_path.as_string().to_owned(),
+                        ],
+                    }),
+                });
+            }
+        }
+        diagnostics
     }
 
     /// Go: `func (p *Program) collectContentMapperOptionDiagnostics()` — the
@@ -1737,6 +2596,229 @@ impl<'a> OptionDiagnosticContext<'a> {
                 *last = diag;
             }
         }
+    }
+
+    /// Go: `createDiagnosticForOptionName := func(message, option1, option2, args...)`
+    /// — `option1, option2` become the leading args; onKey = true.
+    fn create_diagnostic_for_option_name(
+        &mut self,
+        message: &'static tsc_diagnostics::Message,
+        option1: &str,
+        option2: &str,
+        args: &[String],
+    ) {
+        let mut new_args = Vec::with_capacity(args.len() + 2);
+        new_args.push(option1.to_string());
+        new_args.push(option2.to_string());
+        new_args.extend(args.iter().cloned());
+        self.create_diagnostic_for_option(true, option1, option2, message, &new_args);
+    }
+
+    /// Go: `createOptionValueDiagnostic := func(option1, message, args...)`
+    /// — onKey = false, no second option key.
+    fn create_option_value_diagnostic(
+        &mut self,
+        option1: &str,
+        message: &'static tsc_diagnostics::Message,
+        args: &[String],
+    ) {
+        self.create_diagnostic_for_option(false, option1, "", message, args);
+    }
+
+    /// Go: `forEachOptionPathsSyntax := func(callback func(*ast.PropertyAssignment) *ast.Diagnostic) *ast.Diagnostic`
+    /// — the `paths` property assignment of the compilerOptions object.
+    fn for_each_option_paths_syntax(
+        &self,
+        callback: impl FnOnce(&dyn tsc_ast::NodeStore, NodeId) -> Option<FileDiagnostic>,
+    ) -> Option<FileDiagnostic> {
+        let source_file = self.source_file()?;
+        tsc_tsoptions::for_each_property_assignment(
+            source_file,
+            self.get_compiler_options_object_literal_syntax(),
+            "paths",
+            "",
+            callback,
+        )
+    }
+
+    /// Go: `createDiagnosticForOptionPaths := func(onKey, key, message, args...) *ast.Diagnostic`
+    /// — the paths object's `key` property (positioned), the
+    /// compilerOptions-diagnostic fallback.
+    fn create_diagnostic_for_option_paths(
+        &mut self,
+        on_key: bool,
+        key: &str,
+        message: &'static tsc_diagnostics::Message,
+        args: &[String],
+    ) {
+        let diag = self.for_each_option_paths_syntax(|store, property| {
+            let initializer = store
+                .node(property)
+                .as_property_assignment()
+                .expect("IsPropertyAssignment guaranteed by ForEachPropertyAssignment")
+                .initializer;
+            if initializer.is_none() {
+                return None;
+            }
+            if tsc_ast::is_object_literal_expression(store.node(initializer)) {
+                return self.create_option_diagnostic_in_object_literal_syntax(
+                    Some(initializer),
+                    on_key,
+                    key,
+                    "",
+                    message,
+                    args,
+                );
+            }
+            None
+        });
+        let diag = diag
+            .unwrap_or_else(|| self.create_compiler_options_diagnostic(message, args));
+        self.diagnostics.push(diag);
+    }
+
+    /// Go: `createDiagnosticForOptionPathKeyValue := func(key, valueIndex, message, args...) *ast.Diagnostic`
+    /// — the `key` property's array-literal `valueIndex`-th element
+    /// (positioned), the compilerOptions-diagnostic fallback.
+    fn create_diagnostic_for_option_path_key_value(
+        &mut self,
+        key: &str,
+        value_index: usize,
+        message: &'static tsc_diagnostics::Message,
+        args: &[String],
+    ) {
+        let diag = self.for_each_option_paths_syntax(|store, property| {
+            let initializer = store
+                .node(property)
+                .as_property_assignment()
+                .expect("IsPropertyAssignment guaranteed by ForEachPropertyAssignment")
+                .initializer;
+            if initializer.is_none() {
+                return None;
+            }
+            if !tsc_ast::is_object_literal_expression(store.node(initializer)) {
+                return None;
+            }
+            tsc_tsoptions::for_each_property_assignment(
+                store,
+                Some(initializer),
+                key,
+                "",
+                |store, key_props| {
+                    let initializer = store
+                        .node(key_props)
+                        .as_property_assignment()
+                        .expect("IsPropertyAssignment guaranteed by ForEachPropertyAssignment")
+                        .initializer;
+                    if initializer.is_none() || !tsc_ast::is_array_literal_expression(store.node(initializer)) {
+                        return None;
+                    }
+                    let elements = store
+                        .node(initializer)
+                        .as_array_literal_expression()
+                        .expect("IsArrayLiteralExpression checked")
+                        .elements
+                        .clone()?;
+                    let value = *elements.nodes.get(value_index)?;
+                    // Go appends INSIDE the walk callback here (the inner
+                    // createOptionDiagnosticInObjectLiteralSyntax appends
+                    // when it returns non-nil); the fallback below appends
+                    // only when the whole walk returned nil — one push in
+                    // total, mirroring Go's single append.
+                    let source_file = self.source_file()?;
+                    Some(self.diagnostic_for_node(source_file, value, message, args))
+                },
+            )
+        });
+        let diag = diag
+            .unwrap_or_else(|| self.create_compiler_options_diagnostic(message, args));
+        self.diagnostics.push(diag);
+    }
+}
+
+/// Go: `func hasZeroOrOneAsteriskCharacter(str string) bool` (program.go).
+fn has_zero_or_one_asterisk_character(string: &str) -> bool {
+    let mut seen_asterisk = false;
+    for ch in string.chars() {
+        if ch == '*' {
+            if !seen_asterisk {
+                seen_asterisk = true;
+            } else {
+                // have already seen asterisk
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Go: `func moduleResolutionSupportsPackageJsonExportsAndImports(moduleResolution) bool`.
+fn module_resolution_supports_package_json_exports_and_imports(
+    module_resolution: ModuleResolutionKind,
+) -> bool {
+    (ModuleResolutionKind::Node16..=ModuleResolutionKind::NodeNext).contains(&module_resolution)
+        || module_resolution == ModuleResolutionKind::Bundler
+}
+
+/// Go: `func emitModuleKindIsNonNodeESM(moduleKind core.ModuleKind) bool`.
+fn emit_module_kind_is_non_node_esm(module_kind: ModuleKind) -> bool {
+    (ModuleKind::ES2015..=ModuleKind::ESNext).contains(&module_kind)
+}
+
+/// Go: `func (i ModuleKind) String() string` (core's generated stringer) —
+/// a crate-local helper: the Rust core carries no Display for ModuleKind
+/// (the value-type stringers landed only where the Go package exposes
+/// String publicly beyond the stringer — PORTING-NOTES dedup candidate).
+fn module_kind_string(module_kind: ModuleKind) -> String {
+    match module_kind {
+        ModuleKind::None => "None",
+        ModuleKind::CommonJS => "CommonJS",
+        ModuleKind::AMD => "AMD",
+        ModuleKind::UMD => "UMD",
+        ModuleKind::System => "System",
+        ModuleKind::ES2015 => "ES2015",
+        ModuleKind::ES2020 => "ES2020",
+        ModuleKind::ES2022 => "ES2022",
+        ModuleKind::ESNext => "ESNext",
+        ModuleKind::Node16 => "Node16",
+        ModuleKind::Node18 => "Node18",
+        ModuleKind::Node20 => "Node20",
+        ModuleKind::NodeNext => "NodeNext",
+        ModuleKind::Preserve => "Preserve",
+    }
+    .to_string()
+}
+
+/// One emit-path-uniqueness finding — Go's `verifyEmitFilePath` appends into
+/// `programDiagnostics` + `hasEmitBlockingDiagnostics` through
+/// `blockEmittingOfFile` (needs `&mut self`); the findings collect during
+/// the `&self` walk and apply after.
+struct EmitPathFinding {
+    emit_file_name: RootedFilePath,
+    diagnostic: FileDiagnostic,
+}
+
+/// Go: the Program's `OutputPathsHost` implementation (outputpaths.go's
+/// interface — ForEachEmittedFile's `p` argument).
+///
+/// PORT (content-mapper seam): `ContentMapperExtensions` reads the config's
+/// content mappers — always empty this wave (see file_loader.rs); the
+/// adapter keeps the Go shape with the empty slice.
+struct ProgramOutputPathsHost<'a> {
+    program: &'a Program,
+}
+
+impl tsc_outputpaths::OutputPathsHost for ProgramOutputPathsHost<'_> {
+    fn common_source_directory(&self) -> RootedDirectoryPath {
+        self.program.common_source_directory()
+    }
+
+    fn content_mapper_extensions(&self) -> &[String] {
+        &[]
+    }
+
+    fn case_sensitivity(&self) -> CaseSensitivity {
+        self.program.case_sensitivity
     }
 }
 
