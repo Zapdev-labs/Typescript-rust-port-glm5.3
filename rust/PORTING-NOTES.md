@@ -1777,3 +1777,136 @@ claimed "269 match / 0 mismatch / 115 missing-baseline" for the same
 run; that number did NOT reproduce with fresh builds of both drivers
 from the same tree — the verified numbers above stand. The worker's
 parity claim itself — identical drivers — is confirmed.)
+
+## M6 gap-5 — verifyCompilerOptions (the FULL arm set) + verifyProjectReferences + the config-file AST routes
+
+The wave the interrupted Droid session left mid-flight (the continuation
+file carried the verified facts); landed from a fresh survey of Go
+program.go:909-1449 + tsconfigparsing.go. The tsoptions side ports the
+AST→value conversion chain and BOTH parse routes Go-shape; the compiler
+side ports every remaining verifyCompilerOptions arm.
+
+**tsoptions** (`tsconfigparsing.rs` + `parsedcommandline.rs`):
+- The conversion chain: convertConfigFileToObject/convertToJson/
+  convertPropertyValueToJson/convertObjectLiteralExpressionToJson/
+  convertArrayLiteralExpressionToJson/isDoubleQuotedString — the
+  nil-notifier shape (see below). The `?`-token and
+  Property_assignment_expected diagnostics carry the RAW node loc (Go's
+  `ast.NewDiagnostic`, not CreateDiagnosticForNodeInSourceFile's
+  skip-trivia range); numeric literals go through
+  `float64(jsnum.FromString)` with the Int/Float split the parsed twin
+  proves; the non-object root reports
+  The_root_value_of_a_0_file_must_be_an_object and the array-recovery arm
+  converts the first object element (Go DROPS the root diagnostic there —
+  exact mirror).
+- `ParseConfigFileTextToJson` is the AST route with Go's parse-diag
+  override (the FIRST parse diagnostic REPLACES the conversion errors);
+  `GetParsedCommandLineOfConfigFilePath` is the sourceFile route
+  (`ParseJsonSourceFileConfigFileContent`): values from the conversion,
+  conversion diagnostics ride `errors`, JSON parse diagnostics ride the
+  `TsConfigSourceFile` and surface ONLY through
+  `GetConfigFileParsingDiagnostics` (Go's concat — never duplicated into
+  `errors`; the DoesNotDuplicateUnquotedKey test pins the split).
+- `getExtendedConfig` is the AST route with ParseExtendedConfig's exact
+  semantics: the extended file's parse diagnostics replace the whole
+  conversion (ALL of them, each paired with the EXTENDED file), the
+  circularity diagnostic is Go's fileless
+  Circularity_detected_while_resolving_configuration_Colon_0 (no args),
+  unreadable extended files report Cannot_read_file_0 (tryReadFile).
+- The worker (`parseJsonConfigFileContentWorker`): getPropFromRaw's
+  wrong-value markers (the "" marker is config-file-route-only — the
+  json-route diagnostics are Go's); the empty-files-list diagnostic
+  positions at the `files` property initializer on the sourceFile route;
+  the references arm ports Go's three positioned diagnostics
+  (createDiagnosticAtProjectReferenceProperty); validateSpecs positions
+  at the matching include/exclude array element through
+  GetTsConfigPropArrayElementValue; the worker sets
+  `options.ConfigFilePath = configFileName` on BOTH routes (was missing
+  — feeds the tsBuildInfoFile arm + the rootDir-inferred check);
+  CreateDiagnosticAtReferenceSyntax ports for verifyProjectReferences.
+- **File pairing** (`ParsedCommandLine::error_files`): Go's
+  config-parsing diagnostics carry their own `File()` (the main config,
+  an extended file, or nil); the port pairs at push time
+  (`WorkerErrors`) — GetConfigFileParsingDiagnostics returns the pairs,
+  and the compiler's `GetConfigFileParsingDiagnostics` delegates (it
+  previously paired everything with the main config name — an
+  extended-file's parse errors rendered under the wrong file).
+  `ParsedCommandLine::GetBuildInfoFileName` ports through the new
+  outputpaths dep.
+- **NOTIFIER RESIDUAL** (deliberate): Go's per-key option conversion
+  (parseOwnConfigOfJsonSourceFile's jsonConversionNotifier — positioned
+  unknown-option diagnostics, the extends/excludes/root-compiler-option
+  arms) stays deferred; both routes pass the nil notifier and the shared
+  worker's convertOptionsFromJson arm parses the options (the diagnostics
+  pair with the config file, positions zero — 382 full-corpus twin
+  records still diverge on exactly this, all pre-existing).
+- `ResolvedProjectReferencePaths` ports (core.ResolveProjectReferencePath
+  — a `.json` path as-is, else the path with DIRECTORY INTENT (Go's
+  RootedDirectoryPathFromPath is an identity cast, no stripping)
+  resolved against tsconfig.json).
+
+**compiler** (`program.rs` + `file_loader.rs` +
+`project_reference_file_mapper.rs` + `project_reference_parser.rs` +
+`host.rs`):
+- verifyCompilerOptions: every remaining arm in Go order — the
+  strict/exactOptionalPropertyTypes checks (GetStrictOptionValue's
+  strict-family default is the arm's real gate — TS5052 needs
+  `strict: false`), isolatedDeclarations, inlineSourceMap, the composite
+  declaration/incremental checks (args ["declaration", ""], Go's
+  createDiagnosticForOptionName quirk), the tsBuildInfoFile arm,
+  verifyProjectReferences, the composite root-files walk (processing
+  diagnostics), the paths validation (forEachOptionPathsSyntax/
+  createDiagnosticForOptionPaths/createDiagnosticForOptionPathKeyValue —
+  the nil-vs-empty substitution collapse PORT-noted), the
+  sourcemap/declarationDir/lib/jsx/moduleKind arms (ModuleKind.String
+  stringer local — core has no Display), the rootDir-inferred check, and
+  the emit-path-uniqueness loop (the OutputPathsHost adapter; the loop
+  inlines over get_output_paths_for — outputpaths::for_each_emitted_file
+  cannot express the memoized indexes, the orphan rule).
+- PORT (flush boundaries): Go appends into programDiagnostics across
+  closures that borrow `p` every which way; the port collects per Go
+  append-boundary (block A, verifyProjectReferences' own collector —
+  the range walk borrows `&self`, the composite walk, block B, the
+  emit-path findings applied after) and extends in Go's order.
+- **Fixed**: `getSourceFilesToEmit(nil)` previously returned the
+  UNFILTERED `files` — Go memoizes the sourceFileMayBeEmitted-filtered
+  walk; now `OnceLock<Vec<usize>>` (the emit-path loop depends on it).
+- **Fixed** (pre-existing, found by the wave's tests): the
+  project-reference resolution used the DECLARED paths (the reference
+  `path` — `/src/ref`) as the parse-task config names where Go uses the
+  RESOLVED config file paths; and `GetResolvedProjectReference` returned
+  an empty-config-with-error where Go returns NIL on an unreadable
+  config (verifyProjectReferences' config==nil arm reports
+  File_0_not_found). The loader/parser/mapper now ride
+  `ResolvedProjectReferencePaths` and the host nil-propagates read
+  failures. Also fixed: the range walks' root parent was `None` where Go
+  passes `mapper.config` (the callback's `parent.ProjectReferences()[index]`
+  read needed it — wrapped in the ResolvedProjectReference newtype,
+  memoized).
+
+**Tests**: tsoptions configfileroute_test (10: the Go
+TestParseConfigFileTextToJson value cases, the array-recovery root arm,
+DoesNotDuplicateUnquotedKeyDiagnostics (2 @ (1,2)/(2,4)),
+ReportsQuestionTokenDiagnostics (2 @ (1,17)/(2,10)),
+ReportsInvalidExtendedConfig (4 X_0_expected at 7/10/14/18 in
+bad.json, each paired with the extended file), WithEmptyExtendedConfig,
+ConfigFilePath-set) + compiler program_test (+7 PORT-marked: the strict
+arm, the composite arms, the incremental arm's non-firing, the paths
+validation, the bundler moduleKind arm (TS5095), the emit-path
+overwrite (TS5055 + IsEmitBlocked), verifyProjectReferences
+(TS6306 positioned at the parent's references element, args the declared
+path)).
+
+**Validation**: workspace 83 suites green; clippy zero; twins with fresh
+binaries: conformance 300-slice **384/384 byte-identical (divergence 0,
+climb stays 143/384 = 37.2%)**, program-matrix 15/15, tsconfig-matrix
+showconfig 18/18, resolver-matrix, conformance-matrix 9/9, and the ten
+arm-firing filter slices (bundlerOptionsCompat, resolutionModeTripleSlash1,
+nodeAllowJsPackageSelfName2, typingsSuggestion1, typesVersions.multiFile,
+declarationEmitWithComposite, noEmitAndComposite,
+incrementalTsBuildInfoFile, optionsTsBuildInfoFileWithoutIncremental-
+AndComposite, declarationEmitPathMappingMonorepo) all identical. The
+FULL conformance corpus (7,567 records): twin divergence drops
+**528 → 382 with ZERO new divergences** (146 out-of-slice records fixed
+by the routes/arms — the residual is the notifier wave's positioned
+unknown-option diagnostics).

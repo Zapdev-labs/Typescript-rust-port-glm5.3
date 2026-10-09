@@ -163,6 +163,7 @@ program` over `rust/bench/gates/program-matrix` — byte-identical
 | first green slice | fixture matrix twin identical + climb ≥ 50% | matrix identical; 55.5% (pre gap-1) | **PASS** |
 | gap-1 closure | twin divergence ≤ gap 2's residual on the 300-slice | 1 divergent record (gap 2 only) | **PASS** |
 | gap-2 closure (M6 S1) | twin divergence 0 on the 300-slice | 384/384 byte-identical | **PASS** |
+| gap-5 closure (verifyCompilerOptions full arms + the config-file AST routes) | 300-slice divergence 0 + the arm-firing filter slices identical | 384/384; 10/10 filter slices identical; full-corpus divergence 528 → 382, 0 new | **PASS** |
 | M6 done | climb ≥ 90% on the 300-case slice | 37.2% at parse+bind (twin-parity first; re-measures at full depth with the checker waves) | blocked (below) |
 
 A test is counted "pass" in the legacy table only when its full baseline
@@ -181,8 +182,9 @@ single-`.errors.txt` slice at parse+bind depth.
    paths/jsx/moduleKind arms, `verifyProjectReferences`, the
    emit-path-uniqueness loop) and the AST→value config conversion
    (`convertConfigFileToObject`) stay deferred to the full AST-config
-   wave — the plug points are PORT-noted in
-   `crates/compiler/src/program.rs::verify_compiler_options`.
+   wave — the plug points were PORT-noted in
+   `crates/compiler/src/program.rs::verify_compiler_options` (the
+   gap-5 wave landed them all — see gap 5).
 2. ~~**JS parse-diagnostic scope (TS8009)**~~ — **CLOSED (M6 S1 wave)**:
    the divergence was not a checker/parser scope split (Go's checker never
    emits TS8009; verified — the only emission sites are the parser's
@@ -204,10 +206,25 @@ single-`.errors.txt` slice at parse+bind depth.
    conformance drivers render `!!! related TSxxxx: <message>` without
    the `file(line,col)` prefix. Parse-level diagnostics do not carry
    related information in practice.
-5. **verifyCompilerOptions' non-removed arms** (new, the deferred
-   AST-config wave above) — none fire on the 300-slice (the twin proves
-   it: the residual is gap 2 alone), but they are unported and will
-   surface when real-tsconfig corpora run.
+5. ~~**verifyCompilerOptions' non-removed arms**~~ — **CLOSED (the
+   gap-5 wave)**: every remaining Go arm is ported — the strict/
+   isolatedDeclarations/inlineSourceMap/composite/tsBuildInfo checks,
+   `verifyProjectReferences` (+ the reference-path resolution chain it
+   reads: `ResolvedProjectReferencePaths`, the host's nil-on-unreadable
+   propagation, the range walks' root parent), the composite root-files
+   walk, the `paths` validation, the sourcemap/declarationDir/lib/jsx/
+   moduleKind arms, and the emit-path-uniqueness loop — plus the
+   config-file AST routes in tsoptions
+   (`ParseConfigFileTextToJson`'s parse-diag override,
+   `GetParsedCommandLineOfConfigFilePath`'s route split,
+   `getExtendedConfig`'s AST semantics, the per-diagnostic file pairing).
+   Measured on the ten arm-firing filter slices (bundlerOptionsCompat,
+   the composite/tsBuildInfo/paths compiler-suite cases): all identical;
+   the full-corpus twin divergence drops 528 → 382 with zero new. The
+   residual (382 records, all pre-existing) is the
+   `jsonConversionNotifier` wave — Go's per-key route diagnostics are
+   POSITIONED by `parseOwnConfigOfJsonSourceFile`; the port's are
+   route-paired with the zero range until that wave lands (PORTING-NOTES).
 
 ## Subtleties (PORT notes kept in the crates)
 
