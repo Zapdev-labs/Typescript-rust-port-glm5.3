@@ -68,6 +68,7 @@ func main() {
 		runSymbols(os.Args[2:])
 	case "program":
 		runProgram(os.Args[2:])
+		printProgramProfile()
 	case "conformance":
 		runConformance(os.Args[2:])
 	case "help", "-h", "--help":
@@ -1549,6 +1550,34 @@ func (c *countingFS) loadedNames() []string {
 	return names
 }
 
+// TSC_BENCH_PROFILE=1 accumulates per-phase wall time to STDERR (the Rust
+// twin's PROGRAM_PROFILE shape — same phases, same env var; the NDJSON
+// contract is untouched).
+type programProfile struct {
+	seed, config, program, bind, record time.Duration
+	records                            uint64
+}
+
+var progProfile struct {
+	mu  sync.Mutex
+	acc programProfile
+}
+
+func profileEnabled() bool { return os.Getenv("TSC_BENCH_PROFILE") != "" }
+
+func profileAdd(d *time.Duration, v time.Duration) { *d += v }
+
+func printProgramProfile() {
+	if !profileEnabled() {
+		return
+	}
+	progProfile.mu.Lock()
+	defer progProfile.mu.Unlock()
+	a := progProfile.acc
+	fmt.Fprintf(os.Stderr, "profile: records=%d seed=%.1fms config=%.1fms program=%.1fms bind=%.1fms record=%.1fms\n",
+		a.records, a.seed.Seconds()*1e3, a.config.Seconds()*1e3, a.program.Seconds()*1e3, a.bind.Seconds()*1e3, a.record.Seconds()*1e3)
+}
+
 // emitProgramLine renders one root's NDJSON parity line (the field set and
 // the shape_hash fold recipe are documented in the Rust twin's header —
 // `hash_lines` there; vectors in its tests).
@@ -1569,6 +1598,11 @@ func emitProgramLine(sb *strings.Builder, corpusDir string, root *benchFile, see
 	// at their real absolute paths) + the synthetic one-file tsconfig,
 	// bundled lib overlay on top — program_test.go's TestProgram shape
 	// (vfstest.FromMap + bundled.WrapFS), CaseSensitive on both drivers.
+	profile := profileEnabled()
+	var t0 time.Time
+	if profile {
+		t0 = time.Now()
+	}
 	entries := make(map[string]string, len(seed)+1)
 	for i := range seed {
 		entries[seed[i].fileName.AsString()] = seed[i].text
@@ -1580,9 +1614,17 @@ func emitProgramLine(sb *strings.Builder, corpusDir string, root *benchFile, see
 	configText.WriteString(`"]}`)
 	entries[configPath.AsString()] = configText.String()
 	fs := bundled.WrapFS(vfstest.FromMap(entries, tspath.CaseSensitive))
+	var tSeed time.Duration
+	if profile {
+		tSeed = time.Since(t0)
+	}
 
 	// Config: the ImportSource test's config-parsing route, over the same FS.
 	config, _ := tsoptions.GetParsedCommandLineOfConfigFile(configPath, nil, nil, fs, nil)
+	var tConfig time.Duration
+	if profile {
+		tConfig = time.Since(t0) - tSeed
+	}
 
 	// Program: NewCompilerHost over the counting FS wrapper (the `loaded`
 	// observable) + NewProgram — exactly the program tests' constructors.
@@ -1592,8 +1634,23 @@ func emitProgramLine(sb *strings.Builder, corpusDir string, root *benchFile, see
 		ProgramConfig: compiler.ProgramConfig{Config: config},
 		ProgramHosts:  compiler.ProgramHosts{Host: host},
 	})
+	var tProgram time.Duration
+	if profile {
+		tProgram = time.Since(t0) - tSeed - tConfig
+	}
 	stage = "bind"
 	program.BindSourceFiles()
+	var tBind time.Duration
+	if profile {
+		tBind = time.Since(t0) - tSeed - tConfig - tProgram
+		progProfile.mu.Lock()
+		progProfile.acc.seed += tSeed
+		progProfile.acc.config += tConfig
+		progProfile.acc.program += tProgram
+		progProfile.acc.bind += tBind
+		progProfile.acc.records++
+		progProfile.mu.Unlock()
+	}
 
 	// ── The record fields (all deterministic: program order for file
 	//    lists, sorted for read/unresolved sets). ──

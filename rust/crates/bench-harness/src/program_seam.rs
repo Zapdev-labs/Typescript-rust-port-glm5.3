@@ -440,6 +440,8 @@ fn shape_hash(lines: &[String]) -> String {
 /// ok:false IS a divergence finding — panic payloads are driver-specific
 /// and never byte-shared).
 fn emit_program_line(line: &mut String, corpus_abs: &str, root: &BenchFile, seed: &[BenchFile]) {
+    let profile = std::env::var_os("TSC_BENCH_PROFILE").is_some();
+    let t0 = std::time::Instant::now();
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         build_bound_program(corpus_abs, root, seed)
     }));
@@ -450,6 +452,7 @@ fn emit_program_line(line: &mut String, corpus_abs: &str, root: &BenchFile, seed
             return;
         }
     };
+    let t_build = t0.elapsed();
 
     // ── Collect the record fields (all deterministic: program order for
     //    file lists, sorted for read/unresolved sets). ──
@@ -501,6 +504,10 @@ fn emit_program_line(line: &mut String, corpus_abs: &str, root: &BenchFile, seed
         unresolved: &unresolved,
     });
     let hash = shape_hash(&lines);
+    if profile {
+        let mut totals = PROGRAM_PROFILE.lock().expect("profile poisoned");
+        totals.record += t0.elapsed() - t_build;
+    }
 
     // ── The NDJSON line (field order is the contract). ──
     line.push_str("{\"file\":\"");
@@ -561,6 +568,11 @@ fn build_bound_program(
     root: &BenchFile,
     seed: &[BenchFile],
 ) -> (tsc_compiler::Program, Arc<CountingFs>) {
+    // PORT (profiling): TSC_BENCH_PROFILE=1 accumulates per-phase wall time
+    // to STDERR — the harness shape makes the phases (seed/config/program/
+    // bind/record) the load-bearing costs; the NDJSON contract is untouched.
+    let profile = std::env::var_os("TSC_BENCH_PROFILE").is_some();
+    let t0 = std::time::Instant::now();
     let config_path =
         rooted_file_path_from_absolute(&format!("{corpus_abs}/__program__.tsconfig.json"));
     let mut config_text = String::from(r#"{"compilerOptions":{"target":"esnext"},"files":[""#);
@@ -576,8 +588,10 @@ fn build_bound_program(
         entries,
         CaseSensitivity::CaseSensitive,
     ));
+    let t_seed = t0.elapsed();
 
     let config = get_parsed_command_line_of_config_file_path(&config_path, fs.as_ref(), None);
+    let t_config = t0.elapsed() - t_seed;
 
     let counting = Arc::new(CountingFs::new(fs));
     let host = new_compiler_host(
@@ -594,8 +608,56 @@ fn build_bound_program(
         hosts: ProgramHosts { host: Some(host) },
         factories: ProgramFactories::default(),
     });
+    let t_program = t0.elapsed() - t_seed - t_config;
     program.bind_source_files();
+    let t_bind = t0.elapsed() - t_seed - t_config - t_program;
+    if profile {
+        let mut totals = PROGRAM_PROFILE.lock().expect("profile poisoned");
+        totals.seed += t_seed;
+        totals.config += t_config;
+        totals.program += t_program;
+        totals.bind += t_bind;
+        totals.records += 1;
+    }
     (program, counting)
+}
+
+/// The per-phase accumulators (see `build_bound_program`'s PORT note).
+#[derive(Default)]
+struct ProgramProfile {
+    seed: std::time::Duration,
+    config: std::time::Duration,
+    program: std::time::Duration,
+    bind: std::time::Duration,
+    record: std::time::Duration,
+    records: u64,
+}
+
+static PROGRAM_PROFILE: std::sync::Mutex<ProgramProfile> = std::sync::Mutex::new(ProgramProfile {
+    seed: std::time::Duration::ZERO,
+    config: std::time::Duration::ZERO,
+    program: std::time::Duration::ZERO,
+    bind: std::time::Duration::ZERO,
+    record: std::time::Duration::ZERO,
+    records: 0,
+});
+
+/// Emits the accumulated phase profile to STDERR (TSC_BENCH_PROFILE=1).
+pub fn print_program_profile() {
+    if std::env::var_os("TSC_BENCH_PROFILE").is_none() {
+        return;
+    }
+    let totals = PROGRAM_PROFILE.lock().expect("profile poisoned");
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+    eprintln!(
+        "profile: records={} seed={:.1}ms config={:.1}ms program={:.1}ms bind={:.1}ms record={:.1}ms",
+        totals.records,
+        ms(totals.seed),
+        ms(totals.config),
+        ms(totals.program),
+        ms(totals.bind),
+        ms(totals.record),
+    );
 }
 
 /// The ok:false NDJSON line (`stage` is "program"/"bind").

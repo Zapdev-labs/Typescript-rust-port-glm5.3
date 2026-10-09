@@ -1155,15 +1155,75 @@ impl Program {
         }
     }
 
-    /// Go: `func (p *Program) BindSourceFiles()`.
+    /// Go: `func (p *Program) BindSourceFiles()` — `wg :=
+    /// core.NewWorkGroup(p.SingleThreaded())`, one queued bind per unbound
+    /// file.
     ///
-    /// PORT: Go queues the binds on a WorkGroup; the binds are disjoint
-    /// `&mut` borrows of `files` — the sequential loop is the same dataflow
-    /// (parallelism returns with the checker wave's grouped iteration).
+    /// PORT: the binds are disjoint `&mut` borrows of `files`, so the
+    /// parallel WorkGroup maps onto scoped threads over contiguous
+    /// chunks. Go's queue balances per-file work on the scheduler; static
+    /// equal-count chunks would straggle on the big lib `.d.ts` files
+    /// (lib.dom et al. dwarf the rest), so the chunk boundaries are cut by
+    /// cumulative TEXT SIZE — the bind is O(nodes) in the file — keeping
+    /// the disjoint-chunk borrows while approximating Go's per-file queue
+    /// balance. Determinism is Go's own: the binder is per-file (no
+    /// cross-file state), the `files` order is unchanged, and no twin
+    /// output reads the raw lazily-assigned node/symbol ids (the binder's
+    /// atomics — `symbols_seam` canonicalizes by encounter order and
+    /// drops the ids on both sides). Sequential below the work-group's
+    /// break-even and on the SingleThreaded option (Go's gate).
     pub fn bind_source_files(&mut self) {
-        for file in &mut self.files {
-            tsc_binder::bind_source_file(file);
+        const MIN_PARALLEL_FILES: usize = 8;
+        if self.single_threaded() || self.files.len() < MIN_PARALLEL_FILES {
+            for file in &mut self.files {
+                // Go: `if !file.IsBound()`.
+                if !file.is_bound() {
+                    tsc_binder::bind_source_file(file);
+                }
+            }
+            return;
         }
+        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        let threads = threads.min(self.files.len());
+        // The balanced contiguous cut points: cumulative-bytes targets
+        // (the bind is O(nodes) in the file; the big lib `.d.ts` files
+        // otherwise straggle an equal-count chunking).
+        let total: usize = self.files.iter().map(|file| file.text().len() + 1).sum();
+        let target = total.div_ceil(threads);
+        let mut cut_points: Vec<usize> = Vec::with_capacity(threads);
+        let mut acc = 0usize;
+        for (index, file) in self.files.iter().enumerate() {
+            acc += file.text().len() + 1;
+            if acc >= target && cut_points.len() + 1 < threads {
+                cut_points.push(index + 1);
+                acc = 0;
+            }
+        }
+        cut_points.dedup();
+        std::thread::scope(|scope| {
+            let mut rest = self.files.as_mut_slice();
+            let mut offset = 0usize;
+            for boundary in cut_points {
+                let (head, tail) = rest.split_at_mut(boundary - offset);
+                offset = boundary;
+                rest = tail;
+                scope.spawn(move || {
+                    for file in head {
+                        if !file.is_bound() {
+                            tsc_binder::bind_source_file(file);
+                        }
+                    }
+                });
+            }
+            // The tail chunk absorbs the remainder.
+            scope.spawn(move || {
+                for file in rest {
+                    if !file.is_bound() {
+                        tsc_binder::bind_source_file(file);
+                    }
+                }
+            });
+        });
     }
 
     /// Go: `func (p *Program) GetProgramDiagnostics()`.

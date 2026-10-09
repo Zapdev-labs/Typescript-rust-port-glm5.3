@@ -894,7 +894,7 @@ impl<'a> CollectState<'a> {
 
     /// Go: the recursive `collectFiles` closure.
     fn collect_files(&mut self, tasks: Vec<usize>) {
-        for task_index in tasks {
+        for mut task_index in tasks {
             let include_reason = self
                 .files_parser
                 .arena
@@ -913,10 +913,19 @@ impl<'a> CollectState<'a> {
                     )
                 });
             if redirected.is_none() && !is_for_automatic_type_directive {
+                // Go: `if task.loadedTask != nil { task = task.loadedTask }` —
+                // the CLAIM task is the group's loaded winner, so the
+                // subtree claims at the FIRST DFS site. The pre-follow
+                // form read the alias's own `loaded` (false) and skipped,
+                // leaving the claim to whichever task won the parallel
+                // load race — the program order (and the twin's
+                // `program_files` fold) was run-to-run nondeterministic.
+                if let Some(loaded_task) = loaded_task {
+                    task_index = loaded_task;
+                }
                 if let Some(include_reason) = &include_reason {
-                    let reason_task = loaded_task.unwrap_or(task_index);
                     self.files_parser
-                        .add_include_reason(self, reason_task, include_reason.clone());
+                        .add_include_reason(self, task_index, include_reason.clone());
                 }
             }
             let path = self

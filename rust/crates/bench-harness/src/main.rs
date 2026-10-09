@@ -36,7 +36,10 @@ fn main() {
         "showconfig" => showconfig_seam::run_showconfig(&args[1..]),
         "resolvereact" => showconfig_seam::run_resolvereact(&args[1..]),
         "symbols" => symbols_seam::run_symbols(&args[1..]),
-        "program" => program_seam::run_program(&args[1..]),
+        "program" => {
+            program_seam::run_program(&args[1..]);
+            program_seam::print_program_profile();
+        }
         "conformance" => conformance_seam::run_conformance(&args[1..]),
         _ => usage(),
     }
