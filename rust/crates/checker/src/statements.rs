@@ -622,7 +622,7 @@ impl Checker {
         self.check_testing_known_truthy_callable_or_awaitable_or_enum_member_type(
             expression,
             t,
-            then_statement,
+            Some(then_statement),
         );
         self.check_source_element(Some(then_statement));
         if self.store().node(then_statement).kind == Kind::EmptyStatement {
@@ -641,7 +641,9 @@ impl Checker {
         &mut self,
         cond_expr: NodeId,
         cond_type: TypeId,
-        body: NodeId,
+        // Go: `body *ast.Node` — nil when the && arm's parent isn't an if
+        // statement (checker.go:12587); Option matches that nullability.
+        body: Option<NodeId>,
     ) {
         if !self.strict_null_checks {
             return;
@@ -654,10 +656,10 @@ impl Checker {
         &mut self,
         cond_expr: NodeId,
         cond_type: TypeId,
-        body: NodeId,
+        body: Option<NodeId>,
     ) {
         let mut cond_expr = tsc_ast::utilities::skip_parentheses(self.store(), cond_expr);
-        self.check_testing_known_truthy_type(cond_expr, cond_type, Some(body));
+        self.check_testing_known_truthy_type(cond_expr, cond_type, body);
         while is_binary_expression(self.store().node(cond_expr)) {
             let op = self
                 .store()
@@ -677,7 +679,7 @@ impl Checker {
                     .expect("BinaryExpression data")
                     .left,
             );
-            self.check_testing_known_truthy_type(cond_expr, cond_type, Some(body));
+            self.check_testing_known_truthy_type(cond_expr, cond_type, body);
         }
     }
 
@@ -705,7 +707,7 @@ impl Checker {
             return;
         }
         if is_logical_or_coalescing_binary_expression(self.store(), location) {
-            self.check_testing_known_truthy_types(location, cond_type, body.expect("body"));
+            self.check_testing_known_truthy_types(location, cond_type, body);
             return;
         }
         let mut t = cond_type;

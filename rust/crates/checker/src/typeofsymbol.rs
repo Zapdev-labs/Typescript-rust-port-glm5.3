@@ -1864,7 +1864,7 @@ impl Checker {
     }
 
     /// TODO(port M6 S9): `getContextualThisParameterType(fn)` — permissive None.
-    fn get_contextual_this_parameter_type(&mut self, fn_: NodeId) -> Option<TypeId> {
+    pub(crate) fn get_contextual_this_parameter_type(&mut self, fn_: NodeId) -> Option<TypeId> {
         let _ = fn_;
         None
     }
@@ -1883,7 +1883,7 @@ impl Checker {
     }
 
     /// TODO(port M6 S3): `getTypeOfPropertyInBaseClass(symbol)` — permissive None.
-    fn get_type_of_property_in_base_class(&mut self, symbol: SymbolId) -> Option<TypeId> {
+    pub(crate) fn get_type_of_property_in_base_class(&mut self, symbol: SymbolId) -> Option<TypeId> {
         let _ = symbol;
         None
     }
@@ -1910,7 +1910,7 @@ impl Checker {
     /// TODO(port M6 S10): `getIndexedAccessTypeEx(objectType, indexType,
     /// accessFlags, accessNode, errorNode)` — the indexed-access constructor;
     /// permissive errorType (relater.rs carries the same seam).
-    fn get_indexed_access_type_ex(
+    pub(crate) fn get_indexed_access_type_ex(
         &mut self,
         object_type: TypeId,
         index_type: TypeId,
@@ -2620,7 +2620,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getRestType(source *Type, properties []*ast.Node, symbol *ast.Symbol) *Type`.
-    fn get_rest_type(
+    pub(crate) fn get_rest_type(
         &mut self,
         source: TypeId,
         properties: &[NodeId],
@@ -2646,7 +2646,7 @@ impl Checker {
     /// declaration or assignment.
     ///
     /// Go: `func (c *Checker) getFlowTypeOfDestructuring(node, declaredType) *Type`.
-    fn get_flow_type_of_destructuring(&mut self, node: NodeId, declared_type: TypeId) -> TypeId {
+    pub(crate) fn get_flow_type_of_destructuring(&mut self, node: NodeId, declared_type: TypeId) -> TypeId {
         // Go: getSyntheticElementAccess builds a synthetic element access so
         // the flow analyzer doesn't have to handle the destructuring syntaxes,
         // then narrows through getFlowTypeOfReference.
@@ -2888,7 +2888,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) hasDefaultValue(node *ast.Node) bool` (checker.go:13862).
-    fn has_default_value(&mut self, node: NodeId) -> bool {
+    pub(crate) fn has_default_value(&mut self, node: NodeId) -> bool {
         let store = self.store();
         let n = store.node(node);
         if n.kind == Kind::BindingElement {

@@ -16,6 +16,13 @@
 use std::hint::black_box;
 use std::time::Instant;
 
+// Bench-harness-only allocator swap (see Cargo.toml). The port crates are
+// allocator-agnostic; this gate exists so the official default builds are
+// untouched and the allocator delta is measurable on the same tree.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod conformance_seam;
 mod micro;
 mod parse;

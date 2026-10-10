@@ -248,6 +248,9 @@ pub struct Checker {
     pub(crate) marked_assignment_symbol_links: LinkStore<SymbolId, MarkedAssignmentSymbolLinks>,
     pub(crate) symbol_container_links: LinkStore<SymbolId, ContainingSymbolLinks>,
     pub(crate) source_file_links: LinkStore<NodeId, SourceFileLinks>,
+    /// Go: `nonExistentProperties core.AutoSet[NonExistentPropertyKey]`
+    /// (checker.go:11767 — the reportNonexistentProperty memo).
+    pub(crate) non_existent_properties: std::collections::HashSet<(NodeId, TypeId, bool)>,
     // TODO(port M6): signatureLinks, jsxElementLinks (JsxElementLinks), the
     // RegExpScanner, patternForType, contextFreeTypes, flow caches.
     // ── Arenas (§5.5) ──
@@ -614,10 +617,18 @@ impl Checker {
         circular_constraint_type => circular_constraint_type,
     }
 
-    /// Go: the `booleanType` field — `getUnionType([false, true])`,
-    /// TODO(port M6 union types).
-    pub fn boolean_type(&self) -> TypeId {
-        panic!("TODO(port M6): booleanType = getUnionType([regularFalseType, regularTrueType])")
+    /// Go: the `booleanType` field — `getUnionType([regularFalseType,
+    /// regularTrueType])` (checker.go's initializeChecker). The M6 S4
+    /// expression leaves (checkBinaryExpression's comparison arms,
+    /// checkPrefixUnaryExpression's `!`, checkDeleteExpression) call it on
+    /// live test paths, so the field is constructed lazily through the S7
+    /// relater union seam instead of panicking: multi-constituent unions
+    /// answer errorType under the seam (relater.rs's pinned S7 TODO) — the
+    /// documented trajectory until S7's real union constructor lands.
+    pub fn boolean_type(&mut self) -> TypeId {
+        let false_t = self.regular_false_type.expect("regular_false_type");
+        let true_t = self.regular_true_type.expect("regular_true_type");
+        crate::relater::get_union_type(self, vec![false_t, true_t])
     }
 
     /// The `missingType` id as an `Option`-free helper for utilities.rs.
@@ -1289,6 +1300,7 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         global_this_symbol: None,
         node_links: LinkStore::new(),
         symbol_node_links: NodeLinkStore::new(),
+        non_existent_properties: Default::default(),
         type_node_links: LinkStore::new(),
         enum_member_links: LinkStore::new(),
         assertion_links: LinkStore::new(),

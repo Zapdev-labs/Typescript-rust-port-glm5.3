@@ -3121,8 +3121,15 @@ define_flags!(TypeFacts, u32);
 impl TypeFacts {
     /// Go: `TypeFactsEQUndefined TypeFacts = 1 << 16`.
     pub const EQ_UNDEFINED: TypeFacts = TypeFacts(1 << 16);
+    /// Go: `TypeFactsEQUndefinedOrNull TypeFacts = 1 << 18`.
+    pub const EQ_UNDEFINED_OR_NULL: TypeFacts = TypeFacts(1 << 18);
     /// Go: `TypeFactsNEUndefined TypeFacts = 1 << 19`.
     pub const NE_UNDEFINED: TypeFacts = TypeFacts(1 << 19);
+    /// Go: `TypeFactsTruthy TypeFacts = 1 << 22` (M6 S4: added with the
+    /// checkBinaryLikeExpression &&/|| arms).
+    pub const TRUTHY: TypeFacts = TypeFacts(1 << 22);
+    /// Go: `TypeFactsFalsy TypeFacts = 1 << 23` (M6 S4).
+    pub const FALSY: TypeFacts = TypeFacts(1 << 23);
     /// Go: `TypeFactsIsUndefined TypeFacts = 1 << 24`.
     pub const IS_UNDEFINED: TypeFacts = TypeFacts(1 << 24);
     /// Go: `TypeFactsIsNull TypeFacts = 1 << 25`.

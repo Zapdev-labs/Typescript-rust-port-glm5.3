@@ -2095,8 +2095,8 @@ impl Checker {
                 self.error_type()
             }
             Kind::ThisKeyword => {
-                // TODO(port M6 S4): checkThisExpression.
-                self.error_type()
+                // M6 S4: checkThisExpression (expressions.rs).
+                self.check_this_expression(node)
             }
             Kind::SuperKeyword => {
                 // TODO(port M6 S4): checkSuperExpression.
@@ -2147,9 +2147,8 @@ impl Checker {
                 self.error_type()
             }
             Kind::PropertyAccessExpression => {
-                // TODO(port M6 S4): checkPropertyAccessExpression(node, checkMode, false /*writeOnly*/).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkPropertyAccessExpression (expressions.rs).
+                self.check_property_access_expression(node, check_mode, false /*writeOnly*/)
             }
             Kind::QualifiedName => {
                 // TODO(port M6 S4): checkQualifiedName(node, checkMode).
@@ -2191,73 +2190,69 @@ impl Checker {
                 self.error_type()
             }
             Kind::TypeAssertionExpression | Kind::AsExpression => {
-                // TODO(port M6 S4): checkAssertion(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkAssertion (expressions.rs).
+                self.check_assertion(node, check_mode)
             }
             Kind::TypeOfExpression => {
-                // TODO(port M6 S4): checkTypeOfExpression.
-                self.error_type()
+                // M6 S4: checkTypeOfExpression (expressions.rs).
+                self.check_type_of_expression(node)
             }
             Kind::NonNullExpression => {
-                // TODO(port M6 S4): checkNonNullAssertion.
-                self.error_type()
+                // M6 S4: checkNonNullAssertion (expressions.rs).
+                self.check_non_null_assertion(node)
             }
             Kind::ExpressionWithTypeArguments => {
-                // TODO(port M6 S4): checkExpressionWithTypeArguments.
-                self.error_type()
+                // M6 S4: checkExpressionWithTypeArguments (expressions.rs).
+                self.check_expression_with_type_arguments(node)
             }
             Kind::SatisfiesExpression => {
-                // TODO(port M6 S4): checkSatisfiesExpression.
-                self.error_type()
+                // M6 S4: checkSatisfiesExpression (expressions.rs).
+                self.check_satisfies_expression(node)
             }
             Kind::MetaProperty => {
-                // TODO(port M6 S4): checkMetaProperty.
-                self.error_type()
+                // M6 S4: checkMetaProperty (expressions.rs).
+                self.check_meta_property(node)
             }
             Kind::DeleteExpression => {
-                // TODO(port M6 S4): checkDeleteExpression.
-                self.error_type()
+                // M6 S4: checkDeleteExpression (expressions.rs).
+                self.check_delete_expression(node)
             }
             Kind::VoidExpression => {
-                // TODO(port M6 S4): checkVoidExpression.
-                self.error_type()
+                // M6 S4: checkVoidExpression (expressions.rs).
+                self.check_void_expression(node)
             }
             Kind::AwaitExpression => {
-                // TODO(port M6 S4): checkAwaitExpression.
-                self.error_type()
+                // M6 S4: checkAwaitExpression (expressions.rs).
+                self.check_await_expression(node)
             }
             Kind::PrefixUnaryExpression => {
-                // TODO(port M6 S4): checkPrefixUnaryExpression.
-                self.error_type()
+                // M6 S4: checkPrefixUnaryExpression (expressions.rs).
+                self.check_prefix_unary_expression(node)
             }
             Kind::PostfixUnaryExpression => {
-                // TODO(port M6 S4): checkPostfixUnaryExpression.
-                self.error_type()
+                // M6 S4: checkPostfixUnaryExpression (expressions.rs).
+                self.check_postfix_unary_expression(node)
             }
             Kind::BinaryExpression => {
-                // TODO(port M6 S4): checkBinaryExpression(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkBinaryExpression (expressions.rs).
+                self.check_binary_expression(node, check_mode)
             }
             Kind::ConditionalExpression => {
-                // TODO(port M6 S4): checkConditionalExpression(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkConditionalExpression (expressions.rs).
+                self.check_conditional_expression(node, check_mode)
             }
             Kind::SpreadElement => {
-                // TODO(port M6 S4): checkSpreadExpression(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkSpreadExpression (expressions.rs).
+                self.check_spread_expression(node, check_mode)
             }
             Kind::OmittedExpression => self.undefined_widening_type(),
             Kind::YieldExpression => {
-                // TODO(port M6 S4): checkYieldExpression.
-                self.error_type()
+                // M6 S4: checkYieldExpression (expressions.rs).
+                self.check_yield_expression(node)
             }
             Kind::SyntheticExpression => {
-                // TODO(port M6 S4): checkSyntheticExpression.
-                self.error_type()
+                // M6 S4: checkSyntheticExpression (expressions.rs).
+                self.check_synthetic_expression(node)
             }
             Kind::JsxExpression => {
                 // TODO(port M6 W5): checkJsxExpression(node, checkMode) — jsx.go.
@@ -2573,7 +2568,7 @@ fn get_unique_type_parameter_name(c: &Checker, type_parameters: &[TypeId], base_
 
 /// Go: `func isConstEnumObjectType(t *Type) bool` (checker.go:28198) — an
 /// anonymous object type whose symbol is a const enum.
-fn is_const_enum_object_type(c: &Checker, t: TypeId) -> bool {
+pub(crate) fn is_const_enum_object_type(c: &Checker, t: TypeId) -> bool {
     let ty = c.type_(t);
     ty.object_flags.intersects(ObjectFlags::ANONYMOUS)
         && ty.symbol.is_some_and(|symbol| {
