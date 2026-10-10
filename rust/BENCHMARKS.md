@@ -329,3 +329,26 @@ allocator-agnostic), (2) `as_path()` String clones on the path-key hot
 paths (M1's 0.83× RootedFilePathToPathKey note), (3) the text
 double-copy (vfs read_file's owned String + the parser's stored copy —
 Go shares immutable strings).
+
+**2026-10-10 18:19 — ALLOCATOR EXPERIMENT (perf lead 1, landed as an
+optional bench-harness feature).** `--features mimalloc` swaps the bench
+binary's global allocator (mimalloc 0.1, `#[global_allocator]` gated in
+main.rs; the port crates stay allocator-agnostic; default builds use the
+system allocator untouched). Output is byte-identical to the default
+build (cmp of the per-root NDJSON, local + rig).
+
+| variant | rig wall median | rig peak RSS | vs go (3.325 s / 125 MB) |
+|---|---|---|---|
+| default (glibc) | 5.562 s | 357 MB | 1.673× / 2.85× |
+| mimalloc | **4.696 s** | 299 MB | **1.412×** / 2.39× |
+
+Medians of 5, quiet rig (load ~1.1), same tree. Wall 0.844× of the
+default build (−15.6%); the workstation A/B was even stronger (7.00 →
+5.50 s, 0.786×, RSS 647 → 264 MB). The parse phase is allocator-neutral
+(micro-runs are a wash; mimalloc reserves arenas so tiny-run RSS triples
+— irrelevant at scale). Decision pending: whether official Phase B runs
+enable the feature (Go ships a tcmalloc-class allocator, so an allocator
+choice on the Rust side is legitimate engineering, but it must be
+declared in the record either way). The remaining ~1.41× is
+parse-dominated per the phase split (program 3.1 vs 2.2 s, bind 1.9 vs
+1.1 s).

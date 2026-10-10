@@ -13,17 +13,16 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[features]
+mimalloc = ["dep:mimalloc"]
+
+[dependencies]
 # Allocator hardening lever (BENCHMARKS.md Phase B findings, 2026-10-09/10):
 # the program/bind phases are allocation-heavy and glibc malloc trails Go's
 # tcmalloc-class allocator. Enabled ONLY for the bench binary — the port
 # crates stay allocator-agnostic. Off by default; the official default-build
 # numbers use the system allocator.
 mimalloc = { version = "0.1", optional = true }
-
-[features]
-mimalloc = ["dep:mimalloc"]
-
-[dependencies]
 tsc-tspath = { path = "../tspath" }
 tsc-jsnum = { path = "../jsnum" }
 tsc-core = { path = "../core" }
