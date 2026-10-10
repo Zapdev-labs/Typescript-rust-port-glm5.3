@@ -275,6 +275,24 @@ root, target esnext — 96-entry default lib set parsed per program).**
 | 2026-10-09 | (pre) sequential binds | program+bind | 7.47 s | 3.43 s | 2.18× |
 | 2026-10-09 | parallel binds + collectFiles fix | program+bind | 6.50 s | 3.44 s | 1.89× |
 
+**2026-10-10 18:13 — RIG-OFFICIAL RUN (quiet rig, same drivers as the
+official Phase A run, 89308a375b; medians of 5, `program --corpus
+packages/typescript/src`):**
+
+| date | git (rust) | phase | rust | go | rust/go | peak RSS rust/go |
+|---|---|---|---|---|---|---|
+| 2026-10-10 | 89308a375b | program+bind | 5.562 s | 3.325 s | **1.673×** | 357 / 125 MB (**2.85×**) |
+
+The program twin is byte-identical on the rig (TWIN-IDENTICAL, cmp of the
+per-root NDJSON). The rig number (1.673×) is better than the workstation's
+1.89× — the same parallel-binds + collectFiles tree. **RSS finding: the
+program-build phase retains 2.85× Go's memory (357 vs 125 MB peak)** — the
+opposite of the parse phase (Rust at HALF of Go there), pointing at the
+program/bind arenas (per-program node/string storage retained across the
+125 roots; Go frees per program via GC). An RSS-hardening lever for the
+next pass: release per-root arenas before the next root (Rust holds all
+125 programs' retained structures; Go's GC reclaims between roots).
+
 Phase split (env `TSC_BENCH_PROFILE=1`, both drivers instrumented
 identically, medians of repeated runs): seed 52 ms / config 6 ms /
 program 3121 ms / bind 1900 ms / record 20 ms (rust) vs seed 112 ms /
