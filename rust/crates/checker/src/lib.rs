@@ -119,6 +119,7 @@ macro_rules! define_flags {
 pub mod ast_shims;
 pub mod checker;
 pub mod exports;
+pub mod expressions;
 pub mod inference;
 pub mod jsdoc;
 pub mod links;

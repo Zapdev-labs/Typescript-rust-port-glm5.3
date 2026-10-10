@@ -1900,21 +1900,8 @@ impl Feature {
 // ────────────────────────────────────────────────────────────────────────────
 
 impl Checker {
-    /// Go: `func (c *Checker) checkTruthinessExpression(node, checkMode) *Type`
-    /// (checker.go:11179). The spine is S1's; the `checkTruthinessOfType`
-    /// tail is S4 — TODO(port M6 S4): the real truthiness facts narrowing.
-    pub(crate) fn check_truthiness_expression(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
-        let t = self.check_expression_ex(node, check_mode);
-        self.check_truthiness_of_type(t, node)
-    }
-
-    /// Go: `func (c *Checker) checkTruthinessOfType(t, node) *Type`
-    /// (checker.go:13109 — S4). Permissive: the type passes through
-    /// unchanged (no truthiness narrowing until S4/W3).
-    pub(crate) fn check_truthiness_of_type(&mut self, t: TypeId, node: NodeId) -> TypeId {
-        let _ = node;
-        t
-    }
+    // (checkTruthinessExpression/checkTruthinessOfType/checkReferenceExpression
+    // moved to expressions.rs — the M6 S4 slice owns their line ranges.)
 
     /// Go: `func (c *Checker) getSymbolAtLocation(node, ignoreErrors) *ast.Symbol`
     /// (checker.go:32147 — S10's getSymbolOfNode resolution). Permissive
@@ -1956,18 +1943,6 @@ impl Checker {
     /// context machinery is the emit wave's).
     pub(crate) fn check_external_emit_helpers_stub(&mut self, node: NodeId, helpers: ExternalEmitHelpers) {
         let _ = (node, helpers);
-    }
-
-    /// Go: `func (c *Checker) checkReferenceExpression(expr, invalidReferenceMessage, invalidOptionalChainMessage) bool`
-    /// (checker.go:13374 — S4). Permissive true (valid reference).
-    pub(crate) fn check_reference_expression(
-        &mut self,
-        expr: NodeId,
-        invalid_reference_message: &'static Message,
-        invalid_optional_chain_message: &'static Message,
-    ) -> bool {
-        let _ = (expr, invalid_reference_message, invalid_optional_chain_message);
-        true
     }
 
     /// Go: `func (c *Checker) checkAwaitedType(t, withAlias, errorNode, message)`
