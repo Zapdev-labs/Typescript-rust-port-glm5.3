@@ -98,9 +98,26 @@ load-independent and authoritative.
 | 2026-10-08 | f3870978d9 | 1 | 329.3 | 313.3 (loaded) | 1.051 | 18.9/37.2 MB | 24.1 | 487377d6e977e9ef ✓ |
 | 2026-10-08 | f3870978d9 | 16 | 89.3 | 141.9 (loaded) | 0.629 | 43.6/77.3 MB | 88.7 | 487377d6e977e9ef ✓ |
 
-threads=16: Rust is already **1.59× faster** than Go (89.3 vs 141.9 ms) and
-scales better (5.71× vs 2.21× single→16-thread). The hardening gap is
-single-threaded (~374 vs ~355 ns/node under contention).
+**2026-10-10 17:42 — OFFICIAL QUIET-RIG RUN (the syzkaller campaign ended;
+load avg 1.57 on 16 cores). `bench-parse.sh --samples 10`, both drivers
+release-built from the same tree (rust 89308a375b), medians of 10:**
+
+| date | git (rust) | threads | wall median (rust) | wall median (go) | rust/go | RSS rust/go | MB/s rust | shape_hash |
+|---|---|---|---|---|---|---|---|---|
+| 2026-10-10 | 89308a375b | 1 | 174.3 | 139.9 | **1.246** | 20.1/40.3 MB | 45.5 | 487377d6e977e9ef ✓ MATCH |
+| 2026-10-10 | 89308a375b | 16 | 28.6 | 33.4 | **0.855** | 43.8/79.7 MB | 277.5 | 487377d6e977e9ef ✓ MATCH |
+
+The official verdict **supersedes the loaded-run numbers**: contention had
+flattered the ratio — quiet Go is much faster single-threaded (139.9 ms vs
+313.3 loaded / 254.5 the day-one lock; the box's day-one state likely also
+carried background load). The honest state: **FIRST GREEN (1.246× ≤ 1.30×)
+at t=1; Rust 1.17× FASTER at t=16 (0.855×); peak RSS HALF of Go's at both
+thread counts (20 vs 40 MB, 44 vs 80 MB)**. The hardening target ≤1.00× at
+t=1 has a real ~25% single-thread gap on this JSX-heavy corpus (≈198 vs
+159 ns/node) — the multi-corpus numbers below (type-fest 0.743×, vite
+0.835×, zod 1.003×) were also loaded-rig provisionals and need quiet re-
+measurement before being quoted as final. Raw outputs: rig
+`~/bench-results/phaseA/`.
 
 ### Multi-corpus parity (real-world codebases)
 
