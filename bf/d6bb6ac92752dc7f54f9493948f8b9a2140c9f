@@ -1,0 +1,19 @@
+rust/BENCHMARKS.md
+  s_c760161dda2d19::t_aa3022c19eadd7 137-154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "bfd6bb6ac92752dc7f54f9493948f8b9a2140c9f",
+  "prompts": {},
+  "sessions": {
+    "s_c760161dda2d19": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "e48660fc-43c1-451f-9234-7c7ba6128c6a",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
