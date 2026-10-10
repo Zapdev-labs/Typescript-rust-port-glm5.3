@@ -1975,10 +1975,10 @@ impl Checker {
             && self.check_type_comparable_to(target, source, None, None)
     }
 
-    /// Go: `func (c *Checker) getResolvedSymbolOrNil(node)` — S6's
-    /// resolveName seam; the exports.rs method is the permissive carrier.
+    /// Go: `func (c *Checker) getResolvedSymbolOrNil(node) *ast.Symbol`
+    /// (checker.go:14175) — the link reader only (no resolution).
     pub(crate) fn get_resolved_symbol_nil(&mut self, node: NodeId) -> Option<SymbolId> {
-        self.get_resolved_symbol(node)
+        self.symbol_node_links.get(node).resolved_symbol
     }
 
     /// Go: `func (c *Checker) isReachableFlowNode(flowNode) bool` (flow.go —

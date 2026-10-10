@@ -2225,7 +2225,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkDeclarationInitializer(declaration, checkMode, contextualType) *Type`.
-    fn check_declaration_initializer(
+    pub(crate) fn check_declaration_initializer(
         &mut self,
         declaration: NodeId,
         check_mode: CheckMode,
@@ -2457,7 +2457,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getBindingElementTypeFromParentType(declaration, parentType, noTupleBoundsCheck) *Type`.
-    fn get_binding_element_type_from_parent_type(
+    pub(crate) fn get_binding_element_type_from_parent_type(
         &mut self,
         declaration: NodeId,
         mut parent_type: TypeId,

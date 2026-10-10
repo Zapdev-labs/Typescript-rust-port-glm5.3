@@ -2086,9 +2086,8 @@ impl Checker {
         let kind = self.store().node(node).kind;
         match kind {
             Kind::Identifier => {
-                // TODO(port M6 S4): checkIdentifier(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkIdentifier (expressions.rs, tranche 2).
+                self.check_identifier(node, check_mode)
             }
             Kind::PrivateIdentifier => {
                 // TODO(port M6 S4): checkPrivateIdentifierExpression.
@@ -2099,8 +2098,8 @@ impl Checker {
                 self.check_this_expression(node)
             }
             Kind::SuperKeyword => {
-                // TODO(port M6 S4): checkSuperExpression.
-                self.error_type()
+                // M6 S4: checkSuperExpression (expressions.rs, tranche 2).
+                self.check_super_expression(node)
             }
             Kind::NullKeyword => self.null_widening_type(),
             Kind::StringLiteral | Kind::NoSubstitutionTemplateLiteral => {
@@ -2129,17 +2128,16 @@ impl Checker {
             Kind::TrueKeyword => self.true_type(),
             Kind::FalseKeyword => self.false_type(),
             Kind::TemplateExpression => {
-                // TODO(port M6 S4): checkTemplateExpression.
-                self.error_type()
+                // M6 S4: checkTemplateExpression (expressions.rs, tranche 2).
+                self.check_template_expression(node)
             }
             Kind::RegularExpressionLiteral => {
-                // TODO(port M6 S4): checkRegularExpressionLiteral.
-                self.error_type()
+                // M6 S4: checkRegularExpressionLiteral (expressions.rs, tranche 2).
+                self.check_regular_expression_literal(node)
             }
             Kind::ArrayLiteralExpression => {
-                // TODO(port M6 S4): checkArrayLiteral(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkArrayLiteral (expressions.rs, tranche 2).
+                self.check_array_literal(node, check_mode)
             }
             Kind::ObjectLiteralExpression => {
                 // TODO(port M6 S4): checkObjectLiteral(node, checkMode).
@@ -2151,14 +2149,12 @@ impl Checker {
                 self.check_property_access_expression(node, check_mode, false /*writeOnly*/)
             }
             Kind::QualifiedName => {
-                // TODO(port M6 S4): checkQualifiedName(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkQualifiedName (expressions.rs, tranche 2).
+                self.check_qualified_name(node, check_mode)
             }
             Kind::ElementAccessExpression => {
-                // TODO(port M6 S4): checkIndexedAccess(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkIndexedAccess (expressions.rs, tranche 2).
+                self.check_indexed_access(node, check_mode)
             }
             Kind::CallExpression => {
                 // TODO(port M6 S4): IsImportCall(node) → checkImportCallExpression;
@@ -2172,13 +2168,13 @@ impl Checker {
                 self.error_type()
             }
             Kind::TaggedTemplateExpression => {
-                // TODO(port M6 S4): checkTaggedTemplateExpression.
-                self.error_type()
+                // M6 S4: checkTaggedTemplateExpression (expressions.rs,
+                // tranche 2 — S6's resolveSignature seam inside).
+                self.check_tagged_template_expression(node)
             }
             Kind::ParenthesizedExpression => {
-                // TODO(port M6 S4): checkParenthesizedExpression(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkParenthesizedExpression (expressions.rs, tranche 2).
+                self.check_parenthesized_expression(node, check_mode)
             }
             Kind::ClassExpression => {
                 // TODO(port M6 S4): checkClassExpression.
@@ -2304,7 +2300,7 @@ impl Checker {
     /// Go: `func (c *Checker) instantiateContextualType(contextualType, node, contextFlags) *Type`
     /// (checker.go:31366). TODO(port M6 S9): identity for non-generic
     /// contextual types; permissive pass-through.
-    fn instantiate_contextual_type_stub(
+    pub(crate) fn instantiate_contextual_type_stub(
         &mut self,
         contextual_type: Option<TypeId>,
         node: NodeId,

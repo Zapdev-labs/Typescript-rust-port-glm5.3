@@ -114,11 +114,48 @@ use tsc_diagnostics::{
     X_THIS_CANNOT_BE_REFERENCED_IN_A_MODULE_OR_NAMESPACE_BODY,
     X_THIS_IMPLICITLY_HAS_TYPE_ANY_BECAUSE_IT_DOES_NOT_HAVE_A_TYPE_ANNOTATION,
     X_YIELD_EXPRESSION_IMPLICITLY_RESULTS_IN_AN_ANY_TYPE_BECAUSE_ITS_CONTAINING_GENERATOR_LACKS_A_RETURN_TYPE_ANNOTATION,
+    // tranche 2
+    A_CONST_ENUM_MEMBER_CAN_ONLY_BE_ACCESSED_USING_A_STRING_LITERAL,
+    CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_CLASS, CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_CONSTANT,
+    CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_FUNCTION, CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_NAMESPACE,
+    CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_AN_ENUM, CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_AN_IMPORT,
+    CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_NOT_A_VARIABLE,
+    IMPLICIT_CONVERSION_OF_A_SYMBOL_TO_A_STRING_WILL_FAIL_AT_RUNTIME_CONSIDER_WRAPPING_THIS_EXPRESSION_IN_STRING,
+    INDEX_SIGNATURE_IN_TYPE_0_ONLY_PERMITS_READING,
+    NO_VALUE_EXISTS_IN_SCOPE_FOR_THE_SHORTHAND_PROPERTY_0_EITHER_DECLARE_ONE_OR_PROVIDE_AN_INITIALIZER,
+    OBJECT_LITERAL_MAY_ONLY_SPECIFY_KNOWN_PROPERTIES_AND_0_DOES_NOT_EXIST_IN_TYPE_1,
+    PRIVATE_OR_PROTECTED_MEMBER_0_CANNOT_BE_ACCESSED_ON_A_TYPE_PARAMETER,
+    SPREAD_TYPES_MAY_ONLY_BE_CREATED_FROM_OBJECT_TYPES,
+    SUPER_CALLS_ARE_NOT_PERMITTED_OUTSIDE_CONSTRUCTORS_OR_IN_NESTED_FUNCTIONS_INSIDE_CONSTRUCTORS,
+    CANNOT_FIND_NAME_0, CANNOT_FIND_NAME_0_DID_YOU_MEAN_TO_WRITE_THIS_IN_AN_ASYNC_FUNCTION,
+    CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_CHANGE_YOUR_TARGET_LIBRARY_TRY_CHANGING_THE_LIB_COMPILER_OPTION_TO_1_OR_LATER,
+    CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_CHANGE_YOUR_TARGET_LIBRARY_TRY_CHANGING_THE_LIB_COMPILER_OPTION_TO_INCLUDE_DOM,
+    CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_A_TEST_RUNNER_TRY_NPM_I_SAVE_DEV_TYPES_SLASHJEST_OR_NPM_I_SAVE_DEV_TYPES_SLASHMOCHA,
+    CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_A_TEST_RUNNER_TRY_NPM_I_SAVE_DEV_TYPES_SLASHJEST_OR_NPM_I_SAVE_DEV_TYPES_SLASHMOCHA_AND_THEN_ADD_JEST_OR_MOCHA_TO_THE_TYPES_FIELD_IN_YOUR_TSCONFIG,
+    CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_BUN_TRY_NPM_I_SAVE_DEV_TYPES_SLASHBUN,
+    CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_BUN_TRY_NPM_I_SAVE_DEV_TYPES_SLASHBUN_AND_THEN_ADD_BUN_TO_THE_TYPES_FIELD_IN_YOUR_TSCONFIG,
+    CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_JQUERY_TRY_NPM_I_SAVE_DEV_TYPES_SLASHJQUERY,
+    CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_JQUERY_TRY_NPM_I_SAVE_DEV_TYPES_SLASHJQUERY_AND_THEN_ADD_JQUERY_TO_THE_TYPES_FIELD_IN_YOUR_TSCONFIG,
+    CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_NODE_TRY_NPM_I_SAVE_DEV_TYPES_SLASHNODE,
+    CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_NODE_TRY_NPM_I_SAVE_DEV_TYPES_SLASHNODE_AND_THEN_ADD_NODE_TO_THE_TYPES_FIELD_IN_YOUR_TSCONFIG,
+    THIS_SPREAD_ALWAYS_OVERWRITES_THIS_PROPERTY,
+    TYPE_0_CANNOT_BE_USED_TO_INDEX_TYPE_1,
+    VARIABLE_0_IMPLICITLY_HAS_AN_1_TYPE,
+    VARIABLE_0_IMPLICITLY_HAS_TYPE_1_IN_SOME_LOCATIONS_WHERE_ITS_TYPE_CANNOT_BE_DETERMINED,
+    VARIABLE_0_IS_USED_BEFORE_BEING_ASSIGNED,
+    X_0_IS_SPECIFIED_MORE_THAN_ONCE_SO_THIS_USAGE_WILL_BE_OVERWRITTEN,
+    X_ARGUMENTS_CANNOT_BE_REFERENCED_IN_PROPERTY_INITIALIZERS_OR_CLASS_STATIC_INITIALIZATION_BLOCKS,
+    X_SUPER_CAN_ONLY_BE_REFERENCED_IN_A_DERIVED_CLASS,
+    X_SUPER_CAN_ONLY_BE_REFERENCED_IN_MEMBERS_OF_DERIVED_CLASSES_OR_OBJECT_LITERAL_EXPRESSIONS,
+    X_SUPER_CANNOT_BE_REFERENCED_IN_A_COMPUTED_PROPERTY_NAME,
+    X_SUPER_CANNOT_BE_REFERENCED_IN_CONSTRUCTOR_ARGUMENTS,
+    X_SUPER_MUST_BE_CALLED_BEFORE_ACCESSING_A_PROPERTY_OF_SUPER_IN_THE_CONSTRUCTOR_OF_A_DERIVED_CLASS,
+    X_SUPER_PROPERTY_ACCESS_IS_PERMITTED_ONLY_IN_A_CONSTRUCTOR_MEMBER_FUNCTION_OR_MEMBER_ACCESSOR_OF_A_DERIVED_CLASS,
 };
 
 use crate::checker::CheckMode;
-use crate::relater::{self, TypeFacts};
-use crate::types::{TypeFlags, TypeId};
+use crate::relater::{self, MappedTypeModifiers, TypeFacts};
+use crate::types::{ObjectFlags, TypeFlags, TypeId};
 use crate::utilities as u;
 use crate::Checker;
 
@@ -3866,6 +3903,7 @@ pub(crate) enum ReferenceHint {
     #[allow(dead_code)]
     NONE,
     PROPERTY,
+    IDENTIFIER,
 }
 
 /// Go: `func IsWriteAccess(node) bool` (ast/utilities.go) —
@@ -4181,4 +4219,1875 @@ fn has_this_parameter(c: &Checker, fn_node: NodeId) -> bool {
             let name = c.store().node(p).name();
             matches!(name, Some(id) if tsc_ast::node_text(c.store(), id) == "this")
         })
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// M6 S4 tranche 2 — super / template / regex / tagged-template /
+// qualified-name / parenthesized / indexed-access / array-literal leaves
+// (checker.go 8039-8460 + 10259-10292).
+// ────────────────────────────────────────────────────────────────────────────
+
+impl Checker {
+    /// Go: `func (c *Checker) checkSuperExpression(node) *Type` (checker.go:8056).
+    pub(crate) fn check_super_expression(&mut self, node: NodeId) -> TypeId {
+        let parent = self.store().node(node).parent.get();
+        let is_call_expression = tsc_ast::is_call_expression(self.store().node(parent))
+            && crate::ast_shims::expression_of(self.store(), parent) == Some(node);
+        let immediate_container = u::get_super_container(self.store(), node, true /*stopOnFunctions*/);
+        let mut container = immediate_container;
+
+        // adjust the container reference in case if super is used inside arrow
+        // functions with arbitrarily deep nesting
+        if !is_call_expression {
+            while let Some(c) = container
+                && tsc_ast::is_arrow_function(self.store().node(c))
+            {
+                container = u::get_super_container(self.store(), c, true /*stopOnFunctions*/);
+            }
+        }
+
+        let container_ok = container.is_some_and(|c| {
+            is_legal_usage_of_super(self.store(), c, is_call_expression)
+        });
+
+        if !container_ok {
+            // issue more specific error if super is used in computed property name
+            // class A { foo() { return "1" }}
+            // class B {
+            //     [super.foo()]() {}
+            // }
+            // PORT: Go's FindAncestorOrQuit(node, quit-at-container,
+            // true-at-computed-property-name) as an explicit walk (the
+            // ancestor ids are compared, not the &Node payloads).
+            let mut current: Option<NodeId> = None;
+            let mut n = node;
+            loop {
+                if Some(n) == container {
+                    break;
+                }
+                let nn = self.store().node(n);
+                if nn.kind == Kind::ComputedPropertyName {
+                    current = Some(n);
+                    break;
+                }
+                let p = nn.parent.get();
+                if p.is_none() {
+                    break;
+                }
+                n = p;
+            }
+            let container_parent = container
+                .map(|c| self.store().node(c).parent.get())
+                .unwrap_or(NodeId::NONE);
+            if current.is_some() {
+                self.error(node, &X_SUPER_CANNOT_BE_REFERENCED_IN_A_COMPUTED_PROPERTY_NAME, &[]);
+            } else if is_call_expression {
+                self.error(
+                    node,
+                    &SUPER_CALLS_ARE_NOT_PERMITTED_OUTSIDE_CONSTRUCTORS_OR_IN_NESTED_FUNCTIONS_INSIDE_CONSTRUCTORS,
+                    &[],
+                );
+            } else if container.is_none()
+                || container_parent.is_none()
+                || !(crate::statements::is_class_like(self.store(), container_parent)
+                    || self.store().node(container_parent).kind == Kind::ObjectLiteralExpression)
+            {
+                self.error(
+                    node,
+                    &X_SUPER_CAN_ONLY_BE_REFERENCED_IN_MEMBERS_OF_DERIVED_CLASSES_OR_OBJECT_LITERAL_EXPRESSIONS,
+                    &[],
+                );
+            } else {
+                self.error(
+                    node,
+                    &X_SUPER_PROPERTY_ACCESS_IS_PERMITTED_ONLY_IN_A_CONSTRUCTOR_MEMBER_FUNCTION_OR_MEMBER_ACCESSOR_OF_A_DERIVED_CLASS,
+                    &[],
+                );
+            }
+            return self.error_type();
+        }
+        let container = container.expect("checked is_some above");
+        if !is_call_expression && self.store().node(container).kind == Kind::Constructor {
+            self.check_this_before_super(
+                node,
+                container,
+                &X_SUPER_MUST_BE_CALLED_BEFORE_ACCESSING_A_PROPERTY_OF_SUPER_IN_THE_CONSTRUCTOR_OF_A_DERIVED_CLASS,
+            );
+        }
+        let class_like_declaration = self.store().node(container).parent.get();
+        if self.store().node(class_like_declaration).kind == Kind::ObjectLiteralExpression {
+            // for object literal assume that type of 'super' is 'any'
+            return self.any_type();
+        }
+        // at this point the only legal case for parent is ClassLikeDeclaration
+        if crate::statements::get_class_extends_heritage_element(
+            self.store(),
+            class_like_declaration,
+        )
+        .is_none()
+        {
+            self.error(node, &X_SUPER_CAN_ONLY_BE_REFERENCED_IN_A_DERIVED_CLASS, &[]);
+            return self.error_type();
+        }
+        if self.class_declaration_extends_null(class_like_declaration) {
+            if is_call_expression {
+                return self.error_type();
+            }
+            return self.null_widening_type();
+        }
+        let class_symbol = match self.get_symbol_of_declaration(class_like_declaration) {
+            Some(s) => s,
+            // PORT: Go asserts the class-like has a symbol; a binder-less
+            // node answers Go's errorType shape.
+            None => return self.error_type(),
+        };
+        let class_type = self.get_declared_type_of_symbol(class_symbol);
+        let base_class_type = self.get_base_types(class_type).into_iter().next();
+        let Some(base_class_type) = base_class_type else {
+            return self.error_type();
+        };
+        if self.store().node(container).kind == Kind::Constructor
+            && self.is_in_constructor_argument_initializer(node, container)
+        {
+            // issue custom error message for super property access in constructor arguments (to be aligned with old compiler)
+            self.error(node, &X_SUPER_CANNOT_BE_REFERENCED_IN_CONSTRUCTOR_ARGUMENTS, &[]);
+            return self.error_type();
+        }
+        if tsc_binder::ast_shims::is_static(self.store().node(container)) || is_call_expression {
+            if !is_call_expression
+                && self.language_version
+                    <= tsc_core::options_generated::ScriptTarget::ES2021
+                && matches!(
+                    self.store().node(container).kind,
+                    Kind::PropertyDeclaration | Kind::ClassStaticBlockDeclaration
+                )
+            {
+                // for `super.x` or `super[x]` in a static initializer, mark all
+                // enclosing block scope containers so that we can report potential
+                // collisions with `Reflect`.
+                // TODO(port M6 W3): GetEnclosingBlockScopeContainer walk +
+                // the ContainsSuperPropertyInStaticInitializer flag (the
+                // grammarchecks consumer is W3's); permissive skip.
+            }
+            return self.get_base_constructor_type_of_class(class_type);
+        }
+        let this_arg = self
+            .type_(class_type)
+            .as_interface_type()
+            .and_then(|d| d.this_type)
+            .unwrap_or(base_class_type);
+        relater::get_type_with_this_argument(self, base_class_type, this_arg, false)
+    }
+
+    /// Go: `func (c *Checker) isInConstructorArgumentInitializer(node, constructorDecl) bool`
+    /// (checker.go:8199).
+    pub(crate) fn is_in_constructor_argument_initializer(
+        &self,
+        node: NodeId,
+        constructor_decl: NodeId,
+    ) -> bool {
+        crate::ast_shims::find_ancestor_or_quit(self.store(), node, &mut |n| {
+            if tsc_ast::is_function_like(n) {
+                crate::ast_shims::FindAncestorResult::Quit
+            } else if n.kind == Kind::Parameter && n.parent.get() == constructor_decl {
+                crate::ast_shims::FindAncestorResult::True
+            } else {
+                crate::ast_shims::FindAncestorResult::False
+            }
+        })
+        .is_some()
+    }
+
+    /// Go: `func (c *Checker) classDeclarationExtendsNull(classDecl) bool` (checker.go:12519).
+    pub(crate) fn class_declaration_extends_null(&mut self, class_decl: NodeId) -> bool {
+        let class_symbol = match self.get_symbol_of_declaration(class_decl) {
+            Some(s) => s,
+            None => return false,
+        };
+        let class_instance_type = self.get_declared_type_of_symbol(class_symbol);
+        let base_constructor_type = self.get_base_constructor_type_of_class(class_instance_type);
+        base_constructor_type == self.null_widening_type()
+    }
+
+    /// Go: `func (c *Checker) checkTemplateExpression(node) *Type` (checker.go:8145).
+    pub(crate) fn check_template_expression(&mut self, node: NodeId) -> TypeId {
+        let (head, spans) = {
+            let d = self
+                .store()
+                .node(node)
+                .as_template_expression()
+                .expect("TemplateExpression data");
+            (d.head, d.template_spans.clone())
+        };
+        let length = spans.as_ref().map(|l| l.nodes.len()).unwrap_or(0);
+        let mut texts: Vec<String> = Vec::with_capacity(length + 1);
+        let mut types: Vec<TypeId> = Vec::with_capacity(length);
+        texts.push(tsc_ast::node_text(self.store(), head).to_string());
+        for span in spans.iter().flat_map(|l| l.nodes.iter().copied()) {
+            let (expression, literal) = {
+                let d = self
+                    .store()
+                    .node(span)
+                    .as_template_span()
+                    .expect("TemplateSpan data");
+                (d.expression, d.literal)
+            };
+            let t = self.check_expression(expression);
+            if self.maybe_type_of_kind_considering_base_constraint(
+                t,
+                TypeFlags::ESSYMBOL_LIKE,
+            ) {
+                self.error(
+                    expression,
+                    &IMPLICIT_CONVERSION_OF_A_SYMBOL_TO_A_STRING_WILL_FAIL_AT_RUNTIME_CONSIDER_WRAPPING_THIS_EXPRESSION_IN_STRING,
+                    &[],
+                );
+            }
+            texts.push(tsc_ast::node_text(self.store(), literal).to_string());
+            let constrained = {
+                let constraint = self.template_constraint_type();
+                self.is_type_assignable_to(t, constraint)
+            };
+            types.push(if constrained { t } else { self.string_type() });
+        }
+        // Go: the evaluate() constant-folding probe (S10's evaluator).
+        let evaluated: Option<String> = {
+            let parent = self.store().node(node).parent.get();
+            if self.store().node(parent).kind != Kind::TaggedTemplateExpression {
+                // TODO(port M6 S10): the evaluate() fold; permissive none
+                // (Go's answer when the fold yields no value).
+                None
+            } else {
+                None
+            }
+        };
+        if let Some(value) = evaluated {
+            let literal = self.get_string_literal_type(&value);
+            return self.get_fresh_type_of_literal_type(literal);
+        }
+        let contextual = self
+            .get_contextual_type_stub(node, crate::types::ContextFlags::NONE)
+            .unwrap_or_else(|| self.unknown_type());
+        // Go: someType(contextualType, isTemplateLiteralContextualType) —
+        // PORT: the constituent walk inlined (the closure captures &mut self).
+        let is_contextual_template = if self.type_(contextual).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+            let constituents = self.type_(contextual).types().to_vec();
+            constituents
+                .iter()
+                .any(|&t| self.is_template_literal_contextual_type(t))
+        } else {
+            self.is_template_literal_contextual_type(contextual)
+        };
+        if self.is_const_context(node)
+            || self.is_template_literal_context(node)
+            || is_contextual_template
+        {
+            return relater::get_template_literal_type(self, &texts, &types);
+        }
+        self.string_type()
+    }
+
+    /// Go: `func (c *Checker) isTemplateLiteralContext(node) bool` (checker.go:8169).
+    pub(crate) fn is_template_literal_context(&self, node: NodeId) -> bool {
+        let parent = self.store().node(node).parent.get();
+        if self.store().node(parent).kind == Kind::ParenthesizedExpression {
+            self.is_template_literal_context(parent)
+        } else if self.store().node(parent).kind == Kind::ElementAccessExpression
+            && self
+                .store()
+                .node(parent)
+                .as_element_access_expression()
+                .expect("ElementAccessExpression data")
+                .argument_expression
+                == node
+        {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Go: `func (c *Checker) isTemplateLiteralContextualType(t) bool` (checker.go:8173).
+    pub(crate) fn is_template_literal_contextual_type(&mut self, t: TypeId) -> bool {
+        let flags = self.type_(t).flags;
+        if flags.intersects(TypeFlags::STRING_LITERAL.union(TypeFlags::TEMPLATE_LITERAL)) {
+            return true;
+        }
+        if flags.intersects(TypeFlags::INSTANTIABLE_NON_PRIMITIVE) {
+            let constraint =
+                relater::get_base_constraint_of_type(self, t).unwrap_or_else(|| self.unknown_type());
+            return relater::maybe_type_of_kind(self, constraint, TypeFlags::STRING_LIKE);
+        }
+        false
+    }
+
+    /// Go: the `templateConstraintType` field (checker.go's initializeChecker —
+    /// `getUnionType([stringType, numberType, booleanType, bigintType,
+    /// nullType, undefinedType])`).
+    /// TODO(port M6 S7): the union constructor; string_type is the permissive
+    /// stand-in (string is the only constituent the template spans can hit
+    /// at this depth).
+    fn template_constraint_type(&mut self) -> TypeId {
+        // TODO(port M6 S7): templateConstraintType.
+        self.string_type()
+    }
+
+    /// Go: `func (c *Checker) maybeTypeOfKindConsideringBaseConstraint(t, kind) bool`
+    /// (checker.go:26023 region). REAL body.
+    pub(crate) fn maybe_type_of_kind_considering_base_constraint(
+        &mut self,
+        t: TypeId,
+        kind: TypeFlags,
+    ) -> bool {
+        if relater::maybe_type_of_kind(self, t, kind) {
+            return true;
+        }
+        let base_constraint = relater::get_base_constraint_or_type(self, t);
+        base_constraint != self.never_type()
+            && relater::maybe_type_of_kind(self, base_constraint, kind)
+    }
+
+    /// Go: `func (c *Checker) checkRegularExpressionLiteral(node) *Type` (checker.go:8185).
+    pub(crate) fn check_regular_expression_literal(&mut self, node: NodeId) -> TypeId {
+        if !self
+            .node_links
+            .get(node)
+            .flags
+            .intersects(crate::types::NodeCheckFlags::TYPE_CHECKED)
+        {
+            self.node_links.get(node).flags |= crate::types::NodeCheckFlags::TYPE_CHECKED;
+            // TODO(port M6 W3): checkGrammarRegularExpressionLiteral — the
+            // scanner-level regex diagnostics (grammarchecks.go).
+            let _ = self
+                .store()
+                .node(node)
+                .as_regular_expression_literal()
+                .expect("RegularExpressionLiteral data");
+        }
+        self.global_regexp_type.expect("globalRegExpType")
+    }
+
+    /// Go: `func (c *Checker) checkTaggedTemplateExpression(node) *Type` (checker.go:10259).
+    pub(crate) fn check_tagged_template_expression(&mut self, node: NodeId) -> TypeId {
+        // Go: checkGrammarTaggedTemplateChain / checkGrammarTypeArguments —
+        // TODO(port M6 W3): the optional-chain grammar family; permissive.
+        let _ = self
+            .store()
+            .node(node)
+            .as_tagged_template_expression()
+            .expect("TaggedTemplateExpression data");
+        // TODO(port M6 S6): getResolvedSignature(node, nil, CheckModeNormal)
+        // — resolveTaggedTemplate shares S6's overload-resolution engine;
+        // the seam composes Go's errorSignature shape (silent-never return).
+        let signature = self.get_resolved_signature_stub(node, None, CheckMode::CHECK_MODE_NORMAL);
+        self.check_deprecated_signature(signature, node);
+        match signature {
+            Some(sig) => self.get_return_type_of_signature(sig),
+            // Go: the error call's return type (errorType at this depth).
+            None => self.error_type(),
+        }
+    }
+
+    /// Go: `func (c *Checker) checkDeprecatedSignature(sig, node)` (checker.go:8571).
+    ///
+    /// TODO(port M6 S6): the deprecation family (isDeprecatedSymbol /
+    /// addDeprecatedSuggestionWithSignature — the @deprecated JSDoc walk);
+    /// permissive no-op (diagnostics-neutral).
+    pub(crate) fn check_deprecated_signature(
+        &mut self,
+        sig: Option<crate::types::SignatureId>,
+        node: NodeId,
+    ) {
+        // TODO(port M6 S6): isDeprecatedDeclaration on the signature's
+        // declaration + addDeprecatedSuggestionWithSignature.
+        let _ = (sig, node);
+    }
+
+    /// Go: `func (c *Checker) checkParenthesizedExpression(node, checkMode) *Type`
+    /// (checker.go:10269).
+    pub(crate) fn check_parenthesized_expression(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
+        let expression = crate::ast_shims::expression_of(self.store(), node)
+            .expect("ParenthesizedExpression has an expression");
+        self.check_expression_ex(expression, check_mode)
+    }
+
+    /// Go: `func (c *Checker) checkQualifiedName(node, checkMode) *Type` (checker.go:8328).
+    pub(crate) fn check_qualified_name(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
+        let (left, right) = {
+            let d = self
+                .store()
+                .node(node)
+                .as_qualified_name()
+                .expect("QualifiedName data");
+            (d.left, d.right)
+        };
+        let left_type = if u::is_in_type_query(self.store(), node)
+            && tsc_ast::is_this_identifier(self.store(), left)
+        {
+            let this_type = self.check_this_expression(left);
+            self.check_non_null_type(this_type, left)
+        } else {
+            self.check_non_null_expression(left)
+        };
+        self.check_property_access_expression_or_qualified_name(
+            node, left, left_type, right, check_mode, false /*writeOnly*/,
+        )
+    }
+
+    /// Go: `func (c *Checker) checkIndexedAccess(node, checkMode) *Type` (checker.go:8336).
+    pub(crate) fn check_indexed_access(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
+        if self.store().node(node).flags.intersects(NF::OPTIONAL_CHAIN) {
+            return self.check_element_access_chain(node, check_mode);
+        }
+        let expression = crate::ast_shims::expression_of(self.store(), node)
+            .expect("ElementAccessExpression has an expression");
+        let expr_type = self.check_non_null_expression(expression);
+        self.check_element_access_expression(node, expr_type, check_mode)
+    }
+
+    /// Go: `func (c *Checker) checkElementAccessChain(node, checkMode) *Type` (checker.go:8342).
+    pub(crate) fn check_element_access_chain(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
+        let expression = crate::ast_shims::expression_of(self.store(), node)
+            .expect("ElementAccessExpression has an expression");
+        let expr_type = self.check_expression(expression);
+        let non_optional_type = self.get_optional_expression_type(expr_type, expression);
+        let non_nullable = self.check_non_null_type(non_optional_type, expression);
+        let t = self.check_element_access_expression(node, non_nullable, check_mode);
+        self.propagate_optional_type_marker(t, node, non_optional_type != expr_type)
+    }
+
+    /// Go: `func (c *Checker) checkElementAccessExpression(node, exprType, checkMode) *Type`
+    /// (checker.go:8349).
+    pub(crate) fn check_element_access_expression(
+        &mut self,
+        node: NodeId,
+        mut object_type: TypeId,
+        check_mode: CheckMode,
+    ) -> TypeId {
+        let assignment_kind = u::get_assignment_target_kind(self.store(), node);
+        if assignment_kind != u::AssignmentKind::None || self.is_method_access_for_call(node) {
+            object_type = self.get_widened_type(object_type);
+        }
+        let index_expression = self
+            .store()
+            .node(node)
+            .as_element_access_expression()
+            .expect("ElementAccessExpression data")
+            .argument_expression;
+        let index_type = self.check_expression(index_expression);
+        if relater::is_error_type(self, object_type) || object_type == self.silent_never_type() {
+            return object_type;
+        }
+        if crate::spine::is_const_enum_object_type(self, object_type)
+            && !tsc_binder::ast_shims::is_string_literal_like(self.store().node(index_expression))
+        {
+            self.error(
+                index_expression,
+                &A_CONST_ENUM_MEMBER_CAN_ONLY_BE_ACCESSED_USING_A_STRING_LITERAL,
+                &[],
+            );
+            return self.error_type();
+        }
+        let mut effective_index_type = index_type;
+        if self.is_for_in_variable_for_numeric_property_names(index_expression) {
+            effective_index_type = self.number_type();
+        }
+        let access_flags = if assignment_kind == u::AssignmentKind::None {
+            crate::types::AccessFlags::EXPRESSION_POSITION
+        } else {
+            crate::types::AccessFlags::WRITING
+                .union(if assignment_kind == u::AssignmentKind::Compound {
+                    crate::types::AccessFlags::EXPRESSION_POSITION
+                } else {
+                    crate::types::AccessFlags::NONE
+                })
+                .union(
+                    if relater::is_generic_object_type(self, object_type)
+                        && !u::is_this_type_parameter(self.type_(object_type))
+                    {
+                        crate::types::AccessFlags::NO_INDEX_SIGNATURES
+                    } else {
+                        crate::types::AccessFlags::NONE
+                    },
+                )
+        };
+        let indexed_access_type = self
+            .get_indexed_access_type_or_undefined(
+                object_type,
+                effective_index_type,
+                access_flags,
+                Some(index_expression),
+                Some(node),
+            )
+            .unwrap_or_else(|| self.error_type());
+        let resolved_symbol = self.get_resolved_symbol_nil(node);
+        let flow_type = self.get_flow_type_of_access_expression(
+            node,
+            resolved_symbol,
+            indexed_access_type,
+            index_expression,
+            check_mode,
+        );
+        self.check_indexed_access_index_type(flow_type, node)
+    }
+
+    /// Go: `func (c *Checker) isForInVariableForNumericPropertyNames(expr) bool`
+    /// (checker.go:8383).
+    pub(crate) fn is_for_in_variable_for_numeric_property_names(&mut self, expr: NodeId) -> bool {
+        let e = tsc_ast::utilities::skip_parentheses(self.store(), expr);
+        if is_identifier(self.store().node(e)) {
+            let Some(symbol) = self.get_resolved_symbol(e) else {
+                return false;
+            };
+            if self.program_symbol(symbol).flags.intersects(SymbolFlags::VARIABLE) {
+                let mut child = expr;
+                let mut node = self.store().node(expr).parent.get();
+                while !node.is_none() {
+                    if self.store().node(node).kind == Kind::ForInStatement {
+                        let statement = self
+                            .store()
+                            .node(node)
+                            .as_for_in_or_of_statement()
+                            .expect("ForInStatement data")
+                            .statement;
+                        if child == statement
+                            && self.get_for_in_variable_symbol(node) == Some(symbol)
+                        {
+                            let initializer_expr = crate::ast_shims::expression_of(
+                                self.store(),
+                                node,
+                            )
+                            .expect("ForInStatement has an expression");
+                            let init_type = self.check_expression(initializer_expr);
+                            if self.has_numeric_property_names(init_type) {
+                                return true;
+                            }
+                        }
+                    }
+                    child = node;
+                    node = self.store().node(node).parent.get();
+                }
+            }
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) getForInVariableSymbol(node) *ast.Symbol` (checker.go:8403).
+    pub(crate) fn get_for_in_variable_symbol(&mut self, node: NodeId) -> Option<SymbolId> {
+        let initializer = crate::ast_shims::initializer_of(self.store(), node);
+        if let Some(initializer) = initializer
+            && self.store().node(initializer).kind == Kind::VariableDeclarationList
+        {
+            let declarations = self
+                .store()
+                .node(initializer)
+                .as_variable_declaration_list()
+                .expect("VariableDeclarationList data")
+                .declarations
+                .clone();
+            if let Some(variable) = declarations
+                .as_ref()
+                .and_then(|l| l.nodes.first().copied())
+            {
+                let name = self.store().node(variable).name();
+                let is_binding_pattern = name
+                    .is_some_and(|n| {
+                        matches!(
+                            self.store().node(n).kind,
+                            Kind::ArrayBindingPattern | Kind::ObjectBindingPattern
+                        )
+                    });
+                if !variable.is_none() && !is_binding_pattern {
+                    return self.get_symbol_of_declaration(variable);
+                }
+            }
+        } else if let Some(initializer) = initializer
+            && is_identifier(self.store().node(initializer))
+        {
+            return self.get_resolved_symbol(initializer);
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) hasNumericPropertyNames(t) bool` (checker.go:8417).
+    pub(crate) fn has_numeric_property_names(&mut self, t: TypeId) -> bool {
+        // Go: len(getIndexInfosOfType(t)) == 1 && getIndexInfoOfType(t,
+        // numberType) != nil. The index-info reader is the S8 seam (empty),
+        // so the probe is permissively false — Go's answer when the type
+        // carries no resolved index infos.
+        // TODO(port M6 S8): resolveStructuredTypeMembers' indexInfos.
+        let _ = t;
+        false
+    }
+
+    /// Go: `func (c *Checker) checkIndexedAccessIndexType(t, accessNode) *Type`
+    /// (checker.go:8421).
+    pub(crate) fn check_indexed_access_index_type(&mut self, t: TypeId, access_node: NodeId) -> TypeId {
+        if !self.type_(t).flags.intersects(TypeFlags::INDEXED_ACCESS) {
+            return t;
+        }
+        let (object_type, index_type) = {
+            let d = self.type_(t).as_indexed_access_type().expect("IndexedAccessType data");
+            (
+                d.object_type.unwrap_or(t),
+                d.index_type.unwrap_or(t),
+            )
+        };
+        // skip index type deferral on remapping mapped types
+        // TODO(port M6 S7): getMappedTypeNameTypeKind — the remap probe;
+        // getIndexTypeForMappedType is the non-remap branch's S10 seam carrier.
+        let object_index_type =
+            relater::get_index_type_ex(self, object_type, crate::types::IndexFlags::NONE);
+        let has_number_index_info = self
+            .get_index_info_of_type(object_type, self.number_type())
+            .is_some();
+        let every_assignable = {
+            // Go: everyType(indexType, f) — PORT: the constituent walk
+            // inlined (the closure captures &mut self).
+            if self.type_(index_type).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+                let constituents = self.type_(index_type).types().to_vec();
+                constituents.iter().all(|&t| {
+                    self.index_type_assignable_check(t, object_index_type, has_number_index_info)
+                })
+            } else {
+                self.index_type_assignable_check(index_type, object_index_type, has_number_index_info)
+            }
+        };
+        if every_assignable {
+            if self.store().node(access_node).kind == Kind::ElementAccessExpression
+                && tsc_binder::ast_shims::is_assignment_target(self.store(), access_node)
+                && self.type_(object_type).object_flags.intersects(ObjectFlags::MAPPED)
+                && relater::get_mapped_type_modifiers(self, object_type)
+                    .intersects(MappedTypeModifiers::INCLUDE_READONLY)
+            {
+                let type_string = self.type_to_string(object_type);
+                self.error(
+                    access_node,
+                    &INDEX_SIGNATURE_IN_TYPE_0_ONLY_PERMITS_READING,
+                    &[type_string],
+                );
+            }
+            return t;
+        }
+        if relater::is_generic_object_type(self, object_type) {
+            // TODO(port M6 S10): getPropertyNameFromIndex — the literal-index
+            // name probe; permissive InternalSymbolNameMissing (the private/
+            // protected branch stays dormant).
+            let property_name = String::from(tsc_ast::INTERNAL_SYMBOL_NAME_MISSING);
+            if property_name != tsc_ast::INTERNAL_SYMBOL_NAME_MISSING {
+                let property_symbol = self.get_constituent_property(object_type, &property_name);
+                if let Some(property_symbol) = property_symbol
+                    && relater::get_declaration_modifier_flags_from_symbol(self, property_symbol)
+                        .intersects(ModifierFlags::NON_PUBLIC_ACCESSIBILITY_MODIFIER)
+                {
+                    self.error(
+                        access_node,
+                        &PRIVATE_OR_PROTECTED_MEMBER_0_CANNOT_BE_ACCESSED_ON_A_TYPE_PARAMETER,
+                        &[property_name],
+                    );
+                    return self.error_type();
+                }
+            }
+        }
+        let index_string = self.type_to_string(index_type);
+        let object_string = self.type_to_string(object_type);
+        self.error(
+            access_node,
+            &TYPE_0_CANNOT_BE_USED_TO_INDEX_TYPE_1,
+            &[index_string, object_string],
+        );
+        self.error_type()
+    }
+
+    /// Go: `everyType`'s per-constituent probe of checkIndexedAccessIndexType
+    /// (checker.go:8436) — the inlined closure body.
+    fn index_type_assignable_check(
+        &mut self,
+        t: TypeId,
+        object_index_type: TypeId,
+        has_number_index_info: bool,
+    ) -> bool {
+        self.is_type_assignable_to(t, object_index_type)
+            || has_number_index_info
+                && relater::is_applicable_index_type(self, Some(t), self.number_type())
+    }
+
+    /// Go: `func (c *Checker) getConstituentProperty(objectType, propertyName) *ast.Symbol`
+    /// (checker.go:8460).
+    pub(crate) fn get_constituent_property(
+        &mut self,
+        object_type: TypeId,
+        property_name: &str,
+    ) -> Option<SymbolId> {
+        for t in self.get_apparent_type_distributed(object_type) {
+            if let Some(prop) = relater::get_property_of_type(self, t, property_name) {
+                return Some(prop);
+            }
+        }
+        None
+    }
+
+    /// Go: `c.getApparentType(objectType).Distributed()` — the union
+    /// constituents / the singleton itself.
+    fn get_apparent_type_distributed(&mut self, t: TypeId) -> Vec<TypeId> {
+        let apparent = relater::get_apparent_type(self, t);
+        if self.type_(apparent).flags.intersects(TypeFlags::UNION) {
+            self.type_(apparent).types().to_vec()
+        } else {
+            vec![apparent]
+        }
+    }
+
+    /// Go: `func isSpreadIntoCallOrNew(node) bool` (checker.go:8302).
+    fn is_spread_into_call_or_new(&self, node: NodeId) -> bool {
+        let parent =
+            crate::ast_shims::walk_up_parenthesized_expressions(self.store(), self.store().node(node).parent.get());
+        match parent {
+            Some(p) if self.store().node(p).kind == Kind::SpreadElement => {
+                let grandparent = self.store().node(p).parent.get();
+                matches!(
+                    self.store().node(grandparent).kind,
+                    Kind::CallExpression | Kind::NewExpression
+                )
+            }
+            _ => false,
+        }
+    }
+
+    /// Go: `func (c *Checker) checkArrayLiteral(node, checkMode) *Type` (checker.go:8210).
+    pub(crate) fn check_array_literal(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
+        let elements: Vec<NodeId> = {
+            let d = self
+                .store()
+                .node(node)
+                .as_array_literal_expression()
+                .expect("ArrayLiteralExpression data");
+            d.elements.as_ref().map(|l| l.nodes.iter().copied().collect()).unwrap_or_default()
+        };
+        let length = elements.len();
+        let mut element_types: Vec<TypeId> = vec![self.never_type(); length];
+        let mut element_infos: Vec<crate::types::TupleElementInfo> =
+            vec![Default::default(); length];
+        self.push_cached_contextual_type(node);
+        let in_destructuring_pattern = tsc_binder::ast_shims::is_assignment_target(self.store(), node);
+        let in_const_context = self.is_const_context(node);
+        let contextual_type = self.get_apparent_type_of_contextual_type(node);
+        let in_tuple_context = self.is_spread_into_call_or_new(node)
+            || contextual_type.is_some_and(|contextual_type| {
+                // Go: someType(contextualType, isTupleLike || homomorphic
+                // mapped) — PORT: the constituent walk inlined (the closure
+                // captures &mut self).
+                let constituents: Vec<TypeId> = if self
+                    .type_(contextual_type)
+                    .flags
+                    .intersects(TypeFlags::UNION_OR_INTERSECTION)
+                {
+                    self.type_(contextual_type).types().to_vec()
+                } else {
+                    vec![contextual_type]
+                };
+                constituents.iter().any(|&t| {
+                    relater::is_array_like_type(self, t)
+                        || (relater::is_generic_mapped_type(self, t) && {
+                            // Go: t.AsMappedType().nameType == nil &&
+                            // getHomomorphicTypeVariable(...) != nil — the S7
+                            // mapped-type probe; permissive false.
+                            // TODO(port M6 S7): the homomorphic mapped-type walk.
+                            false
+                        })
+                })
+            });
+        let mut has_omitted_expression = false;
+        for (i, e) in elements.iter().copied().enumerate() {
+            if self.store().node(e).kind == Kind::SpreadElement {
+                let spread_expr = crate::ast_shims::expression_of(self.store(), e)
+                    .expect("SpreadElement has an expression");
+                let spread_type = self.check_expression_ex(spread_expr, check_mode);
+                if relater::is_array_like_type(self, spread_type) {
+                    element_types[i] = spread_type;
+                    element_infos[i] = crate::types::TupleElementInfo {
+                        flags: crate::types::ElementFlags::VARIADIC,
+                        labeled_declaration: None,
+                    };
+                } else if in_destructuring_pattern {
+                    // Given the following situation:
+                    //    var c: {};
+                    //    [...c] = ["", 0];
+                    //
+                    // c is represented in the tree as a spread element in an array literal.
+                    // But c really functions as a rest element, and its purpose is to
+                    // provide a contextual type for the right hand side of the assignment. Therefore,
+                    // instead of calling checkExpression on "...c", which will give an error
+                    // if c is not iterable/array-like, we need to act as if we are trying to
+                    // get the contextual element type from it. So we do something similar to
+                    // getContextualTypeForElementExpression, which will crucially not error
+                    // if there is no index type / iterated type.
+                    let rest_element_type = self
+                        .get_index_type_of_type(spread_type, self.number_type())
+                        .unwrap_or_else(|| {
+                            self.get_iterated_type_or_element_type(
+                                crate::statements::IterationUse::DESTRUCTURING,
+                                spread_type,
+                                self.undefined_type(),
+                                None, /*errorNode*/
+                                false, /*checkAssignability*/
+                            )
+                            .unwrap_or_else(|| self.unknown_type())
+                        });
+                    element_types[i] = rest_element_type;
+                    element_infos[i] = crate::types::TupleElementInfo {
+                        flags: crate::types::ElementFlags::REST,
+                        labeled_declaration: None,
+                    };
+                } else {
+                    let t = self.check_iterated_type_or_element_type(
+                        crate::statements::IterationUse::SPREAD,
+                        spread_type,
+                        self.undefined_type(),
+                        Some(spread_expr),
+                    );
+                    element_types[i] = t;
+                    element_infos[i] = crate::types::TupleElementInfo {
+                        flags: crate::types::ElementFlags::REST,
+                        labeled_declaration: None,
+                    };
+                }
+            } else if self.exact_optional_property_types
+                && self.store().node(e).kind == Kind::OmittedExpression
+            {
+                has_omitted_expression = true;
+                element_types[i] = self.undefined_or_missing_type();
+                element_infos[i] = crate::types::TupleElementInfo {
+                    flags: crate::types::ElementFlags::OPTIONAL,
+                    labeled_declaration: None,
+                };
+            } else {
+                let t = self.check_expression_for_mutable_location(e, check_mode);
+                element_types[i] = self.add_optionality_ex(t, true /*isProperty*/, has_omitted_expression);
+                element_infos[i] = crate::types::TupleElementInfo {
+                    flags: if has_omitted_expression {
+                        crate::types::ElementFlags::OPTIONAL
+                    } else {
+                        crate::types::ElementFlags::REQUIRED
+                    },
+                    labeled_declaration: None,
+                };
+                // Go: CheckModeInferential's intra-expression inference site
+                // (the S6/S9 inference-context readers are permissive; the
+                // isContextSensitive probe stays dormant under them).
+                // TODO(port M6 S6/S9): addIntraExpressionInferenceSite.
+                let _ = (in_tuple_context, check_mode);
+            }
+        }
+        self.pop_contextual_type();
+        if in_destructuring_pattern {
+            return self.create_tuple_type_ex(&element_types, &element_infos, false);
+        }
+        if check_mode.intersects(CheckMode::FORCE_TUPLE) || in_const_context || in_tuple_context {
+            let tuple = self.create_tuple_type_ex(&element_types, &element_infos, false);
+            return self.create_array_literal_type(tuple);
+        }
+        let element_type = if !element_types.is_empty() {
+            for (i, e) in element_types.iter_mut().enumerate() {
+                if element_infos[i].flags.intersects(crate::types::ElementFlags::VARIADIC) {
+                    *e = self
+                        .get_indexed_access_type_or_undefined(
+                            *e,
+                            self.number_type(),
+                            crate::types::AccessFlags::NONE,
+                            None,
+                            None,
+                        )
+                        .unwrap_or_else(|| self.any_type());
+                }
+            }
+            relater::get_union_type_ex(
+                self,
+                element_types,
+                crate::todo_shapes::UnionReduction::Subtype,
+                None,
+                None,
+            )
+        } else if self.strict_null_checks {
+            self.implicit_never_type()
+        } else {
+            self.undefined_widening_type()
+        };
+        let array_type = self.create_array_type_ex(element_type, in_const_context);
+        self.create_array_literal_type(array_type)
+    }
+
+    /// Go: `func (c *Checker) createArrayLiteralType(t) *Type` (checker.go:8290).
+    pub(crate) fn create_array_literal_type(&mut self, t: TypeId) -> TypeId {
+        if !self.type_(t).object_flags.intersects(ObjectFlags::REFERENCE) {
+            return t;
+        }
+        // TODO(port M6 S7): cloneTypeReference + the ArrayLiteral flag pair
+        // (the cachedTypes key); the identity is the non-reference answer.
+        t
+    }
+
+    /// Go: `func (c *Checker) createArrayTypeEx(elementType, isConstTuple) *Type`
+    /// (checker.go's createArrayTypeEx — the const-array wrapper).
+    pub(crate) fn create_array_type_ex(&mut self, element_type: TypeId, _is_const_tuple: bool) -> TypeId {
+        // TODO(port M6 S7): createArrayType with the const-array flag.
+        self.create_array_type(element_type)
+    }
+
+    /// Go: `func (c *Checker) checkExpressionForMutableLocation(node, checkMode) *Type`
+    /// (checker.go:14131).
+    pub(crate) fn check_expression_for_mutable_location(
+        &mut self,
+        node: NodeId,
+        check_mode: CheckMode,
+    ) -> TypeId {
+        let t = self.check_expression_ex(node, check_mode);
+        if self.is_const_context(node) {
+            return self.get_regular_type_of_literal_type(t);
+        }
+        if self.store().node(node).kind == Kind::TypeAssertionExpression {
+            return t;
+        }
+        let contextual_type = {
+            let raw = self.get_contextual_type_stub(node, crate::types::ContextFlags::NONE);
+            self.instantiate_contextual_type_stub(
+                raw,
+                node,
+                crate::types::ContextFlags::NONE,
+            )
+        };
+        self.get_widened_literal_like_type_for_contextual_type(t, contextual_type)
+    }
+
+    /// Go: `func (c *Checker) getWidenedLiteralLikeTypeForContextualType(t, contextualType) *Type`
+    /// (checker.go:26049). REAL body (isLiteralOfContextualType's contextual
+    /// probe is S9-bannered; with the getContextualType S9 seam the arms are
+    /// Go's None answers).
+    pub(crate) fn get_widened_literal_like_type_for_contextual_type(
+        &mut self,
+        t: TypeId,
+        contextual_type: Option<TypeId>,
+    ) -> TypeId {
+        let mut t = t;
+        if !self.is_literal_of_contextual_type(t, contextual_type) {
+            let widened = self.get_widened_literal_type(t);
+            t = self.get_widened_unique_es_symbol_type(widened);
+        }
+        self.get_regular_type_of_literal_type(t)
+    }
+
+    /// Go: `func (c *Checker) isLiteralOfContextualType(candidateType, contextualType) bool`
+    /// (checker.go:26056).
+    pub(crate) fn is_literal_of_contextual_type(
+        &mut self,
+        candidate_type: TypeId,
+        contextual_type: Option<TypeId>,
+    ) -> bool {
+        let Some(contextual_type) = contextual_type else {
+            return false;
+        };
+        if self.type_(contextual_type)
+            .flags
+            .intersects(TypeFlags::UNION_OR_INTERSECTION)
+        {
+            let constituents = self.type_(contextual_type).types().to_vec();
+            return constituents.iter().any(|&t| {
+                self.is_literal_of_contextual_type(candidate_type, Some(t))
+            });
+        }
+        if self
+            .type_(contextual_type)
+            .flags
+            .intersects(TypeFlags::INSTANTIABLE_NON_PRIMITIVE)
+        {
+            // If the contextual type is a type variable constrained to a primitive type, consider
+            // this a literal context for literals of that primitive type. For example, given a
+            // type parameter 'T extends string', infer string literal types for T.
+            let constraint = relater::get_base_constraint_of_type(self, contextual_type)
+                .unwrap_or_else(|| self.unknown_type());
+            return (relater::maybe_type_of_kind(self, constraint, TypeFlags::STRING)
+                && relater::maybe_type_of_kind(self, candidate_type, TypeFlags::STRING_LITERAL))
+                || (relater::maybe_type_of_kind(self, constraint, TypeFlags::NUMBER)
+                    && relater::maybe_type_of_kind(self, candidate_type, TypeFlags::NUMBER_LITERAL))
+                || (relater::maybe_type_of_kind(self, constraint, TypeFlags::BIGINT)
+                    && relater::maybe_type_of_kind(self, candidate_type, TypeFlags::BIGINT_LITERAL))
+                || (relater::maybe_type_of_kind(self, constraint, TypeFlags::ESSYMBOL)
+                    && relater::maybe_type_of_kind(
+                        self,
+                        candidate_type,
+                        TypeFlags::UNIQUE_ESSYMBOL,
+                    ))
+                || self.is_literal_of_contextual_type(candidate_type, Some(constraint));
+        }
+        // If the contextual type is a literal of a particular primitive type, we consider this a
+        // literal context for all literals of that primitive type.
+        let cf = self.type_(contextual_type).flags;
+        (cf.intersects(
+            TypeFlags::STRING_LITERAL
+                .union(TypeFlags::INDEX)
+                .union(TypeFlags::TEMPLATE_LITERAL)
+                .union(TypeFlags::STRING_MAPPING),
+        ) && relater::maybe_type_of_kind(self, candidate_type, TypeFlags::STRING_LITERAL))
+            || (cf.intersects(TypeFlags::NUMBER_LITERAL)
+                && relater::maybe_type_of_kind(self, candidate_type, TypeFlags::NUMBER_LITERAL))
+            || (cf.intersects(TypeFlags::BIGINT_LITERAL)
+                && relater::maybe_type_of_kind(self, candidate_type, TypeFlags::BIGINT_LITERAL))
+            || (cf.intersects(TypeFlags::BOOLEAN_LITERAL)
+                && relater::maybe_type_of_kind(self, candidate_type, TypeFlags::BOOLEAN_LITERAL))
+            || (cf.intersects(TypeFlags::UNIQUE_ESSYMBOL)
+                && relater::maybe_type_of_kind(self, candidate_type, TypeFlags::UNIQUE_ESSYMBOL))
+    }
+
+    /// Go: `func (c *Checker) getWidenedUniqueESSymbolType(t) *Type` (checker.go:26031 region).
+    pub(crate) fn get_widened_unique_es_symbol_type(&mut self, t: TypeId) -> TypeId {
+        if self.type_(t).flags.intersects(TypeFlags::UNIQUE_ESSYMBOL) {
+            return self.es_symbol_type();
+        }
+        if self.type_(t).flags.intersects(TypeFlags::UNION) {
+            // TODO(port M6 S7): mapType over the union constituents; the
+            // identity is Go's answer for every non-compound type.
+            return t;
+        }
+        t
+    }
+
+    /// Go: `func (c *Checker) pushCachedContextualType(node)` (checker.go:31421).
+    pub(crate) fn push_cached_contextual_type(&mut self, node: NodeId) {
+        let t = self.get_contextual_type_stub(node, crate::types::ContextFlags::NONE);
+        self.push_contextual_type(Some(node), t, true /*isCache*/);
+    }
+
+    /// Go: `func (c *Checker) getApparentTypeOfContextualType(node, contextFlags) *Type`
+    /// (checker.go — S9's contextual-typing family). Permissive None.
+    pub(crate) fn get_apparent_type_of_contextual_type(&mut self, node: NodeId) -> Option<TypeId> {
+        // TODO(port M6 S9): getApparentTypeOfContextualType.
+        let _ = node;
+        None
+    }
+
+    /// Go: `func (c *Checker) isConstContext(node) bool` (checker.go:13935).
+    pub(crate) fn is_const_context(&mut self, node: NodeId) -> bool {
+        let parent = self.store().node(node).parent.get();
+        if is_const_assertion(self.store(), parent)
+            || self.is_inline_import_attributes(node)
+        {
+            return true;
+        }
+        if self.is_valid_const_assertion_argument(node) {
+            let contextual_type =
+                self.get_contextual_type_stub(node, crate::types::ContextFlags::NONE);
+            if self.is_const_type_variable_opt(contextual_type, 0) {
+                return true;
+            }
+        }
+        matches!(
+            self.store().node(parent).kind,
+            Kind::ParenthesizedExpression
+                | Kind::ArrayLiteralExpression
+                | Kind::SpreadElement
+        ) && self.is_const_context(parent)
+            || matches!(
+                self.store().node(parent).kind,
+                Kind::PropertyAssignment | Kind::ShorthandPropertyAssignment | Kind::TemplateSpan
+            ) && self.is_const_context(self.store().node(parent).parent.get())
+    }
+
+    /// Go: `func (c *Checker) isInlineImportAttributes(node) bool` (checker.go:13945).
+    pub(crate) fn is_inline_import_attributes(&self, node: NodeId) -> bool {
+        let parent = self.store().node(node).parent.get();
+        if self.store().node(node).kind != Kind::ObjectLiteralExpression
+            || self.store().node(parent).kind != Kind::PropertyAssignment
+            || crate::ast_shims::initializer_of(self.store(), parent) != Some(node)
+        {
+            return false;
+        }
+        let property = parent;
+        let property_name = self.store().node(property).name();
+        let name_ok = property_name.is_some_and(|n| {
+            (is_identifier(self.store().node(n))
+                || tsc_binder::ast_shims::is_string_literal_like(self.store().node(n)))
+                && tsc_ast::node_text(self.store(), n) == "with"
+        });
+        if !name_ok {
+            return false;
+        }
+        let options = self.store().node(property).parent.get();
+        if self.store().node(options).kind != Kind::ObjectLiteralExpression {
+            return false;
+        }
+        let import_call = crate::ast_shims::find_ancestor(self.store(), options, &mut |n| {
+            n.kind == Kind::CallExpression
+                && {
+                    // Go: IsImportCall — the import(...) callee probe.
+                    let d = match &n.data {
+                        tsc_ast::NodeData::CallExpression(d) => Some(d),
+                        _ => None,
+                    };
+                    d.map(|d| {
+                        let store = self.store();
+                        let expr_kind = store.node(d.expression).kind;
+                        expr_kind == Kind::ImportKeyword
+                    })
+                    .unwrap_or(false)
+                }
+        });
+        match import_call {
+            Some(import_call) => {
+                let arguments: Vec<NodeId> = self
+                    .store()
+                    .node(import_call)
+                    .as_call_expression()
+                    .expect("CallExpression data")
+                    .arguments
+                    .as_ref()
+                    .map(|l| l.nodes.iter().copied().collect())
+                    .unwrap_or_default();
+                arguments.len() > 1
+                    && tsc_ast::utilities::skip_parentheses(self.store(), arguments[1]) == options
+            }
+            None => false,
+        }
+    }
+
+    /// Go: `func (c *Checker) isConstTypeVariable(t, depth) bool` (checker.go:13982)
+    /// — the inference.rs free function (already real) is the carrier; this
+    /// is its Option-context adapter (Go's `t == nil` arm).
+    pub(crate) fn is_const_type_variable_opt(&mut self, t: Option<TypeId>, depth: usize) -> bool {
+        let Some(t) = t else {
+            return false;
+        };
+        crate::inference::is_const_type_variable(self, t, depth)
+    }
+}
+
+/// Go: `func IsConstAssertion(node *Node) bool` (ast/utilities.go) —
+/// `IsConstTypeReference(node.Type())` over the as/type-assertion pair.
+fn is_const_assertion(store: &dyn NodeStore, node: NodeId) -> bool {
+    let n = store.node(node);
+    match n.kind {
+        Kind::AsExpression | Kind::TypeAssertionExpression => {
+            let type_node = match (&n.data, n.kind) {
+                (tsc_ast::NodeData::AsExpression(d), _) => d.type_,
+                (tsc_ast::NodeData::TypeAssertion(d), _) => d.type_,
+                _ => return false,
+            };
+            let tn = store.node(type_node);
+            let reference = tn.as_type_reference_node();
+            tn.kind == Kind::TypeReference
+                && reference.is_some_and(|d| {
+                    d.type_arguments.is_none()
+                        || d.type_arguments.as_ref().is_some_and(|l| l.nodes.is_empty())
+                })
+                && reference
+                    .is_some_and(|d| is_identifier(store.node(d.type_name)))
+                && reference.is_some_and(|d| tsc_ast::node_text(store, d.type_name) == "const")
+        }
+        _ => false,
+    }
+}
+
+/// Go: `checkSuperExpression`'s `isLegalUsageOfSuperExpression` closure —
+/// free (store-only reads, no checker borrow).
+fn is_legal_usage_of_super(store: &dyn NodeStore, container: NodeId, is_call_expression: bool) -> bool {
+    if is_call_expression {
+        // TS 1.0 SPEC (April 2014): 4.8.1
+        // Super calls are only permitted in constructors of derived classes
+        return store.node(container).kind == Kind::Constructor;
+    }
+    // TS 1.0 SPEC (April 2014)
+    // 'super' property access is allowed
+    // - In a constructor, instance member function, instance member accessor, or instance member variable initializer where this references a derived class instance
+    // - In a static member function or static member accessor
+    let parent = store.node(container).parent.get();
+    if crate::statements::is_class_like(store, parent)
+        || store.node(parent).kind == Kind::ObjectLiteralExpression
+    {
+        if tsc_binder::ast_shims::is_static(store.node(container)) {
+            return matches!(
+                store.node(container).kind,
+                Kind::MethodDeclaration
+                    | Kind::MethodSignature
+                    | Kind::GetAccessor
+                    | Kind::SetAccessor
+                    | Kind::PropertyDeclaration
+                    | Kind::ClassStaticBlockDeclaration
+            );
+        }
+        return matches!(
+            store.node(container).kind,
+            Kind::MethodDeclaration
+                | Kind::MethodSignature
+                | Kind::GetAccessor
+                | Kind::SetAccessor
+                | Kind::PropertyDeclaration
+                | Kind::PropertySignature
+                | Kind::Constructor
+        );
+    }
+    false
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// M6 S4 tranche 2 — the identifier family (checker.go:11278-11480,
+// 14161-14215) + getNarrowedTypeOfSymbol (checker.go:13900-14131).
+// ────────────────────────────────────────────────────────────────────────────
+
+impl Checker {
+    /// Go: `func (c *Checker) checkIdentifier(node, checkMode) *Type` (checker.go:11278).
+    pub(crate) fn check_identifier(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
+        if is_this_in_type_query(self.store(), node) {
+            return self.check_this_expression(node);
+        }
+        let Some(symbol) = self.get_resolved_symbol(node) else {
+            // PORT: the Option convention — None is Go's unknownSymbol
+            // (checker.go:11287's `symbol == c.unknownSymbol` arm).
+            return self.error_type();
+        };
+        if Some(symbol) == self.arguments_symbol {
+            if self.is_in_property_initializer_or_class_static_block(node, true /*ignoreArrowFunctions*/) {
+                self.error(
+                    node,
+                    &X_ARGUMENTS_CANNOT_BE_REFERENCED_IN_PROPERTY_INITIALIZERS_OR_CLASS_STATIC_INITIALIZATION_BLOCKS,
+                    &[],
+                );
+                return self.error_type();
+            }
+            return self.get_type_of_symbol(symbol);
+        }
+        if should_mark_identifier_alias_referenced(self.store(), node) {
+            self.mark_linked_references(node, ReferenceHint::IDENTIFIER, None, self.never_type());
+        }
+        let local_or_export_symbol = self.get_export_symbol_of_value_symbol_if_exported(symbol);
+        let target_symbol = self.resolve_alias_with_deprecation_check(local_or_export_symbol, node);
+        // TODO(port M6 S6): isDeprecatedSymbol + addDeprecatedSuggestion +
+        // isUncalledFunctionReference — the deprecation family; permissive
+        // (no suggestion diagnostics).
+        let _ = (target_symbol,);
+        let mut declaration = self.program_symbol(local_or_export_symbol).value_declaration;
+        // PORT: Go tracks immediateDeclaration for the never-initialized probe;
+        // the W3 flow seam keeps that probe dormant (see below).
+        let _immediate_declaration = declaration;
+        // If the identifier is declared in a binding pattern for which we're currently computing the implied type and the
+        // reference occurs with the same binding pattern, return the non-inferrable any type. This for example occurs in
+        // 'const [a, b = a + 1] = [2]' when we're computing the contextual type for the array literal '[2]'.
+        if let Some(declaration) = declaration
+            && self.store().node(declaration).kind == Kind::BindingElement
+            && {
+                let declaration_parent = self.store().node(declaration).parent.get();
+                self.contextual_binding_patterns.contains(&declaration_parent)
+                    && crate::ast_shims::find_ancestor(self.store(), node, &mut |n| {
+                        n.parent.get() == declaration_parent
+                    })
+                    .is_some()
+            }
+        {
+            return self.non_inferrable_any_type();
+        }
+        let mut t = self.get_narrowed_type_of_symbol(local_or_export_symbol, node);
+        let assignment_kind = u::get_assignment_target_kind(self.store(), node);
+        if assignment_kind != u::AssignmentKind::None {
+            let local_flags = self.program_symbol(local_or_export_symbol).flags;
+            let in_js = tsc_ast::utilities::is_in_js_file(self.store().node(node));
+            if !local_flags.intersects(SymbolFlags::VARIABLE)
+                && !(in_js && local_flags.intersects(SymbolFlags::VALUE_MODULE))
+            {
+                let assignment_error = if local_flags.intersects(SymbolFlags::ENUM) {
+                    &CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_AN_ENUM
+                } else if local_flags.intersects(SymbolFlags::CLASS) {
+                    &CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_CLASS
+                } else if local_flags.intersects(SymbolFlags::MODULE) {
+                    &CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_NAMESPACE
+                } else if local_flags.intersects(SymbolFlags::FUNCTION) {
+                    &CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_FUNCTION
+                } else if local_flags.intersects(SymbolFlags::ALIAS) {
+                    &CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_AN_IMPORT
+                } else {
+                    &CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_NOT_A_VARIABLE
+                };
+                let name = relater::symbol_to_string(self, symbol);
+                self.error(node, assignment_error, &[name]);
+                return self.error_type();
+            }
+            if self.is_readonly_symbol(local_or_export_symbol) {
+                let message = if local_flags.intersects(SymbolFlags::VARIABLE) {
+                    &CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_CONSTANT
+                } else {
+                    &CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_READ_ONLY_PROPERTY
+                };
+                let name = relater::symbol_to_string(self, symbol);
+                self.error(node, message, &[name]);
+                return self.error_type();
+            }
+        }
+        let is_alias = self
+            .program_symbol(local_or_export_symbol)
+            .flags
+            .intersects(SymbolFlags::ALIAS);
+        // We only narrow variables and parameters occurring in a non-assignment position. For all other
+        // entities we simply return the declared type.
+        if self
+            .program_symbol(local_or_export_symbol)
+            .flags
+            .intersects(SymbolFlags::VARIABLE)
+        {
+            if assignment_kind == u::AssignmentKind::Definite {
+                if u::is_in_compound_like_assignment(self.store(), node) {
+                    return self.get_base_type_of_literal_type(t);
+                }
+                return t;
+            }
+        } else if is_alias {
+            declaration = self.get_declaration_of_alias_symbol(symbol);
+        } else {
+            return t;
+        }
+        let Some(declaration) = declaration else {
+            return t;
+        };
+        t = self.get_narrowable_type_for_reference(t, node, check_mode);
+        // The declaration container is the innermost function that encloses the declaration of the variable
+        // or parameter. The flow container is the innermost function starting with which we analyze the control
+        // flow graph to determine the control flow based type.
+        let is_parameter =
+            self.store().node(tsc_binder::ast_shims::get_root_declaration(self.store(), declaration)).kind
+                == Kind::Parameter;
+        let declaration_container = self.get_control_flow_container(declaration);
+        let flow_container = self.get_control_flow_container(node);
+        let is_outer_variable = flow_container != declaration_container;
+        let is_spread_destructuring_assignment_target = {
+            let parent = self.store().node(node).parent.get();
+            let grandparent = self.store().node(parent).parent.get();
+            self.store().node(parent).kind == Kind::SpreadAssignment
+                && self.is_destructuring_assignment_target(grandparent)
+        };
+        let is_module_exports = self
+            .program_symbol(symbol)
+            .flags
+            .intersects(SymbolFlags::MODULE_EXPORTS);
+        let type_is_automatic = t == self.auto_type() || Some(t) == self.auto_array_type;
+        let is_automatic_type_in_non_null = type_is_automatic && {
+            let parent = self.store().node(node).parent.get();
+            self.store().node(parent).kind == Kind::NonNullExpression
+        };
+        // When the control flow originates in a function expression, arrow function, method, or accessor, and
+        // we are referencing a closed-over const variable or parameter or mutable local variable past its last
+        // assignment, we extend the origin of the control flow analysis to include the immediately enclosing
+        // control flow container.
+        // TODO(port M6 W3): the isPastLastAssignment flow probe — the loop's
+        // condition is permissively false (no container hops).
+        // A variable is considered uninitialized when it is possible to analyze the entire control flow graph
+        // from declaration to use, and when the variable's declared type doesn't include undefined but the
+        // control flow based type does include undefined.
+        let is_never_initialized = false;
+        let _ = (is_never_initialized, is_parameter || is_alias);
+        let assume_initialized = is_parameter
+            || is_alias
+            || (is_outer_variable && !is_never_initialized)
+            || is_spread_destructuring_assignment_target
+            || is_module_exports
+            || self.is_same_scoped_binding_element(node, declaration)
+            || (t != self.auto_type()
+                && Some(t) != self.auto_array_type
+                && (!self.strict_null_checks
+                    || self.type_(t)
+                        .flags
+                        .intersects(TypeFlags::ANY_OR_UNKNOWN.union(TypeFlags::VOID))
+                    || u::is_in_type_query(self.store(), node)
+                    || self.is_in_ambient_or_type_node(node)
+                    || self.store().node(self.store().node(node).parent.get()).kind
+                        == Kind::ExportSpecifier))
+            || self.store().node(self.store().node(node).parent.get()).kind
+                == Kind::NonNullExpression
+            || (self.store().node(declaration).kind == Kind::VariableDeclaration
+                && self
+                    .store()
+                    .node(declaration)
+                    .as_variable_declaration()
+                    .is_some_and(|d| d.exclamation_token.is_some()))
+            || self.store().node(declaration).flags.intersects(NF::AMBIENT);
+        let initial_type = if is_automatic_type_in_non_null {
+            self.undefined_type()
+        } else if assume_initialized && is_parameter {
+            self.remove_optionality_from_declared_type(t, declaration)
+        } else if assume_initialized {
+            t
+        } else if type_is_automatic {
+            self.undefined_type()
+        } else {
+            self.get_optional_type(t, false /*isProperty*/)
+        };
+        let flow_type = if is_automatic_type_in_non_null {
+            let non_nullable =
+                self.get_flow_type_of_reference_ex(node, t, initial_type, flow_container);
+            relater::get_non_nullable_type(self, non_nullable)
+        } else {
+            self.get_flow_type_of_reference_ex(node, t, initial_type, flow_container)
+        };
+        // A variable is considered uninitialized when it is possible to analyze the entire control flow graph
+        // from declaration to use, and when the variable's declared type doesn't include undefined but the
+        // control flow based type does include undefined.
+        // TODO(port M6 W3): the definite-assignment flow facts — under the
+        // no-flow seam the flow type is the initial type, and the
+        // used-before-assigned probe cannot distinguish assigned references
+        // (it stays dormant, Go's answer when the reference carries no flow
+        // node); the autoType evolving-array arm composes identically.
+        if !type_is_automatic || t != self.auto_type() && Some(t) != self.auto_array_type {
+            if assignment_kind != u::AssignmentKind::None {
+                // Identifier is target of a compound assignment
+                return self.get_base_type_of_literal_type(flow_type);
+            }
+            return flow_type;
+        }
+        let _ = flow_type;
+        if assignment_kind != u::AssignmentKind::None {
+            return self.get_base_type_of_literal_type(t);
+        }
+        t
+    }
+
+    /// Go: `func (c *Checker) isSameScopedBindingElement(node, declaration) bool`
+    /// (checker.go:11444).
+    pub(crate) fn is_same_scoped_binding_element(
+        &self,
+        node: NodeId,
+        declaration: NodeId,
+    ) -> bool {
+        if self.store().node(declaration).kind == Kind::BindingElement {
+            let binding_element = crate::ast_shims::find_ancestor(self.store(), node, &mut |n| {
+                n.kind == Kind::BindingElement
+            });
+            return binding_element.is_some_and(|be| {
+                tsc_binder::ast_shims::get_root_declaration(self.store(), be)
+                    == tsc_binder::ast_shims::get_root_declaration(self.store(), declaration)
+            });
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) removeOptionalityFromDeclaredType(declaredType, declaration) *Type`
+    /// (checker.go:11451).
+    pub(crate) fn remove_optionality_from_declared_type(
+        &mut self,
+        declared_type: TypeId,
+        declaration: NodeId,
+    ) -> TypeId {
+        let remove_undefined = self.strict_null_checks
+            && self.store().node(declaration).kind == Kind::Parameter
+            && crate::ast_shims::initializer_of(self.store(), declaration).is_some()
+            && self.has_type_facts(declared_type, TypeFacts::IS_UNDEFINED)
+            && !self.parameter_initializer_contains_undefined(declaration);
+        if remove_undefined {
+            return relater::get_type_with_facts(self, declared_type, TypeFacts::NE_UNDEFINED);
+        }
+        declared_type
+    }
+
+    /// Go: `func (c *Checker) parameterInitializerContainsUndefined(declaration) bool`
+    /// (checker.go:11463).
+    pub(crate) fn parameter_initializer_contains_undefined(&mut self, declaration: NodeId) -> bool {
+        let links_flags = self.node_links.get(declaration).flags;
+        if !links_flags
+            .intersects(crate::types::NodeCheckFlags::INITIALIZER_IS_UNDEFINED_COMPUTED)
+        {
+            if !self.push_type_resolution(
+                crate::checker::TypeSystemEntity::Node(declaration),
+                crate::checker::TypeSystemPropertyName::InitializerIsUndefined,
+            ) {
+                // PORT: Go reportCircularityError(declaration.Symbol()) then
+                // returns true; the port's circularity carrier answers true.
+                return true;
+            }
+            let initializer_type = self.check_declaration_initializer(
+                declaration,
+                CheckMode::CHECK_MODE_NORMAL,
+                None,
+            );
+            let contains_undefined =
+                self.has_type_facts(initializer_type, TypeFacts::IS_UNDEFINED);
+            if !self.pop_type_resolution() {
+                return true;
+            }
+            let flags = crate::types::NodeCheckFlags::INITIALIZER_IS_UNDEFINED_COMPUTED
+                | if contains_undefined {
+                    crate::types::NodeCheckFlags::INITIALIZER_IS_UNDEFINED
+                } else {
+                    crate::types::NodeCheckFlags::NONE
+                };
+            self.node_links.get(declaration).flags |= flags;
+        }
+        self.node_links
+            .get(declaration)
+            .flags
+            .intersects(crate::types::NodeCheckFlags::INITIALIZER_IS_UNDEFINED)
+    }
+
+    /// Go: `func (c *Checker) isInAmbientOrTypeNode(node) bool` (checker.go:11479).
+    pub(crate) fn is_in_ambient_or_type_node(&self, node: NodeId) -> bool {
+        if self.store().node(node).flags.intersects(NF::AMBIENT) {
+            return true;
+        }
+        crate::ast_shims::find_ancestor(self.store(), node, &mut |n| {
+            matches!(
+                n.kind,
+                Kind::InterfaceDeclaration
+                    | Kind::TypeAliasDeclaration
+                    | Kind::TypeLiteral
+            )
+        })
+        .is_some()
+    }
+
+    /// Go: `func (c *Checker) isInPropertyInitializerOrClassStaticBlock(node, ignoreArrowFunctions) bool`
+    /// (checker.go:13906).
+    pub(crate) fn is_in_property_initializer_or_class_static_block(
+        &self,
+        node: NodeId,
+        ignore_arrow_functions: bool,
+    ) -> bool {
+        let store = self.store();
+        crate::ast_shims::find_ancestor_or_quit(store, node, &mut |n| match n.kind {
+            Kind::PropertyDeclaration | Kind::ClassStaticBlockDeclaration => {
+                crate::ast_shims::FindAncestorResult::True
+            }
+            Kind::TypeQuery | Kind::JsxClosingElement => {
+                crate::ast_shims::FindAncestorResult::Quit
+            }
+            Kind::ArrowFunction => {
+                if ignore_arrow_functions {
+                    crate::ast_shims::FindAncestorResult::False
+                } else {
+                    crate::ast_shims::FindAncestorResult::Quit
+                }
+            }
+            Kind::Block => {
+                if tsc_ast::is_function_like(store.node(n.parent.get()))
+                    && store.node(n.parent.get()).kind != Kind::ArrowFunction
+                {
+                    crate::ast_shims::FindAncestorResult::Quit
+                } else {
+                    crate::ast_shims::FindAncestorResult::False
+                }
+            }
+            _ => crate::ast_shims::FindAncestorResult::False,
+        })
+        .is_some()
+    }
+
+    /// Go: `func (c *Checker) getNarrowedTypeOfSymbol(symbol, location) *Type`
+    /// (checker.go:13900).
+    pub(crate) fn get_narrowed_type_of_symbol(
+        &mut self,
+        symbol: SymbolId,
+        location: NodeId,
+    ) -> TypeId {
+        let mut t = self.get_type_of_symbol(symbol);
+        let declaration = self.program_symbol(symbol).value_declaration;
+        if let Some(declaration) = declaration
+            && self.store().node(declaration).kind == Kind::BindingElement
+        {
+            // If we have a non-rest binding element with no initializer declared as a const variable or a const-like
+            // parameter (a parameter for which there are no assignments in the function body), and if the parent type
+            // for the destructuring is a union type, one or more of the binding elements may represent discriminant
+            // properties, and we want the effects of conditional checks on such discriminants to affect the types of
+            // other binding elements from the same destructuring. (See checker.go's worked example.)
+            let has_initializer = crate::ast_shims::initializer_of(self.store(), declaration).is_some();
+            let has_dot_dot_dot = {
+                let d = self
+                    .store()
+                    .node(declaration)
+                    .as_binding_element()
+                    .expect("BindingElement data");
+                d.dot_dot_dot_token.is_some()
+            };
+            let elements_len = {
+                let parent = self.store().node(declaration).parent.get();
+                match &self.store().node(parent).data {
+                    tsc_ast::NodeData::BindingPattern(d) => d
+                        .elements
+                        .as_ref()
+                        .map(|l| l.nodes.len())
+                        .unwrap_or(0),
+                    _ => 0,
+                }
+            };
+            if !has_initializer && !has_dot_dot_dot && elements_len >= 2 {
+                let root_declaration =
+                    tsc_binder::ast_shims::get_root_declaration(self.store(), declaration);
+                let root_initializer =
+                    crate::ast_shims::initializer_of(self.store(), root_declaration);
+                // Avoid declaration circularity without blocking binding defaults or nested callbacks.
+                let inside_root_initializer = root_initializer.is_some_and(|ri| {
+                    u::is_node_descendant_of(self.store(), location, ri)
+                        && self.get_control_flow_container(declaration)
+                            == self.get_control_flow_container(location)
+                });
+                if !inside_root_initializer {
+                    let pattern = self.store().node(declaration).parent.get();
+                    let parent = self.store().node(pattern).parent.get();
+                    let root_is_const_variable = self.store().node(root_declaration).kind
+                        == Kind::VariableDeclaration
+                        && self
+                            .get_combined_node_flags_cached(root_declaration)
+                            .intersects(NF::CONSTANT);
+                    let root_is_parameter =
+                        self.store().node(root_declaration).kind == Kind::Parameter;
+                    if root_is_const_variable || root_is_parameter {
+                        if !self
+                            .node_links
+                            .get(parent)
+                            .flags
+                            .intersects(crate::types::NodeCheckFlags::IN_CHECK_IDENTIFIER)
+                        {
+                            self.node_links.get(parent).flags |=
+                                crate::types::NodeCheckFlags::IN_CHECK_IDENTIFIER;
+                            let parent_type = self
+                                .get_type_for_binding_element_parent(parent, CheckMode::CHECK_MODE_NORMAL)
+                                .unwrap_or_else(|| self.error_type());
+                            // Guard parent-type resolution only; flow analysis should allow re-entrant narrowing
+                            self.node_links.get(parent).flags &=
+                                !crate::types::NodeCheckFlags::IN_CHECK_IDENTIFIER;
+                            // PORT: Go maps parentType through getBaseConstraintOrType
+                            // (mapType); the S7 mapType seam applies f to the
+                            // type itself.
+                            let parent_type_constraint =
+                                relater::get_base_constraint_or_type(self, parent_type);
+                            // TODO(port M6 W3): isSomeSymbolAssigned — the
+                            // assignment flow probe; permissive false.
+                            if self.type_(parent_type_constraint)
+                                .flags
+                                .intersects(TypeFlags::UNION)
+                            {
+                                // TODO(port M6 W3): getFlowTypeOfReferenceEx —
+                                // the flow walk; the seam returns the initial
+                                // (constraint) type.
+                                let narrowed_type = self.get_flow_type_of_reference_ex(
+                                    pattern,
+                                    parent_type_constraint,
+                                    parent_type_constraint,
+                                    NodeId::NONE,
+                                );
+                                if self.type_(narrowed_type).flags.intersects(TypeFlags::NEVER) {
+                                    t = self.never_type();
+                                } else {
+                                    // Destructurings are validated against the parent type elsewhere. Here we disable tuple bounds
+                                    // checks because the narrowed type may have lower arity than the full parent type.
+                                    t = self.get_binding_element_type_from_parent_type(
+                                        declaration,
+                                        narrowed_type,
+                                        true, /*noTupleBoundsCheck*/
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        t
+    }
+
+    /// Go: `func (c *Checker) getFlowTypeOfReferenceEx(node, declaredType, initialType, flowContainer, flowNode) *Type`
+    /// (flow.go — W3). Permissive: the initial type (Go's answer when the
+    /// reference carries no flow node).
+    pub(crate) fn get_flow_type_of_reference_ex(
+        &mut self,
+        node: NodeId,
+        declared_type: TypeId,
+        initial_type: TypeId,
+        flow_container: NodeId,
+    ) -> TypeId {
+        // TODO(port M6 W3): the flow-node walk.
+        let _ = (node, declared_type, flow_container);
+        initial_type
+    }
+
+    /// Go: `func (c *Checker) isPastLastAssignment(symbol, location) bool`
+    /// (flow.go — W3). Permissive false.
+    pub(crate) fn is_past_last_assignment(&mut self, symbol: SymbolId, location: NodeId) -> bool {
+        // TODO(port M6 W3): the assignment flow-epoch probe.
+        let _ = (symbol, location);
+        false
+    }
+
+    /// Go: `func (c *Checker) isSymbolAssignedDefinitely(symbol) bool` — the
+    /// flow-engine helper (W3). Permissive true (every variable counts as
+    /// assigned; keeps the never-initialized probe dormant under the seam).
+    pub(crate) fn is_symbol_assigned_definitely(&mut self, symbol: SymbolId) -> bool {
+        // TODO(port M6 W3): the definite-assignment flow walk.
+        let _ = symbol;
+        true
+    }
+
+    /// Go: `func (c *Checker) isDestructuringAssignmentTarget(parent) bool`
+    /// (flow.go: checker.go:11371's call site). REAL body (store-only reads).
+    pub(crate) fn is_destructuring_assignment_target(&self, parent: NodeId) -> bool {
+        let parent_parent = self.store().node(parent).parent.get();
+        if self.store().node(parent_parent).kind == Kind::BinaryExpression {
+            let d = self
+                .store()
+                .node(parent_parent)
+                .as_binary_expression()
+                .expect("BinaryExpression data");
+            return d.left == parent;
+        }
+        self.store().node(parent_parent).kind == Kind::ForOfStatement
+            && crate::ast_shims::initializer_of(self.store(), parent_parent) == Some(parent)
+    }
+
+    /// Go: `func (c *Checker) resolveAliasWithDeprecationCheck(symbol, location) *ast.Symbol`
+    /// (checker.go:16697 — S6). Permissive: the symbol itself (Go's answer
+    /// when the alias chain is trivial).
+    pub(crate) fn resolve_alias_with_deprecation_check(
+        &mut self,
+        symbol: SymbolId,
+        location: NodeId,
+    ) -> SymbolId {
+        // TODO(port M6 S6): resolveAlias + the deprecation suggestion probe.
+        let _ = location;
+        symbol
+    }
+
+    /// Go: `func (c *Checker) getResolvedSymbol(node) *ast.Symbol` (checker.go:14161)
+    /// — the exports.rs method is the carrier (real caching body over the S6
+    /// resolveName seam). `get_cannot_find_name_diagnostic_for_name` is the
+    /// diagnostic-message probe.
+    pub(crate) fn get_cannot_find_name_diagnostic_for_name(
+        &mut self,
+        node: NodeId,
+    ) -> &'static Message {
+        let name = tsc_ast::node_text(self.store(), node);
+        match name {
+            "document" | "console" => {
+                &CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_CHANGE_YOUR_TARGET_LIBRARY_TRY_CHANGING_THE_LIB_COMPILER_OPTION_TO_INCLUDE_DOM
+            }
+            "$" => {
+                if self.compiler_options_uses_wildcard_types() {
+                    &CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_JQUERY_TRY_NPM_I_SAVE_DEV_TYPES_SLASHJQUERY
+                } else {
+                    &CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_JQUERY_TRY_NPM_I_SAVE_DEV_TYPES_SLASHJQUERY_AND_THEN_ADD_JQUERY_TO_THE_TYPES_FIELD_IN_YOUR_TSCONFIG
+                }
+            }
+            "beforeEach" | "describe" | "suite" | "it" | "test" => {
+                if self.compiler_options_uses_wildcard_types() {
+                    &CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_A_TEST_RUNNER_TRY_NPM_I_SAVE_DEV_TYPES_SLASHJEST_OR_NPM_I_SAVE_DEV_TYPES_SLASHMOCHA
+                } else {
+                    &CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_A_TEST_RUNNER_TRY_NPM_I_SAVE_DEV_TYPES_SLASHJEST_OR_NPM_I_SAVE_DEV_TYPES_SLASHMOCHA_AND_THEN_ADD_JEST_OR_MOCHA_TO_THE_TYPES_FIELD_IN_YOUR_TSCONFIG
+                }
+            }
+            "process" | "require" | "Buffer" | "module" | "NodeJS" => {
+                if self.compiler_options_uses_wildcard_types() {
+                    &CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_NODE_TRY_NPM_I_SAVE_DEV_TYPES_SLASHNODE
+                } else {
+                    &CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_NODE_TRY_NPM_I_SAVE_DEV_TYPES_SLASHNODE_AND_THEN_ADD_NODE_TO_THE_TYPES_FIELD_IN_YOUR_TSCONFIG
+                }
+            }
+            "Bun" => {
+                if self.compiler_options_uses_wildcard_types() {
+                    &CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_BUN_TRY_NPM_I_SAVE_DEV_TYPES_SLASHBUN
+                } else {
+                    &CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_BUN_TRY_NPM_I_SAVE_DEV_TYPES_SLASHBUN_AND_THEN_ADD_BUN_TO_THE_TYPES_FIELD_IN_YOUR_TSCONFIG
+                }
+            }
+            "Map" | "Set" | "Promise" | "ast.Symbol" | "WeakMap" | "WeakSet" | "Iterator"
+            | "AsyncIterator" | "SharedArrayBuffer" | "Atomics" | "AsyncIterable"
+            | "AsyncIterableIterator" | "AsyncGenerator" | "AsyncGeneratorFunction" | "BigInt"
+            | "Reflect" | "BigInt64Array" | "BigUint64Array" => {
+                &CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_CHANGE_YOUR_TARGET_LIBRARY_TRY_CHANGING_THE_LIB_COMPILER_OPTION_TO_1_OR_LATER
+            }
+            "await" => {
+                let parent = self.store().node(node).parent.get();
+                if self.store().node(parent).kind == Kind::CallExpression {
+                    &CANNOT_FIND_NAME_0_DID_YOU_MEAN_TO_WRITE_THIS_IN_AN_ASYNC_FUNCTION
+                }
+                // Go: fallthrough to default.
+                else if self.store().node(parent).kind == Kind::ShorthandPropertyAssignment {
+                    &NO_VALUE_EXISTS_IN_SCOPE_FOR_THE_SHORTHAND_PROPERTY_0_EITHER_DECLARE_ONE_OR_PROVIDE_AN_INITIALIZER
+                } else {
+                    &CANNOT_FIND_NAME_0
+                }
+            }
+            _ => {
+                let parent = self.store().node(node).parent.get();
+                if self.store().node(parent).kind == Kind::ShorthandPropertyAssignment {
+                    &NO_VALUE_EXISTS_IN_SCOPE_FOR_THE_SHORTHAND_PROPERTY_0_EITHER_DECLARE_ONE_OR_PROVIDE_AN_INITIALIZER
+                } else {
+                    &CANNOT_FIND_NAME_0
+                }
+            }
+        }
+    }
+
+    /// Go: `core.CompilerOptions.UsesWildcardTypes()` — `TypeRoots != nil ||
+    /// Types != nil` (the "config supplies @types" probe).
+    fn compiler_options_uses_wildcard_types(&self) -> bool {
+        self.compiler_options.uses_wildcard_types()
+    }
+
+    /// Go: `func (c *Checker) getReferencedValueOrAliasSymbol(reference) *ast.Symbol`
+    /// (checker.go:14177).
+    pub(crate) fn get_referenced_value_or_alias_symbol(&mut self, reference: NodeId) -> Option<SymbolId> {
+        let resolved_symbol = self.symbol_node_links.get(reference).resolved_symbol;
+        if resolved_symbol.is_some() && resolved_symbol != Some(self.unknown_symbol()) {
+            return resolved_symbol;
+        }
+        // TODO(port M6 S6): resolveName with the Alias meaning — the S6 seam
+        // permissive None.
+        None
+    }
+}
+
+/// Go: `func shouldMarkIdentifierAliasReferenced(node *ast.IdentifierNode) bool`
+/// (checker.go:28900). REAL body (store-only reads).
+fn should_mark_identifier_alias_referenced(store: &dyn NodeStore, node: NodeId) -> bool {
+    let parent = store.node(node).parent.get();
+    if !parent.is_none() {
+        // A property access expression LHS? checkPropertyAccessExpression will handle that.
+        if store.node(parent).kind == Kind::PropertyAccessExpression
+            && crate::ast_shims::expression_of(store, parent) == Some(node)
+        {
+            return false;
+        }
+        // Next two check for an identifier inside a type only export.
+        let is_type_only = |n: NodeId| match &store.node(n).data {
+            tsc_ast::NodeData::ExportSpecifier(d) => d.is_type_only,
+            tsc_ast::NodeData::ExportDeclaration(d) => d.is_type_only,
+            _ => false,
+        };
+        if store.node(parent).kind == Kind::ExportSpecifier && is_type_only(parent) {
+            return false;
+        }
+        let parent_parent = store.node(parent).parent.get();
+        if !parent_parent.is_none() {
+            let great_grandparent = store.node(parent_parent).parent.get();
+            if !great_grandparent.is_none()
+                && store.node(great_grandparent).kind == Kind::ExportDeclaration
+                && is_type_only(great_grandparent)
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Go: `func IsThisInTypeQuery(node *Node) bool` (ast/utilities.go) — REAL
+/// body (the qualified-name left-chain walk to the TypeQuery parent).
+fn is_this_in_type_query(store: &dyn NodeStore, node: NodeId) -> bool {
+    if !tsc_ast::is_this_identifier(store, node) {
+        return false;
+    }
+    let mut node = node;
+    loop {
+        let parent = store.node(node).parent.get();
+        if store.node(parent).kind == Kind::QualifiedName
+            && store
+                .node(parent)
+                .as_qualified_name()
+                .is_some_and(|d| d.left == node)
+        {
+            node = parent;
+            continue;
+        }
+        return store.node(parent).kind == Kind::TypeQuery;
+    }
 }

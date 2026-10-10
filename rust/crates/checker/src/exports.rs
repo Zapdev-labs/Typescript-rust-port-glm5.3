@@ -479,12 +479,32 @@ impl Checker {
         Vec::new()
     }
 
-    /// Go: `func (c *Checker) GetResolvedSymbol(node *ast.Node) *ast.Symbol` →
-    /// `c.getResolvedSymbol(node)` (checker.go:14161 — S6).
+    /// Go: `func (c *Checker) getResolvedSymbol(node *ast.Node) *ast.Symbol`
+    /// (checker.go:14161). REAL caching body over the S6 resolveName seam:
+    /// the name resolution itself (resolveName's scope walk) is S6's, so the
+    /// seam answers None (Go's unknownSymbol). PORT: the crate's Option
+    /// convention keeps None as the unknownSymbol answer (the Go callers
+    /// compare against `c.unknownSymbol`).
     pub fn get_resolved_symbol(&mut self, node: NodeId) -> Option<SymbolId> {
-        // TODO(port M6 S6): the alias-resolving symbol resolution.
-        let _ = node;
-        None
+        if self.symbol_node_links.get(node).resolved_symbol.is_none() {
+            let mut symbol = None;
+            if !tsc_ast::node_is_missing(self.store().node(node)) {
+                // TODO(port M6 S6): resolveName(node, text, Value|ExportValue,
+                // getCannotFindNameDiagnosticForName(node), isUse, false) —
+                // the scope walk; permissive None (unknownSymbol).
+                let _ = self.get_cannot_find_name_diagnostic_for_name(node);
+                let _ = !crate::expressions::is_write_only_access(self.store(), node);
+                let name = tsc_ast::node_text(self.store(), node).to_string();
+                symbol = self.resolve_name(
+                    &name,
+                    node,
+                    SymbolFlags::VALUE.union(SymbolFlags::EXPORT_VALUE),
+                    false, /*excludeGlobals*/
+                );
+            }
+            self.symbol_node_links.get(node).resolved_symbol = symbol;
+        }
+        self.symbol_node_links.get(node).resolved_symbol
     }
 
     /// Go: `func (c *Checker) GetJsxNamespace(location *ast.Node) string` →

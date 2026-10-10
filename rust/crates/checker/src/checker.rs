@@ -251,6 +251,9 @@ pub struct Checker {
     /// Go: `nonExistentProperties core.AutoSet[NonExistentPropertyKey]`
     /// (checker.go:11767 — the reportNonexistentProperty memo).
     pub(crate) non_existent_properties: std::collections::HashSet<(NodeId, TypeId, bool)>,
+    /// Go: `cachedArgumentsReferenced map[*ast.Node]bool` (checker.go —
+    /// containsArgumentsReference's memo).
+    pub(crate) cached_arguments_referenced: FxHashMap<NodeId, bool>,
     // TODO(port M6): signatureLinks, jsxElementLinks (JsxElementLinks), the
     // RegExpScanner, patternForType, contextFreeTypes, flow caches.
     // ── Arenas (§5.5) ──
@@ -1157,13 +1160,74 @@ impl Checker {
     // this module's surface, unchanged.)
 
     /// Go: `func (c *Checker) containsArgumentsReference(node *ast.Node) bool`
-    /// (checker.go:32675 — S4's flow-walk family). Permissive W1 stub: false
-    /// (jsdoc.go's `arguments`-matching arm stays dormant until then).
-    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
+    /// (checker.go:32675 — S4's flow-walk family). REAL body (the
+    /// cachedArgumentsReferenced memo + the subtree walk; the
+    /// getResolvedSymbol reader is the S6 seam carrier).
     pub(crate) fn contains_arguments_reference(&mut self, node: NodeId) -> bool {
-        // TODO(port M6 S4): the subtree walk for `arguments` references.
-        let _ = node;
-        false
+        let body = tsc_binder::node_data::body_of(self.store(), node);
+        let Some(body) = body else {
+            return false;
+        };
+        if let Some(contains_arguments) = self.cached_arguments_referenced.get(&node) {
+            return *contains_arguments;
+        }
+        let arguments_symbol = self.arguments_symbol;
+        let contains_arguments = {
+            fn visit(
+                c: &mut Checker,
+                arguments_symbol: Option<SymbolId>,
+                node: NodeId,
+            ) -> bool {
+                use tsc_ast::Kind;
+                if node.is_none() {
+                    return false;
+                }
+                let n = c.store().node(node);
+                match n.kind {
+                    Kind::Identifier => {
+                        let name_matches = arguments_symbol
+                            .is_some_and(|s| c.program_symbol(s).name.as_str()
+                                == tsc_ast::node_text(c.store(), node));
+                        // Go: c.IsArgumentsSymbol(c.getResolvedSymbol(node)).
+                        name_matches && c.get_resolved_symbol(node) == arguments_symbol
+                    }
+                    Kind::PropertyDeclaration
+                    | Kind::MethodDeclaration
+                    | Kind::GetAccessor
+                    | Kind::SetAccessor => {
+                        if let Some(name) = n.name()
+                            && c.store().node(name).kind == Kind::ComputedPropertyName
+                        {
+                            return visit(c, arguments_symbol, name);
+                        }
+                        false
+                    }
+                    Kind::PropertyAccessExpression | Kind::ElementAccessExpression => {
+                        let expression = crate::ast_shims::expression_of(c.store(), node)
+                            .unwrap_or(NodeId::NONE);
+                        visit(c, arguments_symbol, expression)
+                    }
+                    Kind::PropertyAssignment => {
+                        let initializer = crate::ast_shims::initializer_of(c.store(), node)
+                            .unwrap_or(NodeId::NONE);
+                        visit(c, arguments_symbol, initializer)
+                    }
+                    _ => {
+                        if crate::utilities::node_starts_new_lexical_environment(n)
+                            || crate::utilities::is_part_of_type_node(c.store(), node)
+                        {
+                            return false;
+                        }
+                        crate::statements::children_of(c.store(), node)
+                            .iter()
+                            .any(|&child| visit(c, arguments_symbol, child))
+                    }
+                }
+            }
+            visit(self, arguments_symbol, body)
+        };
+        self.cached_arguments_referenced.insert(node, contains_arguments);
+        contains_arguments
     }
 
     /// Go: `func (c *Checker) isArrayType(t *Type) bool` (checker.go:24005 —
@@ -1301,6 +1365,7 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         node_links: LinkStore::new(),
         symbol_node_links: NodeLinkStore::new(),
         non_existent_properties: Default::default(),
+        cached_arguments_referenced: FxHashMap::default(),
         type_node_links: LinkStore::new(),
         enum_member_links: LinkStore::new(),
         assertion_links: LinkStore::new(),

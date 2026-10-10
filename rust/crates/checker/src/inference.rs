@@ -2841,7 +2841,7 @@ fn get_substitution_intersection(c: &mut Checker, t: TypeId) -> TypeId {
 }
 
 /// Go: `func (c *Checker) isConstTypeVariable(t, depth) bool`.
-fn is_const_type_variable(c: &mut Checker, t: TypeId, depth: usize) -> bool {
+pub(crate) fn is_const_type_variable(c: &mut Checker, t: TypeId, depth: usize) -> bool {
     // TODO(port M6 S2/S7): the const-modifier/homomorphic-variable walk;
     // permissive false.
     let _ = (c, t, depth);

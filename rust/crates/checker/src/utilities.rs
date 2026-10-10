@@ -2239,7 +2239,7 @@ pub fn for_each_yield_expression(
                             return traverse(store, name, visitor);
                         }
                     }
-                } else if !is_part_of_type_node_shim(store, node) {
+                } else if !is_part_of_type_node(store, node) {
                     // This is the general case, which should include mostly
                     // expressions and statements. Also includes NodeArrays.
                     return for_each_child_stopping(store, node, visitor);
@@ -2254,7 +2254,7 @@ pub fn for_each_yield_expression(
 /// The `ast.IsPartOfTypeNode` walk, partial surface: the type-node kind range
 /// and the pure-keyword arms are exact; the identifier/qualified-name parent
 /// recursions need the full ast/utilities.go port (TODO(port M7)).
-fn is_part_of_type_node_shim(store: &dyn NodeStore, node: NodeId) -> bool {
+pub(crate) fn is_part_of_type_node(store: &dyn NodeStore, node: NodeId) -> bool {
     let n = store.node(node);
     if matches!(
         n.kind,
