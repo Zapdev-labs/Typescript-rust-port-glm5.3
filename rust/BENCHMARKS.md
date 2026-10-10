@@ -134,6 +134,24 @@ timings (rig still loaded by the syzkaller campaign, load ~30):
 | zod (colinhacks, depth 1) | 515 | 563,033 | 0 | `15803bfa6c347c94` ✓ | 1.003 | 0.642 |
 | vite (vitejs, depth 1) | 602 | 355,856 | 1 | `db36d00b94e30112` ✓ | 0.835 | 0.398 |
 
+**2026-10-10 18:10 — QUIET-RIG RE-MEASURE (the provisional caveat above
+cleared).** Same drivers as the official Phase A run (89308a375b, load
+avg 0.7-1.6), parity re-verified (shape hashes identical on both sides),
+medians of 5:
+
+| corpus | rust/go t=1 | rust/go t=16 |
+|---|---|---|
+| type-fest | **1.000** (31.46 vs 31.47 ms) | **0.483** (5.83 vs 12.08 ms, Rust 2.07× faster) |
+| zod | 1.180 (104.3 vs 88.3 ms) | **0.765** (18.2 vs 23.8 ms) |
+| vite | 1.117 (70.7 vs 63.3 ms) | **0.593** (10.6 vs 17.9 ms) |
+
+The loaded-run ratios were contention-flattered. The honest quiet picture
+on real-world code: single-threaded Rust is dead-even on type-fest and
+11-18% behind on the zod/vite mixes; multi-threaded Rust is 1.3-2.1×
+FASTER across the board. The single-thread hardening gap (~12-25%) is
+concentrated in the d.ts-heavy/JSX-heavy mixes — same profile as the race
+corpus (1.246× t=1).
+
 tsc/testdata (torture corpus, 12,957 files, 2,584,705 nodes, 7,218 intentional
 errors) — **PARITY GREEN** (2026-10-08 05:10, shape `b2b6a3ebc8e90d02` on both
 sides) after the two parser fixes (26d303a562): `!`-definite-assignment on a
