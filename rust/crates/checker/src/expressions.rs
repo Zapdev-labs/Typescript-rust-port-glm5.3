@@ -54,45 +54,29 @@ use tsc_diagnostics::{
     AN_OBJECT_S_SYMBOL_HASINSTANCE_METHOD_MUST_RETURN_A_BOOLEAN_VALUE_FOR_IT_TO_BE_USED_ON_THE_RIGHT_HAND_SIDE_OF_AN_INSTANCEOF_EXPRESSION,
     A_CONST_ASSERTION_CAN_ONLY_BE_APPLIED_TO_REFERENCES_TO_ENUM_MEMBERS_OR_STRING_NUMBER_BOOLEAN_ARRAY_OR_OBJECT_LITERALS,
     A_REST_ELEMENT_CANNOT_HAVE_AN_INITIALIZER, A_REST_ELEMENT_MUST_BE_LAST_IN_A_DESTRUCTURING_PATTERN,
-    CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_CONSTANT, CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_CLASS,
-    CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_AN_ENUM, CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_FUNCTION,
-    CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_AN_IMPORT, CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_NAMESPACE,
     CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_READ_ONLY_PROPERTY,
     CANNOT_ASSIGN_TO_PRIVATE_METHOD_0_PRIVATE_METHODS_ARE_NOT_WRITABLE,
-    CANNOT_EXTEND_AN_INTERFACE_0_DID_YOU_MEAN_IMPLEMENTS,
     CANNOT_USE_THIS_IN_A_STATIC_PROPERTY_INITIALIZER_OF_A_DECORATED_CLASS,
-    CLASS_0_USED_BEFORE_ITS_DECLARATION,
     CLASS_FIELD_0_DEFINED_BY_THE_PARENT_CLASS_IS_NOT_ACCESSIBLE_IN_THE_CHILD_CLASS_VIA_SUPER,
-    DID_YOU_MEAN_0, ELEMENT_IMPLICITLY_HAS_AN_ANY_TYPE_BECAUSE_TYPE_0_HAS_NO_INDEX_SIGNATURE,
     EXPONENTIATION_CANNOT_BE_PERFORMED_ON_BIGINT_VALUES_UNLESS_THE_TARGET_OPTION_IS_SET_TO_ES2016_OR_LATER,
-    IMPLICIT_CONVERSION_OF_A_SYMBOL_TO_A_STRING_WILL_FAIL_AT_RUNTIME_CONSIDER_WRAPPING_THIS_EXPRESSION_IN_STRING,
-    INDEX_SIGNATURE_IN_TYPE_0_ONLY_PERMITS_READING,
     LEFT_SIDE_OF_COMMA_OPERATOR_IS_UNUSED_AND_HAS_NO_SIDE_EFFECTS,
     META_PROPERTY_0_IS_ONLY_ALLOWED_IN_THE_BODY_OF_A_FUNCTION_DECLARATION_FUNCTION_EXPRESSION_OR_CONSTRUCTOR,
-    NO_VALUE_EXISTS_IN_SCOPE_FOR_THE_SHORTHAND_PROPERTY_0_EITHER_DECLARE_ONE_OR_PROVIDE_AN_INITIALIZER,
     OPERATOR_0_CANNOT_BE_APPLIED_TO_TYPE_1, OPERATOR_0_CANNOT_BE_APPLIED_TO_TYPES_1_AND_2,
     PRIVATE_ACCESSOR_WAS_DEFINED_WITHOUT_A_GETTER,
     PRIVATE_FIELD_0_MUST_BE_DECLARED_IN_AN_ENCLOSING_CLASS,
     PRIVATE_IDENTIFIERS_ARE_NOT_ALLOWED_OUTSIDE_CLASS_BODIES,
     PRIVATE_IDENTIFIERS_CANNOT_BE_USED_IN_DESTRUCTURING_PATTERNS,
-    PROPERTY_0_COMES_FROM_AN_INDEX_SIGNATURE_SO_IT_MUST_BE_ACCESSED_WITH_0,
-    PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1, PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_2,
-    PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_TO_ACCESS_THE_STATIC_MEMBER_2_INSTEAD,
-    PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_DO_YOU_NEED_TO_CHANGE_YOUR_TARGET_LIBRARY_TRY_CHANGING_THE_LIB_COMPILER_OPTION_TO_2_OR_LATER,
-    PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_TRY_CHANGING_THE_LIB_COMPILER_OPTION_TO_INCLUDE_DOM,
+    PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1,
     PROPERTY_0_IS_PRIVATE_AND_ONLY_ACCESSIBLE_WITHIN_CLASS_1,
     PROPERTY_0_IS_PROTECTED_AND_ONLY_ACCESSIBLE_THROUGH_AN_INSTANCE_OF_CLASS_1_THIS_IS_AN_INSTANCE_OF_CLASS_2,
     PROPERTY_0_IS_PROTECTED_AND_ONLY_ACCESSIBLE_WITHIN_CLASS_1_AND_ITS_SUBCLASSES,
-    PROPERTY_0_IS_USED_BEFORE_BEING_ASSIGNED, PROPERTY_0_IS_USED_BEFORE_ITS_INITIALIZATION,
+    PROPERTY_0_IS_USED_BEFORE_BEING_ASSIGNED,
     PROPERTY_0_MAY_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_2,
     PROPERTY_ASSIGNMENT_EXPECTED,
     RIGHT_OPERAND_OF_IS_UNREACHABLE_BECAUSE_THE_LEFT_OPERAND_IS_NEVER_NULLISH,
-    SPREAD_TYPES_MAY_ONLY_BE_CREATED_FROM_OBJECT_TYPES,
-    SUPER_CALLS_ARE_NOT_PERMITTED_OUTSIDE_CONSTRUCTORS_OR_IN_NESTED_FUNCTIONS_INSIDE_CONSTRUCTORS,
     THE_0_OPERATOR_CANNOT_BE_APPLIED_TO_TYPE_SYMBOL,
     THE_0_OPERATOR_IS_NOT_ALLOWED_FOR_BOOLEAN_TYPES_CONSIDER_USING_1_INSTEAD,
     THE_CONTAINING_ARROW_FUNCTION_CAPTURES_THE_GLOBAL_VALUE_OF_THIS,
-    THE_IMPORT_META_META_PROPERTY_IS_NOT_ALLOWED_IN_FILES_WHICH_WILL_BUILD_INTO_COMMONJS_OUTPUT,
     THE_IMPORT_META_META_PROPERTY_IS_ONLY_ALLOWED_WHEN_THE_MODULE_OPTION_IS_ES2020_ES2022_ESNEXT_SYSTEM_NODE16_NODE18_NODE20_OR_NODENEXT,
     THE_LEFT_HAND_SIDE_OF_AN_ARITHMETIC_OPERATION_MUST_BE_OF_TYPE_ANY_NUMBER_BIGINT_OR_AN_ENUM_TYPE,
     THE_LEFT_HAND_SIDE_OF_AN_ASSIGNMENT_EXPRESSION_MAY_NOT_BE_AN_OPTIONAL_PROPERTY_ACCESS,
@@ -113,47 +97,28 @@ use tsc_diagnostics::{
     TYPE_OF_YIELD_OPERAND_IN_AN_ASYNC_GENERATOR_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER,
     X_AWAIT_HAS_NO_EFFECT_ON_THE_TYPE_OF_THIS_EXPRESSION,
     PROPERTY_0_IS_NOT_ACCESSIBLE_OUTSIDE_CLASS_1_BECAUSE_IT_HAS_A_PRIVATE_IDENTIFIER,
-    THE_SHADOWING_DECLARATION_OF_0_IS_DEFINED_HERE,
-    THE_DECLARATION_OF_0_THAT_YOU_PROBABLY_INTENDED_TO_USE_IS_DEFINED_HERE,
     THE_TARGET_OF_AN_OBJECT_REST_ASSIGNMENT_MAY_NOT_BE_AN_OPTIONAL_PROPERTY_ACCESS,
     THE_TARGET_OF_AN_OBJECT_REST_ASSIGNMENT_MUST_BE_A_VARIABLE_OR_A_PROPERTY_ACCESS,
     THIS_CONDITION_WILL_ALWAYS_RETURN_0,
     THIS_CONDITION_WILL_ALWAYS_RETURN_0_SINCE_JAVASCRIPT_COMPARES_OBJECTS_BY_REFERENCE_NOT_VALUE,
     THIS_COMPARISON_APPEARS_TO_BE_UNINTENTIONAL_BECAUSE_THE_TYPES_0_AND_1_HAVE_NO_OVERLAP,
     THIS_EXPRESSION_IS_ALWAYS_NULLISH, THIS_KIND_OF_EXPRESSION_IS_ALWAYS_FALSY,
-    THIS_KIND_OF_EXPRESSION_IS_ALWAYS_TRUTHY, THIS_OPERATION_CAN_BE_SIMPLIFIED_THIS_SHIFT_IS_IDENTICAL_TO_0_1_2,
-    THIS_SPREAD_ALWAYS_OVERWRITES_THIS_PROPERTY,
-    THIS_SYNTAX_IS_NOT_ALLOWED_WHEN_ERASABLESYNTAXONLY_IS_ENABLED,
-    THIS_SYNTAX_IS_RESERVED_IN_FILES_WITH_THE_MTS_OR_CTS_EXTENSION_USE_AN_AS_EXPRESSION_INSTEAD,
-    TYPE_0_CANNOT_BE_USED_TO_INDEX_TYPE_1,
+    THIS_KIND_OF_EXPRESSION_IS_ALWAYS_TRUTHY,
     TYPE_0_DOES_NOT_SATISFY_THE_EXPECTED_TYPE_1,
-    TYPE_0_HAS_NO_SIGNATURES_FOR_WHICH_THE_TYPE_ARGUMENT_LIST_IS_APPLICABLE,
     TYPE_0_IS_NOT_ASSIGNABLE_TO_TYPE_1_WITH_EXACTOPTIONALPROPERTYTYPES_COLON_TRUE_CONSIDER_ADDING_UNDEFINED_TO_THE_TYPE_OF_THE_TARGET,
     TYPE_0_MAY_REPRESENT_A_PRIMITIVE_VALUE_WHICH_IS_NOT_PERMITTED_AS_THE_RIGHT_OPERAND_OF_THE_IN_OPERATOR,
-    UNUSED_LABEL,
-    VARIABLE_0_IMPLICITLY_HAS_AN_1_TYPE, VARIABLE_0_IMPLICITLY_HAS_TYPE_1_IN_SOME_LOCATIONS_WHERE_ITS_TYPE_CANNOT_BE_DETERMINED,
-    VARIABLE_0_IS_USED_BEFORE_BEING_ASSIGNED,
     X_0_AND_1_OPERATIONS_CANNOT_BE_MIXED_WITHOUT_PARENTHESES,
-    X_0_IS_DECLARED_HERE, X_0_IS_SPECIFIED_MORE_THAN_ONCE_SO_THIS_USAGE_WILL_BE_OVERWRITTEN,
-    X_ARGUMENTS_CANNOT_BE_REFERENCED_IN_PROPERTY_INITIALIZERS_OR_CLASS_STATIC_INITIALIZATION_BLOCKS,
-    X_SUPER_CAN_ONLY_BE_REFERENCED_IN_A_DERIVED_CLASS,
-    X_SUPER_CAN_ONLY_BE_REFERENCED_IN_MEMBERS_OF_DERIVED_CLASSES_OR_OBJECT_LITERAL_EXPRESSIONS,
-    X_SUPER_CANNOT_BE_REFERENCED_IN_A_COMPUTED_PROPERTY_NAME,
-    X_SUPER_CANNOT_BE_REFERENCED_IN_CONSTRUCTOR_ARGUMENTS,
-    X_SUPER_MUST_BE_CALLED_BEFORE_ACCESSING_A_PROPERTY_OF_SUPER_IN_THE_CONSTRUCTOR_OF_A_DERIVED_CLASS,
     X_SUPER_MUST_BE_CALLED_BEFORE_ACCESSING_THIS_IN_THE_CONSTRUCTOR_OF_A_DERIVED_CLASS,
-    X_SUPER_PROPERTY_ACCESS_IS_PERMITTED_ONLY_IN_A_CONSTRUCTOR_MEMBER_FUNCTION_OR_MEMBER_ACCESSOR_OF_A_DERIVED_CLASS,
     X_THIS_CANNOT_BE_REFERENCED_IN_A_COMPUTED_PROPERTY_NAME,
     X_THIS_CANNOT_BE_REFERENCED_IN_CURRENT_LOCATION,
     X_THIS_CANNOT_BE_REFERENCED_IN_A_MODULE_OR_NAMESPACE_BODY,
     X_THIS_IMPLICITLY_HAS_TYPE_ANY_BECAUSE_IT_DOES_NOT_HAVE_A_TYPE_ANNOTATION,
     X_YIELD_EXPRESSION_IMPLICITLY_RESULTS_IN_AN_ANY_TYPE_BECAUSE_ITS_CONTAINING_GENERATOR_LACKS_A_RETURN_TYPE_ANNOTATION,
 };
-use tsc_diagnostics as diag;
 
 use crate::checker::CheckMode;
 use crate::relater::{self, TypeFacts};
-use crate::types::{ObjectFlags, SignatureKind, TypeFlags, TypeId};
+use crate::types::{TypeFlags, TypeId};
 use crate::utilities as u;
 use crate::Checker;
 
@@ -800,7 +765,7 @@ impl Checker {
         // and the right operand to be of type Any, a subtype of the 'Function' interface type, or have a call or construct signature.
         // The result is always of the Boolean primitive type.
         // NOTE: do not raise error if leftType is unknown as related error was already reported
-        if !crate::utilities::is_type_any(Some(&self.type_(left_type)))
+        if !crate::utilities::is_type_any(Some(self.type_(left_type)))
             && self.all_types_assignable_to_kind(left_type, TypeFlags::PRIMITIVE)
         {
             self.error(
@@ -910,6 +875,8 @@ impl Checker {
     /// (checker.go:13361). TODO(port M6 S8): the structured-member property
     /// walk (getPropertyOfType + getTypeOfSymbol per property); permissive
     /// empty (no unassignable properties at this depth).
+    // (Called by S8's checkTypeAssignableTo exactOptionalPropertyTypes arm.)
+    #[allow(dead_code)]
     pub(crate) fn get_exact_optional_unassignable_properties(
         &mut self,
         source: TypeId,
@@ -1259,6 +1226,8 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkAssertionDeferred(node *ast.Node)` (checker.go:12554).
+    // (Wired by checkDeferredNode's S4 arms.)
+    #[allow(dead_code)]
     pub(crate) fn check_assertion_deferred(&mut self, node: NodeId) {
         let type_node = crate::ast_shims::type_of_node(self.store(), node)
             .expect("assertion has a type node");
@@ -1415,36 +1384,35 @@ impl Checker {
                     &THE_RIGHT_HAND_SIDE_OF_AN_ARITHMETIC_OPERATION_MUST_BE_OF_TYPE_ANY_NUMBER_BIGINT_OR_AN_ENUM_TYPE,
                     true, /*isAwaitValid*/
                 );
-                let result_type;
                 // If both are any or unknown, allow operation; assume it will resolve to number
-                if (self.is_type_assignable_to_kind(left_type, TypeFlags::ANY_OR_UNKNOWN)
+                let result_type = if (self.is_type_assignable_to_kind(left_type, TypeFlags::ANY_OR_UNKNOWN)
                     && self.is_type_assignable_to_kind(right_type, TypeFlags::ANY_OR_UNKNOWN))
                     || (!relater::maybe_type_of_kind(self, left_type, TypeFlags::BIGINT_LIKE)
                         && !relater::maybe_type_of_kind(self, right_type, TypeFlags::BIGINT_LIKE))
                 {
-                    result_type = self.number_type();
+                    self.number_type()
                 } else if self.both_are_big_int_like(left_type, right_type) {
                     match operator {
                         Kind::GreaterThanGreaterThanGreaterThanToken
                         | Kind::GreaterThanGreaterThanGreaterThanEqualsToken => {
                             self.report_operator_error(left_type, operator, right_type, error_node, None);
                         }
-                        Kind::AsteriskAsteriskToken | Kind::AsteriskAsteriskEqualsToken => {
-                            if self.language_version < tsc_core::options_generated::ScriptTarget::ES2016 {
-                                self.error(
-                                    error_node.expect("non-nil errorNode on this path"),
-                                    &EXPONENTIATION_CANNOT_BE_PERFORMED_ON_BIGINT_VALUES_UNLESS_THE_TARGET_OPTION_IS_SET_TO_ES2016_OR_LATER,
-                                    &[],
-                                );
-                            }
+                        Kind::AsteriskAsteriskToken | Kind::AsteriskAsteriskEqualsToken
+                            if self.language_version < tsc_core::options_generated::ScriptTarget::ES2016 =>
+                        {
+                            self.error(
+                                error_node.expect("non-nil errorNode on this path"),
+                                &EXPONENTIATION_CANNOT_BE_PERFORMED_ON_BIGINT_VALUES_UNLESS_THE_TARGET_OPTION_IS_SET_TO_ES2016_OR_LATER,
+                                &[],
+                            );
                         }
                         _ => {}
                     }
-                    result_type = self.bigint_type();
+                    self.bigint_type()
                 } else {
                     self.report_operator_error(left_type, operator, right_type, error_node, Some(Checker::both_are_big_int_like));
-                    result_type = self.error_type();
-                }
+                    self.error_type()
+                };
                 if left_ok && right_ok {
                     self.check_assignment_operator(left, operator, right, left_type, result_type);
                     match operator {
@@ -1492,8 +1460,8 @@ impl Checker {
                 {
                     // If one or both operands are of the String primitive type, the result is of the String primitive type.
                     result_type = Some(self.string_type());
-                } else if u::is_type_any(Some(&self.type_(left_type)))
-                    || u::is_type_any(Some(&self.type_(right_type)))
+                } else if u::is_type_any(Some(self.type_(left_type)))
+                    || u::is_type_any(Some(self.type_(right_type)))
                 {
                     // Otherwise, the result is of type Any.
                     // NOTE: unknown type here denotes error type. Old compiler treated this case as any type so do we.
@@ -1514,10 +1482,9 @@ impl Checker {
                     // If both types have an awaited type of one of these, we'll assume the user
                     // might be missing an await without doing an exhaustive check that inserting
                     // await(s) will actually be a completely valid binary expression.
-                    let close_enough_kind = TypeFlags::NUMBER_LIKE
-                        .union(TypeFlags::BIGINT_LIKE)
-                        .union(TypeFlags::STRING_LIKE)
-                        .union(TypeFlags::ANY_OR_UNKNOWN);
+                    // (Go's closeEnoughKind lives inside the operand-kind closure —
+                    // close_enough_kind_is_related recomputes it, the PORT note in
+                    // report_operator_error.)
                     self.report_operator_error(
                         left_type,
                         operator,
@@ -2072,7 +2039,7 @@ fn close_enough_kind_is_related(c: &mut Checker, left: TypeId, right: TypeId) ->
 /// Go: the `typesAreCompatible` closure of the relational arms
 /// (checker.go:12704).
 fn relational_types_are_compatible(c: &mut Checker, left: TypeId, right: TypeId) -> bool {
-    if u::is_type_any(Some(&c.type_(left))) || u::is_type_any(Some(&c.type_(right))) {
+    if u::is_type_any(Some(c.type_(left))) || u::is_type_any(Some(c.type_(right))) {
         return true;
     }
     let number_or_big_int_type = c.number_or_big_int_type();
@@ -2380,12 +2347,11 @@ impl Checker {
         if self.strict_null_checks
             && !self.type_(t).flags.intersects(TypeFlags::ANY_OR_UNKNOWN.union(TypeFlags::NEVER))
         {
-            let is_optional;
-            if self.exact_optional_property_types {
-                is_optional = self.program_symbol(symbol).flags.intersects(SymbolFlags::OPTIONAL);
+            let is_optional = if self.exact_optional_property_types {
+                self.program_symbol(symbol).flags.intersects(SymbolFlags::OPTIONAL)
             } else {
-                is_optional = self.has_type_facts(t, TypeFacts::IS_UNDEFINED);
-            }
+                self.has_type_facts(t, TypeFacts::IS_UNDEFINED)
+            };
             if !is_optional {
                 self.error(expr, &THE_OPERAND_OF_A_DELETE_OPERATOR_MUST_BE_OPTIONAL, &[]);
             }
@@ -2669,7 +2635,7 @@ impl Checker {
         let signature_next_type = iteration_types.next_type.unwrap_or_else(|| self.any_type());
         let yielded_type =
             self.get_yielded_type_of_yield_expression(node, yield_expression_type, signature_next_type, is_async);
-        if let Some(rt) = return_type
+        if let Some(_rt) = return_type
             && let Some(yielded) = yielded_type
         {
             self.check_type_assignable_to_and_optionally_elaborate(
@@ -2709,7 +2675,7 @@ impl Checker {
         match t {
             Some(t) => t,
             None => {
-                let mut t = self.any_type();
+                let t = self.any_type();
                 if self.no_implicit_any && !u::expression_result_is_unused(self.store(), node) {
                     let contextual_type = self.get_contextual_type_stub(node, crate::types::ContextFlags::NONE);
                     if contextual_type.is_none() || u::is_type_any(contextual_type.as_ref().map(|t| self.type_(*t))) {
@@ -2720,7 +2686,6 @@ impl Checker {
                         );
                     }
                 }
-                t = t;
                 t
             }
         }
@@ -3052,8 +3017,9 @@ impl Checker {
         if self.store().node(right).kind == Kind::PrivateIdentifier {
             // (Go's emit-helper arms for downlevel private names run under
             // checkExternalEmitHelpers — TODO(port M6 W3/S10).)
+            let right_text = tsc_ast::node_text(self.store(), right).to_string();
             let lexically_scoped_symbol =
-                self.lookup_symbol_for_private_identifier_declaration(&tsc_ast::node_text(self.store(), right).to_string(), right);
+                self.lookup_symbol_for_private_identifier_declaration(&right_text, right);
             if assignment_kind != u::AssignmentKind::None
                 && let Some(l) = lexically_scoped_symbol
             {
@@ -3069,7 +3035,7 @@ impl Checker {
                 }
             }
             if is_any_like {
-                if let Some(l) = lexically_scoped_symbol {
+                if lexically_scoped_symbol.is_some() {
                     if relater::is_error_type(self, apparent_type) {
                         return self.error_type();
                     }
@@ -3135,9 +3101,10 @@ impl Checker {
                 }
                 return apparent_type;
             }
+            let right_text = tsc_ast::node_text(self.store(), right).to_string();
             prop = self.get_property_of_type_ex(
                 apparent_type,
-                &tsc_ast::node_text(self.store(), right).to_string(),
+                &right_text,
                 /*skipObjectFunctionPropertyAugment*/ crate::spine::is_const_enum_object_type(self, apparent_type),
                 /*includeTypeOnlyMembers*/ self.store().node(node).kind == Kind::QualifiedName,
             );
@@ -3648,14 +3615,12 @@ impl Checker {
         }
         let mut containing_type = containing_type;
         if self.type_(containing_type).flags.intersects(TypeFlags::TYPE_PARAMETER) {
-            // get the original type -- represented as the type constraint of the 'this' type
-            if u::is_this_type_parameter(self.type_(containing_type)) {
-                containing_type = relater::get_constraint_of_type_parameter(self, containing_type)
-                    .unwrap_or(containing_type);
-            } else {
-                containing_type = relater::get_constraint_of_type_parameter(self, containing_type)
-                    .unwrap_or(containing_type);
-            }
+            // get the original type -- represented as the type constraint of
+            // the 'this' type. (Go's isThisType vs base-constraint split
+            // collapses here until S7's thisType carries its own constraint;
+            // both arms resolve the constraint.)
+            containing_type = relater::get_constraint_of_type_parameter(self, containing_type)
+                .unwrap_or(containing_type);
         }
         let Some(enclosing) = enclosing_class else { return true };
         if !self.has_base_type(containing_type, enclosing) {
@@ -3893,7 +3858,12 @@ impl Checker {
 
 /// Go: `const (ReferenceHintNone ReferenceHint = iota; ReferenceHintProperty; ...)`
 /// (checker.go:12760 region). The S4 slice only uses ReferenceHintProperty.
+// (Go keeps SCREAMING-SNAKE ReferenceHint constants; the port keeps the
+// shape and silences the acronym-style lint rather than renaming away from
+// the Go spelling.)
+#[allow(clippy::upper_case_acronyms)]
 pub(crate) enum ReferenceHint {
+    #[allow(dead_code)]
     NONE,
     PROPERTY,
 }
@@ -4020,6 +3990,8 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) tryGetThisTypeAt(node) *Type` (checker.go:12382).
+    // (Go's public TryGetThisTypeAt; used by the language-service slice.)
+    #[allow(dead_code)]
     pub(crate) fn try_get_this_type_at(&mut self, node: NodeId) -> Option<TypeId> {
         self.try_get_this_type_at_ex(node, true /*includeGlobalThis*/, None /*container*/)
     }
@@ -4112,12 +4084,11 @@ impl Checker {
                 return false;
             }
             let parent_kind = self.store().node(parent).kind;
-            if parent_kind == Kind::Parameter {
-                if in_binding_initializer
-                    || crate::ast_shims::initializer_of(self.store(), parent) == Some(node)
-                {
-                    return true;
-                }
+            if parent_kind == Kind::Parameter
+                && (in_binding_initializer
+                    || crate::ast_shims::initializer_of(self.store(), parent) == Some(node))
+            {
+                return true;
             }
             if parent_kind == Kind::BindingElement
                 && crate::ast_shims::initializer_of(self.store(), parent) == Some(node)
@@ -4141,7 +4112,7 @@ impl Checker {
             && self.legacy_decorators
         {
             let initializer = crate::ast_shims::initializer_of(self.store(), container);
-            if let Some(initializer) = initializer {
+            if let Some(_initializer) = initializer {
                 let pos_in_loc = {
                     let this_pos = self.store().node(this_expression).loc.pos();
                     let loc = &self.store().node(container).loc;

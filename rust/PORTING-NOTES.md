@@ -1945,3 +1945,19 @@ entries):
   five phase timers (seed/config/program/bind/record) to STDERR on both
   drivers (identical phases, same env var; the NDJSON contract
   untouched). PORT-noted at the instrumentation site.
+
+## M6 S4 (tranche 1) — expression leaves I: operators/literals/this/property-access (2026-10-10, wip-checkpointed + tail commit)
+
+`expressions.rs` ~4,200 lines: truthiness/nullish semantics, operator
+error family, REAL is_type_assignable_to_kind, full check_binary_like_
+expression + destructuring-assignment, unary/await/conditional/spread/
+yield/meta-property leaves, property-access core incl. private
+identifiers + accessibility, the this family, 18 spine arms wired.
+checker.rs boolean_type no longer panics (S7 seam lazy build).
+Worker gates, ALL re-verified by the orchestrator with fresh binaries:
+115 checker tests, workspace clippy 0, fixture matrix 9/9 identical,
+300-slice twins byte-identical (143/143 match, 0 divergent — baseline
+preserved), program twin 15/15 identical. Remaining S4 families
+(identifier/super/template/regex/array-literal/object-literal full/
+expando/JS-assignment/contextual signatures) bannered; continuation at
+$HOME/.s4-continuation.md; tranche 2 dispatched.

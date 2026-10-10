@@ -460,6 +460,11 @@ pub fn type_of_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
         tsc_ast::NodeData::ConstructSignatureDeclaration(d) => d.type_,
         tsc_ast::NodeData::IndexSignatureDeclaration(d) => d.type_,
         tsc_ast::NodeData::JSDocTypeExpression(d) => Some(d.type_),
+        // Go: node.Type() on the assertion family (checker.go's
+        // checkAssertion/checkSatisfiesExpression call sites).
+        tsc_ast::NodeData::TypeAssertion(d) => Some(d.type_),
+        tsc_ast::NodeData::AsExpression(d) => Some(d.type_),
+        tsc_ast::NodeData::SatisfiesExpression(d) => Some(d.type_),
         _ => None,
     }
 }
