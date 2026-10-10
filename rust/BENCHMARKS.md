@@ -352,3 +352,15 @@ choice on the Rust side is legitimate engineering, but it must be
 declared in the record either way). The remaining ~1.41× is
 parse-dominated per the phase split (program 3.1 vs 2.2 s, bind 1.9 vs
 1.1 s).
+
+**2026-10-10 18:30 — PERF LEAD 2 (as_path/path-key clones): landed, NO
+measurable win — lead exhausted.** Removed the String clones from the
+CaseSensitivity hot wrappers (compare_file_paths cloned both args,
+contains_file_path cloned the child; path_key round-tripped through an
+owned RootedPath) and added path_key_str; seven program/module call
+sites swapped. Output byte-identical, tspath+compiler tests green — but
+the program race is unchanged (local A/B: 7.24 vs 7.00 s median, within
+noise). The M1 0.83× RootedFilePathToPathKey note does not reproduce at
+the program-build scale: these paths are NOT the hot allocation site.
+The remaining single-thread gap lives in the parse/scan phase itself
+(and the Phase B split: program 3.1 vs 2.2 s, bind 1.9 vs 1.1 s).

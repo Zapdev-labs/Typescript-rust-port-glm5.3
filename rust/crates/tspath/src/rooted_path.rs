@@ -722,7 +722,10 @@ impl CaseSensitivity {
     // CompareFilePaths compares already rooted and normalized file names without
     // combining or reducing their path components.
     pub fn compare_file_paths(&self, a: &RootedFilePath, b: &RootedFilePath) -> i32 {
-        self.compare_paths(&a.as_path(), &b.as_path())
+        // PORT(perf M1 0.83x note, 2026-10-10): the Go original forwards to
+        // ComparePaths; forwarding through as_path() here cloned both path
+        // strings on every call. Compare the underlying text directly.
+        self.compare_rooted_text(a.as_string(), b.as_string())
     }
 
     // ComparePaths compares already rooted and normalized paths without combining
@@ -767,7 +770,10 @@ impl CaseSensitivity {
     }
 
     pub fn contains_file_path(&self, parent: &RootedDirectoryPath, child: &RootedFilePath) -> bool {
-        self.contains_path(parent, &child.as_path())
+        // PORT(perf M1 0.83x note, 2026-10-10): forward to the text form
+        // directly — routing through contains_path cloned the child path.
+        self.trim_contained_path(parent.as_string(), child.as_string())
+            .is_some()
     }
 
     pub fn contains_path(&self, parent: &RootedDirectoryPath, child: &RootedPath) -> bool {

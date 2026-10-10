@@ -69,10 +69,18 @@ impl CaseSensitivity {
     // PathKey returns the canonical key for an already rooted, normalized path
     // under c.
     pub fn path_key(&self, path: &RootedPath) -> PathKey {
-        if is_encoded_dynamic_file_name(path.as_string()) {
-            return PathKey::from(canonical_dynamic_uri_path(path.as_string()).as_ref());
+        self.path_key_str(path.as_string())
+    }
+
+    // PORT(perf M1 0.83x note, 2026-10-10): string-taking form of PathKey —
+    // callers holding a RootedFilePath/RootedDirectoryPath previously routed
+    // through as_path(), which cloned the whole path string per call on the
+    // program-build resolution hot path.
+    pub fn path_key_str(&self, path: &str) -> PathKey {
+        if is_encoded_dynamic_file_name(path) {
+            return PathKey::from(canonical_dynamic_uri_path(path).as_ref());
         }
-        PathKey::from(self.canonicalize(path.as_string()).as_ref())
+        PathKey::from(self.canonicalize(path).as_ref())
     }
 }
 

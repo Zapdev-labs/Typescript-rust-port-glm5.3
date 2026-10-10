@@ -345,9 +345,7 @@ impl<'a> FileLoader<'a> {
         {
             let task = crate::files_parser::ParseTask {
                 // Go: tspath.RootedPath(fileName) → toPath(fileName)
-                path: self.case_sensitivity.path_key(&RootedPath::from(
-                    file_name.as_string(),
-                )),
+                path: self.case_sensitivity.path_key_str(file_name.as_string()),
                 normalized_file_path: file_name,
                 lib_file,
                 include_reason,

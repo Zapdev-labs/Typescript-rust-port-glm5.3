@@ -470,8 +470,9 @@ impl Program {
 
     /// Go: `func (p *Program) PathKeyForFileName(fileName) tspath.PathKey`.
     pub fn path_key_for_file_name(&self, file_name: &RootedFilePath) -> PathKey {
-        self.case_sensitivity
-            .path_key(&RootedPath::from(file_name.as_string()))
+        // PORT(perf, 2026-10-10): string form — the RootedPath round-trip
+        // cloned the path text on every call (hot via GetSourceFile).
+        self.case_sensitivity.path_key_str(file_name.as_string())
     }
 
     /// Go: `func (p *Program) GetSourceFile(fileName) *ast.SourceFile`.
@@ -973,10 +974,10 @@ impl Program {
         if !file_name.is_declaration_file() {
             return false;
         }
-        self.case_sensitivity.contains_path(
-            self.get_global_typings_cache_location(),
-            &file_name.as_path(),
-        )
+        // PORT(perf, 2026-10-10): the file-path form avoids the child-path
+        // clone the RootedPath routing performed.
+        self.case_sensitivity
+            .contains_file_path(self.get_global_typings_cache_location(), file_name)
     }
 
     /// Go: `func (p *Program) GetJSXRuntimeImportSpecifier(path)`.
@@ -2370,7 +2371,7 @@ impl Program {
         };
         let mut root_paths: rustc_hash::FxHashSet<PathKey> = rustc_hash::FxHashSet::default();
         for file_name in self.opts.config.file_names() {
-            root_paths.insert(self.case_sensitivity.path_key(&file_name.as_path()));
+            root_paths.insert(self.case_sensitivity.path_key_str(file_name.as_string()));
         }
         let mut diagnostics = Vec::new();
         for file in &self.files {

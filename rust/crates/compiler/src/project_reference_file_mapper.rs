@@ -157,9 +157,7 @@ impl ProjectReferenceFileMapper {
         if self.config.config_file_name.as_string().is_empty() {
             return PathKey::default();
         }
-        self.config.case_sensitivity.path_key(
-            &tsc_tspath::RootedPath::from(self.config.config_file_name.as_string()),
-        )
+        self.config.case_sensitivity.path_key_str(self.config.config_file_name.as_string())
     }
 
     /// Go: `func (mapper *projectReferenceFileMapper) getParseFileRedirect(file ast.HasFileName)`.
@@ -370,9 +368,9 @@ impl ProjectReferenceFileMapper {
         if child_config.config_file_name.as_string().is_empty() {
             return false;
         }
-        let child_path = child_config.case_sensitivity.path_key(
-            &tsc_tspath::RootedPath::from(child_config.config_file_name.as_string()),
-        );
+        let child_path = child_config
+            .case_sensitivity
+            .path_key_str(child_config.config_file_name.as_string());
         let mut seen_ref: rustc_hash::FxHashSet<PathKey> =
             rustc_hash::FxHashSet::with_capacity_and_hasher(
                 self.references_in_config_file.len(),
@@ -508,8 +506,11 @@ impl ProjectReferenceFileMapperBuilder {
                 // Go: realpath the file through the fs and re-map through the
                 // output-dts table; symlinks.KnownSymlinks + cachedvfs are not
                 // ported — the direct comparison arm only (PORTING-NOTES).
-                let real_declaration_path = self.host.fs().case_sensitivity().path_key(
-                    &self.host.fs().realpath(&tsc_tspath::RootedPath::from(file_name.as_string())),
+                let real_declaration_path = self.host.fs().case_sensitivity().path_key_str(
+                    self.host
+                        .fs()
+                        .realpath(&tsc_tspath::RootedPath::from(file_name.as_string()))
+                        .as_string(),
                 );
                 let entry = if real_declaration_path == *path {
                     None

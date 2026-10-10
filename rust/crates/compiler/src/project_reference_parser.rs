@@ -234,7 +234,5 @@ fn path_key_of(
     task_index: usize,
     case_sensitivity: CaseSensitivity,
 ) -> PathKey {
-    case_sensitivity.path_key(&RootedPath::from(
-        tasks[task_index].config_name.as_string().to_string(),
-    ))
+    case_sensitivity.path_key_str(tasks[task_index].config_name.as_string())
 }
