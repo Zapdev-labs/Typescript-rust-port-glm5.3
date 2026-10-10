@@ -1,0 +1,65 @@
+rust/crates/checker/src/relater.rs
+  s_49e1cb19943b26::t_083d56a3ce466e 3124-3125,3128-3132
+rust/crates/checker/src/typeofsymbol.rs
+  s_49e1cb19943b26::t_de4ce2bd9cc448 2623
+  s_49e1cb19943b26::t_3fd75a748ca667 2649
+rust/crates/checker/src/statements.rs
+  s_49e1cb19943b26::t_a716696ee2b99d 644-646,659
+  s_49e1cb19943b26::t_551dd2f21fe500 682
+  s_49e1cb19943b26::t_c00e3478e756cc 710
+  s_49e1cb19943b26::t_a7857a88b6dada 625
+rust/crates/bench-harness/src/main.rs
+  s_c760161dda2d19::t_487326549c5755 19-25
+rust/crates/checker/src/expressions.rs
+  s_49e1cb19943b26::t_7dd0d5f4eac631 900-905
+  s_49e1cb19943b26::t_3c2d2dc0c51180 616
+  s_49e1cb19943b26::t_26dfcd3049f399 2648-2662
+  s_49e1cb19943b26::t_b2a9bec53edfeb 2130-2132
+  s_49e1cb19943b26::t_f22762acc24b7f 690-694
+  s_49e1cb19943b26::t_38cec7acae6403 2361-2362
+  s_49e1cb19943b26::t_a28f5a05e58e3f 1678-1683
+  s_49e1cb19943b26::t_42236614bd37dc 2766-2768
+  s_49e1cb19943b26::t_32e25674072779 1685-1691
+  s_49e1cb19943b26::t_81d974a4241e3e 1540-1543
+  s_49e1cb19943b26::t_5ba9d2d140745b 2411
+  s_49e1cb19943b26::t_b41914b6864b36 4203-4210
+  s_49e1cb19943b26::t_805280d86f312b 1802,1807
+  s_49e1cb19943b26::t_90f9a6e2ea547b 606-607
+  s_49e1cb19943b26::t_b565eb4a6fd6c3 2120-2121
+  s_49e1cb19943b26::t_c39f169b254093 2782-2787
+  s_49e1cb19943b26::t_62736bd5938509 4090-4092
+  s_49e1cb19943b26::t_750d75bb96bed1 1620,1622
+  s_49e1cb19943b26::t_fcdb0389635a71 1559
+  s_49e1cb19943b26::t_c0b42177875769 107,110-114
+rust/crates/bench-harness/Cargo.toml
+  s_c760161dda2d19::t_f9c858be391dcb 16-25
+rust/crates/checker/src/checker.rs
+  s_49e1cb19943b26::t_c14e6e546154bd 621-622,624-628,631
+  s_49e1cb19943b26::t_8178d029c7235e 1303
+  s_49e1cb19943b26::t_a107016d7a434a 251-253
+  s_49e1cb19943b26::t_678e2d548f4e32 620,623,629-630
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "3345c81d492f531874df09ebe85797bcb8fff775",
+  "prompts": {},
+  "sessions": {
+    "s_49e1cb19943b26": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "0bc91149-5250-45f0-bace-9c42ce8190b2",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    },
+    "s_c760161dda2d19": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "e48660fc-43c1-451f-9234-7c7ba6128c6a",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
