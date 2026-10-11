@@ -364,3 +364,14 @@ noise). The M1 0.83× RootedFilePathToPathKey note does not reproduce at
 the program-build scale: these paths are NOT the hot allocation site.
 The remaining single-thread gap lives in the parse/scan phase itself
 (and the Phase B split: program 3.1 vs 2.2 s, bind 1.9 vs 1.1 s).
+
+**2026-10-11 — Phase split on the rig with mimalloc (TSC_BENCH_PROFILE=1,
+125 roots):** seed 47.1 ms (go 102.8 — Rust **2.2× faster**), config 5.0
+ms (go 4.5), program 2456 ms vs go 2082 (**1.18×**), bind 1264 ms vs
+1020 (**1.24×**), record 15 ms (go ~0). Default-build split same runs:
+program 2858 ms, bind 1467 ms (1.37×/1.44×). With the allocator fixed,
+the remaining program+bind gap is evenly spread at ~1.2× — both phases
+are parse/resolve/allocation dominated; no single hot spot remains.
+The rig's `target/release/tsc-bench` is a hardlink of the deps artifact
+(feature toggles swap hardlinks in 0.02s legitimately) — see
+PORTING-NOTES for the staleness-check gotcha.
