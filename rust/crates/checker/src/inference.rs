@@ -2923,23 +2923,45 @@ pub(crate) fn is_no_infer_type(c: &Checker, t: TypeId) -> bool {
             .is_some_and(|constraint| c.type_(constraint).flags.intersects(TypeFlags::UNKNOWN))
 }
 
-/// Go: `func (c *Checker) getActualTypeVariable(t) *Type`.
+// Go: `func (c *Checker) getNoInferType(t) *Type` + `isNoInferTargetType`
+// (checker.go:27928/27932) — uniontypes.rs owns the REAL bodies (same impl
+// block); the NoInfer<T> intrinsic's call sites reach them as Checker methods.
+
+/// Go: `func (c *Checker) getActualTypeVariable(t) *Type` (checker.go:32116)
+/// — REAL (M6 S10): the substitution unwrap + indexed-access recombination +
+/// getNonDistributedTypeParameter.
 pub(crate) fn get_actual_type_variable(c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S7): the indexed-access/substitution unwrapping
-    // (getSimplifiedType's variable exposure); permissive identity.
-    let _ = c;
-    t
+    let flags = c.type_(t).flags;
+    if flags.intersects(TypeFlags::SUBSTITUTION) {
+        let base = substitution_base_type(c, t);
+        return get_actual_type_variable(c, base);
+    }
+    if flags.intersects(TypeFlags::INDEXED_ACCESS) {
+        let (object_type, index_type) = {
+            let d = c.type_(t).as_indexed_access_type().expect("IndexedAccessType data");
+            (
+                d.object_type.expect("objectType"),
+                d.index_type.expect("indexType"),
+            )
+        };
+        let new_object_type = get_actual_type_variable(c, object_type);
+        let new_index_type = get_actual_type_variable(c, index_type);
+        if new_object_type != object_type || new_index_type != index_type {
+            return c.get_indexed_access_type_impl(new_object_type, new_index_type);
+        }
+    }
+    c.get_non_distributed_type_parameter(t)
 }
 
-/// Go: `func (c *Checker) getSimplifiedType(t, writing) *Type`.
-fn get_simplified_type(c: &mut Checker, t: TypeId, _writing: bool) -> TypeId {
-    // TODO(port M6 S7): the simplification engine; permissive identity.
-    let _ = c;
-    t
+/// Go: `func (c *Checker) getSimplifiedType(t, writing) *Type` — REAL (M6 S10):
+/// delegates to index.rs's body.
+pub(crate) fn get_simplified_type(c: &mut Checker, t: TypeId, writing: bool) -> TypeId {
+    c.get_simplified_type_impl(t, writing)
 }
 
-/// Go: `func (c *Checker) getSubstitutionIntersection(t) *Type`.
-fn get_substitution_intersection(c: &mut Checker, t: TypeId) -> TypeId {
+/// Go: `func (c *Checker) getSubstitutionIntersection(t) *Type` — pub(crate)
+/// (M6 S10: typeofsymbol.rs's computeBaseConstraint substitution arm calls it).
+pub(crate) fn get_substitution_intersection(c: &mut Checker, t: TypeId) -> TypeId {
     if is_no_infer_type(c, t) {
         return substitution_base_type(c, t);
     }

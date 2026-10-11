@@ -2527,6 +2527,24 @@ impl Checker {
         }
     }
 
+    /// Go: `func (c *Checker) getApplicableIndexInfos(t, keyType) []*IndexInfo`
+    /// (checker.go:32635) — REAL (M6 S10): the filter form over
+    /// getIndexInfosOfType + isApplicableIndexType.
+    pub(crate) fn get_applicable_index_infos_impl(
+        &mut self,
+        t: TypeId,
+        key_type: TypeId,
+    ) -> Vec<IndexInfoId> {
+        let infos = self.get_index_infos_of_type_impl(t);
+        let mut result = Vec::new();
+        for info in infos {
+            let info_key_type = self.index_info_key_type(info);
+            if self.is_applicable_index_type(key_type, info_key_type) {
+                result.push(info);
+            }
+        }
+        result
+    }
     /// Go: `func (c *Checker) isApplicableIndexType(source, target) bool` (checker.go:19448).
     pub(crate) fn is_applicable_index_type(&mut self, source: TypeId, target: TypeId) -> bool {
         // A 'string' index signature applies to types assignable to 'string'
@@ -2792,10 +2810,19 @@ impl Checker {
                         check_flags |= CheckFlags::READONLY;
                     }
                     if crate::relater::is_tuple_type(self, t) {
-                        // TODO(port M6 S10): getRestTypeOfTupleType — the
-                        // out-of-bounds tuple element type; undefinedType is
-                        // the conservative answer.
-                        index_types.push(self.undefined_type());
+                        // REAL (M6 S10, checker.go:21830): getRestTypeOfTupleType —
+                        // the out-of-bounds tuple element type
+                        // (getElementTypeOfSliceOfTupleType at fixedLength).
+                        let target = self.type_(t).target_tuple_type();
+                        let fixed_length = self
+                            .type_(target)
+                            .as_tuple_type()
+                            .map(|d| d.fixed_length as usize)
+                            .unwrap_or(0);
+                        let rest_type = crate::typenodes::get_element_type_of_slice_of_tuple_type(
+                            self, t, fixed_length, 0, false, false,
+                        );
+                        index_types.push(rest_type.unwrap_or_else(|| self.undefined_type()));
                     } else {
                         index_types.push(self.index_info_value_type(index_info));
                     }
@@ -3471,7 +3498,7 @@ impl Checker {
     }
 
     /// Go: `func getMappedTypeOptionality(t) int` (checker.go:29555).
-    fn get_mapped_type_optionality(&mut self, t: TypeId) -> i32 {
+    pub(crate) fn get_mapped_type_optionality_impl(&mut self, t: TypeId) -> i32 {
         let modifiers = self.mapped_type_modifiers_impl(t);
         if modifiers
             .intersects(crate::relater::MappedTypeModifiers::EXCLUDE_OPTIONAL)
@@ -3494,7 +3521,7 @@ impl Checker {
     /// (Go's comment).
     pub(crate) fn get_combined_mapped_type_optionality_impl(&mut self, t: TypeId) -> i32 {
         if self.type_(t).object_flags.intersects(ObjectFlags::MAPPED) {
-            let optionality = self.get_mapped_type_optionality(t);
+            let optionality = self.get_mapped_type_optionality_impl(t);
             if optionality != 0 {
                 return optionality;
             }
@@ -3604,7 +3631,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) forEachMappedTypePropertyKeyTypeAndIndexSignatureKeyType(t, include, stringsOnly, cb)`
     /// (checker.go:23215).
-    fn for_each_mapped_type_property_key_type_and_index_signature_key_type(
+    pub(crate) fn for_each_mapped_type_property_key_type_and_index_signature_key_type(
         &mut self,
         t: TypeId,
         include: TypeFlags,

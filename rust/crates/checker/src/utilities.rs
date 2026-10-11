@@ -2608,6 +2608,17 @@ pub fn get_feature_map() -> &'static FxHashMap<&'static str, Vec<FeatureMapEntry
     FEATURE_MAP.get_or_init(build_feature_map)
 }
 
+/// Go: `func (c *Checker) getSuggestedLibForNonExistentName(name) string`
+/// (checker.go:1777) — REAL (M6 S10): the feature map's first lib for the
+/// name (`typeFeatures[0].lib`).
+pub(crate) fn get_suggested_lib_for_non_existent_name(name: &str) -> String {
+    get_feature_map()
+        .get(name)
+        .and_then(|type_features| type_features.first())
+        .map(|entry| entry.lib.to_string())
+        .unwrap_or_default()
+}
+
 /// Inverse-table builder for the Go literal below — same data, same order.
 fn feature_entries(entries: &[(&'static str, &'static [&'static str])]) -> Vec<FeatureMapEntry> {
     entries
@@ -3000,8 +3011,9 @@ pub fn try_get_property_access_or_identifier_to_string(
     String::new()
 }
 
-/// Go: `ast.IsPropertyName`.
-fn is_property_name(store: &dyn NodeStore, node: NodeId) -> bool {
+/// Go: `ast.IsPropertyName` — pub(crate) (M6 S10: index.rs's
+/// getPropertyNameFromIndex reads it).
+pub(crate) fn is_property_name(store: &dyn NodeStore, node: NodeId) -> bool {
     let n = store.node(node);
     matches!(
         n.kind,

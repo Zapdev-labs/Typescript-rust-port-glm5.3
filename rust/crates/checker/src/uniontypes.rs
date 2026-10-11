@@ -1794,6 +1794,61 @@ impl Checker {
         }
         self.never_type()
     }
+    /// Go: `func (c *Checker) filterType(t *Type, f func(*Type) bool)`
+    /// (checker.go:27016) — the `&mut Checker`-taking twin (M6 S10: the
+    /// facts-lattice predicates resolve members through the base-constraint
+    /// engine, so the `&Checker` form above can't carry them). The body is
+    /// Go-identical to [`Self::filter_type`].
+    pub(crate) fn filter_type_mut(
+        &mut self,
+        t: TypeId,
+        mut f: impl FnMut(&mut Checker, TypeId) -> bool,
+    ) -> TypeId {
+        if self.type_(t).flags.intersects(TypeFlags::UNION) {
+            let types = self.type_(t).types().to_vec();
+            let mut filtered: Vec<TypeId> = Vec::with_capacity(types.len());
+            for &u in &types {
+                if f(self, u) {
+                    filtered.push(u);
+                }
+            }
+            if types == filtered {
+                return t;
+            }
+            let origin = self
+                .type_(t)
+                .as_union_type()
+                .expect("UnionType data")
+                .origin;
+            let mut new_origin: Option<TypeId> = None;
+            if let Some(origin) =
+                origin.filter(|&origin| self.type_(origin).flags.intersects(TypeFlags::UNION))
+            {
+                // If the origin type is a (denormalized) union type, filter
+                // its non-union constituents (Go's comment, checker.go:27029).
+                let origin_types = self.type_(origin).types().to_vec();
+                let mut origin_filtered: Vec<TypeId> = Vec::with_capacity(origin_types.len());
+                for &u in &origin_types {
+                    if self.type_(u).flags.intersects(TypeFlags::UNION) || f(self, u) {
+                        origin_filtered.push(u);
+                    }
+                }
+                if origin_types.len() - origin_filtered.len() == types.len() - filtered.len() {
+                    if origin_filtered.len() == 1 {
+                        return origin_filtered[0];
+                    }
+                    new_origin = Some(self.new_union_type(ObjectFlags::NONE, origin_filtered));
+                }
+            }
+            let object_flags = self.type_(t).object_flags
+                & (ObjectFlags::PRIMITIVE_UNION | ObjectFlags::CONTAINS_INTERSECTIONS);
+            return self.get_union_type_from_sorted_list(filtered, object_flags, None, new_origin);
+        }
+        if self.type_(t).flags.intersects(TypeFlags::NEVER) || f(self, t) {
+            return t;
+        }
+        self.never_type()
+    }
 
     /// Go: `func (c *Checker) removeType(t *Type, targetType *Type) *Type`
     /// (checker.go:27071).
@@ -2652,9 +2707,16 @@ impl Checker {
             return self.get_union_type_ex(new_types, UnionReduction::Literal, alias, None);
         }
         if flags.intersects(TypeFlags::INDEX) {
-            // TODO(port M6 S10): getIndexType — the keyof constructor; the
-            // identity keeps index types stable until the index wave lands.
-            return t;
+            // REAL (M6 S10, checker.go:22750):
+            // `c.getIndexType(c.instantiateType(t.Target(), m))`.
+            let target = self
+                .type_(t)
+                .as_index_type()
+                .expect("IndexType data")
+                .target
+                .expect("IndexType target");
+            let new_target = self.instantiate_type(target, m);
+            return self.get_index_type_impl(new_target);
         }
         if flags.intersects(TypeFlags::INDEXED_ACCESS) {
             let alias = alias.or_else(|| self.instantiate_type_alias_of(t, Some(m)));

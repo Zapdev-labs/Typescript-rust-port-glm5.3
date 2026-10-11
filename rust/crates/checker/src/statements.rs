@@ -1852,8 +1852,8 @@ where
 
 // ────────────────────────────────────────────────────────────────────────────
 // ExternalEmitHelpers (Go checker/types.go:130-150) — the emit-helper
-// bitfield checkExternalEmitHelpers reads. TODO(port M6 S10): the real
-// checkExternalEmitHelpers (checker.go:29105 — the context/emit-helpers
+// bitfield checkExternalEmitHelpers reads. TODO(port M6 W5): the real
+// checkExternalEmitHelpers (emitsupport.go's wave — the context/emit-helpers
 // machinery); permissive no-op here.
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -6171,9 +6171,9 @@ impl Checker {
             }
             let symbol = self.get_resolved_symbol_nil(node);
             if let Some(symbol) = symbol {
-                // TODO(port M6 S10): IsDeprecatedDeclaration +
-                // addDeprecatedSuggestion (the deprecation family);
-                // permissive.
+                // TODO(port M6 deprecation family): IsDeprecatedDeclaration +
+                // addDeprecatedSuggestion (the JSDoc @deprecated tag walk —
+                // resolvecall.rs carries the same seam); permissive.
                 let _ = symbol;
             }
         }
@@ -6366,11 +6366,13 @@ impl Checker {
         let members = members_of(self.store(), node);
         self.check_source_elements(&members);
         let t = self.get_type_from_type_node(node);
-        // TODO(port M6 S10): checkIndexConstraints (the index-constraint
-        // relation family); permissive.
+        // REAL (M6 S10, checker.go:3185): checkIndexConstraints (the
+        // index-constraint relation family).
+        let symbol = crate::typeofsymbol::get_symbol_of_declaration(self, node)
+            .expect("type literal symbol");
+        self.check_index_constraints(t, symbol, false /*isStaticIndex*/);
         // TODO(port M6 S3 class batch): checkTypeForDuplicateIndexSignatures
         // — lands with checkClassOrInterfaceForDuplicateIndexSignatures.
-        let _ = t;
         self.check_object_type_for_duplicate_declarations(node, false /*checkPrivateNames*/);
     }
 
@@ -6778,10 +6780,10 @@ impl Checker {
         for child in children_of(self.store(), node) {
             self.check_source_element(Some(child));
         }
-        // TODO(port M6 S10): checkIndexedAccessIndexType — the index-type
-        // constraint family; permissive.
-        let t = self.get_type_from_type_node(node);
-        let _ = t;
+        // REAL (M6 S10, checker.go:3407): the index-type constraint family
+        // (expressions.rs's S4-landed REAL body).
+        let t = self.get_type_from_indexed_access_type_node(node);
+        self.check_indexed_access_index_type(t, node);
     }
 
     /// Go: `func (c *Checker) checkMappedType(node)` (checker.go:3409).
@@ -6800,11 +6802,35 @@ impl Checker {
             let any_type = self.any_type();
             self.report_implicit_any(node, any_type, crate::typeofsymbol::WideningKind::Normal);
         }
-        let t = self.get_type_from_type_node(node);
-        // TODO(port M6 S10): getNameTypeFromMappedType /
-        // getConstraintTypeFromMappedType — the mapped-type constraint
-        // family; permissive.
-        let _ = t;
+        // REAL (M6 S10, checker.go:3421): the mapped-type constraint family —
+        // the name-type arm when the mapped type has one, else the
+        // constraint arm.
+        let t = self.get_type_from_mapped_type_node(node);
+        let name_type = self.get_name_type_from_mapped_type_impl(t);
+        if let Some(name_type) = name_type {
+            let string_number_symbol_type = self.string_number_symbol_type();
+            self.check_type_assignable_to(
+                name_type,
+                string_number_symbol_type,
+                d.name_type,
+                None,
+            );
+        } else {
+            let constraint_type = crate::relater::get_constraint_type_from_mapped_type(self, t);
+            let string_number_symbol_type = self.string_number_symbol_type();
+            let constraint_node = self
+                .store()
+                .node(d.type_parameter)
+                .as_type_parameter_declaration()
+                .expect("TypeParameterDeclaration data")
+                .constraint;
+            self.check_type_assignable_to(
+                constraint_type,
+                string_number_symbol_type,
+                constraint_node,
+                None,
+            );
+        }
     }
 
     /// Go: `func (c *Checker) checkFunctionDeclaration(node)` (checker.go:3436).
@@ -7752,19 +7778,22 @@ impl Checker {
         if self.emit_standard_class_fields {
             return;
         }
-        let node_symbol = self.get_symbol_of_declaration(node);
-        let node_symbol_name = node_symbol
-            .map(|s| self.program_symbol(s).name.clone())
-            .unwrap_or_default();
+        let node_symbol_name = match self.get_symbol_of_declaration(node) {
+            Some(symbol) => crate::relater::symbol_to_string(self, symbol),
+            None => String::new(),
+        };
         for member in members_of(self.store(), node) {
             let member_name_node = self.store().node(member).name();
             if has_static_modifier(self.store(), member) {
                 if let Some(member_name_node) = member_name_node {
-                    // TODO(port M6 S10): getEffectivePropertyNameForPropertyName-
-                    // Node — the computed-name resolution; identifier/
-                    // literal names read directly.
-                    let member_name = tsc_ast::node_text(self.store(), member_name_node);
-                    match member_name {
+                    // REAL (M6 S10, checker.go:4463):
+                    // getEffectivePropertyNameForPropertyNameNode — the
+                    // computed-name resolution (typeofsymbol.rs's body).
+                    let (member_name, _is_late_bound_name) = self
+                        .get_effective_property_name_for_property_name_node(
+                            member_name_node,
+                        );
+                    match member_name.as_str() {
                         "name" | "length" | "caller" | "arguments" => {
                             self.error(
                                 member_name_node,
@@ -8627,16 +8656,23 @@ impl Checker {
             return;
         }
         // Go: for _, prop := range c.getPropertiesOfObjectType(t).
-        let properties = self.get_properties_of_type(t);
+        // REAL (M6 S10, checker.go:4896): getPropertiesOfObjectType + the
+        // literal extraction (getLiteralTypeFromProperty with
+        // includeNonPublic=true) + getNonMissingTypeOfSymbol.
+        let properties = self.get_properties_of_object_type_impl(t);
         for prop in properties {
             let is_prototype = is_static_index
                 && self.program_symbol(prop).flags.intersects(SymbolFlags::PROTOTYPE);
             if !is_prototype {
-                // TODO(port M6 S10): getLiteralTypeFromProperty(includeNonPublic)
-                // + getNonMissingTypeOfSymbol — the S10 literal extraction.
-                // Permissive: the property check rests until S10's
-                // getApplicableIndexInfos lands (empty answer).
-                let _ = prop;
+                let prop_name_type = self
+                    .get_literal_type_from_property_impl(
+                        prop,
+                        TypeFlags::STRING_OR_NUMBER_LITERAL_OR_UNIQUE,
+                        true, /*includeNonPublic*/
+                    )
+                    .unwrap_or_else(|| self.never_type());
+                let prop_type = self.get_non_missing_type_of_symbol(prop);
+                self.check_index_constraint_for_property(t, prop, prop_name_type, prop_type);
             }
         }
         let type_declaration = self.program_symbol(symbol).value_declaration;
@@ -8649,9 +8685,19 @@ impl Checker {
                 if has_static_modifier(self.store(), member) == is_static_index
                     && !self.has_bindable_name(member)
                 {
-                    // TODO(port M6 S4): getTypeOfExpression on the computed
-                    // name expression; permissive (the property arm rests).
-                    let _ = member;
+                    // REAL (M6 S10, checker.go:4910): the computed-name member
+                    // arm — checkIndexConstraintForProperty with the name
+                    // expression's type.
+                    if let Some(symbol) = crate::typeofsymbol::get_symbol_of_declaration(self, member) {
+                        let name = tsc_binder::ast_shims::get_name_of_declaration(self.store(), member);
+                        let expression = name.filter(|&n| self.store().node(n).kind == Kind::ComputedPropertyName)
+                            .map(|n| self.store().node(n).as_computed_property_name().expect("ComputedPropertyName data").expression);
+                        if let Some(expression) = expression {
+                            let prop_name_type = self.get_type_of_expression(expression);
+                            let prop_type = self.get_non_missing_type_of_symbol(symbol);
+                            self.check_index_constraint_for_property(t, symbol, prop_name_type, prop_type);
+                        }
+                    }
                 }
             }
         }
@@ -8663,7 +8709,6 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkIndexConstraintForProperty(...)` (checker.go:4919).
-    #[allow(dead_code)] // lands with the import/export batch wiring (Go 5420-5943)
     pub(crate) fn check_index_constraint_for_property(
         &mut self,
         t: TypeId,
@@ -8683,25 +8728,83 @@ impl Checker {
             return;
         }
         let prop_name = self.program_symbol(prop).name.clone();
+        // REAL (M6 S10, checker.go:4944): propDeclaration — a binary-expression
+        // value declaration or a computed property name.
+        let prop_declaration: Option<NodeId> = if declaration
+            .is_some_and(|d| self.store().node(d).kind == Kind::BinaryExpression)
+        {
+            declaration
+        } else {
+            let name = declaration
+                .and_then(|d| tsc_binder::ast_shims::get_name_of_declaration(self.store(), d));
+            name.filter(|&n| self.store().node(n).kind == Kind::ComputedPropertyName)
+                .map(|n| self.store().node(n).parent.get())
+        };
+        let type_symbol = self.type_(t).symbol;
+        let local_prop_declaration: Option<NodeId> = if self.get_parent_of_symbol(prop) == type_symbol {
+            declaration
+        } else {
+            None
+        };
+        let interface_declaration: Option<NodeId> = if self.type_(t).object_flags.intersects(ObjectFlags::INTERFACE) {
+            type_symbol.and_then(|symbol| {
+                self.program_symbol(symbol)
+                    .declarations
+                    .iter()
+                    .copied()
+                    .find(|&d| self.store().node(d).kind == Kind::InterfaceDeclaration)
+            })
+        } else {
+            None
+        };
         for info in index_infos {
-            // TODO(port M6 S10): the (a)/(b)/(c) errorNode selection —
-            // getParentOfSymbol + getBaseTypes index lookups; permissive:
-            // the local declarations only.
-            let error_node = get_local_index_declaration(self, t, info);
+            // REAL (M6 S10, checker.go:4951): the (a)/(b)/(c) errorNode
+            // selection — the local property declaration, the local index
+            // declaration, or the interface declaration when no base
+            // interface contains both the property and the index signature.
+            let mut error_node = local_prop_declaration.or(get_local_index_declaration(self, t, info));
+            if error_node.is_none()
+                && let Some(interface_declaration) = interface_declaration
+                && let Some(type_symbol) = type_symbol
+            {
+                let info_key_type = self.index_info_key_type(info);
+                let base_types = self.get_base_types(t);
+                let base_has_both = base_types.iter().any(|&base| {
+                    self.get_property_of_object_type_impl(base, &prop_name).is_some()
+                        && self.get_index_type_of_type_impl(base, info_key_type).is_some()
+                });
+                let _ = type_symbol;
+                if !base_has_both {
+                    error_node = Some(interface_declaration);
+                }
+            }
             if let Some(error_node) = error_node {
+                let info_key_type = self.index_info_key_type(info);
                 let info_value_type = self.index_info_value_type(info);
                 if !self.check_type_assignable_to(prop_type, info_value_type, None, None) {
                     let prop_text = relater::symbol_to_string(self, prop);
                     let prop_type_text = self.type_to_string(prop_type);
+                    let key_text = self.type_to_string(info_key_type);
                     let value_text = self.type_to_string(info_value_type);
-                    let d = u::new_diagnostic_for_node(
+                    let mut d = u::new_diagnostic_for_node(
                         self.store(),
                         error_node,
                         &diag::PROPERTY_0_OF_TYPE_1_IS_NOT_ASSIGNABLE_TO_2_INDEX_TYPE_3,
-                        vec![prop_text, prop_type_text, "index".to_string(), value_text],
+                        vec![prop_text.clone(), prop_type_text, key_text, value_text],
                     );
+                    // Go (checker.go:4961): the related info when the property
+                    // is declared elsewhere than the error node.
+                    if let Some(prop_declaration) = prop_declaration
+                        && prop_declaration != error_node
+                    {
+                        d.add_related_info(u::new_diagnostic_for_node(
+                            self.store(),
+                            prop_declaration,
+                            &diag::X_0_IS_DECLARED_HERE,
+                            vec![prop_text],
+                        ));
+                    }
                     self.add_diagnostic(d);
-                    let _ = prop_name;
                 }
             }
         }
@@ -8723,8 +8826,8 @@ impl Checker {
             if info == check_info {
                 continue;
             }
-            // TODO(port M6 S10): the (a)/(b)/(c) errorNode selection — same
-            // permissive local-declaration-only answer as the property arm.
+            // REAL (M6 S10, checker.go:4986): the (a)/(b) errorNode selection —
+            // the local index declarations for both signatures.
             let error_node = get_local_index_declaration(self, t, info)
                 .or(get_local_index_declaration(self, t, check_info));
             if let Some(error_node) = error_node {
@@ -8746,16 +8849,15 @@ impl Checker {
         }
     }
 
-    /// TODO(port M6 S10): `getApplicableIndexInfos` — the applicable index
-    /// row for a key type; permissive empty (both index-constraint arms
-    /// rest until S10 lands).
+    /// Go: `func (c *Checker) getApplicableIndexInfos(t, keyType) []*IndexInfo`
+    /// (checker.go:32635) — REAL (M6 S10): re-points to members.rs's filter
+    /// form.
     fn get_applicable_index_infos(
         &mut self,
         t: TypeId,
         key_type: TypeId,
     ) -> Vec<crate::types::IndexInfoId> {
-        let _ = (t, key_type);
-        Vec::new()
+        self.get_applicable_index_infos_impl(t, key_type)
     }
 
 

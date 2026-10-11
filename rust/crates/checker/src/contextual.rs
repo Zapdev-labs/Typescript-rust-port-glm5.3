@@ -923,14 +923,247 @@ impl Checker {
                 }
             },
         );
-        // TODO(port M6 S10): the union discriminate arms
-        // (discriminateContextualTypeByObjectMembers for object literals,
-        // discriminateContextualTypeByJSXAttributes for JSX — checker.go
-        // 31256/31261) ride the S10 discriminant family
-        // (discriminateTypeByDiscriminableItems, getKeyPropertyName); the
-        // undiscriminated apparent type is Go's answer for
-        // non-discriminant programs.
+        // REAL (M6 S10, checker.go:31252): the union discriminate arms —
+        // discriminateContextualTypeByObjectMembers for object literals;
+        // discriminateContextualTypeByJSXAttributes stays W5 (jsx.go's wave).
+        if self.type_(apparent_type).flags.intersects(TypeFlags::UNION) {
+            let node_kind = self.store().node(node).kind;
+            if node_kind == Kind::ObjectLiteralExpression {
+                return self.discriminate_contextual_type_by_object_members(node, apparent_type);
+            }
+            // TODO(port M6 W5): discriminateContextualTypeByJSXAttributes —
+            // jsx.go's arm (the JSX wave; IsJsxAttributes discriminant).
+        }
         Some(apparent_type)
+    }
+
+    /// Go: `func (c *Checker) discriminateContextualTypeByObjectMembers(node, contextualType) *Type`
+    /// (checker.go:31298) — REAL (M6 S10): the cached
+    /// getMatchingUnionConstituentForObjectLiteral probe, else the
+    /// ObjectLiteralDiscriminator over the node's discriminant properties and
+    /// the contextual type's optional members.
+    pub(crate) fn discriminate_contextual_type_by_object_members(
+        &mut self,
+        node: NodeId,
+        contextual_type: TypeId,
+    ) -> Option<TypeId> {
+        let key = (node, contextual_type);
+        if let Some(discriminated) = self.discriminated_contextual_types.get(&key) {
+            return *discriminated;
+        }
+        let mut discriminated =
+            self.get_matching_union_constituent_for_object_literal(contextual_type, node);
+        if discriminated.is_none() {
+            // Go: discriminantProperties — the property-assignment/shorthand
+            // filter over node.Properties().
+            let properties: Vec<NodeId> = {
+                let d = self
+                    .store()
+                    .node(node)
+                    .as_object_literal_expression()
+                    .expect("ObjectLiteralExpression data");
+                d.properties
+                    .as_ref()
+                    .map(|l| l.nodes.to_vec())
+                    .unwrap_or_default()
+            };
+            let mut discriminant_properties: Vec<NodeId> = Vec::new();
+            for p in properties {
+                let Some(symbol) = self.get_symbol_of_node_real(p) else {
+                    continue;
+                };
+                let name = self.program_symbol(symbol).name.clone();
+                let kind = self.store().node(p).kind;
+                if kind == Kind::PropertyAssignment {
+                    let initializer = self
+                        .store()
+                        .node(p)
+                        .as_property_assignment()
+                        .expect("PropertyAssignment data")
+                        .initializer;
+                    if self.is_possibly_discriminant_value(initializer)
+                        && crate::relater::is_discriminant_property(self, contextual_type, &name)
+                    {
+                        discriminant_properties.push(p);
+                    }
+                } else if kind == Kind::ShorthandPropertyAssignment
+                    && crate::relater::is_discriminant_property(self, contextual_type, &name)
+                {
+                    discriminant_properties.push(p);
+                }
+            }
+            // Go: discriminantMembers — the contextual type's optional
+            // members absent from the node's symbol's member table.
+            let node_symbol_members: Vec<(String, tsc_ast::SymbolId)> = self
+                .get_symbol_of_node_real(node)
+                .map(|symbol| {
+                    self.program_symbol(symbol)
+                        .members
+                        .entries()
+                        .map(|(k, &v)| (k.clone(), v))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let discriminant_members: Vec<tsc_ast::SymbolId> =
+                crate::relater::get_properties_of_type(self, contextual_type)
+                    .into_iter()
+                    .filter(|&s| {
+                        let name = self.program_symbol(s).name.clone();
+                        self.program_symbol(s).flags.intersects(SymbolFlags::OPTIONAL)
+                            && !node_symbol_members.iter().any(|(k, _)| *k == name)
+                            && crate::relater::is_discriminant_property(self, contextual_type, &name)
+                    })
+                    .collect();
+            // Go's ObjectLiteralDiscriminator: len = props + members; name and
+            // matches below (the closure triple rides relater.rs's
+            // discriminateTypeByDiscriminableItems).
+            let props = discriminant_properties;
+            let members = discriminant_members;
+            let (props_snapshot, members_snapshot) = (props.clone(), members.clone());
+            let discriminated_type = crate::relater::discriminate_type_by_discriminable_items_with_closures(
+                self,
+                contextual_type,
+                props_snapshot.len() + members_snapshot.len(),
+                |c, index| {
+                    if index < props_snapshot.len() {
+                        let p = props_snapshot[index];
+                        let symbol = c.get_symbol_of_node_real(p).expect("property symbol");
+                        c.program_symbol(symbol).name.clone()
+                    } else {
+                        let s = members_snapshot[index - props_snapshot.len()];
+                        c.program_symbol(s).name.clone()
+                    }
+                },
+                |c, index, t| {
+                    let prop_type = if index < props_snapshot.len() {
+                        let p = props_snapshot[index];
+                        let kind = c.store().node(p).kind;
+                        if kind == Kind::PropertyAssignment || kind == Kind::JsxAttribute {
+                            let initializer = if kind == Kind::PropertyAssignment {
+                                Some(
+                                    c.store()
+                                        .node(p)
+                                        .as_property_assignment()
+                                        .expect("PropertyAssignment data")
+                                        .initializer,
+                                )
+                            } else {
+                                // Go: a JsxAttribute without initializer is
+                                // always true.
+                                None
+                            };
+                            match initializer {
+                                Some(initializer) => c.get_context_free_type_of_expression(initializer),
+                                None => c.true_type(),
+                            }
+                        } else {
+                            let name = binder_shims::get_name_of_declaration(c.store(), p)
+                                .expect("property name node");
+                            c.get_context_free_type_of_expression(name)
+                        }
+                    } else {
+                        c.undefined_type()
+                    };
+                    // Go: `for _, s := range propType.Distributed()`.
+                    for s in c.type_(prop_type).distributed() {
+                        if c.is_type_assignable_to(s, t) {
+                            return true;
+                        }
+                    }
+                    false
+                },
+            );
+            discriminated = Some(discriminated_type);
+        }
+        self.discriminated_contextual_types.insert(key, discriminated);
+        discriminated
+    }
+
+    /// Go: `func (c *Checker) getMatchingUnionConstituentForObjectLiteral(unionType, node) *Type`
+    /// (checker.go:31333) — REAL (M6 S10).
+    pub(crate) fn get_matching_union_constituent_for_object_literal(
+        &mut self,
+        union_type: TypeId,
+        node: NodeId,
+    ) -> Option<TypeId> {
+        let key_property_name =
+            crate::relater::get_key_property_name_public(self, union_type)?;
+        let properties: Vec<NodeId> = {
+            let d = self
+                .store()
+                .node(node)
+                .as_object_literal_expression()
+                .expect("ObjectLiteralExpression data");
+            d.properties
+                .as_ref()
+                .map(|l| l.nodes.to_vec())
+                .unwrap_or_default()
+        };
+        for p in properties {
+            let Some(symbol) = self.get_symbol_of_node_real(p) else {
+                continue;
+            };
+            if self.store().node(p).kind == Kind::PropertyAssignment
+                && self.program_symbol(symbol).name == key_property_name
+            {
+                let initializer = self
+                    .store()
+                    .node(p)
+                    .as_property_assignment()
+                    .expect("PropertyAssignment data")
+                    .initializer;
+                if self.is_possibly_discriminant_value(initializer) {
+                    let prop_type = self.get_context_free_type_of_expression(initializer);
+                    return crate::relater::get_constituent_type_for_key_type_public(self, union_type, prop_type);
+                }
+            }
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) isPossiblyDiscriminantValue(node) bool` (checker.go:31346)
+    /// — REAL (M6 S10). (Go comment, verbatim:) Return true if the given
+    /// expression is possibly a discriminant value. We limit the kinds of
+    /// expressions we check to those that don't depend on their contextual
+    /// type in order not to cause recursive (and possibly infinite)
+    /// invocations of getContextualType.
+    pub(crate) fn is_possibly_discriminant_value(&mut self, node: NodeId) -> bool {
+        match self.store().node(node).kind {
+            Kind::StringLiteral
+            | Kind::NumericLiteral
+            | Kind::BigIntLiteral
+            | Kind::NoSubstitutionTemplateLiteral
+            | Kind::TemplateExpression
+            | Kind::TrueKeyword
+            | Kind::FalseKeyword
+            | Kind::NullKeyword
+            | Kind::Identifier
+            | Kind::UndefinedKeyword => true,
+            Kind::PropertyAccessExpression | Kind::ParenthesizedExpression => {
+                let expression = {
+                    let data = &self.store().node(node).data;
+                    match data {
+                        NodeData::PropertyAccessExpression(d) => Some(d.expression),
+                        NodeData::ParenthesizedExpression(d) => Some(d.expression),
+                        _ => None,
+                    }
+                };
+                expression.is_some_and(|e| self.is_possibly_discriminant_value(e))
+            }
+            Kind::JsxExpression => {
+                let expression = self
+                    .store()
+                    .node(node)
+                    .as_jsx_expression()
+                    .map(|d| d.expression);
+                match expression {
+                    None => true,
+                    Some(Some(e)) => self.is_possibly_discriminant_value(e),
+                    Some(None) => true,
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Go: `func (c *Checker) instantiateContextualType(contextualType *Type, node *ast.Node, contextFlags ContextFlags) *Type`

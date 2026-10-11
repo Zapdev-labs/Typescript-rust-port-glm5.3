@@ -540,6 +540,19 @@ pub struct Checker {
     /// Go: `cachedTypes map[CachedTypeKey]*Type` (the kind+typeId key,
     /// checker.go:158).
     pub(crate) cached_types: FxHashMap<crate::todo_shapes::CachedTypeKey, Option<TypeId>>,
+    /// Go: `indexedAccessTypes map[CacheHashKey]*Type` (checker.go:630) — the
+    /// deferred indexed-access intern table (M6 S10; keyed by
+    /// getIndexedAccessKey over the KeyBuilder).
+    pub(crate) indexed_access_types: FxHashMap<crate::todo_shapes::CacheHashKey, TypeId>,
+    /// Go: `propertiesTypes map[PropertiesTypesKey]*Type` (checker.go:666) —
+    /// the keyof/property-literal cache (M6 S10; the key struct is
+    /// index.rs's PropertiesTypesKey).
+    pub(crate) properties_types: FxHashMap<crate::index::PropertiesTypesKey, TypeId>,
+    /// Go: `discriminatedContextualTypes map[DiscriminatedContextualTypeKey]*Type`
+    /// (the Checker struct, checker.go:736) — the contextual discriminate
+    /// arms' cache (discriminateContextualTypeByObjectMembers). Keyed
+    /// (nodeId, typeId) — the port's DiscriminatedContextualTypeKey form.
+    pub(crate) discriminated_contextual_types: FxHashMap<(NodeId, TypeId), Option<TypeId>>,
     /// Go: `noConstraintType` (NewChecker's newAnonymousType, checker.go:1042).
     pub(crate) no_constraint_type: Option<TypeId>,
     /// Go: `circularConstraintType` (checker.go:1043).
@@ -1621,6 +1634,9 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         enum_nan_literal_types: FxHashMap::default(),
         undefined_properties: FxHashMap::default(),
         cached_types: FxHashMap::default(),
+        indexed_access_types: FxHashMap::default(),
+        properties_types: FxHashMap::default(),
+        discriminated_contextual_types: FxHashMap::default(),
         no_constraint_type: None,
         circular_constraint_type: None,
         conditional_constraint_depth: 0,

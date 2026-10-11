@@ -909,10 +909,10 @@ impl Checker {
             );
         }
         // Report missing lib first
-        // TODO(port M6 S10): getSuggestedLibForNonExistentName — the feature
-        // map (Go's getFeatureMap) rides the lib-directive surface; permissive
-        // "" keeps the arm dormant.
-        let suggested_lib = String::new();
+        // REAL (M6 S10, checker.go:1778): getSuggestedLibForNonExistentName —
+        // the feature map's first lib for the name (getFeatureMap's
+        // typeFeatures[0].lib read; utilities.rs's table).
+        let suggested_lib = crate::utilities::get_suggested_lib_for_non_existent_name(name);
         if !suggested_lib.is_empty() {
             self.error(error_location, name_not_found_message.unwrap(), &[declaration_name, suggested_lib]);
             return;

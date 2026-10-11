@@ -1155,7 +1155,7 @@ impl Checker {
     /// (The `_impl` suffix keeps the pub-API surface's Get* twin in exports.rs
     /// the sole `get_constraint_of_type_parameter` method name.)
     pub(crate) fn get_constraint_of_type_parameter_impl(&mut self, type_parameter: TypeId) -> Option<TypeId> {
-        if self.has_non_circular_base_constraint(type_parameter) {
+        if self.has_non_circular_base_constraint_impl(type_parameter) {
             return self.get_constraint_from_type_parameter(type_parameter);
         }
         None
@@ -1163,7 +1163,7 @@ impl Checker {
 
     /// Go: `func (c \*Checker) hasNonCircularBaseConstraint(t) bool` — REAL
     /// (M6 S9): `getResolvedBaseConstraint(t, nil) != circularConstraintType`.
-    fn has_non_circular_base_constraint(&mut self, t: TypeId) -> bool {
+    pub(crate) fn has_non_circular_base_constraint_impl(&mut self, t: TypeId) -> bool {
         self.get_resolved_base_constraint(t, Vec::new()) != Some(self.circular_constraint_type())
     }
 
@@ -1301,10 +1301,24 @@ impl Checker {
             return None;
         }
         if flags.intersects(TypeFlags::INDEX) {
-            // TODO(port M6 S10): the generic-mapped-type arm
-            // (getIndexTypeForMappedType — checker.go:27405, the index-type
-            // family's wave); the stringNumberSymbolType answer is Go's
-            // fallback for every non-generic-mapped index type.
+            // REAL (M6 S10): the generic-mapped arm — getIndexTypeForMappedType
+            // for a name-typed (non-keyof-declared) generic mapped target;
+            // stringNumberSymbolType is Go's fallback answer.
+            let target = self
+                .type_(t)
+                .as_index_type()
+                .expect("IndexType data")
+                .target
+                .expect("index target");
+            if crate::relater::is_generic_mapped_type(self, target) {
+                let name_type = self.get_name_type_from_mapped_type_impl(target);
+                if name_type.is_some()
+                    && !self.is_mapped_type_with_keyof_constraint_declaration_impl(target)
+                {
+                    let index_type = self.get_index_type_for_mapped_type(target, crate::types::IndexFlags::NONE);
+                    return self.get_next_base_constraint(Some(index_type), stack);
+                }
+            }
             return Some(self.string_number_symbol_type());
         }
         if flags.intersects(TypeFlags::TEMPLATE_LITERAL) {
@@ -1345,11 +1359,46 @@ impl Checker {
             return Some(self.string_type());
         }
         if flags.intersects(TypeFlags::INDEXED_ACCESS) {
-            // TODO(port M6 S10): the indexed-access arm (substituteIndexedMappedType
-            // + getIndexedAccessTypeOrUndefined — checker.go:29839/27461, the
-            // index-access constructor family's wave); permissive identity
-            // keeps an indexed access as its own base constraint until then.
-            return Some(t);
+            // REAL (M6 S10, checker.go:28086): the mapped-generic arm
+            // substitutes the instantiated template; otherwise the next
+            // base constraints of both sides feed the access constructor.
+            if self.is_mapped_type_generic_indexed_access(t) {
+                // For indexed access types of the form { [P in K]: E }[X],
+                // where K is non-generic and X is generic, we substitute an
+                // instantiation of E where P is replaced with X (Go's
+                // comment).
+                let (object_type, index_type) = {
+                    let d = self.type_(t).as_indexed_access_type().expect("IndexedAccessType data");
+                    (
+                        d.object_type.expect("objectType"),
+                        d.index_type.expect("indexType"),
+                    )
+                };
+                let substituted = self.substitute_indexed_mapped_type(object_type, index_type);
+                return self.get_next_base_constraint(Some(substituted), stack);
+            }
+            let (object_type, index_type, access_flags) = {
+                let d = self.type_(t).as_indexed_access_type().expect("IndexedAccessType data");
+                (
+                    d.object_type.expect("objectType"),
+                    d.index_type.expect("indexType"),
+                    d.access_flags,
+                )
+            };
+            let base_object_type = self.get_next_base_constraint(Some(object_type), stack.clone());
+            let base_index_type = self.get_next_base_constraint(Some(index_type), stack.clone());
+            let (Some(base_object_type), Some(base_index_type)) = (base_object_type, base_index_type) else {
+                return None;
+            };
+            let accessed =
+                self.get_indexed_access_type_or_undefined_impl(
+                    base_object_type,
+                    base_index_type,
+                    access_flags,
+                    None,
+                    None,
+                );
+            return self.get_next_base_constraint(accessed, stack);
         }
         if flags.intersects(TypeFlags::CONDITIONAL) {
             if self.conditional_constraint_depth >= 100 {
@@ -1361,9 +1410,10 @@ impl Checker {
             return self.get_next_base_constraint(constraint, stack);
         }
         if flags.intersects(TypeFlags::SUBSTITUTION) {
-            // TODO(port M6 S10): getSubstitutionIntersection (checker.go:27361,
-            // the substitution-type family's wave); permissive identity.
-            return Some(t);
+            // REAL (M6 S10, checker.go:28113): getSubstitutionIntersection
+            // (inference.rs's free fn) then the recursive next-base read.
+            let intersection = crate::inference::get_substitution_intersection(self, t);
+            return self.get_next_base_constraint(Some(intersection), stack);
         }
         if crate::typenodes::is_generic_tuple_type(self, t) {
             // We substitute constraints for variadic elements only when the
@@ -1654,18 +1704,22 @@ impl Checker {
             })
     }
 
-    /// Go: `func (c *Checker) getConstraintOfIndexedAccess(t *Type) *Type`.
-    fn get_constraint_of_indexed_access(&mut self, t: TypeId) -> Option<TypeId> {
-        if self.has_non_circular_base_constraint(t) {
+    /// Go: `func (c *Checker) getConstraintOfIndexedAccess(t *Type) *Type` —
+    /// REAL (M6 S10): pub(crate) (relater.rs's getConstraintOfType
+    /// indexed-access arm calls it).
+    pub(crate) fn get_constraint_of_indexed_access(&mut self, t: TypeId) -> Option<TypeId> {
+        if self.has_non_circular_base_constraint_impl(t) {
             return self.get_constraint_from_indexed_access(t);
         }
         None
     }
 
-    /// Go: `func (c *Checker) getConstraintFromIndexedAccess(t *Type) *Type`.
+    /// Go: `func (c *Checker) getConstraintFromIndexedAccess(t *Type) *Type`
+    /// (checker.go:17609) — REAL (M6 S10; replaces the permissive-None stub):
+    /// the mapped-generic arm substitutes the instantiated template;
+    /// otherwise the simplified constraint of each side feeds the access
+    /// constructor (index.rs).
     fn get_constraint_from_indexed_access(&mut self, t: TypeId) -> Option<TypeId> {
-        // TODO(port M6 S10): the substituteIndexedMappedType / simplified
-        // constraint arms — the indexed-access constructor family's wave.
         let (object_type, index_type, access_flags) = {
             let d = self.type_(t).as_indexed_access_type().expect("IndexedAccessType data");
             (
@@ -1674,13 +1728,41 @@ impl Checker {
                 d.access_flags,
             )
         };
-        let _ = (object_type, index_type, access_flags);
+        if self.is_mapped_type_generic_indexed_access(t) {
+            // For indexed access types of the form { [P in K]: E }[X], where
+            // K is non-generic and X is generic, we substitute an
+            // instantiation of E where P is replaced with X (Go's comment).
+            return Some(self.substitute_indexed_mapped_type(object_type, index_type));
+        }
+        let index_constraint = self.get_simplified_type_or_constraint_impl(index_type);
+        if let Some(index_constraint) = index_constraint.filter(|&c| c != index_type) {
+            let indexed_access = self.get_indexed_access_type_or_undefined_impl(
+                object_type,
+                index_constraint,
+                access_flags,
+                None,
+                None,
+            );
+            if let Some(indexed_access) = indexed_access {
+                return Some(indexed_access);
+            }
+        }
+        let object_constraint = self.get_simplified_type_or_constraint_impl(object_type);
+        if let Some(object_constraint) = object_constraint.filter(|&c| c != object_type) {
+            return self.get_indexed_access_type_or_undefined_impl(
+                object_constraint,
+                index_type,
+                access_flags,
+                None,
+                None,
+            );
+        }
         None
     }
 
     /// Go: `func (c *Checker) getConstraintOfConditionalType(t *Type) *Type`.
     fn get_constraint_of_conditional_type(&mut self, t: TypeId) -> Option<TypeId> {
-        if self.has_non_circular_base_constraint(t) {
+        if self.has_non_circular_base_constraint_impl(t) {
             return self.get_constraint_from_conditional_type(t);
         }
         None
@@ -2288,17 +2370,16 @@ impl Checker {
         }
     }
 
-    /// Go: `func (c *Checker) getExtractStringType(t *Type) *Type` (S10) —
-    /// TODO(port M6 S10): the mapped-type/string-literal extraction; the
-    /// identity keeps the for-in arm's stringType answer dominant.
+    /// Go: `func (c *Checker) getExtractStringType(t *Type) *Type` — REAL
+    /// (M6 S10): index.rs's body (without lib.d.ts Go's getGlobalExtractSymbol
+    /// answers nil, so the stringType fallback is the faithful answer).
     pub(crate) fn get_extract_string_type(&mut self, t: TypeId) -> TypeId {
-        let _ = t;
-        self.string_type()
+        self.get_extract_string_type_impl(t)
     }
 
-    /// TODO(port M6 S10): `getIndexedAccessTypeEx(objectType, indexType,
-    /// accessFlags, accessNode, errorNode)` — the indexed-access constructor;
-    /// permissive errorType (relater.rs carries the same seam).
+    /// Go: `func (c *Checker) getIndexedAccessTypeEx(objectType, indexType, accessFlags, accessNode, alias) *Type`
+    /// — REAL (M6 S10): routes to index.rs's body (the S5 potentialAlias seam
+    /// now feeds the interned deferred indexed-access constructor).
     pub(crate) fn get_indexed_access_type_ex(
         &mut self,
         object_type: TypeId,
@@ -2307,10 +2388,13 @@ impl Checker {
         access_node: Option<NodeId>,
         potential_alias: Option<Box<crate::types::TypeAlias>>,
     ) -> TypeId {
-        // M6 S5: the potentialAlias parameter (Go checker.go:23425's call)
-        // rides through to the S10 constructor seam.
-        let _ = (access_flags, access_node, potential_alias);
-        crate::relater::get_indexed_access_type(self, object_type, index_type)
+        self.get_indexed_access_type_ex_impl(
+            object_type,
+            index_type,
+            access_flags,
+            access_node,
+            potential_alias,
+        )
     }
 
     /// Go: `func (c *Checker) getTypeOfInitializer(initializer *ast.Node) *Type`
@@ -2321,14 +2405,11 @@ impl Checker {
         self.get_type_of_expression(initializer)
     }
 
-    /// Go: `func (c *Checker) getNonUndefinedType(t *Type) *Type` (S10) —
-    /// the generic-undefined-constraint map + getTypeWithFacts; the S7/S10
-    /// permissive seams compose to the identity-with-facts-stub answer.
+    /// Go: `func (c *Checker) getNonUndefinedType(t *Type) *Type` — REAL
+    /// (M6 S10, checker.go:32097): the generic-undefined-constraint map +
+    /// getTypeWithFacts (index.rs's body).
     fn get_non_undefined_type(&mut self, t: TypeId) -> TypeId {
-        // TODO(port M6 S10): isGenericTypeWithUndefinedConstraint + the
-        // base-constraint mapping; the facts-stub identity is the permissive
-        // value (undefined removal is a no-op until the facts wave).
-        t
+        self.get_non_undefined_type_impl(t)
     }
 
     /// Go: `func (c *Checker) getTypeOfSymbol(symbol)`'s mapped-symbol arm's
@@ -2785,10 +2866,12 @@ fn is_catch_clause_variable_declaration_or_binding_element(
 
 impl Checker {
     /// Go: `func (c *Checker) hasTypeFacts(t *Type, facts TypeFacts) bool` —
-    /// `(c.getTypeFacts(t, facts) & facts) == facts` over relater's stub.
+    /// REAL (M6 S10): `getTypeFacts(t, facts) != 0` over facts.rs's lattice
+    /// worker (ANY-bit semantics; Go checker.go:31527). The prior stub's
+    /// contains-all read was a misport.
     pub(crate) fn has_type_facts(&mut self, t: TypeId, facts: crate::relater::TypeFacts) -> bool {
-        let computed = self.get_type_facts(t, facts);
-        computed.contains(facts)
+        let computed = self.get_type_facts_impl(t, facts);
+        !computed.is_empty()
     }
 
     /// Return the inferred type for a binding element.
@@ -2996,21 +3079,37 @@ impl Checker {
         {
             // In strict null checking mode, if a default value of a
             // non-undefined type is specified, remove undefined from the
-            // final type.
-            // TODO(port M6 S10): the TypeFactsIsUndefined probe — the facts
-            // stub keeps t unchanged (Go strips undefined when the default
-            // is non-undefined).
+            // final type. REAL (M6 S10, checker.go:17976): the
+            // TypeFactsIsUndefined probe + getNonUndefinedType.
+            if self.strict_null_checks {
+                let initializer_type = self.check_declaration_initializer(
+                    declaration,
+                    CheckMode::CHECK_MODE_NORMAL,
+                    None, /*contextualType*/
+                );
+                if !self.has_type_facts(initializer_type, crate::relater::TypeFacts::IS_UNDEFINED) {
+                    return self.get_non_undefined_type(t);
+                }
+            }
             return t;
         }
+        // REAL (M6 S10, checker.go:17981):
+        // `widenTypeInferredFromInitializer(declaration, getUnionTypeEx(
+        //    [getNonUndefinedType(t), checkDeclarationInitializer(...)],
+        //    UnionReductionSubtype, nil, nil))`.
         let initializer_type = self.check_declaration_initializer(
             declaration,
             CheckMode::CHECK_MODE_NORMAL,
             None, /*contextualType*/
         );
-        // REAL (M6 S7): the union ctor handles the subtype reduction below
-        // (the initializer type feeds Go's widened-literal composition).
-        let _ = initializer_type;
-        self.widen_type_inferred_from_initializer(declaration, t)
+        let non_undefined = self.get_non_undefined_type(t);
+        let union = self.get_union_type_ex(
+            vec![non_undefined, initializer_type],
+            crate::todo_shapes::UnionReduction::Subtype,
+            None,
+            None,
+        );
+        self.widen_type_inferred_from_initializer(declaration, union)
     }
 
     /// Go: `func (c *Checker) getRestType(source *Type, properties []*ast.Node, symbol *ast.Symbol) *Type`.
@@ -3030,14 +3129,16 @@ impl Checker {
         crate::relater::get_non_nullable_type(self, source)
     }
 
-    /// Go: `func (c *Checker) isValidSpreadType(t) bool` (checker.go:13748).
-    ///
-    /// Go: `removeDefinitelyFalsyTypes(mapType(t, getBaseConstraintOrType))`
-    /// then the flags probe. TODO(port M6 S7/S10): the falsy-removal +
-    /// constraint map; the flags probe below is the post-removal shape for
-    /// the compound-free types.
+    /// Go: `func (c *Checker) isValidSpreadType(t) bool` (checker.go:13748) —
+    /// REAL (M6 S10): `removeDefinitelyFalsyTypes(mapType(t, getBaseConstraintOrType))`
+    /// then the flags probe over the post-removal type.
     pub(crate) fn is_valid_spread_type(&mut self, t: TypeId) -> bool {
-        let flags = self.type_(t).flags;
+        // REAL (M6 S10, checker.go:13748):
+        // `s := removeDefinitelyFalsyTypes(mapType(t, getBaseConstraintOrType))`
+        // then the flags probe over s.
+        let mapped = crate::typenodes::map_type(self, t, crate::relater::get_base_constraint_or_type);
+        let s = self.remove_definitely_falsy_types(mapped);
+        let flags = self.type_(s).flags;
         if flags.intersects(
             crate::types::TypeFlags::ANY
                 .union(crate::types::TypeFlags::NON_PRIMITIVE)
@@ -3047,7 +3148,7 @@ impl Checker {
             return true;
         }
         if flags.intersects(crate::types::TypeFlags::UNION_OR_INTERSECTION) {
-            let constituents = self.type_(t).types().to_vec();
+            let constituents = self.type_(s).types().to_vec();
             return constituents.iter().all(|&c| self.is_valid_spread_type(c));
         }
         false
@@ -4469,11 +4570,13 @@ impl Checker {
                         return outer_type_parameters;
                     }
                     if kind == Kind::ConditionalType {
-                        // TODO(port M6 S10): getInferTypeParameters — the
-                        // conditional/infer wave; the locals read is its
-                        // seam. Go appends the node's TypeParameter-flagged
-                        // locals' declared types here.
-                        return outer_type_parameters;
+                        // REAL (M6 S10, checker.go:24312): getInferTypeParameters —
+                        // typenodes.rs's REAL body (the node's
+                        // TypeParameter-flagged locals' declared types,
+                        // id-sorted).
+                        let mut result = outer_type_parameters;
+                        result.extend(self.get_infer_type_parameters(node));
+                        return result;
                     }
                     let declarations = binder_node_data::type_parameters_of(self.store(), node)
                         .map(|list| list.nodes.clone())

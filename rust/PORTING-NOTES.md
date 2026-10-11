@@ -2101,3 +2101,23 @@ Next: S10.
 Rig validation (S9, 2026-10-11): forced clean + rebuild — all three
 twin gates green (fixture 9/9, 300-slice 143/143 byte-identical,
 program twin 15/15). S9 CLOSED.
+
+## M6 S10 — facts lattice + pattern/index machinery landed (2026-10-12) — S-SLICES COMPLETE
+
+facts.rs ~440 (the TypeFacts bitset family — NOTE: the dispatch doc's
+checkFacts/ExprFact/setFact names do not exist in this Go snapshot; the
+real lattice is getTypeFacts/hasTypeWithFacts; the prior contains-all
+stub was a misport; doc corrected) + index.rs ~1,730 (keyof family with
+NoInfer re-wrap + deferred generic/mapped forms, the interned
+indexed-access ctor, getPropertyTypeForIndexType with Levenshtein
+suggestions, substitution/distribution families). Stub->real flips
+across 12 modules: relater get_constraint_of_type to Go's exact switch,
+typeofsymbol computeBaseConstraint arms + the Go-17981 widen-tail fix,
+uniontypes instantiateType INDEX, contextual discriminate arms with
+ObjectLiteralDiscriminator, statements checkIndexConstraints with the
+(a)/(b)/(c) errorNode selection, checkMappedType, expressions TS2464 +
+spread index-infos. One honest open banner: resolveNameForSymbolSuggestion
+(lookup-hook refactor; affects only did-you-mean). Orchestrator
+re-verified fresh: 188 tests (6 new), clippy 0, fixture 9/9, 300-slice
+twins identical 143/143, program twin 15/15. ALL TEN S-SLICES CLOSED.
+Next: W3 flow/grammarchecks/services + check-stage wiring (climb %).

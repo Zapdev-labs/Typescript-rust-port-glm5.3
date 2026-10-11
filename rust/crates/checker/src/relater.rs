@@ -42,7 +42,7 @@ use tsc_diagnostics::Message;
 use tsc_diagnostics as msg;
 
 use crate::types::{
-    ElementFlags, IndexFlags, ObjectFlags, SignatureKind, Ternary,
+    AccessFlags, ElementFlags, IndexFlags, ObjectFlags, SignatureKind, Ternary,
     TypeFlags, TypeId, TypePredicate, TypePredicateKind, VarianceFlags,
 };
 use crate::utilities as u;
@@ -3136,14 +3136,35 @@ impl Checker {
                 && self.is_type_derived_from(source, self.global_readonly_array_type.expect("globalReadonlyArrayType (S2)")))
     }
 
-    /// Go: `func (c *Checker) isDistributionDependent(root) bool`.
+    /// Go: `func (c *Checker) isDistributionDependent(root) bool` (relater.go:5026)
+    /// — REAL (M6 S10): `root.isDistributive &&
+    /// (isTypeParameterPossiblyReferenced(checkType, TrueType) ||
+    ///  isTypeParameterPossiblyReferenced(checkType, FalseType))`.
     pub(crate) fn is_distribution_dependent(
         &mut self,
         root: &crate::types::ConditionalRoot,
     ) -> bool {
-        // TODO(port M6 S10): isTypeParameterPossiblyReferenced.
-        root.is_distributive
+        if !root.is_distributive {
+            return false;
+        }
+        let Some(check_type) = root.check_type else {
+            return false;
+        };
+        let Some(node) = root.node else {
+            return false;
+        };
+        let (true_type, false_type) = {
+            let d = self
+                .store()
+                .node(node)
+                .as_conditional_type_node()
+                .expect("ConditionalTypeNode data");
+            (d.true_type, d.false_type)
+        };
+        self.is_type_parameter_possibly_referenced(check_type, true_type)
+            || self.is_type_parameter_possibly_referenced(check_type, false_type)
     }
+
 }
 
 /// Go: `func (c *Checker) getNonNullableType(t)` (utilities.go — the signature
@@ -3160,24 +3181,58 @@ fn is_type_any(c: &Checker, t: TypeId) -> bool {
     u::is_type_any(Some(c.type_(t)))
 }
 
-// The TypeFacts bits the relater reads (Go checker.go TypeFacts — the full
-// facts wave is S10; the bits are Go's exact values so the S2 binding-element
-// and S10 facts workers share one lattice).
+// The TypeFacts lattice (Go checker.go:399-482 — the FULL constant set landed
+// with the M6 S10 facts wave; the bits are Go's exact values so the S2
+// binding-element, S4 truthiness and S10 facts workers share one lattice).
 define_flags!(TypeFacts, u32);
 impl TypeFacts {
+    /// Go: `TypeFactsTypeofEQString TypeFacts = 1 << 0`.
+    pub const TYPEOF_EQ_STRING: TypeFacts = TypeFacts(1 << 0);
+    /// Go: `TypeFactsTypeofEQNumber TypeFacts = 1 << 1`.
+    pub const TYPEOF_EQ_NUMBER: TypeFacts = TypeFacts(1 << 1);
+    /// Go: `TypeFactsTypeofEQBigInt TypeFacts = 1 << 2`.
+    pub const TYPEOF_EQ_BIGINT: TypeFacts = TypeFacts(1 << 2);
+    /// Go: `TypeFactsTypeofEQBoolean TypeFacts = 1 << 3`.
+    pub const TYPEOF_EQ_BOOLEAN: TypeFacts = TypeFacts(1 << 3);
+    /// Go: `TypeFactsTypeofEQSymbol TypeFacts = 1 << 4`.
+    pub const TYPEOF_EQ_SYMBOL: TypeFacts = TypeFacts(1 << 4);
+    /// Go: `TypeFactsTypeofEQObject TypeFacts = 1 << 5`.
+    pub const TYPEOF_EQ_OBJECT: TypeFacts = TypeFacts(1 << 5);
+    /// Go: `TypeFactsTypeofEQFunction TypeFacts = 1 << 6`.
+    pub const TYPEOF_EQ_FUNCTION: TypeFacts = TypeFacts(1 << 6);
+    /// Go: `TypeFactsTypeofEQHostObject TypeFacts = 1 << 7`.
+    pub const TYPEOF_EQ_HOST_OBJECT: TypeFacts = TypeFacts(1 << 7);
+    /// Go: `TypeFactsTypeofNEString TypeFacts = 1 << 8`.
+    pub const TYPEOF_NE_STRING: TypeFacts = TypeFacts(1 << 8);
+    /// Go: `TypeFactsTypeofNENumber TypeFacts = 1 << 9`.
+    pub const TYPEOF_NE_NUMBER: TypeFacts = TypeFacts(1 << 9);
+    /// Go: `TypeFactsTypeofNEBigInt TypeFacts = 1 << 10`.
+    pub const TYPEOF_NE_BIGINT: TypeFacts = TypeFacts(1 << 10);
+    /// Go: `TypeFactsTypeofNEBoolean TypeFacts = 1 << 11`.
+    pub const TYPEOF_NE_BOOLEAN: TypeFacts = TypeFacts(1 << 11);
+    /// Go: `TypeFactsTypeofNESymbol TypeFacts = 1 << 12`.
+    pub const TYPEOF_NE_SYMBOL: TypeFacts = TypeFacts(1 << 12);
+    /// Go: `TypeFactsTypeofNEObject TypeFacts = 1 << 13`.
+    pub const TYPEOF_NE_OBJECT: TypeFacts = TypeFacts(1 << 13);
+    /// Go: `TypeFactsTypeofNEFunction TypeFacts = 1 << 14`.
+    pub const TYPEOF_NE_FUNCTION: TypeFacts = TypeFacts(1 << 14);
+    /// Go: `TypeFactsTypeofNEHostObject TypeFacts = 1 << 15`.
+    pub const TYPEOF_NE_HOST_OBJECT: TypeFacts = TypeFacts(1 << 15);
     /// Go: `TypeFactsEQUndefined TypeFacts = 1 << 16`.
     pub const EQ_UNDEFINED: TypeFacts = TypeFacts(1 << 16);
+    /// Go: `TypeFactsEQNull TypeFacts = 1 << 17`.
+    pub const EQ_NULL: TypeFacts = TypeFacts(1 << 17);
     /// Go: `TypeFactsEQUndefinedOrNull TypeFacts = 1 << 18`.
     pub const EQ_UNDEFINED_OR_NULL: TypeFacts = TypeFacts(1 << 18);
     /// Go: `TypeFactsNEUndefined TypeFacts = 1 << 19`.
     pub const NE_UNDEFINED: TypeFacts = TypeFacts(1 << 19);
-    /// Go: `TypeFactsNEUndefinedOrNull TypeFacts = 1 << 21` (M6 S9: the
-    /// awaited-family's onfulfilled-parameter reads).
+    /// Go: `TypeFactsNENull TypeFacts = 1 << 20`.
+    pub const NE_NULL: TypeFacts = TypeFacts(1 << 20);
+    /// Go: `TypeFactsNEUndefinedOrNull TypeFacts = 1 << 21`.
     pub const NE_UNDEFINED_OR_NULL: TypeFacts = TypeFacts(1 << 21);
-    /// Go: `TypeFactsTruthy TypeFacts = 1 << 22` (M6 S4: added with the
-    /// checkBinaryLikeExpression &&/|| arms).
+    /// Go: `TypeFactsTruthy TypeFacts = 1 << 22`.
     pub const TRUTHY: TypeFacts = TypeFacts(1 << 22);
-    /// Go: `TypeFactsFalsy TypeFacts = 1 << 23` (M6 S4).
+    /// Go: `TypeFactsFalsy TypeFacts = 1 << 23`.
     pub const FALSY: TypeFacts = TypeFacts(1 << 23);
     /// Go: `TypeFactsIsUndefined TypeFacts = 1 << 24`.
     pub const IS_UNDEFINED: TypeFacts = TypeFacts(1 << 24);
@@ -3186,6 +3241,218 @@ impl TypeFacts {
     /// Go: `TypeFactsIsUndefinedOrNull = TypeFactsIsUndefined | TypeFactsIsNull`.
     pub const IS_UNDEFINED_OR_NULL: TypeFacts =
         TypeFacts(Self::IS_UNDEFINED.0 | Self::IS_NULL.0);
+    /// Go: `TypeFactsAll TypeFacts = (1 << 27) - 1`.
+    pub const ALL: TypeFacts = TypeFacts((1 << 27) - 1);
+    // The following members encode facts about particular kinds of types for
+    // use in the getTypeFacts function (Go checker.go:432-478).
+    /// Go: `TypeFactsBaseStringStrictFacts`.
+    pub const BASE_STRING_STRICT_FACTS: TypeFacts = TypeFacts(
+        Self::TYPEOF_EQ_STRING.0 | Self::TYPEOF_NE_NUMBER.0 | Self::TYPEOF_NE_BIGINT.0
+            | Self::TYPEOF_NE_BOOLEAN.0 | Self::TYPEOF_NE_SYMBOL.0 | Self::TYPEOF_NE_OBJECT.0
+            | Self::TYPEOF_NE_FUNCTION.0 | Self::TYPEOF_NE_HOST_OBJECT.0
+            | Self::NE_UNDEFINED.0 | Self::NE_NULL.0 | Self::NE_UNDEFINED_OR_NULL.0,
+    );
+    /// Go: `TypeFactsBaseStringFacts`.
+    pub const BASE_STRING_FACTS: TypeFacts = TypeFacts(
+        Self::BASE_STRING_STRICT_FACTS.0 | Self::EQ_UNDEFINED.0 | Self::EQ_NULL.0
+            | Self::EQ_UNDEFINED_OR_NULL.0
+            | Self::FALSY.0,
+    );
+    /// Go: `TypeFactsStringStrictFacts`.
+    pub const STRING_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_STRING_STRICT_FACTS.0 | Self::TRUTHY.0 | Self::FALSY.0);
+    /// Go: `TypeFactsStringFacts`.
+    pub const STRING_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_STRING_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsEmptyStringStrictFacts`.
+    pub const EMPTY_STRING_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_STRING_STRICT_FACTS.0 | Self::FALSY.0);
+    /// Go: `TypeFactsEmptyStringFacts`.
+    pub const EMPTY_STRING_FACTS: TypeFacts = TypeFacts(Self::BASE_STRING_STRICT_FACTS.0);
+    /// Go: `TypeFactsNonEmptyStringStrictFacts`.
+    pub const NON_EMPTY_STRING_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_STRING_STRICT_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsNonEmptyStringFacts`.
+    pub const NON_EMPTY_STRING_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_STRING_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsBaseNumberStrictFacts`.
+    pub const BASE_NUMBER_STRICT_FACTS: TypeFacts = TypeFacts(
+        Self::TYPEOF_EQ_NUMBER.0 | Self::TYPEOF_NE_STRING.0 | Self::TYPEOF_NE_BIGINT.0
+            | Self::TYPEOF_NE_BOOLEAN.0 | Self::TYPEOF_NE_SYMBOL.0 | Self::TYPEOF_NE_OBJECT.0
+            | Self::TYPEOF_NE_FUNCTION.0 | Self::TYPEOF_NE_HOST_OBJECT.0
+            | Self::NE_UNDEFINED.0 | Self::NE_NULL.0 | Self::NE_UNDEFINED_OR_NULL.0,
+    );
+    /// Go: `TypeFactsBaseNumberFacts`.
+    pub const BASE_NUMBER_FACTS: TypeFacts = TypeFacts(
+        Self::BASE_NUMBER_STRICT_FACTS.0 | Self::EQ_UNDEFINED.0 | Self::EQ_NULL.0
+            | Self::EQ_UNDEFINED_OR_NULL.0
+            | Self::FALSY.0,
+    );
+    /// Go: `TypeFactsNumberStrictFacts`.
+    pub const NUMBER_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_NUMBER_STRICT_FACTS.0 | Self::TRUTHY.0 | Self::FALSY.0);
+    /// Go: `TypeFactsNumberFacts`.
+    pub const NUMBER_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_NUMBER_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsZeroNumberStrictFacts`.
+    pub const ZERO_NUMBER_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_NUMBER_STRICT_FACTS.0 | Self::FALSY.0);
+    /// Go: `TypeFactsZeroNumberFacts`.
+    pub const ZERO_NUMBER_FACTS: TypeFacts = TypeFacts(Self::BASE_NUMBER_FACTS.0);
+    /// Go: `TypeFactsNonZeroNumberStrictFacts`.
+    pub const NON_ZERO_NUMBER_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_NUMBER_STRICT_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsNonZeroNumberFacts`.
+    pub const NON_ZERO_NUMBER_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_NUMBER_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsBaseBigIntStrictFacts`.
+    pub const BASE_BIGINT_STRICT_FACTS: TypeFacts = TypeFacts(
+        Self::TYPEOF_EQ_BIGINT.0 | Self::TYPEOF_NE_STRING.0 | Self::TYPEOF_NE_NUMBER.0
+            | Self::TYPEOF_NE_BOOLEAN.0 | Self::TYPEOF_NE_SYMBOL.0 | Self::TYPEOF_NE_OBJECT.0
+            | Self::TYPEOF_NE_FUNCTION.0 | Self::TYPEOF_NE_HOST_OBJECT.0
+            | Self::NE_UNDEFINED.0 | Self::NE_NULL.0 | Self::NE_UNDEFINED_OR_NULL.0,
+    );
+    /// Go: `TypeFactsBaseBigIntFacts`.
+    pub const BASE_BIGINT_FACTS: TypeFacts = TypeFacts(
+        Self::BASE_BIGINT_STRICT_FACTS.0 | Self::EQ_UNDEFINED.0 | Self::EQ_NULL.0
+            | Self::EQ_UNDEFINED_OR_NULL.0
+            | Self::FALSY.0,
+    );
+    /// Go: `TypeFactsBigIntStrictFacts`.
+    pub const BIGINT_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_BIGINT_STRICT_FACTS.0 | Self::TRUTHY.0 | Self::FALSY.0);
+    /// Go: `TypeFactsBigIntFacts`.
+    pub const BIGINT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_BIGINT_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsZeroBigIntStrictFacts`.
+    pub const ZERO_BIGINT_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_BIGINT_STRICT_FACTS.0 | Self::FALSY.0);
+    /// Go: `TypeFactsZeroBigIntFacts`.
+    pub const ZERO_BIGINT_FACTS: TypeFacts = TypeFacts(Self::BASE_BIGINT_FACTS.0);
+    /// Go: `TypeFactsNonZeroBigIntStrictFacts`.
+    pub const NON_ZERO_BIGINT_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_BIGINT_STRICT_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsNonZeroBigIntFacts`.
+    pub const NON_ZERO_BIGINT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_BIGINT_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsBaseBooleanStrictFacts`.
+    pub const BASE_BOOLEAN_STRICT_FACTS: TypeFacts = TypeFacts(
+        Self::TYPEOF_EQ_BOOLEAN.0 | Self::TYPEOF_NE_STRING.0 | Self::TYPEOF_NE_NUMBER.0
+            | Self::TYPEOF_NE_BIGINT.0 | Self::TYPEOF_NE_SYMBOL.0 | Self::TYPEOF_NE_OBJECT.0
+            | Self::TYPEOF_NE_FUNCTION.0 | Self::TYPEOF_NE_HOST_OBJECT.0
+            | Self::NE_UNDEFINED.0 | Self::NE_NULL.0 | Self::NE_UNDEFINED_OR_NULL.0,
+    );
+    /// Go: `TypeFactsBaseBooleanFacts`.
+    pub const BASE_BOOLEAN_FACTS: TypeFacts = TypeFacts(
+        Self::BASE_BOOLEAN_STRICT_FACTS.0 | Self::EQ_UNDEFINED.0 | Self::EQ_NULL.0
+            | Self::EQ_UNDEFINED_OR_NULL.0
+            | Self::FALSY.0,
+    );
+    /// Go: `TypeFactsBooleanStrictFacts`.
+    pub const BOOLEAN_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_BOOLEAN_STRICT_FACTS.0 | Self::TRUTHY.0 | Self::FALSY.0);
+    /// Go: `TypeFactsBooleanFacts`.
+    pub const BOOLEAN_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_BOOLEAN_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsFalseStrictFacts`.
+    pub const FALSE_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_BOOLEAN_STRICT_FACTS.0 | Self::FALSY.0);
+    /// Go: `TypeFactsFalseFacts`.
+    pub const FALSE_FACTS: TypeFacts = TypeFacts(Self::BASE_BOOLEAN_FACTS.0);
+    /// Go: `TypeFactsTrueStrictFacts`.
+    pub const TRUE_STRICT_FACTS: TypeFacts =
+        TypeFacts(Self::BASE_BOOLEAN_STRICT_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsTrueFacts`.
+    pub const TRUE_FACTS: TypeFacts = TypeFacts(Self::BASE_BOOLEAN_FACTS.0 | Self::TRUTHY.0);
+    /// Go: `TypeFactsSymbolStrictFacts`.
+    pub const SYMBOL_STRICT_FACTS: TypeFacts = TypeFacts(
+        Self::TYPEOF_EQ_SYMBOL.0 | Self::TYPEOF_NE_STRING.0 | Self::TYPEOF_NE_NUMBER.0
+            | Self::TYPEOF_NE_BIGINT.0 | Self::TYPEOF_NE_BOOLEAN.0 | Self::TYPEOF_NE_OBJECT.0
+            | Self::TYPEOF_NE_FUNCTION.0 | Self::TYPEOF_NE_HOST_OBJECT.0
+            | Self::NE_UNDEFINED.0 | Self::NE_NULL.0 | Self::NE_UNDEFINED_OR_NULL.0
+            | Self::TRUTHY.0,
+    );
+    /// Go: `TypeFactsSymbolFacts`.
+    pub const SYMBOL_FACTS: TypeFacts = TypeFacts(
+        Self::SYMBOL_STRICT_FACTS.0 | Self::EQ_UNDEFINED.0 | Self::EQ_NULL.0
+            | Self::EQ_UNDEFINED_OR_NULL.0
+            | Self::FALSY.0,
+    );
+    /// Go: `TypeFactsObjectStrictFacts`.
+    pub const OBJECT_STRICT_FACTS: TypeFacts = TypeFacts(
+        Self::TYPEOF_EQ_OBJECT.0 | Self::TYPEOF_EQ_HOST_OBJECT.0 | Self::TYPEOF_NE_STRING.0
+            | Self::TYPEOF_NE_NUMBER.0 | Self::TYPEOF_NE_BIGINT.0 | Self::TYPEOF_NE_BOOLEAN.0
+            | Self::TYPEOF_NE_SYMBOL.0 | Self::TYPEOF_NE_FUNCTION.0 | Self::NE_UNDEFINED.0
+            | Self::NE_NULL.0 | Self::NE_UNDEFINED_OR_NULL.0 | Self::TRUTHY.0,
+    );
+    /// Go: `TypeFactsObjectFacts`.
+    pub const OBJECT_FACTS: TypeFacts = TypeFacts(
+        Self::OBJECT_STRICT_FACTS.0 | Self::EQ_UNDEFINED.0 | Self::EQ_NULL.0
+            | Self::EQ_UNDEFINED_OR_NULL.0
+            | Self::FALSY.0,
+    );
+    /// Go: `TypeFactsFunctionStrictFacts`.
+    pub const FUNCTION_STRICT_FACTS: TypeFacts = TypeFacts(
+        Self::TYPEOF_EQ_FUNCTION.0 | Self::TYPEOF_EQ_HOST_OBJECT.0 | Self::TYPEOF_NE_STRING.0
+            | Self::TYPEOF_NE_NUMBER.0 | Self::TYPEOF_NE_BIGINT.0 | Self::TYPEOF_NE_BOOLEAN.0
+            | Self::TYPEOF_NE_SYMBOL.0 | Self::TYPEOF_NE_OBJECT.0 | Self::NE_UNDEFINED.0
+            | Self::NE_NULL.0 | Self::NE_UNDEFINED_OR_NULL.0 | Self::TRUTHY.0,
+    );
+    /// Go: `TypeFactsFunctionFacts`.
+    pub const FUNCTION_FACTS: TypeFacts = TypeFacts(
+        Self::FUNCTION_STRICT_FACTS.0 | Self::EQ_UNDEFINED.0 | Self::EQ_NULL.0
+            | Self::EQ_UNDEFINED_OR_NULL.0
+            | Self::FALSY.0,
+    );
+    /// Go: `TypeFactsVoidFacts`.
+    pub const VOID_FACTS: TypeFacts = TypeFacts(
+        Self::TYPEOF_NE_STRING.0 | Self::TYPEOF_NE_NUMBER.0 | Self::TYPEOF_NE_BIGINT.0
+            | Self::TYPEOF_NE_BOOLEAN.0 | Self::TYPEOF_NE_SYMBOL.0 | Self::TYPEOF_NE_OBJECT.0
+            | Self::TYPEOF_NE_FUNCTION.0 | Self::TYPEOF_NE_HOST_OBJECT.0
+            | Self::EQ_UNDEFINED.0 | Self::EQ_UNDEFINED_OR_NULL.0 | Self::NE_NULL.0
+            | Self::FALSY.0,
+    );
+    /// Go: `TypeFactsUndefinedFacts`.
+    pub const UNDEFINED_FACTS: TypeFacts = TypeFacts(
+        Self::TYPEOF_NE_STRING.0 | Self::TYPEOF_NE_NUMBER.0 | Self::TYPEOF_NE_BIGINT.0
+            | Self::TYPEOF_NE_BOOLEAN.0 | Self::TYPEOF_NE_SYMBOL.0 | Self::TYPEOF_NE_OBJECT.0
+            | Self::TYPEOF_NE_FUNCTION.0 | Self::TYPEOF_NE_HOST_OBJECT.0
+            | Self::EQ_UNDEFINED.0 | Self::EQ_UNDEFINED_OR_NULL.0 | Self::NE_NULL.0
+            | Self::FALSY.0 | Self::IS_UNDEFINED.0,
+    );
+    /// Go: `TypeFactsNullFacts`.
+    pub const NULL_FACTS: TypeFacts = TypeFacts(
+        Self::TYPEOF_EQ_OBJECT.0 | Self::TYPEOF_NE_STRING.0 | Self::TYPEOF_NE_NUMBER.0
+            | Self::TYPEOF_NE_BIGINT.0 | Self::TYPEOF_NE_BOOLEAN.0 | Self::TYPEOF_NE_SYMBOL.0
+            | Self::TYPEOF_NE_FUNCTION.0 | Self::TYPEOF_NE_HOST_OBJECT.0 | Self::EQ_NULL.0
+            | Self::EQ_UNDEFINED_OR_NULL.0 | Self::NE_UNDEFINED.0 | Self::FALSY.0
+            | Self::IS_NULL.0,
+    );
+    /// Go: `TypeFactsEmptyObjectStrictFacts = TypeFactsAll & ^(EQUndefined|EQNull|EQUndefinedOrNull|IsUndefinedOrNull)`.
+    pub const EMPTY_OBJECT_STRICT_FACTS: TypeFacts = TypeFacts(
+        Self::ALL.0
+            & !(Self::EQ_UNDEFINED.0 | Self::EQ_NULL.0 | Self::EQ_UNDEFINED_OR_NULL.0
+                | Self::IS_UNDEFINED_OR_NULL.0),
+    );
+    /// Go: `TypeFactsEmptyObjectFacts = TypeFactsAll & ^TypeFactsIsUndefinedOrNull`.
+    pub const EMPTY_OBJECT_FACTS: TypeFacts =
+        TypeFacts(Self::ALL.0 & !Self::IS_UNDEFINED_OR_NULL.0);
+    /// Go: `TypeFactsUnknownFacts = TypeFactsAll & ^TypeFactsIsUndefinedOrNull`.
+    pub const UNKNOWN_FACTS: TypeFacts =
+        TypeFacts(Self::ALL.0 & !Self::IS_UNDEFINED_OR_NULL.0);
+    /// Go: `TypeFactsAllTypeofNE` (flow.go's typeof-switch combiner).
+    pub const ALL_TYPEOF_NE: TypeFacts = TypeFacts(
+        Self::TYPEOF_NE_STRING.0 | Self::TYPEOF_NE_NUMBER.0 | Self::TYPEOF_NE_BIGINT.0
+            | Self::TYPEOF_NE_BOOLEAN.0 | Self::TYPEOF_NE_SYMBOL.0 | Self::TYPEOF_NE_OBJECT.0
+            | Self::TYPEOF_NE_FUNCTION.0
+            | Self::NE_UNDEFINED.0,
+    );
+    // Masks (Go checker.go:480-482).
+    /// Go: `TypeFactsOrFactsMask = TypeFactsTypeofEQFunction | TypeFactsTypeofNEObject`.
+    pub const OR_FACTS_MASK: TypeFacts =
+        TypeFacts(Self::TYPEOF_EQ_FUNCTION.0 | Self::TYPEOF_NE_OBJECT.0);
+    /// Go: `TypeFactsAndFactsMask = TypeFactsAll & ^TypeFactsOrFactsMask`.
+    pub const AND_FACTS_MASK: TypeFacts = TypeFacts(Self::ALL.0 & !Self::OR_FACTS_MASK.0);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -6517,15 +6784,110 @@ fn find_discriminant_properties(c: &mut Checker, source_properties: &[SymbolId],
     result
 }
 
-/// Go: `func (c *Checker) isDiscriminantProperty(t, name) bool`.
-fn is_discriminant_property(c: &mut Checker, t: TypeId, _name: &str) -> bool {
+/// Go: `func (c *Checker) isDiscriminantProperty(t, name) bool` (relater.go:1080)
+/// — REAL (M6 S10): the synthetic union property's discriminant CheckFlags
+/// computation (needs S8's getUnionOrIntersectionProperty, landed).
+pub(crate) fn is_discriminant_property(c: &mut Checker, t: TypeId, name: &str) -> bool {
     if c.type_(t).flags.intersects(TypeFlags::UNION) {
-        // TODO(port M6 S8): getUnionOrIntersectionProperty — the synthetic
-        // discriminant CheckFlags computation (nonUniformAndLiteral etc.).
-        // Union property resolution lands with resolveStructuredTypeMembers.
-        return false;
+        let prop = match c.get_union_or_intersection_property(t, name, false /*skipObjectFunctionPropertyAugment*/) {
+            Some(prop) => prop,
+            None => return false,
+        };
+        if c.program_symbol(prop).check_flags.intersects(CheckFlags::SYNTHETIC_PROPERTY) {
+            if !c
+                .program_symbol(prop)
+                .check_flags
+                .intersects(CheckFlags::IS_DISCRIMINANT_COMPUTED)
+            {
+                c.program_symbol_mut(prop).check_flags |= CheckFlags::IS_DISCRIMINANT_COMPUTED;
+                let prop_type = get_type_of_symbol(c, prop);
+                let non_uniform_and_literal = c
+                    .program_symbol(prop)
+                    .check_flags
+                    .intersects(CheckFlags::NON_UNIFORM_AND_LITERAL);
+                if non_uniform_and_literal && !c.is_generic_type(prop_type) {
+                    c.program_symbol_mut(prop).check_flags |= CheckFlags::IS_DISCRIMINANT;
+                }
+            }
+            return c
+                .program_symbol(prop)
+                .check_flags
+                .intersects(CheckFlags::IS_DISCRIMINANT);
+        }
     }
     false
+}
+
+/// Go: `func (c *Checker) discriminateTypeByDiscriminableItems(target, discriminator) *Type`
+/// (relater.go:1205) — REAL (M6 S10): the closure-triple form of Go's
+/// `Discriminator` interface (the symbol-props + comparer form above is the
+/// relater-internal call shape; the contextual arms — contextual.rs — and
+/// the JSX arm (W5) supply the closure triple).
+pub(crate) fn discriminate_type_by_discriminable_items_with_closures(
+    c: &mut Checker,
+    target: TypeId,
+    discriminator_len: usize,
+    mut discriminator_name: impl FnMut(&mut Checker, usize) -> String,
+    mut discriminator_matches: impl FnMut(&mut Checker, usize, TypeId) -> bool,
+) -> TypeId {
+    // Ternary include — the Maybe/True/False lattice as i8 (0 = False,
+    // 1 = Maybe, 2 = True).
+    let types: Vec<TypeId> = c.type_(target).types().to_vec();
+    let mut include: Vec<i8> = vec![0; types.len()];
+    for (i, &t) in types.iter().enumerate() {
+        let reduced = c.get_reduced_type(t);
+        if !c.type_(t).flags.intersects(TypeFlags::PRIMITIVE)
+            && !c.type_(reduced).flags.intersects(TypeFlags::NEVER)
+        {
+            include[i] = 2;
+        }
+    }
+    for n in 0..discriminator_len {
+        // If the remaining target types include at least one with a matching
+        // discriminant, eliminate those that have non-matching discriminants.
+        // This ensures that we ignore erroneous discriminators and gradually
+        // refine the target set without eliminating every constituent (which
+        // would lead to `never`). (Go comment, verbatim.)
+        let mut matched = false;
+        for i in 0..types.len() {
+            if include[i] != 0 {
+                let name = discriminator_name(c, n);
+                let target_type = get_type_of_property_or_index_signature_of_type(c, types[i], &name);
+                if let Some(target_type) = target_type {
+                    if discriminator_matches(c, n, target_type) {
+                        matched = true;
+                    } else {
+                        include[i] = 1;
+                    }
+                }
+            }
+        }
+        // Turn each Maybe into False if there was a match. Otherwise, revert
+        // to True.
+        for slot in include.iter_mut() {
+            if *slot == 1 {
+                *slot = if matched { 0 } else { 2 };
+            }
+        }
+    }
+    if include.contains(&0) {
+        let filtered_types: Vec<TypeId> = types
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| include[i] == 2)
+            .map(|(_, &t)| t)
+            .collect();
+        let filtered = c.get_union_type_ex(
+            filtered_types,
+            crate::todo_shapes::UnionReduction::None,
+            None,
+            None,
+        );
+        if !c.type_(filtered).flags.intersects(TypeFlags::NEVER) {
+            return filtered;
+        }
+    }
+    target
 }
 
 /// Go: `func (c *Checker) getMatchingUnionConstituentForType(unionType, t) *Type`.
@@ -6548,6 +6910,22 @@ fn get_key_property_name(c: &mut Checker, t: TypeId) -> Option<String> {
     let computed = compute_key_property_name_and_map(c, t);
     c.key_property_names.insert(t, computed.clone());
     computed
+}
+
+/// The contextual discriminate arms' seam (M6 S10, contextual.rs) — the
+/// public reach of the private key-property name reader.
+pub(crate) fn get_key_property_name_public(c: &mut Checker, t: TypeId) -> Option<String> {
+    get_key_property_name(c, t)
+}
+
+/// The contextual discriminate arms' seam (M6 S10, contextual.rs) — the
+/// public reach of the private constituent-map reader.
+pub(crate) fn get_constituent_type_for_key_type_public(
+    c: &mut Checker,
+    t: TypeId,
+    key_type: TypeId,
+) -> Option<TypeId> {
+    get_constituent_type_for_key_type(c, t, key_type)
 }
 
 /// Go: `func (c *Checker) computeKeyPropertyNameAndMap(t) (string, map[*Type]*Type)`.
@@ -6624,8 +7002,7 @@ fn get_constituent_type_for_key_type(c: &mut Checker, t: TypeId, key_type: TypeI
     let key = c.get_regular_type_of_literal_type(key_type);
     let key_property_name = get_key_property_name(c, t)?;
     //The map is rebuilt lazily (PORT note: Go caches it on the union).
-    let types = c.type_(t).types().to_vec();
-    let map = map_types_by_key_property(c, &types, &key_property_name)?;
+    let types = c.type_(t).types().to_vec();    let map = map_types_by_key_property(c, &types, &key_property_name)?;
     match map.get(&key) {
         Some(&result) if result != c.unknown_type() => Some(result),
         _ => None,
@@ -7523,11 +7900,13 @@ pub(crate) fn is_error_type(c: &Checker, t: TypeId) -> bool {
     Some(t) == c.error_type
 }
 
-/// Go: `func IsDistributedTypeParameter(t) bool` (utilities.go).
+/// Go: `func IsDistributedTypeParameter(t) bool` (exports.go) — REAL (M6 S10):
+/// the distributed-marker payload read.
 pub(crate) fn is_distributed_type_parameter(c: &Checker, t: TypeId) -> bool {
-    // TODO(port M6 S10): the distributed-marker check.
-    let _ = (c, t);
-    false
+    c.type_(t).flags.intersects(TypeFlags::TYPE_PARAMETER)
+        && c.type_(t)
+            .as_type_parameter()
+            .is_some_and(|d| d.is_distributed)
 }
 
 /// Go: `func isSingleElementGenericTupleType(t) bool` (checker.go:24024) —
@@ -7563,25 +7942,23 @@ pub(crate) fn get_normalized_type(c: &mut Checker, t: TypeId, writing: bool) -> 
     t
 }
 
-/// Go: `func (c *Checker) getConstraintOfType(t) *Type` — reads the payload
-/// constraint; the type-alias and mapped-type arms are S9.
+/// Go: `func (c *Checker) getConstraintOfType(t) *Type` (checker.go:17434) —
+/// REAL (M6 S10): the exact Go switch — typeParameter → the payload
+/// constraint reader, indexedAccess → getConstraintOfIndexedAccess (index.rs),
+/// conditional → the payload's resolved constraint; everything else (INDEX
+/// included) → getBaseConstraintOfType.
 pub(crate) fn get_constraint_of_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
-    let ty = c.type_(t);
-    if ty.flags.intersects(TypeFlags::TYPE_PARAMETER | TypeFlags::INDEX | TypeFlags::CONDITIONAL) {
-        if let Some(data) = ty.as_type_parameter() {
-            return data.constraint;
-        }
-        // TODO(port M6 S10): the index-type constraint (stringNumberSymbol).
-        if ty.flags.intersects(TypeFlags::INDEX) {
-            return None;
-        }
-        if let Some(data) = ty.as_conditional_type() {
-            return data.base.resolved_base_constraint;
-        }
+    let flags = c.type_(t).flags;
+    if flags.intersects(TypeFlags::TYPE_PARAMETER) {
+        return c.type_(t).as_type_parameter().and_then(|d| d.constraint);
     }
-    // TODO(port M6 S9): getConstraintFromTypeReference, mapped types,
-    // `infer`-parameter constraints.
-    None
+    if flags.intersects(TypeFlags::INDEXED_ACCESS) {
+        return c.get_constraint_of_indexed_access(t);
+    }
+    if let Some(data) = c.type_(t).as_conditional_type() {
+        return data.base.resolved_base_constraint;
+    }
+    get_base_constraint_of_type(c, t)
 }
 
 /// Go: `func (c *Checker) getConstraintOfTypeParameter(t) *Type`.
@@ -7596,11 +7973,10 @@ pub(crate) fn get_base_constraint_of_type(c: &mut Checker, t: TypeId) -> Option<
 }
 
 /// Go: `func (c *Checker) getSimplifiedType(t, writing) *Type` (checker.go:28436)
-/// — TODO(port M6 S10): the simplified-conditional/indexed-access family; the
-/// permissive identity is exact for non-simplifiable types (the current S9
-/// constraint surface never hand it a simplifiable conditional).
-pub(crate) fn get_simplified_type(_c: &mut Checker, t: TypeId, _writing: bool) -> TypeId {
-    t
+/// — REAL (M6 S10): delegates to index.rs's body (the simplified-conditional/
+/// indexed-access family over the cachedTypes axes).
+pub(crate) fn get_simplified_type(c: &mut Checker, t: TypeId, writing: bool) -> TypeId {
+    c.get_simplified_type_impl(t, writing)
 }
 
 /// Go: `func (c *Checker) getBaseConstraintOrType(t) *Type`.
@@ -7618,10 +7994,10 @@ pub(crate) fn get_constraint_of_distributive_conditional_type(c: &mut Checker, t
     c.type_(t).as_conditional_type().and_then(|d| d.resolved_constraint_of_distributive)
 }
 
-/// Go: `func (c *Checker) hasNonCircularBaseConstraint(t) bool`.
+/// Go: `func (c *Checker) hasNonCircularBaseConstraint(t) bool` — REAL (M6
+/// S10): delegates to typeofsymbol.rs's resolved-base-constraint read.
 pub(crate) fn has_non_circular_base_constraint(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S9): the circularity detection; permissive until then.
-    get_base_constraint_of_type(c, t).is_some()
+    c.has_non_circular_base_constraint_impl(t)
 }
 
 /// Go: `func (c *Checker) getTypeWithThisArgument(t, thisArgument, needApparentType) *Type`.
@@ -7885,55 +8261,54 @@ pub(crate) fn string_mapping_target(c: &Checker, t: TypeId) -> TypeId {
         .expect("string-mapping target")
 }
 
-// ── Index / indexed-access / keys (S10 seams) ──
+// ── Index / indexed-access / keys (S10 — REAL bodies in index.rs) ──
 
 /// Go: `func (c *Checker) getIndexType(t) *Type` — keyof construction.
+/// REAL (M6 S10): delegates to index.rs's body.
 pub(crate) fn get_index_type(c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S10): getIndexedAccessType with AccessFlagsWriting.
-    let _ = t;
-    c.never_type()
+    c.get_index_type_impl(t)
 }
 
 /// Go: `func (c *Checker) getIndexTypeEx(t, indexFlags) *Type`.
-pub(crate) fn get_index_type_ex(c: &mut Checker, t: TypeId, _index_flags: IndexFlags) -> TypeId {
-    // TODO(port M6 S10).
-    let _ = t;
-    c.never_type()
+/// REAL (M6 S10): delegates to index.rs's body.
+pub(crate) fn get_index_type_ex(c: &mut Checker, t: TypeId, index_flags: IndexFlags) -> TypeId {
+    c.get_index_type_ex_impl(t, index_flags)
 }
 
 /// Go: `func (c *Checker) getIndexTypeOfTypeEx(t, key, fallback) *Type`.
-pub(crate) fn get_index_type_of_type_ex(c: &mut Checker, t: TypeId, _key: TypeId, _fallback: TypeId) -> TypeId {
-    // TODO(port M6 S10).
-    let _ = t;
-    c.never_type()
+/// REAL (M6 S10): routes through the members index-info reader.
+pub(crate) fn get_index_type_of_type_ex(c: &mut Checker, t: TypeId, key: TypeId, fallback: TypeId) -> TypeId {
+    c.get_index_type_of_type_impl(t, key).unwrap_or(fallback)
 }
 
 /// Go: `func (c *Checker) getIndexedAccessType(t, key) *Type`.
+/// REAL (M6 S10): delegates to index.rs's body (the interned deferred
+/// indexed-access constructor + getPropertyTypeForIndexType resolution).
 pub(crate) fn get_indexed_access_type(c: &mut Checker, t: TypeId, key: TypeId) -> TypeId {
-    // TODO(port M6 S10): the indexed-access constructor.
-    let _ = (t, key);
-    c.error_type()
+    c.get_indexed_access_type_impl(t, key)
 }
 
 /// Go: `func (c *Checker) getIndexedAccessTypeOrUndefined(objectType, indexType, accessFlags, accessNode, errorNode) *Type`
 /// — the `AccessFlagsWriting | IfElse(baseObjectType != objectType, AccessFlagsNoIndexSignatures, 0)` call.
-pub(crate) fn get_indexed_access_type_or_undefined_writing(_c: &mut Checker, object_type: TypeId, index_type: TypeId, _no_index_signatures: bool) -> Option<TypeId> {
-    // TODO(port M6 S10): the constraint-of-indexed-access resolution.
-    let _ = (object_type, index_type);
-    None
+/// REAL (M6 S10): delegates to index.rs's body.
+pub(crate) fn get_indexed_access_type_or_undefined_writing(c: &mut Checker, object_type: TypeId, index_type: TypeId, no_index_signatures: bool) -> Option<TypeId> {
+    let mut flags = AccessFlags::WRITING;
+    if no_index_signatures {
+        flags |= AccessFlags::NO_INDEX_SIGNATURES;
+    }
+    c.get_indexed_access_type_or_undefined_impl(object_type, index_type, flags, None, None)
 }
 
-/// Go: `func (c *Checker) getKnownKeysOfTupleType(t) *Type`.
+/// Go: `func (c *Checker) getKnownKeysOfTupleType(t) *Type` (relater.go).
+/// REAL (M6 S10): delegates to index.rs's body.
 pub(crate) fn get_known_keys_of_tuple_type(c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S7/S10).
-    let _ = t;
-    c.never_type()
+    c.get_known_keys_of_tuple_type_impl(t)
 }
 
 /// Go: `func (c *Checker) getSimplifiedTypeOrConstraint(t) *Type`.
+/// REAL (M6 S10): delegates to index.rs's body.
 pub(crate) fn get_simplified_type_or_constraint(c: &mut Checker, t: TypeId) -> Option<TypeId> {
-    // TODO(port M6 S10): getSimplifiedType.
-    get_base_constraint_of_type(c, t)
+    c.get_simplified_type_or_constraint_impl(t)
 }
 
 // ── Type references / tuples / aliases (S2/S7 seams) ──
@@ -8041,10 +8416,9 @@ pub(crate) fn is_mapped_type_with_keyof_constraint_declaration(c: &mut Checker, 
 }
 
 /// Go: `func (c *Checker) shouldDeferIndexType(target, indexFlags) bool`.
-pub(crate) fn should_defer_index_type(_c: &mut Checker, t: TypeId, _index_flags: IndexFlags) -> bool {
-    // TODO(port M6 S10).
-    let _ = t;
-    false
+/// REAL (M6 S10): delegates to index.rs's body.
+pub(crate) fn should_defer_index_type(c: &mut Checker, t: TypeId, index_flags: IndexFlags) -> bool {
+    c.should_defer_index_type_impl(t, index_flags)
 }
 
 // ── Instantiation seams (S7) ──
@@ -8214,10 +8588,10 @@ pub(crate) fn modifier_flags_of_node(c: &Checker, node: NodeId) -> ModifierFlags
     c.store().node(node).modifier_flags()
 }
 
-/// Go: `func (c *Checker) getTypeWithFacts(t, facts) *Type` — S10 stub.
-pub(crate) fn get_type_with_facts(_c: &mut Checker, t: TypeId, _facts: TypeFacts) -> TypeId {
-    // TODO(port M6 S10): the facts-based type construction.
-    t
+/// Go: `func (c *Checker) getTypeWithFacts(t, facts) *Type` — REAL (M6 S10):
+/// delegates to facts.rs's body (the TypeFacts lattice landed).
+pub(crate) fn get_type_with_facts(c: &mut Checker, t: TypeId, facts: TypeFacts) -> TypeId {
+    c.get_type_with_facts_impl(t, facts)
 }
 
 /// Go: `func (c *Checker) hasCovariantVoidArgument(typeArguments, variances) bool`
@@ -8258,14 +8632,11 @@ pub(crate) fn has_base_type(c: &mut Checker, t: TypeId, s: TypeId) -> bool {
     c.has_base_type_impl(t, s)
 }
 
-/// Go: `func (c *Checker) isFunctionObjectType(t) bool` — S8 stub.
-#[allow(dead_code)] // TODO(port M6 W2): Go-mirrored; callers land with inference.rs
-pub(crate) fn is_function_object_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S8): the Function-global check.
-    let _ = (c, t);
-    false
-}
-
+// Go: `func (c *Checker) isFunctionObjectType(t) bool` — REMOVED (M6 S10):
+// superseded by facts.rs's REAL body (same signature; the S8/S10 facts wave
+// owns the bind-probe + globalFunctionType subtype check).
+//
+// (The get_no_infer_type/is_no_infer_target_type pair lives in uniontypes.rs.)
 /// Go: `getStringLiteralValue(t)` (utilities.go).
 pub(crate) fn get_string_literal_value(c: &Checker, t: TypeId) -> String {
     match c.type_(t).as_literal_type().and_then(|d| d.value.as_ref()) {
@@ -8378,12 +8749,9 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getTypeWithFacts`-shaped `getTypeFacts(t, facts)`
-    /// — S10 stub (equal-facts fallback: the facts query is only consulted
-    /// on undefined-containing types the current surface can't build).
+    /// — REAL (M6 S10): delegates to facts.rs's lattice worker.
     pub(crate) fn get_type_facts(&mut self, t: TypeId, facts: TypeFacts) -> TypeFacts {
-        // TODO(port M6 S10): the TypeFacts lattice worker.
-        let _ = t;
-        facts
+        self.get_type_facts_impl(t, facts)
     }
 
     /// Go: `func (c *Checker) getSingleCallSignatureOfType(t) *Signature`.
@@ -8449,10 +8817,8 @@ impl Checker {
         get_base_type_of_enum_like_type(self, t)
     }
 
-    /// Go: `func (c *Checker) isFunctionObjectType(t) bool`.
-    pub(crate) fn is_function_object_type(&mut self, t: TypeId) -> bool {
-        is_function_object_type(self, t)
-    }
+    // Go: `func (c *Checker) isFunctionObjectType(t) bool` — REMOVED (M6
+    // S10): facts.rs's REAL body replaced the W2 stub (same signature).
 
     /// Go: `func (c *Checker) hasBaseType(t, s) bool`.
     pub(crate) fn has_base_type(&mut self, t: TypeId, s: TypeId) -> bool {

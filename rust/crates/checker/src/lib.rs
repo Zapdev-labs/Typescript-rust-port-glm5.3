@@ -121,6 +121,8 @@ pub mod checker;
 pub mod contextual;
 pub mod exports;
 pub mod expressions;
+pub mod facts;
+pub mod index;
 pub mod inference;
 pub mod jsdoc;
 pub mod links;

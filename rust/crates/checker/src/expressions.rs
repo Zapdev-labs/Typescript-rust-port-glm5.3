@@ -711,13 +711,14 @@ impl Checker {
         operator: Kind,
     ) -> bool {
         let mut offending_symbol_operand = None;
-        // TODO(port M6 S10): maybeTypeOfKindConsideringBaseConstraint — the
-        // constraint-walking variant; the flag-only maybeTypeOfKind is Go's
-        // answer for every non-generic type (the constraint walk only widens
-        // the match, so this can only under-report, never over-report).
-        if relater::maybe_type_of_kind(self, left_type, TypeFlags::ESSYMBOL_LIKE) {
+        // REAL (M6 S10, checker.go:31467): maybeTypeOfKindConsideringBaseConstraint —
+        // the constraint-walking variant (index.rs's free fn over the facts-
+        // lattice worker's base-constraint read).
+        if self.maybe_type_of_kind_considering_base_constraint(left_type, TypeFlags::ESSYMBOL_LIKE) {
             offending_symbol_operand = Some(left);
-        } else if relater::maybe_type_of_kind(self, right_type, TypeFlags::ESSYMBOL_LIKE) {
+        } else if self
+            .maybe_type_of_kind_considering_base_constraint(right_type, TypeFlags::ESSYMBOL_LIKE)
+        {
             offending_symbol_operand = Some(right);
         }
         if let Some(offending) = offending_symbol_operand {
@@ -1591,9 +1592,9 @@ impl Checker {
                     } else {
                         left_type
                     };
-                    // TODO(port M6 S10): extractDefinitelyFalsyTypes — the
-                    // facts-lattice extract; identity until then.
-                    let extracted = t;
+                    // REAL (M6 S10): extractDefinitelyFalsyTypes — the
+                    // facts-lattice extract.
+                    let extracted = self.extract_definitely_falsy_types(t);
                     result_type = relater::get_union_type(self, vec![extracted, right_type]);
                 }
                 if operator == Kind::AmpersandAmpersandEqualsToken {
@@ -1604,9 +1605,10 @@ impl Checker {
             Kind::BarBarToken | Kind::BarBarEqualsToken => {
                 let mut result_type = left_type;
                 if self.has_type_facts(left_type, TypeFacts::FALSY) {
-                    // TODO(port M6 S10): removeDefinitelyFalsyTypes — identity
-                    // until the facts lattice lands.
-                    let non_falsy = self.get_non_nullable_type(left_type);
+                    // REAL (M6 S10): removeDefinitelyFalsyTypes — the
+                    // facts-lattice filter (truthy-only constituents).
+                    let removed = self.remove_definitely_falsy_types(left_type);
+                    let non_falsy = self.get_non_nullable_type(removed);
                     result_type = self.get_union_type_ex(
                         vec![non_falsy, right_type],
                         crate::todo_shapes::UnionReduction::Subtype,
@@ -1952,9 +1954,10 @@ impl Checker {
                 if self.is_array_like_type(source_type) {
                     // We create a synthetic expression so that getIndexedAccessType doesn't get confused
                     // when the element is a SyntaxKind.ElementAccessExpression.
-                    // TODO(port M6 S10): createSyntheticExpression — the
-                    // synthetic node factory; the element node stands in for
-                    // the access node (error positions only).
+                    // TODO(port M6 W4): createSyntheticExpression — the
+                    // synthetic node factory (nodecopy.go's wave); the element
+                    // node stands in for the access node (error positions
+                    // only). The S10 indexed-access consumers are real.
                     let access_flags = crate::types::AccessFlags::EXPRESSION_POSITION
                         | if self.has_default_value(element) {
                             crate::types::AccessFlags::ALLOW_MISSING
@@ -2487,9 +2490,11 @@ impl Checker {
         match operator {
             Kind::PlusToken | Kind::MinusToken | Kind::TildeToken => {
                 self.check_non_null_type(operand_type, operand);
-                // TODO(port M6 S10): maybeTypeOfKindConsideringBaseConstraint —
-                // the constraint walk; the flag-only probe under-reports only.
-                if relater::maybe_type_of_kind(self, operand_type, TypeFlags::ESSYMBOL_LIKE) {
+                // REAL (M6 S10, checker.go:31467): the constraint walk
+                // (maybeTypeOfKindConsideringBaseConstraint).
+                if self
+                    .maybe_type_of_kind_considering_base_constraint(operand_type, TypeFlags::ESSYMBOL_LIKE)
+                {
                     self.error(
                         operand,
                         &THE_0_OPERATOR_CANNOT_BE_APPLIED_TO_TYPE_SYMBOL,
@@ -2971,20 +2976,92 @@ impl Checker {
         Some(self.get_indexed_access_type(t, key))
     }
 
-    /// Go: `func (c *Checker) markPropertyAsReferenced(prop, node, isSelfReference)`
-    /// (checker.go:12747 — S10 reference tracking). Permissive no-op.
+    /// Go: `func (c *Checker) markPropertyAsReferenced(prop, nodeForCheckWriteOnly, isSelfTypeAccess)`
+    /// (checker.go:28240) — REAL (M6 S10): the symbol-reference recording
+    /// (the import-elision seam: only private class members record).
     pub(crate) fn mark_property_as_referenced(
         &mut self,
         prop: SymbolId,
-        node: Option<NodeId>,
-        is_self_reference: bool,
+        node_for_check_write_only: Option<NodeId>,
+        is_self_type_access: bool,
     ) {
-        // TODO(port M6 S10): the symbol-reference recording (import-elision).
-        let _ = (prop, node, is_self_reference);
+        if !self
+            .program_symbol(prop)
+            .flags
+            .intersects(SymbolFlags::CLASS_MEMBER)
+        {
+            return;
+        }
+        let Some(value_declaration) = self.program_symbol(prop).value_declaration else {
+            return;
+        };
+        let has_private_modifier =
+            crate::ast_shims::has_modifier(self.store().node(value_declaration), ModifierFlags::PRIVATE);
+        let has_private_identifier = self
+            .store()
+            .node(value_declaration)
+            .name()
+            .is_some_and(|name| tsc_ast::is_private_identifier(self.store().node(name)));
+        if !has_private_modifier && !has_private_identifier {
+            return;
+        }
+        if let Some(node) = node_for_check_write_only
+            && is_write_only_access(self.store(), node)
+            && !self
+                .program_symbol(prop)
+                .flags
+                .intersects(SymbolFlags::SET_ACCESSOR)
+        {
+            return;
+        }
+        if is_self_type_access
+            && let Some(node) = node_for_check_write_only
+        {
+            // Find any FunctionLikeDeclaration because those create a new
+            // 'this' binding. But this should only matter for methods (or
+            // getters/setters). (Go comment, verbatim.)
+            let mut is_function_like = |n: &tsc_ast::Node| {
+                matches!(
+                    n.kind,
+                    Kind::FunctionDeclaration
+                        | Kind::FunctionExpression
+                        | Kind::ArrowFunction
+                        | Kind::MethodDeclaration
+                        | Kind::MethodSignature
+                        | Kind::GetAccessor
+                        | Kind::SetAccessor
+                        | Kind::Constructor
+                )
+            };
+            let containing_method =
+                crate::ast_shims::find_ancestor(self.store(), node, &mut is_function_like);
+            if let Some(containing_method) = containing_method
+                && crate::typeofsymbol::get_symbol_of_declaration(self, containing_method) == Some(prop)
+            {
+                return;
+            }
+        }
+        // Go: instantiated symbols record on their target.
+        let target = if self
+            .program_symbol(prop)
+            .check_flags
+            .intersects(tsc_ast::CheckFlags::INSTANTIATED)
+        {
+            self.value_symbol_links.get(prop).target
+        } else {
+            Some(prop)
+        };
+        if let Some(target) = target {
+            let kinds = self.symbol_reference_links.get(target).reference_kinds;
+            self.symbol_reference_links.get(target).reference_kinds =
+                kinds | SymbolFlags::ALL;
+        }
     }
 
-    /// Go: `func (c *Checker) markLinkedReferences(node, referenceHint, propSymbol, leftType)`
-    /// (checker.go:12754 — S10). Permissive no-op.
+    /// Go: `func (c *Checker) markLinkedReferences(location, hint, propSymbol, parentType)`
+    /// (checker.go:28723). Permissive no-op — the alias-reference recording
+    /// engine (canCollectSymbolAliasAccessibilityData + the mark*AliasReferenced
+    /// family) is symbolaccessibility.go's surface.
     pub(crate) fn mark_linked_references(
         &mut self,
         node: NodeId,
@@ -2992,7 +3069,9 @@ impl Checker {
         prop_symbol: Option<SymbolId>,
         left_type: TypeId,
     ) {
-        // TODO(port M6 S10): the deferred-reference recording.
+        // TODO(port M6 W4): the deferred-reference recording
+        // (symbolaccessibility.go's wave; the canCollectSymbolAliasAccessibilityData
+        // gate is false until then, which is Go's no-op answer).
         let _ = (node, reference_hint, prop_symbol, left_type);
     }
 
@@ -4484,12 +4563,13 @@ impl Checker {
             };
             types.push(if constrained { t } else { self.string_type() });
         }
-        // Go: the evaluate() constant-folding probe (S10's evaluator).
+        // Go: the evaluate() constant-folding probe (the const-eval engine).
         let evaluated: Option<String> = {
             let parent = self.store().node(node).parent.get();
             if self.store().node(parent).kind != Kind::TaggedTemplateExpression {
-                // TODO(port M6 S10): the evaluate() fold; permissive none
-                // (Go's answer when the fold yields no value).
+                // TODO(port M6 S4 follow-up): the evaluate() fold (the
+                // const-eval engine's own sub-port); permissive none (Go's
+                // answer when the fold yields no value).
                 None
             } else {
                 None
@@ -4896,10 +4976,9 @@ impl Checker {
             return t;
         }
         if relater::is_generic_object_type(self, object_type) {
-            // TODO(port M6 S10): getPropertyNameFromIndex — the literal-index
-            // name probe; permissive InternalSymbolNameMissing (the private/
-            // protected branch stays dormant).
-            let property_name = String::from(tsc_ast::INTERNAL_SYMBOL_NAME_MISSING);
+            // REAL (M6 S10, checker.go:27769): getPropertyNameFromIndex — the
+            // literal-index name probe (index.rs's free fn).
+            let property_name = self.get_property_name_from_index(index_type, None);
             if property_name != tsc_ast::INTERNAL_SYMBOL_NAME_MISSING {
                 let property_symbol = self.get_constituent_property(object_type, &property_name);
                 if let Some(property_symbol) = property_symbol
@@ -6506,16 +6585,65 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkComputedPropertyName(node) *Type`
-    /// (checker.go:27336 — S10). Permissive anyType (the S10 fold's answer
-    /// for an unresolvable computed name at this depth).
+    /// (checker.go:27336) — REAL (M6 S10): the typeNodeLinks resolved-type
+    /// fold (circularity-guarded), the invalid-name probe, and the
+    /// string|number|symbol|any assignability gate.
     pub(crate) fn check_computed_property_name(&mut self, node: NodeId) -> TypeId {
-        // TODO(port M6 S10): the computed-name expression check + name fold.
-        let _ = self
+        if let Some(resolved) = self.type_node_links.get(node).resolved_type {
+            return resolved;
+        }
+        let circular_constraint_type = self.circular_constraint_type();
+        self.type_node_links.get(node).resolved_type = Some(circular_constraint_type);
+        if Self::is_invalid_computed_property_name(self.store(), node) {
+            let error_type = self.error_type();
+            self.type_node_links.get(node).resolved_type = Some(error_type);
+            return error_type;
+        }
+        let expression = self
             .store()
             .node(node)
             .as_computed_property_name()
-            .expect("ComputedPropertyName data");
-        self.any_type()
+            .expect("ComputedPropertyName data")
+            .expression;
+        let resolved = self.check_expression(expression);
+        self.type_node_links.get(node).resolved_type = Some(resolved);
+        // This will allow types number, string, symbol or any. It will also
+        // allow enums, the unknown type, and any union of these types (like
+        // string | number). (Go comment, verbatim.)
+        let string_number_symbol_type = self.string_number_symbol_type();
+        let allowed = !self.type_(resolved).flags.intersects(TypeFlags::NULLABLE)
+            && (self.is_type_assignable_to_kind(
+                resolved,
+                TypeFlags::STRING_LIKE | TypeFlags::NUMBER_LIKE | TypeFlags::ESSYMBOL_LIKE,
+            ) || self.is_type_assignable_to(resolved, string_number_symbol_type));
+        if !allowed {
+            self.error(
+                node,
+                &tsc_diagnostics::A_COMPUTED_PROPERTY_NAME_MUST_BE_OF_TYPE_STRING_NUMBER_SYMBOL_OR_ANY,
+                &[],
+            );
+        }
+        resolved
+    }
+
+    /// Go: `func isInvalidComputedPropertyName(node) bool` (checker.go:27330).
+    fn is_invalid_computed_property_name(store: &dyn tsc_ast::NodeStore, node: tsc_ast::NodeId) -> bool {
+        let parent = store.node(node).parent.get();
+        let grandparent = store.node(parent).parent.get();
+        let grandparent_kind = store.node(grandparent).kind;
+        (grandparent_kind == Kind::TypeLiteral
+            || crate::statements::is_class_like(store, grandparent)
+            || grandparent_kind == Kind::InterfaceDeclaration)
+            && store.node(node).kind == Kind::BinaryExpression
+            && store
+                .node(node)
+                .as_binary_expression()
+                .map(|d| store.node(d.operator_token).kind == Kind::InKeyword)
+                .unwrap_or(false)
+            && !matches!(
+                store.node(parent).kind,
+                Kind::GetAccessor | Kind::SetAccessor
+            )
     }
 
     /// Go: `func (c *Checker) checkContextualDeprecations(node)` (checker.go:13605).
@@ -6584,8 +6712,9 @@ impl Checker {
                         );
                         // Go: diagnostic.AddRelatedInfo(NewDiagnosticForNode(
                         //     spread, ThisSpreadAlwaysOverwritesThisProperty))
-                        // TODO(port M6 S10): the related-info attachment; the
-                        // main diagnostic carries the overwrite error (the
+                        // TODO(port M6 W4): the related-info attachment
+                        // (AddRelatedInfo's carrier wave); the main
+                        // diagnostic carries the overwrite error (the
                         // related-info constant is referenced for the wave).
                         let _ = THIS_SPREAD_ALWAYS_OVERWRITES_THIS_PROPERTY;
                     }
@@ -6665,10 +6794,13 @@ impl Checker {
         let mut members = tsc_ast::SymbolTable::new();
         let mut skipped_private_members: std::collections::HashSet<String> =
             std::collections::HashSet::new();
-        // Go: indexInfos — the left==emptyObjectType shortcut over the right's
-        // infos, else getUnionIndexInfos; the S8 read seam is empty either way.
-        // TODO(port M6 S8): getUnionIndexInfos.
-        let _ = self.get_union_index_infos(&[left, right]);
+        // REAL (M6 S10, checker.go:13691): indexInfos — the left==emptyObjectType
+        // shortcut over the right's infos, else getUnionIndexInfos.
+        let index_infos: Vec<crate::types::IndexInfoId> = if left == self.empty_object_type() {
+            self.get_index_infos_of_type(right)
+        } else {
+            self.get_union_index_infos(&[left, right])
+        };
         let right_props = relater::get_properties_of_type(self, right);
         for right_prop in right_props {
             let declaration_modifiers =
@@ -6730,23 +6862,22 @@ impl Checker {
                 members.set(name, spread_symbol);
             }
         }
-        // Go: spreadIndexInfos := core.SameMap(indexInfos, func(info) {
-        //     return c.getIndexInfoWithReadonly(info, readonly) }).
-        // TODO(port M6 S8): the anonymous-type index-info slot — the mapped
-        // list composes once the ctor carries it (the read seam is empty at
-        // this depth, so the map is the identity here).
-        let _spread_index_infos: Vec<crate::types::IndexInfoId> = self
-            .get_index_infos_of_type(left)
+        // REAL (M6 S10, checker.go:13738): spreadIndexInfos :=
+        // core.SameMap(indexInfos, func(info) { return c.getIndexInfoWithReadonly(info, readonly) }).
+        let spread_index_infos: Vec<crate::types::IndexInfoId> = index_infos
             .into_iter()
             .map(|info| self.get_index_info_with_readonly(info, readonly))
             .collect();
         let spread = self.new_anonymous_type_with_members(
             symbol,
-            members,
+            members.clone(),
             object_flags | ObjectFlags::CONTAINS_SPREAD,
         );
         self.type_mut(spread).object_flags |=
             ObjectFlags::OBJECT_LITERAL | ObjectFlags::CONTAINS_OBJECT_OR_ARRAY_LITERAL;
+        // Go's newAnonymousType(symbol, members, nil, nil, spreadIndexInfos):
+        // the index-info slot rides the deferred-members writer.
+        self.set_structured_type_members(spread, members, Vec::new(), Vec::new(), spread_index_infos);
         spread
     }
 
@@ -6759,16 +6890,28 @@ impl Checker {
     ) -> crate::types::IndexInfoId {
         // TODO(port M6 S8): the IndexInfo arena's readonly-clone; identity
         // (the read seam is empty at this depth).
-        let _ = readonly;
-        info
+        // REAL (M6 S10, checker.go:13745): the arena's readonly-clone.
+        let (key_type, value_type, is_readonly, declaration, components) = {
+            let d = &self.index_infos[info.0 as usize];
+            (
+                d.key_type.expect("index info keyType"),
+                d.value_type.expect("index info valueType"),
+                d.is_readonly,
+                d.declaration,
+                d.components.clone(),
+            )
+        };
+        if is_readonly != readonly {
+            crate::types::IndexInfoId(self.new_index_info(key_type, value_type, readonly, declaration, components) as u32)
+        } else {
+            info
+        }
     }
 
-    /// Go: `func (c *Checker) getUnionIndexInfos(types) []*IndexInfo` (checker.go:13758).
-    pub(crate) fn get_union_index_infos(&mut self, types: &[TypeId]) -> Vec<usize> {
-        // TODO(port M6 S8): the per-key union value type; the read seam is
-        // empty (no source index infos).
-        let _ = types;
-        Vec::new()
+    /// Go: `func (c *Checker) getUnionIndexInfos(types) []*IndexInfo` (checker.go:13758) —
+    /// REAL (M6 S10): re-points to members.rs's full port (the S8 read seam).
+    pub(crate) fn get_union_index_infos(&mut self, types: &[TypeId]) -> Vec<crate::types::IndexInfoId> {
+        self.get_union_index_infos_impl(types)
     }
 
     /// Go: `func (c *Checker) tryMergeUnionOfObjectTypeAndEmptyObject(t, readonly) *Type`
@@ -7129,11 +7272,12 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkClassExpressionExternalHelpers(node)` (checker.go:10289)
-    /// — the emit-helpers probe. Permissive (S10's checkExternalEmitHelpers
+    /// — the emit-helpers probe. Permissive (W5's checkExternalEmitHelpers
     /// seam is the no-op carrier).
     pub(crate) fn check_class_expression_external_helpers(&mut self, node: NodeId) {
-        // TODO(port M6 S10): getFirstTransformableStaticClassElement +
-        // checkExternalEmitHelpers (SetFunctionName/PropKey).
+        // TODO(port M6 W5): getFirstTransformableStaticClassElement +
+        // checkExternalEmitHelpers (SetFunctionName/PropKey) — emitsupport.go's
+        // wave.
         let _ = node;
     }
 

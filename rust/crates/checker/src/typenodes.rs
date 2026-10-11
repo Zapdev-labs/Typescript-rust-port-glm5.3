@@ -318,6 +318,12 @@ fn get_total_fixed_element_count(t: &types::TupleType) -> i32 {
     t.fixed_length + get_end_element_count(t, ElementFlags::FIXED) as i32
 }
 
+/// The pub(crate) carrier of [`get_total_fixed_element_count`] for index.rs's
+/// shouldDeferIndexedAccessType / getSimplifiedIndexedAccessTypeWorker.
+pub(crate) fn total_fixed_element_count_of(t: &types::TupleType) -> i32 {
+    get_total_fixed_element_count(t)
+}
+
 /// Go: `type IntrinsicTypeKind int32` + `var intrinsicTypeKinds` (checker.go
 /// checker.go's intrinsic-marker table). statements.rs's
 /// `intrinsic_type_kind_of` keeps the S3 error-arm shape; this enum carries
@@ -341,19 +347,38 @@ fn intrinsic_type_kind(name: &str) -> Option<IntrinsicTypeKind> {
     }
 }
 
-/// Go: `func (c *Checker) isPatternLiteralType(t) bool` (checker.go:27050 —
-/// the S10 string-lattice probe). TODO(port M6 S10): the template-literal
-/// pattern walk; permissive false.
-pub(crate) fn is_pattern_literal_type(_c: &mut Checker, _t: TypeId) -> bool {
-    // TODO(port M6 S10).
+/// Go: `func (c *Checker) isPatternLiteralType(t) bool` (checker.go:27050)
+/// — REAL (M6 S10): a pattern literal type is a template literal or a string
+/// mapping type that contains only non-generic pattern literal placeholders.
+pub(crate) fn is_pattern_literal_type(c: &mut Checker, t: TypeId) -> bool {
+    let flags = c.type_(t).flags;
+    if flags.intersects(TypeFlags::TEMPLATE_LITERAL) {
+        let types = c.type_(t)
+            .as_template_literal_type()
+            .expect("TemplateLiteralType data")
+            .types
+            .clone();
+        return types.iter().all(|&u| c.is_pattern_literal_placeholder_type(u));
+    }
+    if flags.intersects(TypeFlags::STRING_MAPPING) {
+        let target = c
+            .type_(t)
+            .as_string_mapping_type()
+            .expect("StringMappingType data")
+            .target
+            .expect("string-mapping target");
+        return c.is_pattern_literal_placeholder_type(target);
+    }
     false
 }
 
-/// Go: `func (c *Checker) isGenericStringLikeType(t) bool` (checker.go:27057 —
-/// S10). TODO(port M6 S10); permissive false.
-pub(crate) fn is_generic_string_like_type(_c: &mut Checker, _t: TypeId) -> bool {
-    // TODO(port M6 S10).
-    false
+/// Go: `func (c *Checker) isGenericStringLikeType(t) bool` (checker.go:27057)
+/// — REAL (M6 S10).
+pub(crate) fn is_generic_string_like_type(c: &mut Checker, t: TypeId) -> bool {
+    c.type_(t)
+        .flags
+        .intersects(TypeFlags::TEMPLATE_LITERAL | TypeFlags::STRING_MAPPING)
+        && !is_pattern_literal_type(c, t)
 }
 
 /// Go: `func (c *Checker) getGenericObjectFlags(t) ObjectFlags` (checker.go:25495)
@@ -1042,11 +1067,11 @@ impl Checker {
             node = parent;
         }
         if !constraints.is_empty() {
-            // TODO(port M6 S10): getSubstitutionType — the substitution-type
-            // constructor (getOrCreateSubstitutionType needs S7's
-            // newSubstitutionType + the substitutionTypes table). Permissive:
-            // the base type (the constraints are collected but not applied).
-            return t;
+            // REAL (M6 S10, checker.go:25376):
+            // `c.getSubstitutionType(t, c.getIntersectionType(constraints))`
+            // (uniontypes.rs's substitution-type ctor).
+            let constraint = crate::relater::get_intersection_type(self, constraints);
+            return self.get_substitution_type(t, constraint);
         }
         t
     }
@@ -1212,7 +1237,7 @@ impl Checker {
     // ── indexed-access / typeof-operator arms ──
 
     /// Go: `func (c *Checker) getTypeFromIndexedAccessTypeNode(node) *Type` (checker.go:23418).
-    fn get_type_from_indexed_access_type_node(&mut self, node: NodeId) -> TypeId {
+    pub(crate) fn get_type_from_indexed_access_type_node(&mut self, node: NodeId) -> TypeId {
         if self.type_node_links.get(node).resolved_type.is_none() {
             let (object_type, index_type) = {
                 let d = self
@@ -1979,15 +2004,24 @@ impl Checker {
                             }
                         })
                         .collect();
-                    // TODO(port M6 S10): checkCrossProductUnion (checker.go:27182)
-                    // — permissive false skips the cross-product expansion.
-                    if false {
-                        // (the expansion body is unreachable until S10; kept
-                        // in the comment for the port reference)
+                    // REAL (M6 S10, checker.go:22183): checkCrossProductUnion
+                    // gates the cross-product expansion (uniontypes.rs's
+                    // S7-landed body).
+                    if self.check_cross_product_union(&check_types) {
+                        let element_types_snapshot = element_types.clone();
+                        let object_flags_snapshot = object_flags;
+                        return self
+                            .map_type(e, &mut |c, u| {
+                                let mut new_elements = element_types_snapshot.clone();
+                                new_elements[i] = u;
+                                Some(c.create_normalized_tuple_type_ex(
+                                    target,
+                                    new_elements,
+                                    object_flags_snapshot,
+                                ))
+                            })
+                            .expect("mapType result");
                     }
-                    let _ = check_types;
-                    let _ = i;
-                    let _ = e;
                 }
             }
         }
@@ -2176,10 +2210,10 @@ impl Checker {
             {
                 return match kind {
                     IntrinsicTypeKind::NoInfer => {
-                        // TODO(port M6 S10): getNoInferType — the
-                        // substitution-wrapping no-infer type; permissive the
-                        // bare type argument.
-                        type_arguments[0]
+                        // REAL (M6 S10, checker.go:24177): the
+                        // substitution-wrapping no-infer type
+                        // (uniontypes.rs's getNoInferType).
+                        self.get_no_infer_type(type_arguments[0])
                     }
                     IntrinsicTypeKind::StringMapping => {
                         crate::relater::get_string_mapping_type(self, Some(symbol), type_arguments[0])
@@ -2270,7 +2304,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getInferTypeParameters(node) []*Type` (checker.go:24319).
-    fn get_infer_type_parameters(&mut self, node: NodeId) -> Vec<TypeId> {
+    pub(crate) fn get_infer_type_parameters(&mut self, node: NodeId) -> Vec<TypeId> {
         let locals = self
             .store()
             .node(node)
@@ -2611,7 +2645,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getTypeFromMappedTypeNode(node) *Type` (checker.go:24789).
-    fn get_type_from_mapped_type_node(&mut self, node: NodeId) -> TypeId {
+    pub(crate) fn get_type_from_mapped_type_node(&mut self, node: NodeId) -> TypeId {
         if self.type_node_links.get(node).resolved_type.is_none() {
             let symbol = self.get_symbol_of_declaration(node);
             let t = self.new_object_type(ObjectFlags::MAPPED, symbol);

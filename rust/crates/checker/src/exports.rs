@@ -448,12 +448,53 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) GetIndexSignaturesAtLocation(node *ast.Node) []*ast.Node`
-    /// → `c.getIndexSignaturesAtLocation(node)` (checker.go — S8).
+    /// → `c.getIndexSignaturesAtLocation(node)` (checker.go:32317) — REAL
+    /// (M6 S10): the location's apparent-type index signatures (the
+    /// property-access name arm over getApplicableIndexInfos).
     pub fn get_index_signatures_at_location(&mut self, node: NodeId) -> Vec<NodeId> {
-        // TODO(port M6 S10): the location's apparent-type index signatures
-        // (checker.go:32317).
-        let _ = node;
-        Vec::new()
+        let mut signatures: Vec<NodeId> = Vec::new();
+        let is_property_access_name = {
+            let store = self.store();
+            if store.node(node).kind == tsc_ast::Kind::Identifier {
+                let parent = store.node(node).parent.get();
+                store.node(parent).kind == tsc_ast::Kind::PropertyAccessExpression
+                    && store.node(parent).name() == Some(node)
+            } else {
+                false
+            }
+        };
+        if is_property_access_name {
+            let key_type = self.get_literal_type_from_property_name(node);
+            let (object_type,) = {
+                let store = self.store();
+                let parent = store.node(node).parent.get();
+                let expression = store
+                    .node(parent)
+                    .as_property_access_expression()
+                    .expect("PropertyAccessExpression data")
+                    .expression;
+                let object_type = self.get_type_of_expression(expression);
+                (object_type,)
+            };
+            // Go: `objectType.Distributed()`.
+            let constituents: Vec<TypeId> =
+                if self.type_(object_type).flags.intersects(crate::types::TypeFlags::UNION) {
+                    self.type_(object_type).types().to_vec()
+                } else {
+                    vec![object_type]
+                };
+            for t in constituents {
+                for info in self.get_applicable_index_infos_impl(t, key_type) {
+                    let declaration = self.index_infos[info.0 as usize].declaration;
+                    if let Some(declaration) = declaration
+                        && !signatures.contains(&declaration)
+                    {
+                        signatures.push(declaration);
+                    }
+                }
+            }
+        }
+        signatures
     }
 
     /// Go: `func (c *Checker) getResolvedSymbol(node *ast.Node) *ast.Symbol`
@@ -592,25 +633,19 @@ impl Checker {
     /// Go: `func (c *Checker) GetIndexInfoOfType(t *Type, keyType *Type) *IndexInfo`
     /// → `c.getIndexInfoOfType(t, keyType)` (checker.go — S10).
     pub fn get_index_info_of_type(&mut self, t: TypeId, key_type: TypeId) -> Option<IndexInfoId> {
-        // TODO(port M6 S10): getIndexInfosOfType plumbing.
-        let _ = (t, key_type);
-        None
+        self.get_index_info_of_type_impl(t, key_type)
     }
 
     /// Go: `func (c *Checker) GetIndexTypeOfType(t *Type, keyType *Type) *Type` →
     /// `c.getIndexTypeOfType(t, keyType)` (checker.go — S10).
     pub fn get_index_type_of_type(&mut self, t: TypeId, key_type: TypeId) -> Option<TypeId> {
-        // TODO(port M6 S10): getIndexType over the index info.
-        let _ = (t, key_type);
-        None
+        self.get_index_type_of_type_impl(t, key_type)
     }
 
     /// Go: `func (c *Checker) GetIndexInfosOfType(t *Type) []*IndexInfo` →
     /// `c.getIndexInfosOfType(t)` (checker.go — S10).
     pub fn get_index_infos_of_type(&mut self, t: TypeId) -> Vec<IndexInfoId> {
-        // TODO(port M6 S10): the structured-type index-info collection.
-        let _ = t;
-        Vec::new()
+        self.get_index_infos_of_type_impl(t)
     }
 
     /// Go: `func (c *Checker) IsContextSensitive(node *ast.Node) bool` →
@@ -659,11 +694,11 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) RemoveMissingOrUndefinedType(t *Type) *Type` →
-    /// `c.removeMissingOrUndefinedType(t)` (checker.go — S9). Identity is
-    /// the permissive value (nothing removed).
+    /// `c.removeMissingOrUndefinedType(t)` (checker.go:29616) — REAL (M6 S10):
+    /// delegates to facts.rs's body (the missing-type filter under
+    /// exactOptionalPropertyTypes, the NEUndefined facts filter otherwise).
     pub fn remove_missing_or_undefined_type(&mut self, t: TypeId) -> TypeId {
-        // TODO(port M6 S9): the union constituent filtering.
-        t
+        self.remove_missing_or_undefined_type_impl(t)
     }
 
     /// Go: `func (c *Checker) GetWidenedType(t *Type) *Type` →
