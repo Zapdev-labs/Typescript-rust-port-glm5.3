@@ -2165,3 +2165,11 @@ fold — both recorded) — the check-stage climb queue is now concrete:
 services slice + the leading divergence families (ambient/async
 rust-fewer), the special-globals arm, checkUnused semantics. Tranche 3
 dispatched.
+
+Rig validation (W3 tranche 2, 2026-10-12): forced clean + rebuild —
+fixture twins identical at parse, bind, AND check; bind 300-slice
+143/143 byte-identical; program twin 15/15. Rig /tmp tmpfs hit its
+12G quota mid-run (stale tsc-target 3.6G + a go-build dir from
+earlier waves freed; other large /tmp files belong to other rig users
+— the root btrfs balance recommendation stands). W3 tranche 2
+RIG-VALIDATED.
