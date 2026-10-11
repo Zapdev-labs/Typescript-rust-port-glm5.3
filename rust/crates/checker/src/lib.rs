@@ -130,6 +130,7 @@ pub mod jsdoc;
 pub mod links;
 pub mod mapper;
 pub mod members;
+pub mod nodebuilder;
 pub mod relater;
 pub mod resolution;
 pub mod resolvecall;

@@ -929,7 +929,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getBaseTypeVariableOfClass(symbol *ast.Symbol) *Type`.
-    fn get_base_type_variable_of_class(&mut self, symbol: SymbolId) -> Option<TypeId> {
+    pub(crate) fn get_base_type_variable_of_class(&mut self, symbol: SymbolId) -> Option<TypeId> {
         let declared = self.get_declared_type_of_class_or_interface(symbol);
         let base_constructor_type = self.get_base_constructor_type_of_class(declared);
         let flags = self.type_(base_constructor_type).flags;

@@ -4071,4 +4071,137 @@ mod tests {
             "the abstract modifier must be readable from the symbol"
         );
     }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // M6 W4 pins — the nodebuilder printer (nodebuilder.rs). Every expected
+    // string below was verified byte-same against the go-bench twin's
+    // check-stage diagnostic renders over the same source shape (the
+    // $HOME/.w4-scratch probe corpus, --dump-filter p1/p2).
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// Top-level `declare var <name>` declared-type getter for the W4 pins.
+    fn w4_var_type(c: &mut Checker, name: &str) -> TypeId {
+        let file = file_of(c);
+        let stmts: Vec<NodeId> =
+            statements_of(c.store(), file).expect("statements").to_vec();
+        for &s in &stmts {
+            if c.store().node(s).kind == Kind::VariableStatement {
+                let decl_list = c
+                    .store()
+                    .node(s)
+                    .as_variable_statement()
+                    .expect("VariableStatement data")
+                    .declaration_list;
+                let decls: Vec<NodeId> = c
+                    .store()
+                    .node(decl_list)
+                    .as_variable_declaration_list()
+                    .expect("VariableDeclarationList data")
+                    .declarations
+                    .as_ref()
+                    .expect("declarations")
+                    .nodes
+                    .to_vec();
+                for d in decls {
+                    let d_name = binder_shims::get_name_of_declaration(c.store(), d);
+                    let matches = d_name.is_some_and(|n| {
+                        tsc_ast::node_text(c.store(), n) == name
+                    });
+                    if matches {
+                        let symbol = c.get_symbol_of_declaration(d).expect("symbol");
+                        return c.get_type_of_symbol(symbol);
+                    }
+                }
+            }
+        }
+        panic!("no variable named {name}");
+    }
+
+    /// W4 PIN: the object literal with a lone call signature + property —
+    /// Go's createTypeNodeFromObjectType type-literal form, the exact arg
+    /// text of the TS2741 diagnostics on the collapsed slice records.
+    #[test]
+    fn w4_type_to_string_object_with_call_signature() {
+        let mut c = spine_checker(
+            "declare var f: { (x: number): string; prop: boolean; };\n",
+        );
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let t = w4_var_type(&mut c, "f");
+        assert_eq!(
+            crate::nodebuilder::type_to_string(&mut c, t),
+            "{ (x: number): string; prop: boolean; }"
+        );
+    }
+
+    /// W4 PIN: labeled/optional/rest tuple members (arrayOrTupleTypeToTypeNode
+    /// + getTupleElementLabel), byte-same to Go.
+    #[test]
+    fn w4_type_to_string_named_tuple_with_optional_and_rest() {
+        let mut c =
+            spine_checker("declare var t: [x: string, y?: number, ...rest: boolean[]];\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let t = w4_var_type(&mut c, "t");
+        assert_eq!(
+            crate::nodebuilder::type_to_string(&mut c, t),
+            "[x: string, y?: number | undefined, ...rest: boolean[]]"
+        );
+    }
+
+    /// W4 PIN: the abstract constructor type (signatureToSignatureDeclarationHelper's
+    /// ConstructorType arm + the ABSTRACT modifier) — the shape behind the
+    /// `abstract new (x: number) => string` renders.
+    #[test]
+    fn w4_type_to_string_abstract_constructor_type() {
+        let mut c = spine_checker("declare var c: abstract new (x: number) => string;\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let t = w4_var_type(&mut c, "c");
+        assert_eq!(
+            crate::nodebuilder::type_to_string(&mut c, t),
+            "abstract new (x: number) => string"
+        );
+    }
+
+    /// W4 PIN: union constituents parenthesize function types
+    /// (emitUnionTypeConstituent at TypeOperator precedence, printer.go:2053)
+    /// but NOT tuple/postfix members.
+    #[test]
+    fn w4_type_to_string_union_parenthesizes_function_types() {
+        let mut c =
+            spine_checker("declare var u: ((x: string) => void) | { m?(): void; };\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let t = w4_var_type(&mut c, "u");
+        assert_eq!(
+            crate::nodebuilder::type_to_string(&mut c, t),
+            "((x: string) => void) | { m?(): void; }"
+        );
+    }
+
+    /// W4 PIN: enum members render `E.a` (the qualified enum-member form)
+    /// and the rest-parameter dot reads the effective parameter declaration
+    /// (Go nodebuilderimpl.go:1740) — the `(a: string, ...b: X) => void`
+    /// shape. The element type renders as `{}` only because the unit is
+    /// lib-less (the global Array type is unresolved — Go renders the same
+    /// in the same environment; the twin probe confirmed byte-same).
+    #[test]
+    fn w4_signature_to_string_rest_parameter_dot() {
+        let mut c = spine_checker("enum E { a, b }\ndeclare var e: E.a;\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let t = w4_var_type(&mut c, "e");
+        assert_eq!(crate::nodebuilder::type_to_string(&mut c, t), "E.a");
+
+        let mut c = spine_checker("declare var sig: (a: string, ...b: number[]) => void;\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let t = w4_var_type(&mut c, "sig");
+        let rendered = crate::nodebuilder::type_to_string(&mut c, t);
+        assert!(
+            rendered.starts_with("(a: string, ...b: ") && rendered.ends_with(") => void"),
+            "the rest parameter carries its `...` dot; got {rendered}"
+        );
+    }
 }

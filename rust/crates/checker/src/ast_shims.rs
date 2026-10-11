@@ -460,7 +460,17 @@ pub fn type_of_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
         tsc_ast::NodeData::ConstructSignatureDeclaration(d) => d.type_,
         tsc_ast::NodeData::IndexSignatureDeclaration(d) => d.type_,
         tsc_ast::NodeData::JSDocTypeExpression(d) => Some(d.type_),
-        // Go: node.Type() on the assertion family (checker.go's
+        // Go: Node.Type()'s default arm — `funcLike := n.FunctionLikeData();
+        // return funcLike.Type` (ast.go:679-681). The W4 nodebuilder's
+        // serializeReturnTypeForSignature reaches these via
+        // getReturnTypeOfSignature → getReturnTypeFromAnnotation for
+        // FunctionTypeNode/ConstructorTypeNode-declared signatures; the
+        // remaining Node.Type() kinds (PropertyAssignment, TypePredicate,
+        // ParenthesizedType, TypeOperator, MappedType, JSDoc tags, …) land
+        // with the ast/utilities.go wholesale wave (PORT note).
+        tsc_ast::NodeData::FunctionTypeNode(d) => d.type_,
+        tsc_ast::NodeData::ConstructorTypeNode(d) => d.type_,
+        // Go: `node.Type() on the assertion family (checker.go's
         // checkAssertion/checkSatisfiesExpression call sites).
         tsc_ast::NodeData::TypeAssertion(d) => Some(d.type_),
         tsc_ast::NodeData::AsExpression(d) => Some(d.type_),

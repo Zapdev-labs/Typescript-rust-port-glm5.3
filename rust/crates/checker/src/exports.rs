@@ -391,11 +391,9 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) TypePredicateToString(t *TypePredicate) string`
-    /// → `c.typePredicateToString(t)` (nodebuilderimpl.go — M6 wave 4).
-    pub fn type_predicate_to_string(&self, t: &crate::types::TypePredicate) -> String {
-        // TODO(port M6 nodebuilder wave): the printer-facing formatting.
-        let _ = t;
-        String::new()
+    /// → `c.typePredicateToString(t)` (nodebuilderimpl.go — M6 W4 printer).
+    pub fn type_predicate_to_string(&mut self, t: &crate::types::TypePredicate) -> String {
+        crate::nodebuilder::type_predicate_to_string(self, t)
     }
 
     /// Go: `func (c *Checker) GetExpandedParameters(signature *Signature, skipUnionExpanding bool) [][]*ast.Symbol`

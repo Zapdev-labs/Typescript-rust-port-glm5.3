@@ -2215,3 +2215,23 @@ Rig validation (W3 tranche 4, 2026-10-12): forced clean + rebuild —
 all rails green (fixture x3 identical, bind 143/143, program 15/15).
 W3 tranche 4 RIG-VALIDATED. W4 (nodebuilder/type_to_string printer)
 dispatched.
+
+## M6 W4 — the nodebuilder/type-to-string printer landed (2026-10-13)
+
+nodebuilder.rs 3,384 lines: the full nodebuilderimpl.go + printer.go
+family (type/symbol/signature/predicate to_string, the ttn precedence
+dispatch, map_to_type_nodes truncation + collision re-render,
+object/mapped/tuple/conditional/keyof/template/indexed arms,
+get_expanded_parameters; 4 approximation seams PORT-noted). relater's
+printer stubs deleted (real delegation, Go's context-sensitive
+enclosing-name mirror at relater.go:1270-1290). type_of_node gained
+Go's FunctionTypeNode/ConstructorTypeNode default arms (ast.go:679) —
+unblocked return-type rendering. Check divergent 111 -> 99 (the 11
+type_to_string arg-diff records collapsed + the rest-dot fix; the
+remaining 31 count-eq records carry ZERO printer diffs — they are the
+async/2307/2683/2703/2322 families). Four upstream gaps found by the
+byte-verified render probes (union literal reduction in addTypesToUnion,
+declared type predicates, a symbol-links aliasing suspect, TS2322 span
+selection) — recorded for the next tranche. Orchestrator re-verified
+fresh: 16 suites ok, clippy 0, fixture x3 identical, bind 143/143,
+program 15/15, check divergent 99 confirmed, double-run deterministic.

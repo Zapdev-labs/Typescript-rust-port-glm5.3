@@ -1488,10 +1488,27 @@ impl Checker {
         right: TypeId,
     ) -> (String, String) {
         // Go: typeToString with the value declaration for context-sensitive
-        // symbols — TypeToString is the nodebuilder wave.
-        // TODO(port M6 W4): the context-sensitive error display forms.
-        let left_str = self.type_to_string(left);
-        let right_str = self.type_to_string(right);
+        // symbols (relater.go:1270-1283).
+        let left_str = {
+            let symbol = self.type_(left).symbol;
+            let sensitive = symbol.is_some_and(|s| self.symbol_value_declaration_is_context_sensitive(Some(s)));
+            if sensitive {
+                let enclosing = symbol.and_then(|s| self.program_symbol(s).value_declaration);
+                crate::nodebuilder::type_to_string_with_enclosing(self, left, enclosing)
+            } else {
+                self.type_to_string(left)
+            }
+        };
+        let right_str = {
+            let symbol = self.type_(right).symbol;
+            let sensitive = symbol.is_some_and(|s| self.symbol_value_declaration_is_context_sensitive(Some(s)));
+            if sensitive {
+                let enclosing = symbol.and_then(|s| self.program_symbol(s).value_declaration);
+                crate::nodebuilder::type_to_string_with_enclosing(self, right, enclosing)
+            } else {
+                self.type_to_string(right)
+            }
+        };
         if left_str == right_str {
             let left_str = self.get_type_name_for_error_display(left);
             let right_str = self.get_type_name_for_error_display(right);
@@ -1500,9 +1517,15 @@ impl Checker {
         (left_str, right_str)
     }
 
-    /// Go: `func (c *Checker) getTypeNameForErrorDisplay(t) string`.
+    /// Go: `func (c *Checker) getTypeNameForErrorDisplay(t) string`
+    /// (relater.go:1290 — UseFullyQualifiedType).
     pub(crate) fn get_type_name_for_error_display(&mut self, t: TypeId) -> String {
-        self.type_to_string_ex(t)
+        crate::nodebuilder::type_to_string_ex(
+            self,
+            t,
+            None,
+            crate::nodebuilder::tff::USE_FULLY_QUALIFIED_TYPE,
+        )
     }
 
     /// Go: `func (c *Checker) symbolValueDeclarationIsContextSensitive(symbol) bool`.
@@ -7700,37 +7723,18 @@ pub(crate) fn get_type_of_symbol(c: &mut Checker, sym: SymbolId) -> TypeId {
 
 /// Go: `func (c *Checker) symbolToString(sym) string`.
 pub(crate) fn symbol_to_string(c: &mut Checker, sym: SymbolId) -> String {
-    // TODO(port M6 W4): symbolToString's escaping/mangling (nodebuilder wave).
-    c.program_symbol(sym).name.clone()
+    crate::nodebuilder::symbol_to_string(c, sym)
 }
 
 /// Go: `func (c *Checker) signatureToString(s) string`.
 pub(crate) fn signature_to_string(c: &mut Checker, s: crate::types::SignatureId) -> String {
-    // TODO(port M6 W4): the signature printer.
-    let _ = (c, s);
-    String::new()
+    crate::nodebuilder::signature_to_string(c, s)
 }
 
-/// Go: `func (c *Checker) TypeToString(t) string` — W4 stub: the intrinsic
-/// name (or a flag-derived placeholder); the nodebuilder wave owns the real
-/// printer. Only error-message text depends on this.
+/// Go: `func (c *Checker) TypeToString(t) string` — REAL as of M6 W4
+/// (nodebuilder.rs: the nodeBuilder + printer family).
 pub(crate) fn type_to_string(c: &mut Checker, t: TypeId) -> String {
-    // TODO(port M6 W4): TypeToString (nodebuilderimpl).
-    if let Some(data) = c.type_(t).as_intrinsic_type() {
-        return data.intrinsic_name.clone();
-    }
-    if let Some(data) = c.type_(t).as_literal_type() {
-        return match data.value.as_ref() {
-            Some(crate::types::LiteralValue::String(s)) => format!("\"{s}\""),
-            Some(crate::types::LiteralValue::Number(n)) => format!("{}", n.0),
-            Some(crate::types::LiteralValue::BigInt(b)) => b.to_string(),
-            Some(crate::types::LiteralValue::Boolean(b)) => b.to_string(),
-            // Go's `nil` LiteralValue sentinel (only fresh-type widening
-            // produces it; unreachable on the error-display path).
-            Some(crate::types::LiteralValue::None) | None => String::new(),
-        };
-    }
-    "unknown".to_string()
+    crate::nodebuilder::type_to_string(c, t)
 }
 
 /// Go: `func isObjectLiteralType(t) bool` (utilities.go — `t.flags&(TypeFlagsObject|TypeFlagsIntersection) != 0 && t.symbol != nil && t.symbol.Flags&SymbolFlagsObjectLiteral != 0`).
@@ -8770,16 +8774,16 @@ impl Checker {
     // — REMOVED (M6 S7): superseded by uniontypes.rs's real interned
     // constructor (same signature; this module's call sites resolve there).
 
-    /// Go: `func (c *Checker) TypeToString(t) string` (checker.go) — the
-    /// W4-stub free fn, surfaced as the Go method form.
+    /// Go: `func (c *Checker) TypeToString(t) string` — delegates to the
+    /// M6 W4 nodebuilder printer (nodebuilder.rs).
     pub(crate) fn type_to_string(&mut self, t: TypeId) -> String {
         type_to_string(self, t)
     }
 
     /// Go: `func (c *Checker) TypeToStringEx(t, enclosingDeclaration, flags, tracker) string`
-    /// — W4 stub (the error-display form).
+    /// (printer.go:59) — the W4 printer with `nil` enclosing + no flags.
     pub(crate) fn type_to_string_ex(&mut self, t: TypeId) -> String {
-        type_to_string(self, t)
+        crate::nodebuilder::type_to_string_ex(self, t, None, crate::nodebuilder::tff::NONE)
     }
 
     // Go: `func (c *Checker) isEmptyAnonymousObjectType(t) bool` — REMOVED
