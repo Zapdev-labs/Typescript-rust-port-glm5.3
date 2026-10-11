@@ -2002,3 +2002,12 @@ the 2314/2315 ladders dormant by design until S6. Orchestrator
 re-verified fresh: 128 tests (8 new s5), clippy 0, fixture 9/9,
 300-slice twins identical 143/143, program twin 15/15. Next: S6
 resolution.
+
+Rig validation (S5, 2026-10-10): forced `cargo clean -p tsc-checker -p
+bench-harness` + full rebuild (32s) — all three twin gates green
+(fixture 9/9, 300-slice byte-identical 143/143, program twin 15/15).
+Rig gotcha recorded: `target/release/tsc-bench` is a HARDLINK of the
+deps artifact, so its mtime survives `rm` + relink — a "0.01s Finished"
+build with an unchanged binary mtime does NOT prove staleness; when in
+doubt, `cargo clean -p` the crate and rebuild before trusting rig twin
+runs. S5 CLOSED.
