@@ -1240,6 +1240,12 @@ func confSemanticDiagnosticsOfUnit(unitName, content string, config *tsoptions.P
 	// W3T7 PROBE (temporary): print each diagnostic's pos/end + the text
 	// slice, gated on W3T7PROBE (2703 span divergence bisect).
 	if os.Getenv("W3T7PROBE") != "" && strings.Contains(unitName, "await_unary") {
+		fmt.Fprintf(os.Stderr, "w3t7probe-go file=%s content[0:80]=%q\n", unitName, content[0:80])
+		if strings.HasSuffix(unitName, "es6_1.ts") {
+			fmt.Fprintf(os.Stderr, "w3t7probe-go first40=%q len=%d first_bytes=%v\n", content[0:40], len(content), content[0:6])
+			fmt.Fprintf(os.Stderr, "w3t7probe-go content[85:130]=%q\n", content[85:130])
+			fmt.Fprintf(os.Stderr, "w3t7probe-go mid=%q\n", content[40:100])
+		}
 		for _, d := range diags {
 			pos, end := int(d.Pos()), int(d.End())
 			lo, hi := pos, end
