@@ -1502,9 +1502,14 @@ impl Checker {
     /// This is a worker function. Use getConstraintOfTypeParameter which
     /// guards against circular constraints.
     ///
-    /// Go: `func (c *Checker) is_error_type(t *Type) bool` — `t == c.errorType`.
+    /// Go: `func (c *Checker) is_error_type(t *Type) bool` — REAL (W3
+    /// tranche 3): Go's full body is `t == c.errorType || t.flags&
+    /// TypeFlagsAny != 0 && t.alias != nil` (the second arm catches the
+    /// unresolved-alias error types from getTypeFromTypeAliasReference).
     pub(crate) fn is_error_type(&self, t: TypeId) -> bool {
         t == self.error_type()
+            || (self.type_(t).flags.intersects(TypeFlags::ANY)
+                && self.type_(t).alias.is_some())
     }
 
     /// Go: `func (c *Checker) getConstraintFromTypeParameter(t *Type) *Type`.
@@ -4790,7 +4795,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getEnumMemberValue(node) evaluator.Result` (24446).
-    fn get_enum_member_value(&mut self, node: NodeId) -> EvaluatorResult {
+    pub(crate) fn get_enum_member_value(&mut self, node: NodeId) -> EvaluatorResult {
         let parent = self.store().node(node).parent.get();
         self.compute_enum_member_values(parent);
         self.enum_member_links.get(node).value.clone()

@@ -77,6 +77,14 @@ fn get_file_and_range(
     store: &dyn NodeStore,
     node: NodeId,
 ) -> Option<(NodeId, TextPos, TextPos)> {
+    // Go: `if node != nil { file = ...; loc = ... }` (utilities.go
+    // NewDiagnosticForNode) — the NodeId::NONE sentinel is Go's nil
+    // `*ast.Node`: the diagnostic has no file and a zero range (a global
+    // diagnostic in the collection's classification; e.g. the
+    // getGlobalSymbol family reports its errors with no location).
+    if node.is_none() {
+        return None;
+    }
     let n = store.node(node);
     let file = tsc_ast::utilities::get_source_file_of_node(store, node)?;
     let text = file.text();

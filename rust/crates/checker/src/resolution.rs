@@ -549,12 +549,10 @@ impl Checker {
                 }
             }
             if result.is_none() {
-                self.on_failed_to_resolve_symbol(
-                    original_location.expect("nameNotFoundMessage implies a location"),
-                    name,
-                    meaning,
-                    name_not_found_message,
-                );
+                // PORT: Go passes originalLocation (possibly nil — the
+                // getGlobalSymbol family resolves with a nil location);
+                // the hook's nil gates are on_failed_to_resolve_symbol's.
+                self.on_failed_to_resolve_symbol(original_location, name, meaning, name_not_found_message);
             } else {
                 self.on_successfully_resolved_symbol(
                     original_location,
@@ -875,37 +873,50 @@ impl Checker {
 
     /// Go: `func (c *Checker) onFailedToResolveSymbol(location, name, meaning, nameNotFoundMessage)`
     /// (checker.go:1608 — the OnFailedToResolveSymbol hook).
+    ///
+    /// PORT: `errorLocation` is Go's `*ast.Node` — NILABLE. The
+    /// `getGlobalSymbol` family calls `resolveName(nil, name, meaning,
+    /// diagnostic, ...)` (checker.go:1254), so a failed global resolution
+    /// lands here with `None` and must flow to Go's `c.error(nil, ...)`
+    /// — a location-less (global-collection) diagnostic. Every
+    /// location-dereferencing arm below is gated exactly as Go's
+    /// `errorLocation != nil &&` guards; the error emitters take
+    /// `NodeId::NONE` for nil (safe since the `get_file_and_range`
+    /// nil guard — utilities.rs).
     fn on_failed_to_resolve_symbol(
         &mut self,
-        error_location: NodeId,
+        error_location: Option<NodeId>,
         name: &str,
         meaning: SymbolFlags,
         name_not_found_message: Option<&'static Message>,
     ) {
         // The `const` in a `const` assertion (`x as const`) is a syntactic marker, not a real
         // type reference, and must never be resolved or reported as an unresolvable name.
-        if u::is_const_type_reference_name(self.store(), error_location) {
+        // (Go's isConstTypeReferenceName is `node != nil &&` — None is false.)
+        if error_location.is_some_and(|loc| u::is_const_type_reference_name(self.store(), loc)) {
             return;
         }
-        let parent_kind = binder_shims::parent_of(self.store(), error_location)
-            .map(|p| self.store().node(p).kind);
-        if parent_kind == Some(Kind::JSDocLink)
-            || self.check_and_report_error_for_missing_prefix(error_location, name)
-            || self.check_and_report_error_for_using_type_as_namespace(error_location, name, meaning)
-            || self.check_and_report_error_for_exporting_primitive_type(error_location, name)
-            || self.check_and_report_error_for_using_namespace_as_type_or_value(error_location, name, meaning)
-            || self.check_and_report_error_for_using_type_as_value(error_location, name, meaning)
-            || self.check_and_report_error_for_using_value_as_type(error_location, name, meaning)
-        {
+        // Go: `if errorLocation != nil && (errorLocation.Parent.Kind == ... || ladder)`.
+        if error_location.is_some_and(|loc| {
+            let parent_kind = binder_shims::parent_of(self.store(), loc)
+                .map(|p| self.store().node(p).kind);
+            parent_kind == Some(Kind::JSDocLink)
+                || self.check_and_report_error_for_missing_prefix(loc, name)
+                || self.check_and_report_error_for_using_type_as_namespace(loc, name, meaning)
+                || self.check_and_report_error_for_exporting_primitive_type(loc, name)
+                || self.check_and_report_error_for_using_namespace_as_type_or_value(loc, name, meaning)
+                || self.check_and_report_error_for_using_type_as_value(loc, name, meaning)
+                || self.check_and_report_error_for_using_value_as_type(loc, name, meaning)
+        }) {
             return;
         }
         let mut declaration_name = name.to_string();
-        if is_identifier(self.store().node(error_location))
-            && tsc_ast::node_text(self.store(), error_location) == name
-        {
+        if error_location.is_some_and(|loc| {
+            is_identifier(self.store().node(loc)) && tsc_ast::node_text(self.store(), loc) == name
+        }) {
             declaration_name = tsc_scanner::utilities::declaration_name_to_string(
                 self.store(),
-                Some(error_location),
+                error_location,
             );
         }
         // Report missing lib first
@@ -914,11 +925,11 @@ impl Checker {
         // typeFeatures[0].lib read; utilities.rs's table).
         let suggested_lib = crate::utilities::get_suggested_lib_for_non_existent_name(name);
         if !suggested_lib.is_empty() {
-            self.error(error_location, name_not_found_message.unwrap(), &[declaration_name, suggested_lib]);
+            self.error(error_location.unwrap_or(NodeId::NONE), name_not_found_message.unwrap(), &[declaration_name, suggested_lib]);
             return;
         }
         // Then spelling suggestions
-        let suggestion = self.get_suggested_symbol_for_nonexistent_symbol(error_location, name, meaning);
+        let suggestion = self.get_suggested_symbol_for_nonexistent_symbol(error_location.unwrap_or(NodeId::NONE), name, meaning);
         let ambient_global_augmentation = suggestion
             .and_then(|s| self.program_symbol(s).value_declaration)
             .is_some_and(|vd| {
@@ -943,14 +954,14 @@ impl Checker {
             // rides its Diagnostic return with the nodebuilder wave.
             self.error_or_suggestion(
                 !is_unchecked_js,
-                error_location,
+                error_location.unwrap_or(NodeId::NONE),
                 message,
                 &[declaration_name.clone(), suggestion_name],
             );
             return;
         }
         // And then fall back to unspecified "not found"
-        self.error(error_location, name_not_found_message.unwrap(), &[declaration_name]);
+        self.error(error_location.unwrap_or(NodeId::NONE), name_not_found_message.unwrap(), &[declaration_name]);
     }
 
     /// Go: `func (c *Checker) checkAndReportErrorForUsingTypeAsNamespace(errorLocation, name, meaning) bool`

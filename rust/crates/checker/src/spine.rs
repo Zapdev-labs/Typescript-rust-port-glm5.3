@@ -2879,7 +2879,7 @@ impl Checker {
         } else {
             None
         };
-        let symbol = self.get_global_symbol_stub(name, SymbolFlags::TYPE, diagnostic);
+        let symbol = self.get_global_symbol_real(name, SymbolFlags::TYPE, diagnostic);
         if let Some(symbol) = symbol {
             if self
                 .program
@@ -2887,9 +2887,8 @@ impl Checker {
                 .flags
                 .intersects(SymbolFlags::CLASS.union(SymbolFlags::INTERFACE))
             {
-                // TODO(port M6 S2): getDeclaredTypeOfSymbol + the interface
-                // type-parameter arity check (the class/interface arm is
-                // dead while resolveName resolves nothing — S6).
+                // REAL (W3 tranche 3): the class/interface arm is live now
+                // that getGlobalSymbol resolves through resolve_name_worker.
                 let t = self.get_declared_type_of_symbol_stub(symbol);
                 let type_parameters_len = self
                     .type_(t)
@@ -2900,26 +2899,24 @@ impl Checker {
                     return t;
                 }
                 if report_errors {
+                    // PORT: Go passes getGlobalTypeDeclaration(symbol)'s
+                    // nil-able result straight to c.error — a missing
+                    // declaration is a location-less (global) diagnostic,
+                    // NOT a skip. NodeId::NONE carries the nil shape.
                     let declaration = self.get_global_type_declaration_stub(symbol);
-                    // PORT: the declaration is NONE while resolveName is
-                    // the S6 stub (Go would dereference nil here); guard.
-                    if declaration != NodeId::NONE {
-                        self.error(
-                            declaration,
-                            &GLOBAL_TYPE_0_MUST_HAVE_1_TYPE_PARAMETER_S,
-                            &[self.program.symbol(symbol).name.clone(), arity.to_string()],
-                        );
-                    }
+                    self.error(
+                        declaration,
+                        &GLOBAL_TYPE_0_MUST_HAVE_1_TYPE_PARAMETER_S,
+                        &[self.program.symbol(symbol).name.clone(), arity.to_string()],
+                    );
                 }
             } else if report_errors {
                 let declaration = self.get_global_type_declaration_stub(symbol);
-                if declaration != NodeId::NONE {
-                    self.error(
-                        declaration,
-                        &GLOBAL_TYPE_0_MUST_BE_A_CLASS_OR_INTERFACE_TYPE,
-                        &[self.program.symbol(symbol).name.clone()],
-                    );
-                }
+                self.error(
+                    declaration,
+                    &GLOBAL_TYPE_0_MUST_BE_A_CLASS_OR_INTERFACE_TYPE,
+                    &[self.program.symbol(symbol).name.clone()],
+                );
             }
         }
         if arity != 0 {
@@ -2930,8 +2927,9 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getGlobalTypeAliasSymbol(name, arity, reportErrors) *ast.Symbol`
-    /// (checker.go:1288) — pub(crate) (M6 S9: the awaited family's
-    /// `getGlobalAwaitedSymbol` closures resolve through it).
+    /// (checker.go:1198) — REAL (W3 tranche 3): the declared-type resolve +
+    /// the typeAliasLinks type-parameter arity check (pub(crate): M6 S9's
+    /// awaited family resolves through it).
     pub(crate) fn get_global_type_alias_symbol(
         &mut self,
         name: &str,
@@ -2943,28 +2941,51 @@ impl Checker {
         } else {
             None
         };
-        let symbol = self.get_global_symbol_stub(name, SymbolFlags::TYPE_ALIAS, diagnostic)?;
+        let symbol = self.get_global_symbol_real(name, SymbolFlags::TYPE_ALIAS, diagnostic)?;
         // Resolve the declared type of the symbol. This resolves type
         // parameters for the type alias so that we can check arity.
-        // TODO(port M6 S2): getDeclaredTypeOfSymbol + the typeAliasLinks
-        // type-parameter arity check; permissive None (the no-lib answer)
-        // until S2/S6 land.
-        let _ = arity;
-        let _ = self.get_declared_type_of_symbol_stub(symbol);
-        None
+        self.get_declared_type_of_symbol_stub(symbol);
+        if self.type_alias_links.get(symbol).type_parameters.len() != arity {
+            if report_errors {
+                // Go: `core.Find(symbol.Declarations, ast.IsTypeAliasDeclaration)`
+                // — the found declaration may be nil (c.error's nil shape is
+                // the location-less global diagnostic; NodeId::NONE carries it).
+                let declaration = self
+                    .program
+                    .symbol(symbol)
+                    .declarations
+                    .iter()
+                    .copied()
+                    .find(|&d| self.store().node(d).kind == Kind::TypeAliasDeclaration)
+                    .unwrap_or(NodeId::NONE);
+                self.error(
+                    declaration,
+                    &GLOBAL_TYPE_0_MUST_HAVE_1_TYPE_PARAMETER_S,
+                    &[self.program.symbol(symbol).name.clone(), arity.to_string()],
+                );
+            }
+            return None;
+        }
+        Some(symbol)
     }
 
     /// Go: `func (c *Checker) getGlobalSymbol(name, meaning, diagnostic) *ast.Symbol`
-    /// (checker.go:1301) — `c.resolveName(nil, name, meaning, diagnostic,
-    /// false, false)`. TODO(port M6 S6): the name resolver; permissive None.
-    fn get_global_symbol_stub(
+    /// (checker.go:1254) — REAL (W3 tranche 3): Go's body is
+    /// `c.resolveName(nil, name, meaning, diagnostic, false, false)`
+    /// (the full NameResolver walk, already ported as resolution.rs's
+    /// resolve_name_worker). This un-suppresses the special-global-types
+    /// error arm (TS2316/2317/2318/2468: getGlobalType/getGlobalValue with
+    /// reportErrors=true) — the go-driver's confRustSilentGlobalArmKeys
+    /// filter can then drop out of both pipelines. exports.rs's public
+    /// GetGlobalSymbol twin delegates here.
+    pub(crate) fn get_global_symbol_real(
         &mut self,
         name: &str,
         meaning: SymbolFlags,
         diagnostic: Option<&'static Message>,
     ) -> Option<SymbolId> {
-        let _ = (name, meaning, diagnostic);
-        None
+        // Don't track references for global symbols anyway, so value if `isReference` is arbitrary
+        self.resolve_name_worker(None, name, meaning, diagnostic, false /*is_use*/, false /*exclude_globals*/)
     }
 
     /// Go: `func (c *Checker) getDeclaredTypeOfSymbol(symbol) *Type` — the
@@ -3017,13 +3038,13 @@ impl Checker {
             GlobalResolverKind::ValueSymbol => {
                 let diagnostic = report_errors.then_some(&CANNOT_FIND_GLOBAL_VALUE_0);
                 GlobalResolverValue::Symbol(
-                    self.get_global_symbol_stub(name, SymbolFlags::VALUE, diagnostic),
+                    self.get_global_symbol_real(name, SymbolFlags::VALUE, diagnostic),
                 )
             }
             GlobalResolverKind::TypeSymbol => {
                 let diagnostic = report_errors.then_some(&CANNOT_FIND_GLOBAL_TYPE_0);
                 GlobalResolverValue::Symbol(
-                    self.get_global_symbol_stub(name, SymbolFlags::TYPE, diagnostic),
+                    self.get_global_symbol_real(name, SymbolFlags::TYPE, diagnostic),
                 )
             }
         };
@@ -3694,5 +3715,139 @@ mod tests {
         let initializer = crate::ast_shims::initializer_of(c.store(), decl).expect("initializer");
         let t = c.check_expression_ex(initializer, CheckMode::CHECK_MODE_NORMAL);
         assert!(c.type_(t).flags.intersects(TypeFlags::NUMBER_LITERAL));
+    }
+
+    /// W3 tranche 3 pin: an annotated async function under the no-lib shape
+    /// (the awaitBinaryExpression1 divergence). The unresolved `Promise`
+    /// type reference yields the any-flagged error type with the alias
+    /// attached (getTypeFromTypeAliasReference's CheckFlagsUnresolved arm),
+    /// so Go's isErrorType second arm catches it and
+    /// checkAsyncFunctionReturnType bails BEFORE getGlobalPromiseTypeChecked —
+    /// no TS2318-Promise on either side, only the per-reference TS2583s and
+    /// the checker-machinery TS2318s (Array, Object, Function, ...).
+    #[test]
+    fn w3t3_annotated_async_emits_no_promise_2318() {
+        let mut c = spine_checker(
+            "declare var a: boolean;\ndeclare var p: Promise<boolean>;\nasync function func(): Promise<void> {\n    var b = await p || a;\n}\n",
+        );
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        // The two `Promise` references draw TS2583 (the suggested-lib form
+        // of cannot-find-name, one per reference) — and NO TS2318-Promise.
+        let promise_2583 = diags
+            .iter()
+            .filter(|d| d.code() == 2583 && d.message_args().first().is_some_and(|a| a == "Promise"))
+            .count();
+        assert_eq!(promise_2583, 2, "two Promise references, one TS2583 each");
+        let promise_2318 = diags
+            .iter()
+            .filter(|d| d.code() == 2318 && d.message_args().first().is_some_and(|a| a == "Promise"))
+            .count();
+        assert_eq!(
+            promise_2318, 0,
+            "the unresolved-alias return type must gate checkAsyncFunctionReturnType before the Promise resolver"
+        );
+        // The machinery globals still resolve-with-error once each (Go's
+        // NewChecker resolver table over the lib-less program).
+        let global_2318_names: Vec<&str> = diags
+            .iter()
+            .filter(|d| d.code() == 2318)
+            .filter_map(|d| d.message_args().first().map(|s| s.as_str()))
+            .collect();
+        for name in ["Array", "Boolean", "Function", "Object", "String", "Number", "RegExp"] {
+            assert!(
+                global_2318_names.contains(&name),
+                "TS2318-{name} must be emitted (the machinery resolver, Go parity); got {global_2318_names:?}"
+            );
+        }
+    }
+
+    /// W3 tranche 3 pin: services.rs's GetSymbolsInScope — the container
+    /// walk copies the function's binder locals (the var declaration) into
+    /// the answer table; reserved names are stripped by symbols_to_array.
+    #[test]
+    fn w3t3_services_get_symbols_in_scope_reports_function_locals() {
+        let mut c = spine_checker(
+            "function f(a: number) {\n    var x = a + 1;\n    return x;\n}\n",
+        );
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let function = statements_of(c.store(), file).expect("statements")[0];
+        let body = c
+            .store()
+            .node(function)
+            .as_function_declaration()
+            .expect("FunctionDeclaration data")
+            .body
+            .expect("body");
+        let body_statements = statements_of(c.store(), body).expect("body statements");
+        let variable_statement = body_statements[0];
+        let symbols = c.get_symbols_in_scope(variable_statement, SymbolFlags::VALUE);
+        let names: Vec<String> = symbols
+            .iter()
+            .map(|&s| c.program_symbol(s).name.clone())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "x"),
+            "the function-local `x` must be in scope; got {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n == "y"),
+            "nothing else may appear; got {names:?}"
+        );
+    }
+
+    /// W3 tranche 3 pin: services.rs's GetSymbolsOfParameterPropertyDeclaration
+    /// — the `private p` parameter yields the parameter symbol (constructor
+    /// locals) and the property symbol (class members), distinct symbols.
+    #[test]
+    fn w3t3_services_parameter_property_declaration_symbols() {
+        let mut c =
+            spine_checker("class C {\n    constructor(private p: number) {}\n}\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let class = statements_of(c.store(), file).expect("statements")[0];
+        let members = c
+            .store()
+            .node(class)
+            .as_class_declaration()
+            .expect("ClassDeclaration data")
+            .members
+            .as_ref()
+            .expect("members")
+            .nodes
+            .to_vec();
+        let constructor = *members
+            .iter()
+            .find(|&&m| c.store().node(m).kind == Kind::Constructor)
+            .expect("constructor");
+        let parameters = c
+            .store()
+            .node(constructor)
+            .as_constructor_declaration()
+            .expect("ConstructorDeclaration data")
+            .parameters
+            .as_ref()
+            .expect("parameters")
+            .nodes
+            .to_vec();
+        let parameter = parameters[0];
+        let (parameter_symbol, property_symbol) = c
+            .get_symbols_of_parameter_property_declaration(parameter, "p")
+            .expect("both symbols resolve");
+        assert_eq!(c.program_symbol(parameter_symbol).name, "p");
+        assert_eq!(c.program_symbol(property_symbol).name, "p");
+        assert_ne!(
+            parameter_symbol, property_symbol,
+            "the parameter and property symbols are distinct"
+        );
+        assert!(
+            c.program_symbol(property_symbol)
+                .flags
+                .intersects(SymbolFlags::PROPERTY),
+            "the property symbol is a class property; got flags {:?}",
+            c.program_symbol(property_symbol).flags
+        );
     }
 }

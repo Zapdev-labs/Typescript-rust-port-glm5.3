@@ -2173,3 +2173,23 @@ fixture twins identical at parse, bind, AND check; bind 300-slice
 earlier waves freed; other large /tmp files belong to other rig users
 — the root btrfs balance recommendation stands). W3 tranche 2
 RIG-VALIDATED.
+
+## M6 W3 tranche 3 landed (2026-10-12) — services + special-globals + the isErrorType misport
+
+services.rs ~1.9k (62 funcs in Go order); special-globals arm REAL on
+both drivers (Go filter deleted); checkUnused aligned (Go 14232 rule);
+isErrorType misport FIXED — the port had only t==errorType, Go's
+second arm (Any flags + alias) was missing — killed the 105-record
+spurious TS2318-Promise family; get_file_and_range NONE guard;
+--dump-filter bisect tooling both drivers. Counting reconciled
+(divcount.py; the 126-vs-179 was overlapping sub-folds). Check 300-
+slice fresh: BOTH drivers 0/174/210/0 histograms, verdict flips 45->0,
+divergent 131 (64 rust-fewer / 22 rust-more / 45 count-eq-hash-diff).
+Climb note: match-vs-baseline is ~0 on BOTH drivers now (the lib-less
+twin cannot match lib-generated reference baselines; twin identity is
+the strong rail — the lib-file support gap is recorded in
+CONFORMANCE.md as the path back to match%). Orchestrator re-verified
+fresh: 16 suites ok, clippy 0, fixture identical parse/bind/check,
+bind slice 143/143, program twin 15/15, check divergent 131 confirmed.
+Remaining families (next tranche; S6-S9 depth): go-extra TS2454 x47,
+async-2697 x37, TS2304 x33; rust-extra TS2339 x54, 2425/2417/2719 x56.

@@ -49,6 +49,7 @@ pub fn run_conformance(args: &[String]) {
     let mut filter = String::new();
     let mut stage = Stage::Bind;
     let mut local_root: Option<PathBuf> = None;
+    let mut dump_filter = String::new();
     let mut i = 0;
     while i < args.len() {
         let (name, inline) = match args[i].split_once('=') {
@@ -88,6 +89,7 @@ pub fn run_conformance(args: &[String]) {
                 }
             },
             "local-root" => local_root = Some(PathBuf::from(&value)),
+            "dump-filter" => dump_filter = value,
             other => {
                 eprintln!("tsc-bench conformance: flag provided but not defined: -{other}");
                 std::process::exit(2);
@@ -139,6 +141,15 @@ pub fn run_conformance(args: &[String]) {
     let mut emit = |record: &CaseRecord| {
         use std::io::Write;
         writeln!(stdout, "{}", record.to_ndjson()).expect("write record");
+        // The W3 check-stage divergence bisect read: print the shape_hash's
+        // fold lines for matching cases to STDERR (stdout stays pure NDJSON;
+        // the go-driver twin implements the same flag on the same lines).
+        if !dump_filter.is_empty() && record.case.contains(&dump_filter) {
+            let mut stderr = std::io::stderr().lock();
+            for line in record.dump_lines.iter().flatten() {
+                let _ = write!(stderr, "DUMP {line}");
+            }
+        }
         records.set(records.get() + 1);
         match record.verdict {
             tsc_testrunner::Verdict::Match => matched.set(matched.get() + 1),

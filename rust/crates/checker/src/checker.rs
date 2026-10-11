@@ -179,6 +179,13 @@ pub trait Program {
     fn source_file_implied_node_format(&self, _file: NodeId) -> ModuleKind {
         ModuleKind::None
     }
+    /// Go: `!program.IsSourceFileDefaultLibrary(file)` guard from
+    /// services.go's IsLibSymbolForHoverVerbosity/IsLibTypeForHoverVerbosity
+    /// (W3 tranche 3: added with the services slice; permissive default
+    /// mirrors "no lib metadata").
+    fn is_source_file_default_library(&self, _file: NodeId) -> bool {
+        false
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

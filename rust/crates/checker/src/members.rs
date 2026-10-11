@@ -2674,8 +2674,10 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) createUnionOrIntersectionProperty(containingType, name, skipObjectFunctionPropertyAugment) *ast.Symbol`
-    /// (checker.go:21751) — the synthetic property combiner.
-    fn create_union_or_intersection_property(
+    /// (checker.go:21751) — the synthetic property combiner.  Visibility:
+    /// pub(crate) (W3 tranche 3 — the services.rs apparent-properties twin
+    /// calls it).
+    pub(crate) fn create_union_or_intersection_property(
         &mut self,
         containing_type: TypeId,
         name: &str,

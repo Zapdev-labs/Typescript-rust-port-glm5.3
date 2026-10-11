@@ -55,7 +55,6 @@ import (
 	"github.com/microsoft/TypeScript/tsc/internal/checker"
 	"github.com/microsoft/TypeScript/tsc/internal/compiler"
 	"github.com/microsoft/TypeScript/tsc/internal/core"
-	"github.com/microsoft/TypeScript/tsc/internal/diagnostics"
 	"github.com/microsoft/TypeScript/tsc/internal/locale"
 	"github.com/microsoft/TypeScript/tsc/internal/scanner"
 	"github.com/microsoft/TypeScript/tsc/internal/tsoptions"
@@ -167,6 +166,9 @@ type confRecord struct {
 	verdict     string
 	errorsCount int64
 	shapeHash   string
+	// dumpLines — the shape_hash fold lines (the --dump-filter bisect
+	// read; NOT part of the NDJSON contract — mirrors CaseRecord::dump_lines).
+	dumpLines []string
 }
 
 func (r confRecord) ndjson(sb *strings.Builder) {
@@ -195,6 +197,7 @@ func runConformance(args []string) {
 	filter := cli.String("filter", "", "-test.run style pattern")
 	stage := cli.String("stage", "bind", "wired depth: parse|bind|check")
 	localRoot := cli.String("local-root", "", "write local baselines here")
+	dumpFilter := cli.String("dump-filter", "", "print the shape_hash fold lines of matching cases to stderr (the divergence bisect)")
 	_ = cli.Parse(args)
 	if *corpus == "" || *baselines == "" {
 		fmt.Fprintln(os.Stderr, "go-bench conformance: missing required --corpus <dir> and --baselines <dir>")
@@ -246,6 +249,11 @@ func runConformance(args []string) {
 		for _, record := range confRunCaseFile(corpusDir, baselinesDir, *suite, stageName, localDir, file) {
 			record.ndjson(&sb)
 			fmt.Println(sb.String())
+			if *dumpFilter != "" && strings.Contains(record.caseName, *dumpFilter) {
+				for _, line := range record.dumpLines {
+					fmt.Fprintf(os.Stderr, "DUMP %s", line)
+				}
+			}
 			records++
 			switch record.verdict {
 			case "match":
@@ -1166,11 +1174,16 @@ func confRunConfiguration(corpusDir, baselinesDir, suite, stage, localDir, caseN
 			h *= 1099511628211
 		}
 	}
-	fold("case=" + caseName + "\n")
-	fold("baseline=" + suite + "/" + baselineName + "\n")
-	fold("errors=" + strconv.FormatInt(errorsCount, 10) + "\n")
+	dumpLines := make([]string, 0, len(sorted)+3)
+	line := func(s string) {
+		fold(s)
+		dumpLines = append(dumpLines, s)
+	}
+	line("case=" + caseName + "\n")
+	line("baseline=" + suite + "/" + baselineName + "\n")
+	line("errors=" + strconv.FormatInt(errorsCount, 10) + "\n")
 	for _, view := range sorted {
-		fold(fmt.Sprintf("diag=%s|%s|%d|%d|%d|%s\n",
+		line(fmt.Sprintf("diag=%s|%s|%d|%d|%d|%s\n",
 			view.fileName, string(view.d.MessageKey()), view.d.Code(), view.d.Pos(), view.d.End(),
 			strings.Join(view.d.MessageArgs(), "\x01")))
 	}
@@ -1181,20 +1194,8 @@ func confRunConfiguration(corpusDir, baselinesDir, suite, stage, localDir, caseN
 		verdict:     verdict,
 		errorsCount: errorsCount,
 		shapeHash:   fmt.Sprintf("%016x", h),
+		dumpLines:   dumpLines,
 	}, false
-}
-
-// confRustSilentGlobalArmKeys — the special-global-types error arm
-// (checker.go:1359-1385: getGlobalType/getGlobalValue with
-// reportErrors=true) that the Rust port's `get_global_symbol_stub` still
-// suppresses (the S2 resolution wave). The twin discipline: both drivers
-// implement the same pipeline at the same wired depth, so the Go unit read
-// filters exactly the messages that arm emits — nothing else.
-var confRustSilentGlobalArmKeys = map[diagnostics.Key]bool{
-	diagnostics.Cannot_find_global_type_0.Key():                     true,
-	diagnostics.Cannot_find_global_value_0.Key():                   true,
-	diagnostics.Global_type_0_must_be_a_class_or_interface_type.Key(): true,
-	diagnostics.Global_type_0_must_have_1_type_parameter_s.Key():    true,
 }
 
 // confSemanticDiagnosticsOfUnit — the Rust runner's
@@ -1204,6 +1205,11 @@ var confRustSilentGlobalArmKeys = map[diagnostics.Key]bool{
 // with the file list swapped, then the real Go checker over it. The read
 // mirrors the Rust seam's `semantic_diagnostics()` (the whole collection:
 // per-file GetDiagnostics + the global entries).
+//
+// W3 tranche 3: the special-global-types error arm
+// (getGlobalType/getGlobalValue with reportErrors=true — TS2316/TS2317/
+// TS2318/TS2468) is NO LONGER filtered. The Rust port's getGlobalSymbol is
+// real (resolveName over the global scope), so both drivers emit the arm.
 func confSemanticDiagnosticsOfUnit(unitName, content string, config *tsoptions.ParsedCommandLine) []*ast.Diagnostic {
 	// The Rust seam bails on JSON sources (ensure_script_kind's JSON arm —
 	// the caller's extension filter skips .json/.tsbuildinfo already; the
@@ -1231,14 +1237,7 @@ func confSemanticDiagnosticsOfUnit(unitName, content string, config *tsoptions.P
 	fileChecker, _ := checker.NewChecker(program, nil)
 	diags := fileChecker.GetDiagnostics(context.Background(), files[0])
 	diags = append(diags, fileChecker.GetGlobalDiagnostics()...)
-	filtered := make([]*ast.Diagnostic, 0, len(diags))
-	for _, d := range diags {
-		if confRustSilentGlobalArmKeys[d.MessageKey()] {
-			continue
-		}
-		filtered = append(filtered, d)
-	}
-	return filtered
+	return diags
 }
 
 // confViewForDiagnostic — resolve the (file name, file text) a diagnostic

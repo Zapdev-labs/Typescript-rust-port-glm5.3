@@ -85,16 +85,16 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) GetGlobalSymbol(name string, meaning ast.SymbolFlags, diagnostic *diagnostics.Message) *ast.Symbol`
-    /// → `c.getGlobalSymbol(...)` (checker.go — S6's global resolvers).
+    /// → `c.getGlobalSymbol(...)` (checker.go — S6's global resolvers). REAL
+    /// body landed in spine.rs (`get_global_symbol_real` — the resolveName
+    /// walk with a nil location); this carrier delegates (W3 tranche 3).
     pub fn get_global_symbol(
         &mut self,
         name: &str,
         meaning: SymbolFlags,
         diagnostic: Option<&'static Message>,
     ) -> Option<SymbolId> {
-        // TODO(port M6 S6): the globalSymbol resolution family.
-        let _ = (name, meaning, diagnostic);
-        None
+        self.get_global_symbol_real(name, meaning, diagnostic)
     }
 
     /// Go: `func (c *Checker) GetMergedSymbol(symbol *ast.Symbol) *ast.Symbol`

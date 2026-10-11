@@ -85,6 +85,7 @@ use tsc_binder::{BindResult, bind_source_file};
 use tsc_checker::{Program, new_checker};
 use tsc_core::options_generated::{CompilerOptions, ModuleKind};
 use tsc_core::scriptkind::ScriptKind;
+use tsc_core::tristate::Tristate;
 use tsc_parser::parse_source_file;
 
 /// Go: `srcFolder = tspath.RootedDirectoryPathFromNormalized("/.src")`.
@@ -204,7 +205,16 @@ fn semantic_diagnostics_of_unit(
         binder_symbol_count,
         checker_symbols: Vec::new(),
     }));
-    checker.check_source_file(file, false);
+    // Go's exported GetDiagnostics (checker.go:14222+14232) computes
+    // checkUnused from the noUnused* options — the regular (non-suggestion)
+    // collection read the driver twins. The port's seam previously passed
+    // false unconditionally, diverging on every noUnused* case record.
+    // PORT: mirrors Go's `NoUnusedLocals.IsTrue() || NoUnusedParameters.IsTrue()`
+    // (the `collection == &c.suggestionDiagnostics` arm is the suggestion read,
+    // which the driver does not make).
+    let check_unused = options.no_unused_locals == Tristate::TSTrue
+        || options.no_unused_parameters == Tristate::TSTrue;
+    checker.check_source_file(file, check_unused);
     checker.semantic_diagnostics()
 }
 
@@ -296,6 +306,11 @@ pub struct CaseRecord {
     /// FNV-1a 64 (lowercase 16-hex) over the record's fold lines (see
     /// [`shape_hash`]).
     pub shape_hash: String,
+    /// The fold lines themselves (the shape_hash input) — NOT part of the
+    /// NDJSON contract; the `--dump-filter` read on the bench-harness seam
+    /// (and the go-driver twin's) prints them to STDERR for the W3
+    /// check-stage divergence bisect. `None` on the panic sentinel.
+    pub dump_lines: Option<Vec<String>>,
 }
 
 impl CaseRecord {
@@ -527,6 +542,7 @@ fn run_case_configuration(
             verdict: outcome.verdict,
             errors_count: outcome.errors_count,
             shape_hash: outcome.shape_hash,
+            dump_lines: Some(outcome.lines),
         },
         Err(payload) => {
             // The panic message goes to STDERR only (stdout stays the pure
@@ -541,6 +557,7 @@ fn run_case_configuration(
                 verdict: Verdict::Mismatch,
                 errors_count: -1,
                 shape_hash: String::new(),
+                dump_lines: None,
             }
         }
     }
@@ -577,6 +594,9 @@ struct PipelineOutcome {
     verdict: Verdict,
     errors_count: i64,
     shape_hash: String,
+    /// The fold lines (the shape_hash input) — the `--dump-filter` bisect
+    /// read (CaseRecord::dump_lines).
+    lines: Vec<String>,
 }
 
 /// The full depth-controlled pipeline (Go: `newCompilerTest` +
@@ -870,6 +890,7 @@ fn run_configuration_pipeline(
         verdict,
         errors_count,
         shape_hash: shape_hash(&lines),
+        lines,
     }
 }
 

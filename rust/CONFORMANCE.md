@@ -328,3 +328,78 @@ Go 128 / 96 / 160 — **126 records divergent driver-to-driver** (the
 remaining checker gap: services slice, special-globals arm, W4/W5
 families, the documented checkUnused semantics difference). The climb
 targets: drive Rust 85 -> 128 with twin convergence.
+
+## W3 tranche 3 — services slice, real special-globals, isErrorType (2026-10-12)
+
+Landed (rust/crates/checker/** + rust/bench/go-driver):
+
+1. **Counting reconciled**: the canonical divergence metric is
+   "records where ANY of verdict/errors_count/shape_hash differ
+   driver-to-driver" — **126 at baseline** (the worker's ~179 was a
+   multi-fold double-count; non-overlapping folds: 57 rust-fewer /
+   30 rust-more / 39 count-eq-hash-diff, 45 verdict flips, 28
+   hash-only, 258 identical). Script $HOME/.w3t3-scratch/divcount.py.
+2. **checkUnused aligned** (compiler_runner.rs): the seam passes
+   `noUnusedLocals||noUnusedParameters` to check_source_file (Go
+   GetDiagnostics checker.go:14232's rule).
+3. **Special-globals arm REAL on both drivers**: spine.rs
+   get_global_symbol → resolve_name_worker(None, ...) (the ported
+   NameResolver walk) + real get_global_type_alias_symbol (declared
+   type, typeAliasLinks arity check, TS2317); resolution.rs's
+   on_failed_to_resolve_symbol takes Option<NodeId> with Go's exact
+   nil gates (Go's getGlobalSymbol passes nil location WITH a
+   diagnostic — location-less global diagnostics); utilities.rs
+   get_file_and_range gained the NodeId::NONE guard. The Go driver's
+   confRustSilentGlobalArmKeys filter DELETED — both drivers now emit
+   the machinery TS2316/2318 families raw.
+4. **isErrorType misport FIXED** (the big one): relater.rs /
+   typeofsymbol.rs is_error_type carried only `t == errorType`; Go's
+   second arm (`flags&Any != 0 && t.alias != nil` — the any-flagged
+   error types getTypeFromTypeAliasReference manufactures for
+   UNRESOLVED symbol references) was missing. Without it every
+   annotated-async no-lib case ran past checkAsyncFunctionReturnType's
+   gate and emitted a spurious TS2318-Promise (105 records). Pin:
+   spine.rs w3t3_annotated_async_emits_no_promise_2318.
+5. **services.go ported** (62 funcs / 1,149 Go lines → checker/src/
+   services.rs, ~1.9k lines with PORT notes): GetSymbolsInScope +
+   the copy closures (CombinedLocalAndExportSymbolFlags via
+   ast/symbol.rs), IsValidPropertyAccess(+WithType), apparent-
+   properties/signatures/index twins, TryGetMemberInModuleExports,
+   GetContextualType (S9 permissive), inference-block/caching
+   runners, GetRootSymbols, GetShorthandAssignmentValueSymbol,
+   GetReferencesToSymbolInFile (real text scan; astnav nodes arm
+   bannered M7), GetTypeArgumentConstraint,
+   IsTypeInvalidDueToUnionDiscriminant (M7 getTypeOfNode dormant),
+   GetSignatureFromDeclaration, lib hover verbosity twins (new
+   permissive `is_source_file_default_library` on the Program trait),
+   destructuring property/type composition, and the kind-set
+   predicates. Pins: spine.rs w3t3_services_get_symbols_in_scope_
+   reports_function_locals + w3t3_services_parameter_property_
+   declaration_symbols.
+6. **--dump-filter bisect tooling on BOTH drivers**: shape-hash fold
+   lines printable per matching case (drove the isErrorType root-cause).
+
+Fresh measurement (both drivers, check 300-slice, 384 records):
+- Regression gates: fixture twins IDENTICAL at parse/bind/check (9/9);
+  bind 300-slice byte-identical 143/163/78/0; program twin 15/15.
+- Histograms IDENTICAL driver-to-driver: Rust 0/174/210/0, Go
+  0/174/210/0 (match/mismatch/missing-baseline/panic). Divergent:
+  **232 after the raw special-globals fix, 131 after isErrorType**
+  (64 rust-fewer / 22 rust-more / 45 count-eq-hash-diff; verdict flips
+  45 → **0**). The raw-fix regression was fully recovered by
+  isErrorType.
+- SEMANTICS DECISION (the parent's call recorded): dropping the
+  special-globals filter collapses baseline-match% to ~0 on BOTH
+  drivers identically — the lib-less twin shape emits the machinery
+  TS2316/2318 noise the reference baselines (generated WITH libs)
+  never contain. The twin discipline (driver-to-driver identity) is
+  stronger than baseline (verdict flips 0), but the climb-vs-baseline
+  metric stays ~0 until the twin grows lib-file support. The dispatch
+  chose to keep the filter dropped on both drivers.
+- Remaining divergent families (next tranches, mostly S6-S9 depth,
+  not shallow misports): TS2454 definite-assignment ×47,
+  async-2697 ×37, TS2304 ×33 (go-extra); TS2339 ×54 + 2425/2417/2719
+  ×56 (rust-extra, S8 member/relate depth).
+- Validation: cargo test -p tsc-checker -p tsc-testrunner green (93
+  lib tests incl. 3 w3t3 pins); clippy zero on checker + testrunner
+  + bench-harness; go vet + go build clean.

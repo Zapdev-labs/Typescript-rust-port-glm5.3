@@ -7926,10 +7926,18 @@ pub(crate) fn is_mapped_type_generic_indexed_access(c: &mut Checker, t: TypeId) 
     false
 }
 
-/// Go: `func (c *Checker) isErrorType(t) bool`.
-#[allow(dead_code)] // TODO(port M6 W2): Go-mirrored; callers land with inference.rs
+/// Go: `func (c *Checker) isErrorType(t) bool` — REAL (W3 tranche 3):
+/// Go's full body is
+/// `t == c.errorType || t.flags&TypeFlagsAny != 0 && t.alias != nil` —
+/// the second arm catches the any-flagged error types manufactured by
+/// getTypeFromTypeAliasReference for references to UNRESOLVED symbols
+/// (the no-lib `Promise<T>` shape: without the arm, checkAsyncFunction-
+/// ReturnType proceeds past the isErrorType gate and the extra
+/// TS2318-Promise diverges the twin; Go bails and never resolves the
+/// global). The port previously carried only the identity half.
 pub(crate) fn is_error_type(c: &Checker, t: TypeId) -> bool {
     Some(t) == c.error_type
+        || (c.type_(t).flags.intersects(TypeFlags::ANY) && c.type_(t).alias.is_some())
 }
 
 /// Go: `func IsDistributedTypeParameter(t) bool` (exports.go) — REAL (M6 S10):
