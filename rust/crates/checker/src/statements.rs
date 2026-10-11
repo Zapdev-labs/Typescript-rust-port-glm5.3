@@ -5949,10 +5949,15 @@ impl Checker {
                         &[],
                     );
                 } else {
-                    // TODO(port M6 S7): checkGeneratorInstantiation-
-                    // AssignabilityToReturnType (the generator return-type
-                    // relation); permissive.
-                    let _ = return_type;
+                    // Go: checkGeneratorInstantiationAssignabilityToReturnType
+                    // (checker.go:2809) — runs createGeneratorType, whose
+                    // empty-global fallback emits the 2318
+                    // AsyncIterableIterator probe (checker.go:20850).
+                    self.check_generator_instantiation_assignability_to_return_type(
+                        return_type,
+                        function_flags,
+                        Some(return_type_node),
+                    );
                 }
             } else if (function_flags & FunctionFlags::ASYNC_GENERATOR) == FunctionFlags::ASYNC {
                 self.check_async_function_return_type(node, return_type_node);
@@ -9663,9 +9668,18 @@ impl Checker {
                             &diag::AUGMENTATIONS_FOR_THE_GLOBAL_SCOPE_CAN_ONLY_BE_DIRECTLY_NESTED_IN_EXTERNAL_MODULES_OR_AMBIENT_MODULE_DECLARATIONS,
                             &[],
                         );
+                    } else if tsc_tspath::is_external_module_name_relative(
+                        &tsc_ast::node_text(self.store(), d.name),
+                    ) {
+                        // Go: tspath.IsExternalModuleNameRelative(name) —
+                        // W3T7: the 2436 leg of ambientErrors
+                        // (`declare module '../foo' { }`).
+                        self.error(
+                            d.name,
+                            &diag::AMBIENT_MODULE_DECLARATION_CANNOT_SPECIFY_RELATIVE_MODULE_NAME,
+                            &[],
+                        );
                     }
-                    // Go: tspath.IsExternalModuleNameRelative(name) —
-                    // TODO(port M6 W8): the tspath seam; permissive skip.
                 } else if is_global_augmentation {
                     self.error(
                         d.name,

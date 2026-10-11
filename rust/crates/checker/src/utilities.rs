@@ -473,21 +473,32 @@ pub fn is_top_level_in_external_module_augmentation(store: &dyn NodeStore, node:
 /// Go: `ast.IsExternalModuleAugmentation` — the module is ambient and its
 /// string-literal name makes it external.
 pub(crate) fn is_external_module_augmentation(store: &dyn NodeStore, node: NodeId) -> bool {
-    let n = store.node(node);
-    is_external_module_augmentation_worker(store, node, n.flags.intersects(NodeFlags::AMBIENT))
-}
-
-fn is_external_module_augmentation_worker(
-    store: &dyn NodeStore,
-    node: NodeId,
-    is_ambient: bool,
-) -> bool {
-    is_ambient
-        && store.node(node).kind == Kind::ModuleDeclaration
-        && store
-            .node(node)
-            .name()
-            .is_some_and(|name| store.node(name).kind == Kind::StringLiteral)
+    // Go: `IsAmbientModule(node) && IsModuleAugmentationExternal(node)` —
+    // W3T7: the port's old shortcut (`is_ambient && ModuleDeclaration &&
+    // StringLiteral-name`) classified EVERY ambient external module as an
+    // augmentation, so `namespace M { export declare module "M" {} }` took
+    // the augmentation branch and never reached TS2435. The REAL
+    // IsModuleAugmentationExternal keys on the PARENT placement (Go
+    // ast/utilities.go:1720):
+    // - parent SourceFile → the file itself is an external module;
+    // - parent ModuleBlock → the grandparent is an ambient module at the
+    //   top level and the file is NOT an external module;
+    // - otherwise false.
+    if !tsc_binder::ast_shims::is_ambient_module(store, node) {
+        return false;
+    }
+    let parent = store.node(node).parent.get();
+    match store.node(parent).kind {
+        Kind::SourceFile => tsc_binder::ast_shims::is_external_module(store.file(parent.file_id())),
+        Kind::ModuleBlock => {
+            let grandparent = store.node(parent).parent.get();
+            let great_grandparent = store.node(grandparent).parent.get();
+            tsc_binder::ast_shims::is_ambient_module(store, grandparent)
+                && store.node(great_grandparent).kind == Kind::SourceFile
+                && !tsc_binder::ast_shims::is_external_module(store.file(grandparent.file_id()))
+        }
+        _ => false,
+    }
 }
 
 /// Go: `func isSyntacticDefault(node *ast.Node) bool`.
