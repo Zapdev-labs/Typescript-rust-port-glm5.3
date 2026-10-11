@@ -1,0 +1,72 @@
+rust/crates/checker/src/types.rs
+  s_ad511da1830eac::t_71427794ef75f5 1241-1249
+rust/crates/checker/tests/s7_uniontypes.rs
+  s_ad511da1830eac::t_78d7694e9fc6dd 1-8,10-241,247,250,252,254,256-260,266-268,275,278-303
+rust/crates/checker/src/spine.rs
+  s_ad511da1830eac::t_e1b6bf7b0ee84f 3247-3249
+rust/crates/checker/src/lib.rs
+  s_ad511da1830eac::t_db86502a84e8c1 137
+rust/crates/checker/src/uniontypes.rs
+  s_ad511da1830eac::t_64a5ef65d65f2e 3430-3455
+  s_ad511da1830eac::t_d1f5cc125b31da 218
+  s_ad511da1830eac::t_f5220b4f226224 726-733,761,763
+  s_ad511da1830eac::t_d2ddf09b449efa 824-829,840-841,846-861,863-876,878-890,893-896
+  s_ad511da1830eac::t_d822108a435d2e 656-662
+  s_ad511da1830eac::t_3b53b9b5ad9ab0 1976-1983
+  s_ad511da1830eac::t_c26282258d06ee 2727-2731
+  s_ad511da1830eac::t_126703ba5858fe 811
+  s_ad511da1830eac::t_a088d41e5d20cd 3832-3841
+  s_ad511da1830eac::t_5a346595550436 2038-2078,2080-2099
+  s_ad511da1830eac::t_f8c63dcea07ebc 1-18,20,22-23,26-59,64-71,76-80,83-132,135-141,143-146,148-152,154-174,177-192,196-207,210-217,221-223,226-228,230-259,261-264,266-270,272-484,486-655,663-679,681-685,687-706,708-712,714,716-725,734-760,762,764-791,796-808,813-823,830-839,842-845,862,877,897-986
+  s_ad511da1830eac::t_1586022a66e215 2486-2498
+  s_ad511da1830eac::t_40a21a72b1d10b 81-82
+  s_ad511da1830eac::t_e254cc72b82129 133-134
+  s_ad511da1830eac::t_0914a044cec793 19,21,24-25
+  s_ad511da1830eac::t_898444a785e5b7 2398-2399
+  s_ad511da1830eac::t_6714812b5cdb78 1995-2005
+  s_ad511da1830eac::t_d35c883dd1d710 1547
+rust/crates/checker/src/expressions.rs
+  s_ad511da1830eac::t_a049a090e07c23 3191-3209
+  s_ad511da1830eac::t_39ac10c6ff962f 1278-1281
+rust/crates/checker/src/exports.rs
+  s_ad511da1830eac::t_f22a69f68613bc 654
+  s_ad511da1830eac::t_3aaab19ff78df1 46-48
+  s_ad511da1830eac::t_0726f6eaa7e859 78
+  s_ad511da1830eac::t_fa3a9a5e4638fb 773-782
+rust/crates/checker/src/typenodes.rs
+  s_ad511da1830eac::t_c0e4e6ebf85865 2157
+  s_ad511da1830eac::t_1cbe2f5e28a0ab 2170-2174
+  s_ad511da1830eac::t_5804091aba9989 1980
+rust/crates/checker/src/checker.rs
+  s_ad511da1830eac::t_b750aeb31184d2 1635-1641
+  s_ad511da1830eac::t_4403300db710b3 1232-1233
+  s_ad511da1830eac::t_e7270570880c0e 1940-1943
+  s_ad511da1830eac::t_0a110d39e4b529 582-600
+  s_ad511da1830eac::t_c88c695e144614 601-604
+  s_ad511da1830eac::t_181bb3ffc1b089 1622-1629
+  s_ad511da1830eac::t_1b419149eb8882 1631-1634
+  s_ad511da1830eac::t_f609241bd5dff1 1747-1753
+  s_ad511da1830eac::t_1e9b2088581784 1791-1836
+  s_ad511da1830eac::t_668c4111fe6e79 308-323
+  s_ad511da1830eac::t_88fcefae54f8e1 725-727
+  s_ad511da1830eac::t_c98db172bb4eb9 605-613
+  s_ad511da1830eac::t_1b7fd8a3c1c346 1763-1789
+  s_ad511da1830eac::t_abda9d15b9f543 1630
+  s_ad511da1830eac::t_4d123d30897252 695-703
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "a6c530a1fd0002721b07e5db3ccd19c6f3860f4f",
+  "prompts": {},
+  "sessions": {
+    "s_ad511da1830eac": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "d5bd7752-fa2e-4c96-8f92-3bdeff846719",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
