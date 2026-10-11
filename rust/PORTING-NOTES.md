@@ -1978,3 +1978,8 @@ tests, workspace 689/0, clippy 0, fixture 9/9, 300-slice twins
 identical (143/143, 0 divergent), program twin 15/15. Remaining stubs
 by slice at $HOME/.s4t2-continuation.md; CallExpression family is S6.
 Next: S5 type-nodes.
+
+Rig validation (2026-10-10, post-9fd24bb2f3): fresh release build, all
+three twin gates green on the rig — fixture matrix 9/9 identical,
+300-slice byte-identical (143/143), program twin 15/15 identical.
+S4 CLOSED.
