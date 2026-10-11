@@ -2093,8 +2093,8 @@ impl Checker {
                 self.check_identifier(node, check_mode)
             }
             Kind::PrivateIdentifier => {
-                // TODO(port M6 S4): checkPrivateIdentifierExpression.
-                self.error_type()
+                // M6 S4: checkPrivateIdentifierExpression (expressions.rs).
+                self.check_private_identifier_expression(node)
             }
             Kind::ThisKeyword => {
                 // M6 S4: checkThisExpression (expressions.rs).

@@ -1961,3 +1961,20 @@ preserved), program twin 15/15 identical. Remaining S4 families
 (identifier/super/template/regex/array-literal/object-literal full/
 expando/JS-assignment/contextual signatures) bannered; continuation at
 $HOME/.s4-continuation.md; tranche 2 dispatched.
+
+## M6 S4 complete (tranche 2, 2026-10-10) — expression leaves I closed
+
+Tranche 2: checkIdentifier tail to Go's exact shape (2454/7022 dormant
+under W3), checkPrivateIdentifierExpression + cached resolution, the
+computed-property-name fold fix in checkObjectLiteral (name type, never
+node_text — Node.Text() panicked on ComputedPropertyName), spine arms
+ObjectLiteral/Class/Function|Arrow/PrivateIdentifier + 3 deferred arms.
+Cross-file REAL fixes: relater is_readonly_symbol (full Go body),
+typeofsymbol get_type_of_initializer (Go passes the node directly; the
+re-read misport expect-panicked on binding-pattern params — caught by 2
+s3 tests), new_anonymous_type_with_members extended + dedup,
+is_valid_spread_type real. Orchestrator re-verified fresh: 120 checker
+tests, workspace 689/0, clippy 0, fixture 9/9, 300-slice twins
+identical (143/143, 0 divergent), program twin 15/15. Remaining stubs
+by slice at $HOME/.s4t2-continuation.md; CallExpression family is S6.
+Next: S5 type-nodes.

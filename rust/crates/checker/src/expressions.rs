@@ -4228,6 +4228,31 @@ fn has_this_parameter(c: &Checker, fn_node: NodeId) -> bool {
 // ────────────────────────────────────────────────────────────────────────────
 
 impl Checker {
+    /// Go: `func (c *Checker) checkPrivateIdentifierExpression(node) *Type`
+    /// (checker.go:8039).
+    pub(crate) fn check_private_identifier_expression(&mut self, node: NodeId) -> TypeId {
+        // Grammar checking
+        // TODO(port M6 W3): checkGrammarPrivateIdentifierExpression.
+        let symbol = self.get_symbol_for_private_identifier_expression(node);
+        if let Some(symbol) = symbol {
+            self.mark_property_as_referenced(symbol, None /*nodeForCheckWriteOnly*/, false /*isSelfTypeAccess*/);
+        }
+        self.any_type()
+    }
+
+    /// Go: `func (c *Checker) getSymbolForPrivateIdentifierExpression(node) *ast.Symbol`
+    /// (checker.go:8045) — the cached private-identifier resolution.
+    pub(crate) fn get_symbol_for_private_identifier_expression(&mut self, node: NodeId) -> Option<SymbolId> {
+        if self.symbol_node_links.get(node).resolved_symbol.is_none() {
+            let text = tsc_ast::node_text(self.store(), node).to_string();
+            let symbol = self.lookup_symbol_for_private_identifier_declaration(&text, node);
+            self.symbol_node_links.get(node).resolved_symbol = symbol;
+            symbol
+        } else {
+            self.symbol_node_links.get(node).resolved_symbol
+        }
+    }
+
     /// Go: `func (c *Checker) checkSuperExpression(node) *Type` (checker.go:8056).
     pub(crate) fn check_super_expression(&mut self, node: NodeId) -> TypeId {
         let parent = self.store().node(node).parent.get();
