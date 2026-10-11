@@ -1,0 +1,19 @@
+rust/crates/tsc-testrunner/src/compiler_runner.rs
+  s_892629877855c7::t_76c43eedd566c9 188-197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "002e922a82939b9cfb960480a2c40376e1735afd",
+  "prompts": {},
+  "sessions": {
+    "s_892629877855c7": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "65473163-6e1c-4c85-a37e-15d0274087bf",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
