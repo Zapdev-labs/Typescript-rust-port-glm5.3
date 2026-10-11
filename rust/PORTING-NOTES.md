@@ -2146,3 +2146,10 @@ contained as -1 sentinels). Orchestrator re-verified fresh: 217 tests
 69 match / 153 mismatch / 162 missing / 7 panic of 384 (18.0% — the
 climb is live). Tranche 2: grammarchecks + services + the GO DRIVER
 check stage (scope granted) + the 7 panic arms.
+
+Rig validation (W3 tranche 1, 2026-10-12): forced clean + rebuild —
+all three twin gates green at parse+bind (fixture 9/9, 300-slice
+143/143 byte-identical, program twin 15/15). The check stage is
+Rust-side live (69/153/162/7); tranche 2 (grammarchecks + services +
+the Go driver check stage + the 7 panic arms) dispatched with the
+go-driver scope granted.
