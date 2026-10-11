@@ -2291,3 +2291,9 @@ program 15/15, check divergent 27 confirmed, tsc/packages/tools CLEAN.
 Remaining census: the S8 generic-member instantiation root (T->string
 mapping in E3<T>.m() — explains 2322/2719 residuals), 2307 x4 ambient
 program-shape, 2414 x4 checkCollisionsForDeclarationName unwired.
+
+Rig validation (W3 tranche 6, 2026-10-13): forced clean + rebuild — all
+rails green (fixture x3 identical, bind 143/143, program 15/15). W3
+tranche 6 RIG-VALIDATED. Tranche 7 (S8 generic-member instantiation +
+2414 collisions wiring + 2307 ambient seam-shape + the final hash-diffs)
+dispatched — the zero-divergence push.
