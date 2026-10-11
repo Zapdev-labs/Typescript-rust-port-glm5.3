@@ -2375,43 +2375,6 @@ impl Checker {
             .expect("DeleteExpression has an expression");
         self.check_expression(expression);
         let expr = tsc_binder::ast_shims::skip_parentheses(self.store(), expression);
-        // W3T7 PROBE (temporary): 2703 span divergence on await_unary cases.
-        {
-            let file = self.store().file(node.file_id());
-            let text = file.text();
-            let file_name = file.file_name().as_string().to_string();
-            let pe = self.store().node(expr).pos() as usize;
-            let ee = self.store().node(expr).end() as usize;
-            // The diag span: get_error_range_for_node skips leading trivia.
-            let mut lo = pe;
-            while lo < ee && text.as_bytes()[lo].is_ascii_whitespace() {
-                lo += 1;
-            }
-            eprintln!(
-                "w3t7probe-rust file={} expr={}..{} diag={}..{} exprText={:?} diagText={:?}",
-                file_name,
-                pe,
-                ee,
-                lo,
-                ee,
-                &text.get(pe..ee.min(text.len())).unwrap_or("<oob>"),
-                &text.get(lo..ee.min(text.len())).unwrap_or("<oob>")
-            );
-            if text.contains("delete await 42") {
-                let i = text.find("delete await 42").unwrap();
-                eprintln!("w3t7probe-rust content[{}:]={:?}", i, &text.get(i..i + 30).unwrap_or(""));
-                eprintln!("w3t7probe-rust prefix={:?}", &text.get(0..80).unwrap_or(""));
-                eprintln!("w3t7probe-rust mid={:?}", &text.get(40..100).unwrap_or(""));
-                if text.contains("es6") || text.contains("es2017") {
-                    eprintln!(
-                        "w3t7probe-rust first40={:?} len={} first_bytes={:?}",
-                        &text.get(0..40).unwrap_or(""),
-                        text.len(),
-                        text.as_bytes()[0..6].to_vec()
-                    );
-                }
-            }
-        }
         let boolean_type = self.boolean_type();
         if !tsc_ast::is_access_expression(self.store().node(expr)) {
             self.error(

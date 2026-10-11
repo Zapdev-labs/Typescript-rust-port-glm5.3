@@ -185,6 +185,16 @@ fn semantic_diagnostics_of_unit(
     content: &str,
     options: &CompilerOptions,
 ) -> Vec<tsc_ast::Diagnostic> {
+    // PORT (M6 W3 t7): the Go check twin (go-bench conformance's
+    // confSemanticDiagnosticsOfUnit) builds a map-FS program, and the vfs
+    // read (tsc/internal/vfs/internal's Common.ReadFile → decodeBytes)
+    // strips a leading UTF-8 BOM before the parser sees the text — every
+    // check-stage position is relative to the BOM-less text. The parse/bind
+    // stages above already route through the program's vfs; this seam parses
+    // the unit bytes directly, so the same strip applies here (the 2703
+    // spans of the BOM'd await_unary cases). The UTF-16 arm of decodeBytes
+    // is unreachable here: content is a Rust &str (already valid UTF-8).
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let script_kind = match tsc_compiler::ensure_script_kind_from_file_name(&RootedFilePath::from(name)) {
         // Go's checker skips JSON sources — the caller filters .json units;
         // Unknown-forced-TS mirrors GetScriptKindFromFileName's harness rule.

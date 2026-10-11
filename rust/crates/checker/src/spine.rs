@@ -4569,49 +4569,4 @@ mod tests {
             "the rest parameter carries its `...` dot; got {rendered}"
         );
     }
-
-    /// W3T7 PROBE (2703 spans): the delete-operator property-reference
-    /// error's node positions for `delete await 42` inside an async function.
-    #[test]
-    fn w3t7_probe_delete_await_spans() {
-        let mut c = spine_checker("async function bar1() {\n    delete await 42;\n}\n");
-        let file = file_of(&c);
-        c.check_source_file(file, false);
-        // Walk every node; find the DeleteExpression; print child spans.
-        let store = c.store();
-        let mut found = Vec::new();
-        let stmts: Vec<NodeId> =
-            statements_of(store, file).expect("statements").to_vec();
-        for s in stmts {
-            collect_delete_nodes(store, s, &mut found);
-        }
-        for n in found {
-            let node = store.node(n);
-            let d = node.as_delete_expression().expect("DeleteExpression data");
-            let child = store.node(d.expression);
-            eprintln!(
-                "probe: delete@{}..{} child kind={:?} pos={}..{}",
-                node.pos(),
-                node.end(),
-                child.kind,
-                child.pos(),
-                child.end()
-            );
-            let skipped = tsc_binder::ast_shims::skip_parentheses(store, d.expression);
-            let sk = store.node(skipped);
-            eprintln!("probe: skipped kind={:?} pos={}..{}", sk.kind, sk.pos(), sk.end());
-        }
-    }
-
-    /// The probe walker of w3t7_probe_delete_await_spans (visitor returns
-    /// true to STOP, mirroring Go's Visitor).
-    fn collect_delete_nodes(store: &dyn NodeStore, n: NodeId, out: &mut Vec<NodeId>) {
-        store.node(n).for_each_child(&mut |child| {
-            collect_delete_nodes(store, child, out);
-            false
-        });
-        if store.node(n).kind == Kind::DeleteExpression {
-            out.push(n);
-        }
-    }
 }
