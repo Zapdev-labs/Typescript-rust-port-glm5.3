@@ -2074,3 +2074,7 @@ now Go-faithful). Orchestrator re-verified fresh: 166 tests (13 new
 s8), clippy 0, fixture 9/9, 300-slice twins identical 143/143, program
 twin 15/15. Remaining S8 banners (65) are forward-references to
 S9/S10 consumers. Next: S9.
+
+Rig validation (S8, 2026-10-11): forced clean + rebuild — all three
+twin gates green (fixture 9/9, 300-slice 143/143 byte-identical,
+program twin 15/15). S8 CLOSED.
