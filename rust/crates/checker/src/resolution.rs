@@ -1,0 +1,3630 @@
+// Ported from tsc/internal/checker/checker.go @ ec47d33c23e464a17cdf2475632cba629bee8763
+//
+// M6 S6 — SYMBOL/MODULE/CALL RESOLUTION (Go checker.go 8614–10258 +
+// 14472–16750 + the resolver-hook block 1510–2232 + getEffectiveCallArguments
+// 30591). One-.rs-per-region split per the M6-DISPATCH slice table:
+//
+//   Section A — resolveName: the binder NameResolver walk re-ported onto
+//     Checker (see the PORT note on resolve_name_worker) + the
+//     onFailedToResolveSymbol/onSuccessfullyResolvedSymbol hook family
+//     (checker.go 1558–2232: the block-scope-use checks, the
+//     type/namespace misuse ladders, the spelling-suggestion probes).
+//   Section B — the alias/module family: getMergedSymbol/recordMergedSymbol,
+//     getLateBoundSymbol, resolveSymbol(Ex), resolveAlias +
+//     getTargetOfAliasDeclaration and every getTargetOf* arm, the
+//     import/export specifier resolution, resolveEntityName /
+//     resolveQualifiedName, getExportsOfModule(+Worker)/lateBind*,
+//     resolveExternalModuleName(Worker)/resolveExternalModule,
+//     resolveExternalModuleSymbol/resolveESModuleSymbol, getSymbolFlags(Ex).
+//   Section C (resolvecall.rs) — getResolvedSignature/resolveCallExpression/
+//     resolveNewExpression/resolveCall/chooseOverload and the
+//     CallSignature/constructSignature error family.
+//
+// Stub directions this wave leaves in place (per the dispatch table):
+//   - S7: getUnionType/getIntersectionType/createArrayType (the
+//     overload-failure signature union), instantiateSignature (identity)
+//   - S8: resolveStructuredTypeMembers — getSignaturesOfType reads through
+//     the empty-members stub, so typed calls compose Go's
+//     no-signatures paths until S8 lands; getReturnTypeOfSignature
+//   - S9: getContextualType (resolveCall's contextual return inference),
+//     getAwaitedTypeOfPromise (maybeAddMissingAwaitInfo stays dormant)
+//   - W2 remainder: isSignatureApplicable's spread handling through
+//     getSpreadArgumentType
+//   - jsx wave: resolveJsxOpeningLikeElement, inferJsxTypeArguments
+//   - the program/module layer: resolveExternalModule's file-resolution
+//     half (program.GetResolvedModule/GetModeForUsageLocation are not on
+//     the port's Program trait yet — the ambient-module half is real)
+//
+// PORT NOTE (resolve_name_worker): Go wires the checker's hooks into
+// `binder.NameResolver` (checker.go createNameResolver, 1510). The ported
+// `tsc_binder::NameResolver` struct cannot be instantiated against
+// `&mut Checker`: its `store: &dyn NodeStore`, `symbols: &[Symbol]` and
+// `globals: &SymbolTable` shared borrows alias the same Checker the
+// `FnMut` hooks must borrow mutably (Go's closure fields have no such
+// constraint), and the symbol arena is a `Vec<Symbol>` on Program — a
+// `&[Symbol]` slice is invalidated when a hook (late binding,
+// combineValueAndTypeSymbols) allocates. So the Resolve walk is re-ported
+// here as a Checker method with the hooks as direct method calls; the
+// walk itself is line-for-line the binder port (rust/crates/binder/src/
+// nameresolver.rs, itself the port of tsc/internal/binder/nameresolver.go).
+
+use tsc_ast::{
+    has_syntactic_modifier, is_identifier, is_module_declaration, is_source_file, Kind,
+    ModifierFlags, Node, NodeFlags as NF, NodeId, NodeStore, SymbolFlags, SymbolId, SymbolTable,
+    INTERNAL_SYMBOL_NAME_DEFAULT, INTERNAL_SYMBOL_NAME_EXPORT_EQUALS, INTERNAL_SYMBOL_NAME_EXPORT_STAR,
+};
+use tsc_core::tristate::Tristate;
+use tsc_diagnostics as diag;
+use tsc_diagnostics::Message;
+
+use tsc_binder::ast_shims as binder_shims;
+use tsc_binder::node_data as binder_node_data;
+
+use crate::checker::{TypeSystemEntity, TypeSystemPropertyName};
+use crate::types::MembersOrExportsResolutionKind as MembersOrExports;
+use crate::types::{SignatureKind, SymbolNodeLinks};
+use crate::utilities as u;
+use crate::Checker;
+
+impl Checker {
+    // ────────────────────────────────────────────────────────────────────────
+    // Section A — resolveName (Go checker.go:976 + binder nameresolver.go:25)
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// Go: `c.resolveName` (the checker.go:660 closure field —
+    /// `createNameResolver().Resolve`). Full body in resolution.rs per the
+    /// module PORT note.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn resolve_name_worker(
+        &mut self,
+        location: Option<NodeId>,
+        name: &str,
+        meaning: SymbolFlags,
+        name_not_found_message: Option<&'static Message>,
+        is_use: bool,
+        exclude_globals: bool,
+    ) -> Option<SymbolId> {
+        let mut location = location;
+        let mut result: Option<SymbolId> = None;
+        let mut last_location: Option<NodeId> = None;
+        let mut last_self_reference_location: Option<NodeId> = None;
+        let mut property_with_invalid_initializer: Option<NodeId> = None;
+        let mut associated_declaration_for_containing_initializer_or_binding_name: Option<NodeId> =
+            None;
+        let mut within_deferred_context = false;
+        // needed for did-you-mean error reporting, which gathers candidates starting from the original location
+        let original_location = location;
+        let name_is_const = name == "const";
+        'outer: while let Some(loc) = location {
+            if name_is_const && binder_shims::is_const_assertion(self.store(), loc) {
+                // `const` in an `as const` has no symbol, but issues no error because there is no *actual* lookup of the type
+                // (it refers to the constant type of the expression instead)
+                return None;
+            }
+            if binder_shims::is_module_or_enum_declaration(self.store().node(loc))
+                && last_location.is_some()
+                && self.store().node(loc).name() == last_location
+            {
+                // If lastLocation is the name of a namespace or enum, skip the parent since it will have is own locals that could
+                // conflict.
+                last_location = Some(loc);
+                location = binder_shims::parent_of(self.store(), loc);
+                continue 'outer;
+            }
+            let is_module_attributes = is_module_declaration(self.store().node(loc))
+                && last_location.is_some_and(|l| {
+                    (match &self.store().node(loc).data {
+                        tsc_ast::NodeData::ModuleDeclaration(d) => d.attributes,
+                        _ => None,
+                    }) == Some(l)
+                });
+            // Locals of a source file are not in scope (because they get merged into the global symbol table)
+            if let Some(locals) = binder_node_data::locals_of(self.store(), loc)
+                .cloned()
+                .filter(|_| !binder_shims::is_global_source_file(self.store(), loc))
+            {
+                result = self.get_symbol(&locals, name, meaning);
+                if result.is_some() {
+                    let mut use_result = true;
+                    let result_flags = self.program_symbol(result.unwrap()).flags;
+                    if is_module_attributes {
+                        use_result = false;
+                    } else if binder_shims::is_function_like(self.store().node(loc))
+                        && last_location.is_some()
+                        && last_location != binder_node_data::body_of(self.store(), loc)
+                    {
+                        // symbol lookup restrictions for function-like declarations
+                        // - Type parameters of a function are in scope in the entire function declaration, including the parameter
+                        //   list and return type. However, local types are only in scope in the function body.
+                        // - parameters are only in the scope of function body
+                        // This restriction does not apply to JSDoc comment types because they are parented
+                        // at a higher level than type parameters would normally be
+                        if meaning.intersects(result_flags) && result_flags.intersects(SymbolFlags::TYPE) {
+                            // type parameters are visible in parameter list, return type and type parameter list.
+                            // Synthetic fake scopes are added for signatures so type parameters are accessible from them.
+                            use_result = result_flags.intersects(SymbolFlags::TYPE_PARAMETER)
+                                && (last_location.is_some_and(|l| {
+                                    self.store().node(l).flags.intersects(NF::SYNTHESIZED)
+                                })
+                                    || last_location == binder_node_data::type_of(self.store(), loc)
+                                    || last_location.is_some_and(|l| self.store().node(l).kind == Kind::Parameter)
+                                    || last_location.is_some_and(|l| self.store().node(l).kind == Kind::JSDocParameterTag)
+                                    || last_location.is_some_and(|l| self.store().node(l).kind == Kind::JSDocReturnTag)
+                                    || last_location.is_some_and(|l| self.store().node(l).kind == Kind::TypeParameter));
+                        }
+                        if meaning.intersects(result_flags) && result_flags.intersects(SymbolFlags::VARIABLE) {
+                            // expression inside parameter will lookup as normal variable scope when targeting es2015+
+                            if self.use_outer_variable_scope_in_parameter(result.unwrap(), loc, last_location) {
+                                use_result = false;
+                            } else if result_flags.intersects(SymbolFlags::FUNCTION_SCOPED_VARIABLE) {
+                                // parameters are visible only inside function body, parameter list and return type
+                                // technically for parameter list case here we might mix parameters and variables declared in function,
+                                // however, it is detected separately when checking initializers of parameters
+                                // to make sure that they reference no variables declared after them.
+                                let found_in_parameter = last_location.is_some_and(|l| {
+                                    self.store().node(l).kind == Kind::Parameter
+                                        || self.store().node(l).flags.intersects(NF::SYNTHESIZED)
+                                });
+                                let found_through_type = last_location
+                                    == binder_node_data::type_of(self.store(), loc)
+                                    && result
+                                        .and_then(|r| self.program_symbol(r).value_declaration)
+                                        .is_some_and(|vd| {
+                                            binder_shims::find_ancestor(self.store(), vd, &mut |n| {
+                                                tsc_ast::is_parameter_declaration(self.store().node(n))
+                                            })
+                                            .is_some()
+                                        });
+                                use_result = found_in_parameter || found_through_type;
+                            }
+                        }
+                    } else if self.store().node(loc).kind == Kind::ConditionalType {
+                        // A type parameter declared using 'infer T' in a conditional type is visible only in
+                        // the true branch of the conditional type.
+                        use_result = match &self.store().node(loc).data {
+                            tsc_ast::NodeData::ConditionalTypeNode(d) => Some(d.true_type) == last_location,
+                            _ => false,
+                        };
+                    }
+                    if use_result {
+                        break 'outer;
+                    }
+                    result = None;
+                }
+            }
+            within_deferred_context =
+                within_deferred_context || get_is_deferred_context(self.store(), loc, last_location);
+            match self.store().node(loc).kind {
+                Kind::SourceFile => {
+                    let file = self.store().file(loc.file_id());
+                    if binder_shims::is_external_or_common_js_module(file) {
+                        // Go: fallthrough into the ModuleDeclaration case.
+                        self.resolve_module_case(loc, name, meaning, is_module_attributes, &mut result);
+                        if result.is_some() {
+                            break 'outer;
+                        }
+                    }
+                }
+                Kind::ModuleDeclaration => {
+                    self.resolve_module_case(loc, name, meaning, is_module_attributes, &mut result);
+                    if result.is_some() {
+                        break 'outer;
+                    }
+                }
+                Kind::EnumDeclaration => {
+                    // Go: `if enumSymbol == nil { break }` — no enum symbol
+                    // means skip the arm, not the loop.
+                    if let Some(enum_symbol) = self.get_symbol_of_declaration_merged(loc) {
+                        let exports = self.program_symbol(enum_symbol).exports.clone();
+                        result = self.get_symbol(&exports, name, meaning & SymbolFlags::ENUM_MEMBER);
+                        if result.is_some() {
+                            if name_not_found_message.is_some()
+                                && self.compiler_options.get_isolated_modules()
+                                && !self.store().node(loc).flags.intersects(NF::AMBIENT)
+                                && result
+                                    .and_then(|r| self.program_symbol(r).value_declaration)
+                                    .is_some_and(|vd| loc.file_id() != vd.file_id())
+                            {
+                                let isolated_modules_like_flag_name =
+                                    if self.compiler_options.verbatim_module_syntax == Tristate::TSTrue {
+                                        "verbatimModuleSyntax"
+                                    } else {
+                                        "isolatedModules"
+                                    };
+                                let enum_name = self.program_symbol(enum_symbol).name.clone();
+                                let args = vec![
+                                    name.to_string(),
+                                    isolated_modules_like_flag_name.to_string(),
+                                    format!("{enum_name}.{name}"),
+                                ];
+                                self.error(
+                                    original_location.expect("error location"),
+                                    &diag::CANNOT_ACCESS_0_FROM_ANOTHER_FILE_WITHOUT_QUALIFICATION_WHEN_1_IS_ENABLED_USE_2_INSTEAD,
+                                    &args,
+                                );
+                            }
+                            break 'outer;
+                        }
+                    }
+                }
+                Kind::PropertyDeclaration => {
+                    if !binder_shims::is_static(self.store().node(loc)) {
+                        let parent = binder_shims::parent_of(self.store(), loc).expect("member parent");
+                        if let Some(ctor) = binder_shims::find_constructor_declaration(self.store(), parent) {
+                            if let Some(ctor_locals) = binder_node_data::locals_of(self.store(), ctor) {
+                                let ctor_locals = ctor_locals.clone();
+                                let value_meaning = meaning & SymbolFlags::VALUE;
+                                if self.get_symbol(&ctor_locals, name, value_meaning).is_some() {
+                                    // Remember the property node, it will be used later to report appropriate error
+                                    property_with_invalid_initializer = Some(loc);
+                                }
+                            }
+                        }
+                    }
+                }
+                Kind::ClassDeclaration | Kind::ClassExpression | Kind::InterfaceDeclaration => {
+                    let container_symbol =
+                        self.get_symbol_of_declaration_merged(loc).expect("class-like symbol");
+                    let members = self.program_symbol(container_symbol).members.clone();
+                    result = self.get_symbol(&members, name, meaning & SymbolFlags::TYPE);
+                    if result.is_some() {
+                        if !self.is_type_parameter_symbol_declared_in_container(result.unwrap(), loc) {
+                            // ignore type parameters not declared in this container
+                            result = None;
+                        } else {
+                            if last_location.is_some_and(|l| binder_shims::is_static(self.store().node(l))) {
+                                // TypeScript 1.0 spec (April 2014): 3.4.1
+                                // The scope of a type parameter extends over the entire declaration with which the type
+                                // parameter list is associated, with the exception of static member declarations in classes.
+                                if name_not_found_message.is_some() {
+                                    self.error(
+                                        original_location.expect("error location"),
+                                        &diag::STATIC_MEMBERS_CANNOT_REFERENCE_CLASS_TYPE_PARAMETERS,
+                                        &[],
+                                    );
+                                }
+                                return None;
+                            }
+                            break 'outer;
+                        }
+                    }
+                    if tsc_ast::is_class_expression(self.store().node(loc))
+                        && meaning.intersects(SymbolFlags::CLASS)
+                    {
+                        let class_name = self.store().node(loc).name();
+                        if let Some(class_name) = class_name {
+                            if name == tsc_ast::node_text(self.store(), class_name) {
+                                result = binder_node_data::symbol_of(self.store(), loc);
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+                Kind::ExpressionWithTypeArguments => {
+                    let parent = binder_shims::parent_of(self.store(), loc);
+                    let is_extends_clause = parent.is_some_and(|p| {
+                        tsc_ast::is_heritage_clause(self.store().node(p))
+                            && match &self.store().node(p).data {
+                                tsc_ast::NodeData::HeritageClause(d) => d.token == Kind::ExtendsKeyword,
+                                _ => false,
+                            }
+                    });
+                    if last_location == binder_node_data::expression_of(self.store(), loc)
+                        && is_extends_clause
+                    {
+                        let container = binder_shims::parent_of(self.store(), parent.unwrap())
+                            .expect("heritage clause parent");
+                        if binder_shims::is_class_like(self.store().node(container)) {
+                            let container_symbol =
+                                self.get_symbol_of_declaration_merged(container).expect("class-like symbol");
+                            let members = self.program_symbol(container_symbol).members.clone();
+                            result = self.get_symbol(&members, name, meaning & SymbolFlags::TYPE);
+                            if result.is_some() {
+                                if name_not_found_message.is_some() {
+                                    self.error(
+                                        original_location.expect("error location"),
+                                        &diag::BASE_CLASS_EXPRESSIONS_CANNOT_REFERENCE_CLASS_TYPE_PARAMETERS,
+                                        &[],
+                                    );
+                                }
+                                return None;
+                            }
+                        }
+                    }
+                }
+                // It is not legal to reference a class's own type parameters from a computed property name that
+                // belongs to the class. For example:
+                //
+                //   function foo<T>() { return '' }
+                //   class C<T> { // <-- Class's own type parameter T
+                //       [foo<T>()]() { } // <-- Reference to T from class's own computed property
+                //   }
+                Kind::ComputedPropertyName => {
+                    let grandparent = binder_shims::parent_of(self.store(), loc)
+                        .and_then(|p| binder_shims::parent_of(self.store(), p))
+                        .expect("ComputedPropertyName grandparent");
+                    if binder_shims::is_class_like(self.store().node(grandparent))
+                        || tsc_ast::is_interface_declaration(self.store().node(grandparent))
+                    {
+                        // A reference to this grandparent's type parameters would be an error
+                        let grandparent_symbol =
+                            self.get_symbol_of_declaration_merged(grandparent).expect("class-like symbol");
+                        let members = self.program_symbol(grandparent_symbol).members.clone();
+                        result = self.get_symbol(&members, name, meaning & SymbolFlags::TYPE);
+                        if result.is_some() {
+                            if name_not_found_message.is_some() {
+                                self.error(
+                                    original_location.expect("error location"),
+                                    &diag::A_COMPUTED_PROPERTY_NAME_CANNOT_REFERENCE_A_TYPE_PARAMETER_FROM_ITS_CONTAINING_TYPE,
+                                    &[],
+                                );
+                            }
+                            return None;
+                        }
+                    }
+                }
+                Kind::MethodDeclaration
+                | Kind::Constructor
+                | Kind::GetAccessor
+                | Kind::SetAccessor
+                | Kind::FunctionDeclaration => {
+                    if meaning.intersects(SymbolFlags::VARIABLE) && name == "arguments" {
+                        result = Some(self.arguments_symbol.expect("argumentsSymbol"));
+                        break 'outer;
+                    }
+                }
+                Kind::FunctionExpression => {
+                    if meaning.intersects(SymbolFlags::VARIABLE) && name == "arguments" {
+                        result = Some(self.arguments_symbol.expect("argumentsSymbol"));
+                        break 'outer;
+                    }
+                    if meaning.intersects(SymbolFlags::FUNCTION) {
+                        let function_name = match &self.store().node(loc).data {
+                            tsc_ast::NodeData::FunctionExpression(d) => d.name,
+                            _ => None,
+                        };
+                        if let Some(function_name) = function_name {
+                            if name == tsc_ast::node_text(self.store(), function_name) {
+                                result = binder_node_data::symbol_of(self.store(), loc);
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+                Kind::Decorator => {
+                    // Decorators are resolved at the class declaration. Resolving at the parameter
+                    // or member would result in looking up locals in the method.
+                    //
+                    //   function y() {}
+                    //   class C {
+                    //       method(@y x, y) {} // <-- decorator y should be resolved at the class declaration, not the parameter.
+                    //   }
+                    //
+                    if let Some(parent) = binder_shims::parent_of(self.store(), loc) {
+                        if self.store().node(parent).kind == Kind::Parameter {
+                            location = Some(parent);
+                        }
+                    }
+                    //   function y() {}
+                    //   class C {
+                    //       @y method(x, y) {} // <-- decorator y should be resolved at the class declaration, not the method.
+                    //   }
+                    //
+                    // class Decorators are resolved outside of the class to avoid referencing type parameters of that class.
+                    //
+                    //   type T = number;
+                    //   declare function y(x: T): any;
+                    //   @param(1 as T) // <-- T should resolve to the type alias outside of class C
+                    //   class C<T> {}
+                    //
+                    if let Some(parent) = binder_shims::parent_of(self.store(), loc) {
+                        if binder_shims::is_class_element(self.store().node(parent))
+                            || self.store().node(parent).kind == Kind::ClassDeclaration
+                        {
+                            location = Some(parent);
+                        }
+                    }
+                }
+                Kind::Parameter => {
+                    let parameter_declaration = match &self.store().node(loc).data {
+                        tsc_ast::NodeData::ParameterDeclaration(d) => (d.initializer, d.name),
+                        _ => (None, NodeId::NONE),
+                    };
+                    if let Some(last) = last_location {
+                        let is_initializer = Some(last) == parameter_declaration.0;
+                        let is_binding_pattern_name = Some(last) == self.store().node(loc).name()
+                            && binder_shims::is_binding_pattern(self.store().node(last));
+                        if (is_initializer || is_binding_pattern_name)
+                            && associated_declaration_for_containing_initializer_or_binding_name.is_none()
+                        {
+                            associated_declaration_for_containing_initializer_or_binding_name = Some(loc);
+                        }
+                    }
+                }
+                Kind::BindingElement => {
+                    let binding_element = match &self.store().node(loc).data {
+                        tsc_ast::NodeData::BindingElement(d) => (d.initializer, d.name),
+                        _ => (None, None),
+                    };
+                    if let Some(last) = last_location {
+                        let is_initializer = Some(last) == binding_element.0;
+                        let is_binding_pattern_name = Some(last) == binding_element.1
+                            && binder_shims::is_binding_pattern(self.store().node(last));
+                        if (is_initializer || is_binding_pattern_name)
+                            && binder_shims::is_part_of_parameter_declaration(self.store(), loc)
+                            && associated_declaration_for_containing_initializer_or_binding_name.is_none()
+                        {
+                            associated_declaration_for_containing_initializer_or_binding_name = Some(loc);
+                        }
+                    }
+                }
+                Kind::InferType => {
+                    if meaning.intersects(SymbolFlags::TYPE_PARAMETER) {
+                        let parameter_name = match &self.store().node(loc).data {
+                            tsc_ast::NodeData::InferTypeNode(d) => match &self.store().node(d.type_parameter).data {
+                                tsc_ast::NodeData::TypeParameterDeclaration(td) => td.name,
+                                _ => NodeId::NONE,
+                            },
+                            _ => NodeId::NONE,
+                        };
+                        if !parameter_name.is_none()
+                            && name == tsc_ast::node_text(self.store(), parameter_name)
+                        {
+                            result = match &self.store().node(loc).data {
+                                tsc_ast::NodeData::InferTypeNode(d) => {
+                                    binder_node_data::symbol_of(self.store(), d.type_parameter)
+                                }
+                                _ => None,
+                            };
+                            break 'outer;
+                        }
+                    }
+                }
+                Kind::ExportSpecifier => {
+                    let property_name = binder_node_data::property_name_of(self.store(), loc);
+                    if last_location.is_some() && last_location == property_name {
+                        let export_declaration = binder_shims::parent_of(self.store(), loc)
+                            .and_then(|p| binder_shims::parent_of(self.store(), p));
+                        let module_specifier =
+                            export_declaration.and_then(|ed| binder_node_data::module_specifier_of(self.store(), ed));
+                        if module_specifier.is_some() {
+                            location = export_declaration
+                                .and_then(|ed| binder_shims::parent_of(self.store(), ed));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            // Go: `if isSelfReferenceLocation(location, lastLocation) {...};
+            // lastLocation = location; location = location.Parent` — note
+            // `location` (not `loc`): the Decorator/ExportSpecifier arms may
+            // have reassigned it.
+            let effective = location.expect("loop iterates only while location is Some");
+            if is_self_reference_location(self.store().node(effective), last_location) {
+                last_self_reference_location = Some(effective);
+            }
+            last_location = location;
+            location = binder_shims::parent_of(self.store(), effective);
+        }
+        // We just climbed up parents looking for the name, meaning that we started in a descendant node of `lastLocation`.
+        // If `result === lastSelfReferenceLocation.symbol`, that means that we are somewhere inside `lastSelfReferenceLocation` looking up a name, and resolving to `lastLocation` itself.
+        // That means that this is a self-reference of `lastLocation`, and shouldn't count this when considering whether `lastLocation` is used.
+        if is_use {
+            if let Some(result_symbol) = result {
+                let is_self_reference = last_self_reference_location
+                    .and_then(|l| binder_node_data::symbol_of(self.store(), l))
+                    .is_some_and(|s| s == result_symbol);
+                if !is_self_reference {
+                    self.symbol_referenced(result_symbol, meaning);
+                }
+            }
+        }
+        if result.is_none() && !exclude_globals {
+            let globals = self.globals.clone();
+            result = self.get_symbol(&globals, name, meaning.union(SymbolFlags::GLOBAL_LOOKUP));
+        }
+        if result.is_none() {
+            if let Some(original_location) = original_location {
+                if tsc_ast::utilities::is_in_js_file(self.store().node(original_location)) {
+                    if let Some(parent) = binder_shims::parent_of(self.store(), original_location) {
+                        if binder_shims::is_require_call(self.store(), parent, false /*requireStringLiteralLikeArgument*/) {
+                            return self.require_symbol;
+                        }
+                    }
+                }
+            }
+        }
+        if name_not_found_message.is_some() {
+            if let Some(property) = property_with_invalid_initializer {
+                if self.check_and_report_error_for_invalid_initializer(
+                    original_location.expect("propertyWithInvalidInitializer implies a location"),
+                    name,
+                    property,
+                    result,
+                ) {
+                    return None;
+                }
+            }
+            if result.is_none() {
+                self.on_failed_to_resolve_symbol(
+                    original_location.expect("nameNotFoundMessage implies a location"),
+                    name,
+                    meaning,
+                    name_not_found_message,
+                );
+            } else {
+                self.on_successfully_resolved_symbol(
+                    original_location.expect("nameNotFoundMessage implies a location"),
+                    result,
+                    meaning,
+                    last_location,
+                    associated_declaration_for_containing_initializer_or_binding_name,
+                    within_deferred_context,
+                );
+            }
+        }
+        result
+    }
+
+    /// Go: `func (r *NameResolver) symbolReferenced(symbol, meaning)` (the
+    /// checker hook, checker.go:1543).
+    fn symbol_referenced(&mut self, symbol: SymbolId, meaning: SymbolFlags) {
+        self.symbol_reference_links.get(symbol).reference_kinds |= meaning;
+    }
+
+    /// Go: the shared `KindModuleDeclaration` switch body of NameResolver.Resolve
+    /// (nameresolver.go — run via fallthrough from KindSourceFile when the
+    /// file is an external or CommonJS module).
+    fn resolve_module_case(
+        &mut self,
+        location: NodeId,
+        name: &str,
+        meaning: SymbolFlags,
+        is_module_attributes: bool,
+        result: &mut Option<SymbolId>,
+    ) {
+        if is_module_attributes {
+            // Go: break out of the switch.
+            return;
+        }
+        let Some(module_symbol) = self.get_symbol_of_declaration_merged(location) else {
+            return;
+        };
+        let module_exports = self.program_symbol(module_symbol).exports.clone();
+        let is_source_file_loc = is_source_file(self.store().node(location));
+        let is_ambient_module_decl = is_module_declaration(self.store().node(location))
+            && self.store().node(location).flags.intersects(NF::AMBIENT)
+            && !binder_shims::is_global_scope_augmentation(self.store().node(location));
+        if is_source_file_loc || is_ambient_module_decl {
+            // It's an external module. First see if the module has an export default and if the local
+            // name of that export default matches.
+            *result = module_exports.get(INTERNAL_SYMBOL_NAME_DEFAULT).copied();
+            if let Some(result_symbol) = *result {
+                // PORT: Go's GetLocalSymbolForExportDefault reads the
+                // declarations' localSymbol links through the symbol arena;
+                // the binder free helper needs `&[Symbol]`, which cannot be
+                // borrowed while `&mut Checker` is live, so the walk is
+                // inlined (isExportDefaultSymbol + the first localSymbol).
+                let declarations = self.program_symbol(result_symbol).declarations.clone();
+                let local_symbol = declarations
+                    .first()
+                    .copied()
+                    .filter(|&decl| {
+                        has_syntactic_modifier(self.store().node(decl), ModifierFlags::DEFAULT)
+                    })
+                    .and_then(|decl| binder_node_data::local_symbol_of(self.store(), decl));
+                let flags = self.program_symbol(result_symbol).flags;
+                let local_name_matches = local_symbol
+                    .map(|ls| self.program_symbol(ls).name == name)
+                    .unwrap_or(false);
+                if flags.intersects(meaning) && local_name_matches {
+                    return; // caller breaks with result set
+                }
+                *result = None;
+            }
+            // Because of module/namespace merging, a module's exports are in scope,
+            // yet we never want to treat an export specifier as putting a member in scope.
+            // Therefore, if the name we find is purely an export specifier, it is not actually considered in scope.
+            // Two things to note about this:
+            //     1. We have to check this without calling getSymbol. The problem with calling getSymbol
+            //        on an export specifier is that it might find the export specifier itself, and try to
+            //        resolve it as an alias. This will cause the checker to consider the export specifier
+            //        a circular alias reference when it might not be.
+            //     2. We check === SymbolFlags.Alias in order to check that the symbol is *purely*
+            //        an alias. If we used &, we would be throwing out symbols that have non alias aspects,
+            //        which is not the desired behavior.
+            let module_export = module_exports.get(name).copied();
+            if let Some(module_export) = module_export {
+                let flags = self.program_symbol(module_export).flags;
+                if flags == SymbolFlags::ALIAS
+                    && (self
+                        .get_declaration_of_kind_of_symbol(module_export, Kind::ExportSpecifier)
+                        .is_some()
+                        || self
+                            .get_declaration_of_kind_of_symbol(module_export, Kind::NamespaceExport)
+                            .is_some())
+                {
+                    return; // Go: break out of the switch
+                }
+            }
+        }
+        if name != INTERNAL_SYMBOL_NAME_DEFAULT {
+            let module_meaning = meaning & SymbolFlags::MODULE_MEMBER;
+            *result = self.get_symbol(&module_exports, name, module_meaning);
+            if let Some(result_symbol) = *result {
+                let flags = self.program_symbol(result_symbol).flags;
+                // Go: on a CommonJS source file, a non-type result falls
+                // back to nil (the caller's break happens on Some(result)
+                // after the return).
+                if is_source_file_loc
+                    && self
+                        .store()
+                        .file(location.file_id())
+                        .payload()
+                        .common_js_module_indicator
+                        .get()
+                        .is_some()
+                    && !flags.intersects(SymbolFlags::TYPE)
+                {
+                    *result = None;
+                }
+            }
+        }
+    }
+
+    /// Go: `func (r *NameResolver) useOuterVariableScopeInParameter(result, location, lastLocation) bool`.
+    fn use_outer_variable_scope_in_parameter(
+        &mut self,
+        result: SymbolId,
+        location: NodeId,
+        last_location: Option<NodeId>,
+    ) -> bool {
+        if last_location.is_some_and(|l| tsc_ast::is_parameter_declaration(self.store().node(l))) {
+            let body = binder_node_data::body_of(self.store(), location);
+            let value_declaration = self.program_symbol(result).value_declaration;
+            let in_body = body.is_some_and(|b| {
+                value_declaration.is_some_and(|vd| {
+                    self.store().node(vd).pos() >= self.store().node(b).pos()
+                        && self.store().node(vd).end() <= self.store().node(b).end()
+                })
+            });
+            if in_body {
+                // check for several cases where we introduce temporaries that require moving the name/initializer of the parameter to the body
+                // - static field in a class expression
+                // - optional chaining pre-es2020
+                // - nullish coalesce pre-es2020
+                // - spread assignment in binding pattern pre-es2017
+                let function_location = location;
+                let mut declaration_requires_scope_change =
+                    self.node_links.get(function_location).declaration_requires_scope_change;
+                if declaration_requires_scope_change == Tristate::TSUnknown {
+                    let parameters = binder_node_data::parameters_of(self.store(), function_location)
+                        .map(|list| list.nodes.to_vec())
+                        .unwrap_or_default();
+                    let any = parameters.iter().any(|&p| self.requires_scope_change(p));
+                    declaration_requires_scope_change =
+                        if any { Tristate::TSTrue } else { Tristate::TSFalse };
+                    self.node_links.get(function_location).declaration_requires_scope_change =
+                        declaration_requires_scope_change;
+                }
+                return declaration_requires_scope_change != Tristate::TSTrue;
+            }
+        }
+        false
+    }
+
+    /// Go: `func (r *NameResolver) requiresScopeChange(node) bool`.
+    fn requires_scope_change(&mut self, node: NodeId) -> bool {
+        let d = match &self.store().node(node).data {
+            tsc_ast::NodeData::ParameterDeclaration(d) => (d.name, d.initializer),
+            _ => return false,
+        };
+        self.requires_scope_change_worker(Some(d.0))
+            || d.1.is_some() && {
+                let init = d.1.unwrap();
+                self.requires_scope_change_worker(Some(init))
+            }
+    }
+
+    /// Go: `func (r *NameResolver) requiresScopeChangeWorker(node) bool`.
+    fn requires_scope_change_worker(&mut self, node: Option<NodeId>) -> bool {
+        let Some(node) = node else {
+            return false;
+        };
+        match self.store().node(node).kind {
+            Kind::ArrowFunction | Kind::FunctionExpression | Kind::FunctionDeclaration | Kind::Constructor => {
+                false
+            }
+            Kind::MethodDeclaration | Kind::GetAccessor | Kind::SetAccessor | Kind::PropertyAssignment => {
+                self.requires_scope_change_worker(self.store().node(node).name())
+            }
+            Kind::PropertyDeclaration => {
+                if binder_shims::has_static_modifier(self.store().node(node)) {
+                    !self.compiler_options.get_emit_standard_class_fields()
+                } else {
+                    self.requires_scope_change_worker(self.store().node(node).name())
+                }
+            }
+            _ => {
+                if binder_shims::is_nullish_coalesce(self.store(), node)
+                    || tsc_ast::utilities::is_optional_chain(self.store().node(node))
+                {
+                    return self.compiler_options.get_emit_script_target()
+                        < tsc_core::options_generated::ScriptTarget::ES2020;
+                }
+                if tsc_ast::is_binding_element(self.store().node(node))
+                    && match &self.store().node(node).data {
+                        tsc_ast::NodeData::BindingElement(d) => d.dot_dot_dot_token.is_some(),
+                        _ => false,
+                    }
+                    && binder_shims::parent_of(self.store(), node)
+                        .is_some_and(|p| binder_shims::is_binding_pattern(self.store().node(p)))
+                {
+                    return self.compiler_options.get_emit_script_target()
+                        < tsc_core::options_generated::ScriptTarget::ES2017;
+                }
+                if binder_shims::is_type_node(self.store().node(node)) {
+                    return false;
+                }
+                let mut children: Vec<NodeId> = Vec::new();
+                self.store().node(node).for_each_child(&mut |child| {
+                    children.push(child);
+                    false
+                });
+                for child in children {
+                    if self.requires_scope_change_worker(Some(child)) {
+                        return true;
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkAndReportErrorForInvalidInitializer(location, name, propertyWithInvalidInitializer, result) bool`
+    /// (checker.go:1558 — the OnPropertyWithInvalidInitializer hook).
+    fn check_and_report_error_for_invalid_initializer(
+        &mut self,
+        error_location: Option<NodeId>,
+        name: &str,
+        property_with_invalid_initializer: NodeId,
+        result: Option<SymbolId>,
+    ) -> bool {
+        if !self.compiler_options.get_emit_standard_class_fields() {
+            if error_location.is_some()
+                && result.is_none()
+                && self.check_and_report_error_for_missing_prefix(error_location.unwrap(), name)
+            {
+                return true;
+            }
+            // We have a match, but the reference occurred within a property initializer and the identifier also binds
+            // to a local variable in the constructor where the code will be emitted. Note that this is actually allowed
+            // with emitStandardClassFields because the scope semantics are different.
+            let prop = match &self.store().node(property_with_invalid_initializer).data {
+                tsc_ast::NodeData::PropertyDeclaration(d) => d,
+                _ => panic!("PropertyDeclaration data"),
+            };
+            let prop_name = binder_shims::node_text(self.store(), prop.name).to_string();
+            let message = match prop.type_ {
+                Some(type_node)
+                    if error_location.is_some_and(|e| {
+                        let loc = self.store().node(type_node).loc();
+                        loc.contains_inclusive(self.store().node(e).pos() as i32)
+                    }) =>
+                {
+                    &diag::TYPE_OF_INSTANCE_MEMBER_VARIABLE_0_CANNOT_REFERENCE_IDENTIFIER_1_DECLARED_IN_THE_CONSTRUCTOR
+                }
+                _ => &diag::INITIALIZER_OF_INSTANCE_MEMBER_VARIABLE_0_CANNOT_REFERENCE_IDENTIFIER_1_DECLARED_IN_THE_CONSTRUCTOR,
+            };
+            if let Some(error_location) = error_location {
+                self.error(error_location, message, &[prop_name, name.to_string()]);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) checkAndReportErrorForMissingPrefix(errorLocation, name) bool`
+    /// (checker.go:1576).
+    fn check_and_report_error_for_missing_prefix(&mut self, error_location: NodeId, name: &str) -> bool {
+        if !is_identifier(self.store().node(error_location))
+            || tsc_ast::node_text(self.store(), error_location) != name
+            || u::is_type_reference_identifier(self.store(), error_location)
+            || crate::utilities::is_in_type_query(self.store(), error_location)
+        {
+            return false;
+        }
+        let container =
+            binder_shims::get_this_container(self.store(), error_location, false, false);
+        let mut location = Some(container);
+        while let Some(loc) = location
+            && let Some(parent) = binder_shims::parent_of(self.store(), loc)
+        {
+            if binder_shims::is_class_like(self.store().node(parent)) {
+                let Some(class_symbol) = self.get_symbol_of_declaration_merged(parent) else {
+                    break;
+                };
+                // Check to see if a static member exists.
+                let constructor_type = self.get_type_of_symbol(class_symbol);
+                if self.get_property_of_type(constructor_type, name).is_some() {
+                    let class_name = crate::relater::symbol_to_string(self, class_symbol);
+                    self.error(
+                        error_location,
+                        &diag::CANNOT_FIND_NAME_0_DID_YOU_MEAN_THE_STATIC_MEMBER_1_0,
+                        &[name.to_string(), class_name],
+                    );
+                    return true;
+                }
+                // No static member is present.
+                // Check if we're in an instance method and look for a relevant instance member.
+                if loc == container && !binder_shims::is_static(self.store().node(loc)) {
+                    // TODO: GH#18217 (Go comment) — the instance-type probe
+                    // reads the interface thisType through the S8 members
+                    // seam; permissive None keeps the arm dormant.
+                    // TODO(port M6 S8): getDeclaredTypeOfSymbol(...).thisType.
+                    let _instance_probe = self.get_declared_type_of_symbol(class_symbol);
+                }
+            }
+            location = binder_shims::parent_of(self.store(), loc);
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) onFailedToResolveSymbol(location, name, meaning, nameNotFoundMessage)`
+    /// (checker.go:1608 — the OnFailedToResolveSymbol hook).
+    fn on_failed_to_resolve_symbol(
+        &mut self,
+        error_location: NodeId,
+        name: &str,
+        meaning: SymbolFlags,
+        name_not_found_message: Option<&'static Message>,
+    ) {
+        // The `const` in a `const` assertion (`x as const`) is a syntactic marker, not a real
+        // type reference, and must never be resolved or reported as an unresolvable name.
+        if u::is_const_type_reference_name(self.store(), error_location) {
+            return;
+        }
+        let parent_kind = binder_shims::parent_of(self.store(), error_location)
+            .map(|p| self.store().node(p).kind);
+        if parent_kind == Some(Kind::JSDocLink)
+            || self.check_and_report_error_for_missing_prefix(error_location, name)
+            || self.check_and_report_error_for_using_type_as_namespace(error_location, name, meaning)
+            || self.check_and_report_error_for_exporting_primitive_type(error_location, name)
+            || self.check_and_report_error_for_using_namespace_as_type_or_value(error_location, name, meaning)
+            || self.check_and_report_error_for_using_type_as_value(error_location, name, meaning)
+            || self.check_and_report_error_for_using_value_as_type(error_location, name, meaning)
+        {
+            return;
+        }
+        let mut declaration_name = name.to_string();
+        if is_identifier(self.store().node(error_location))
+            && tsc_ast::node_text(self.store(), error_location) == name
+        {
+            declaration_name = u::declaration_name_to_string(self.store(), error_location);
+        }
+        // Report missing lib first
+        // TODO(port M6 S10): getSuggestedLibForNonExistentName — the feature
+        // map (Go's getFeatureMap) rides the lib-directive surface; permissive
+        // "" keeps the arm dormant.
+        let suggested_lib = String::new();
+        if !suggested_lib.is_empty() {
+            self.error(error_location, name_not_found_message.unwrap(), &[declaration_name, suggested_lib]);
+            return;
+        }
+        // Then spelling suggestions
+        let suggestion = self.get_suggested_symbol_for_nonexistent_symbol(error_location, name, meaning);
+        let ambient_global_augmentation = suggestion
+            .and_then(|s| self.program_symbol(s).value_declaration)
+            .is_some_and(|vd| {
+                tsc_ast::utilities::is_ambient_module(self.store(), vd)
+                    && binder_shims::is_global_scope_augmentation(self.store().node(vd))
+            });
+        if let Some(suggestion) = suggestion.filter(|_| !ambient_global_augmentation) {
+            let suggestion_name = crate::relater::symbol_to_string(self, suggestion);
+            // TODO(port M6 W5/js): isUncheckedJSSuggestion reads the JSDoc
+            // host surface; permissive false (the error form).
+            let is_unchecked_js = false;
+            let message = if meaning == SymbolFlags::NAMESPACE {
+                &diag::CANNOT_FIND_NAMESPACE_0_DID_YOU_MEAN_1
+            } else if is_unchecked_js {
+                &diag::COULD_NOT_FIND_NAME_0_DID_YOU_MEAN_1
+            } else {
+                &diag::CANNOT_FIND_NAME_0_DID_YOU_MEAN_1
+            };
+            // Go attaches the suggestion's "is declared here" related info
+            // to the diagnostic; the port's errorOrSuggestion carrier builds
+            // the diagnostic internally (spine.rs) — the related-info attach
+            // rides its Diagnostic return with the nodebuilder wave.
+            self.error_or_suggestion(
+                !is_unchecked_js,
+                error_location,
+                message,
+                &[declaration_name.clone(), suggestion_name],
+            );
+            return;
+        }
+        // And then fall back to unspecified "not found"
+        self.error(error_location, name_not_found_message.unwrap(), &[declaration_name]);
+    }
+
+    /// Go: `func (c *Checker) checkAndReportErrorForUsingTypeAsNamespace(errorLocation, name, meaning) bool`
+    /// (checker.go:1652).
+    fn check_and_report_error_for_using_type_as_namespace(
+        &mut self,
+        error_location: NodeId,
+        name: &str,
+        meaning: SymbolFlags,
+    ) -> bool {
+        if meaning == SymbolFlags::NAMESPACE {
+            let symbol = self
+                .resolve_name_worker(
+                    Some(error_location),
+                    name,
+                    SymbolFlags::TYPE & !SymbolFlags::NAMESPACE,
+                    None,
+                    false,
+                    false,
+                )
+                .map(|s| self.resolve_symbol(s));
+            if let Some(symbol) = symbol {
+                let parent = binder_shims::parent_of(self.store(), error_location);
+                if parent.is_some_and(|p| self.store().node(p).kind == Kind::QualifiedName) {
+                    // Should only be resolving left side of qualified name as a namespace
+                    let prop_name = match &self.store().node(parent.unwrap()).data {
+                        tsc_ast::NodeData::QualifiedName(d) => {
+                            binder_shims::node_text(self.store(), d.right).to_string()
+                        }
+                        _ => String::new(),
+                    };
+                    let declared = self.get_declared_type_of_symbol(symbol);
+                    if self.get_property_of_type(declared, &prop_name).is_some() {
+                        self.error(
+                            parent.unwrap(),
+                            &diag::CANNOT_ACCESS_0_1_BECAUSE_0_IS_A_TYPE_BUT_NOT_A_NAMESPACE_DID_YOU_MEAN_TO_RETRIEVE_THE_TYPE_OF_THE_PROPERTY_1_IN_0_WITH_0_1,
+                            &[name.to_string(), prop_name],
+                        );
+                        return true;
+                    }
+                }
+                self.error(
+                    error_location,
+                    &diag::X_0_ONLY_REFERS_TO_A_TYPE_BUT_IS_BEING_USED_AS_A_NAMESPACE_HERE,
+                    &[name.to_string()],
+                );
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) checkAndReportErrorForExportingPrimitiveType(errorLocation, name) bool`
+    /// (checker.go:1673).
+    fn check_and_report_error_for_exporting_primitive_type(&mut self, error_location: NodeId, name: &str) -> bool {
+        let parent_kind = binder_shims::parent_of(self.store(), error_location)
+            .map(|p| self.store().node(p).kind);
+        if is_primitive_type_name(name) && parent_kind == Some(Kind::ExportSpecifier) {
+            self.error(
+                error_location,
+                &diag::CANNOT_EXPORT_0_ONLY_LOCAL_DECLARATIONS_CAN_BE_EXPORTED_FROM_A_MODULE,
+                &[name.to_string()],
+            );
+            return true;
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) checkAndReportErrorForUsingNamespaceAsTypeOrValue(errorLocation, name, meaning) bool`
+    /// (checker.go:1685).
+    fn check_and_report_error_for_using_namespace_as_type_or_value(
+        &mut self,
+        error_location: NodeId,
+        name: &str,
+        meaning: SymbolFlags,
+    ) -> bool {
+        if meaning.intersects(SymbolFlags::VALUE & !SymbolFlags::TYPE) {
+            let symbol = self
+                .resolve_name_worker(
+                    Some(error_location),
+                    name,
+                    SymbolFlags::NAMESPACE_MODULE,
+                    None,
+                    false,
+                    false,
+                )
+                .map(|s| self.resolve_symbol(s));
+            if symbol.is_some() {
+                // `export = ns` may legitimately reference a namespace; checkExportAssignment decides
+                // whether that is an error, so don't report "cannot use namespace as a value" here.
+                if !u::is_export_assignment_expression_name(self.store(), error_location) {
+                    self.error(
+                        error_location,
+                        &diag::CANNOT_USE_NAMESPACE_0_AS_A_VALUE,
+                        &[name.to_string()],
+                    );
+                }
+                return true;
+            }
+        } else if meaning.intersects(SymbolFlags::TYPE & !SymbolFlags::VALUE) {
+            let symbol = self
+                .resolve_name_worker(Some(error_location), name, SymbolFlags::MODULE, None, false, false)
+                .map(|s| self.resolve_symbol(s));
+            if symbol.is_some() {
+                self.error(
+                    error_location,
+                    &diag::CANNOT_USE_NAMESPACE_0_AS_A_TYPE,
+                    &[name.to_string()],
+                );
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) checkAndReportErrorForUsingTypeAsValue(errorLocation, name, meaning) bool`
+    /// (checker.go:1706).
+    fn check_and_report_error_for_using_type_as_value(
+        &mut self,
+        error_location: NodeId,
+        name: &str,
+        meaning: SymbolFlags,
+    ) -> bool {
+        if meaning.intersects(SymbolFlags::VALUE) {
+            if is_primitive_type_name(name) {
+                let grandparent = binder_shims::parent_of(self.store(), error_location)
+                    .and_then(|p| binder_shims::parent_of(self.store(), p));
+                if let Some(grandparent) = grandparent
+                    && tsc_ast::is_heritage_clause(self.store().node(grandparent))
+                {
+                    let (heritage_kind, container) = match &self.store().node(grandparent).data {
+                        tsc_ast::NodeData::HeritageClause(d) => (d.token, d.parent),
+                        _ => (Kind::Unknown, NodeId::NONE),
+                    };
+                    let container_kind = if container.is_none() {
+                        Kind::Unknown
+                    } else {
+                        self.store().node(container).kind
+                    };
+                    if container_kind == Kind::InterfaceDeclaration && heritage_kind == Kind::ExtendsKeyword {
+                        self.error(
+                            error_location,
+                            &diag::AN_INTERFACE_CANNOT_EXTEND_A_PRIMITIVE_TYPE_LIKE_0_IT_CAN_ONLY_EXTEND_OTHER_NAMED_OBJECT_TYPES,
+                            &[name.to_string()],
+                        );
+                    } else if binder_shims::is_class_like(self.store().node(container))
+                        && heritage_kind == Kind::ExtendsKeyword
+                    {
+                        self.error(
+                            error_location,
+                            &diag::A_CLASS_CANNOT_EXTEND_A_PRIMITIVE_TYPE_LIKE_0_CLASSES_CAN_ONLY_EXTEND_CONSTRUCTABLE_VALUES,
+                            &[name.to_string()],
+                        );
+                    } else if binder_shims::is_class_like(self.store().node(container))
+                        && heritage_kind == Kind::ImplementsKeyword
+                    {
+                        self.error(
+                            error_location,
+                            &diag::A_CLASS_CANNOT_IMPLEMENT_A_PRIMITIVE_TYPE_LIKE_0_IT_CAN_ONLY_IMPLEMENT_OTHER_NAMED_OBJECT_TYPES,
+                            &[name.to_string()],
+                        );
+                    }
+                } else {
+                    self.error(
+                        error_location,
+                        &diag::X_0_ONLY_REFERS_TO_A_TYPE_BUT_IS_BEING_USED_AS_A_VALUE_HERE,
+                        &[name.to_string()],
+                    );
+                }
+                return true;
+            }
+            let symbol = self
+                .resolve_name_worker(
+                    Some(error_location),
+                    name,
+                    SymbolFlags::TYPE & !SymbolFlags::VALUE,
+                    None,
+                    false,
+                    false,
+                )
+                .map(|s| self.resolve_symbol(s));
+            if let Some(symbol) = symbol {
+                let all_flags = self.get_symbol_flags(symbol);
+                if !all_flags.intersects(SymbolFlags::VALUE) {
+                    // `export = SomeType` may legitimately reference a type-only name; checkExportAssignment
+                    // decides whether that is an error, so don't report "used as a value" here.
+                    if u::is_export_assignment_expression_name(self.store(), error_location) {
+                        return true;
+                    }
+                    if is_es2015_or_later_constructor_name(name) {
+                        self.error(
+                            error_location,
+                            &diag::X_0_ONLY_REFERS_TO_A_TYPE_BUT_IS_BEING_USED_AS_A_VALUE_HERE_DO_YOU_NEED_TO_CHANGE_YOUR_TARGET_LIBRARY_TRY_CHANGING_THE_LIB_COMPILER_OPTION_TO_ES2015_OR_LATER,
+                            &[name.to_string()],
+                        );
+                    } else if self.maybe_mapped_type(error_location, symbol) {
+                        let other = if name == "K" { "P" } else { "K" };
+                        self.error(
+                            error_location,
+                            &diag::X_0_ONLY_REFERS_TO_A_TYPE_BUT_IS_BEING_USED_AS_A_VALUE_HERE_DID_YOU_MEAN_TO_USE_1_IN_0,
+                            &[name.to_string(), other.to_string()],
+                        );
+                    } else {
+                        self.error(
+                            error_location,
+                            &diag::X_0_ONLY_REFERS_TO_A_TYPE_BUT_IS_BEING_USED_AS_A_VALUE_HERE,
+                            &[name.to_string()],
+                        );
+                    }
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) maybeMappedType(node, symbol) bool` (checker.go:1752).
+    fn maybe_mapped_type(&mut self, node: NodeId, symbol: SymbolId) -> bool {
+        let mut node = Some(node);
+        loop {
+            let n = node.unwrap();
+            let parent = binder_shims::parent_of(self.store(), n);
+            if parent.is_some()
+                && (tsc_ast::is_computed_property_name(self.store().node(n))
+                    || self.store().node(n).kind == Kind::PropertySignature)
+            {
+                node = parent;
+            } else {
+                break;
+            }
+        }
+        let node = node.unwrap();
+        if tsc_ast::is_type_literal_node(self.store().node(node))
+            && binder_node_data::members_of(self.store(), node).len() == 1
+        {
+            let t = self.get_declared_type_of_symbol(symbol);
+            return self.type_(t).flags.intersects(crate::types::TypeFlags::UNION)
+                && self.all_types_assignable_to_kind_ex(
+                    t,
+                    crate::types::TypeFlags::STRING_OR_NUMBER_LITERAL,
+                    true,
+                );
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) checkAndReportErrorForUsingValueAsType(errorLocation, name, meaning) bool`
+    /// (checker.go:1766).
+    fn check_and_report_error_for_using_value_as_type(
+        &mut self,
+        error_location: NodeId,
+        name: &str,
+        meaning: SymbolFlags,
+    ) -> bool {
+        if meaning.intersects(SymbolFlags::TYPE & !SymbolFlags::NAMESPACE) {
+            let symbol = self
+                .resolve_name_worker(
+                    Some(error_location),
+                    name,
+                    !SymbolFlags::TYPE & SymbolFlags::VALUE,
+                    None,
+                    false,
+                    false,
+                )
+                .map(|s| self.resolve_symbol(s));
+            if let Some(symbol) = symbol
+                && !self.program_symbol(symbol).flags.intersects(SymbolFlags::NAMESPACE)
+            {
+                self.error(
+                    error_location,
+                    &diag::X_0_REFERS_TO_A_VALUE_BUT_IS_BEING_USED_AS_A_TYPE_HERE_DID_YOU_MEAN_TYPEOF_0,
+                    &[name.to_string()],
+                );
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) getSuggestedSymbolForNonexistentSymbol(location, outerName, meaning) *ast.Symbol`
+    /// (checker.go:1785) — `c.resolveNameForSymbolSuggestion(location, ...)`.
+    /// TODO(port M6 S10): the suggestion resolver (createNameResolverForSuggestion +
+    /// getSpellingSuggestionForName over core.GetSpellingSuggestion) rides the
+    /// spelling-suggestion engine (core port); permissive None keeps the
+    /// did-you-mean ladders dormant.
+    fn get_suggested_symbol_for_nonexistent_symbol(
+        &mut self,
+        location: NodeId,
+        outer_name: &str,
+        meaning: SymbolFlags,
+    ) -> Option<SymbolId> {
+        // Go: resolveNameForSymbolSuggestion walks the same scope chain with
+        // getSuggestionForSymbolNameLookup as the lookup hook; the candidate
+        // set here is the direct-scope + globals table with the case/levenshtein
+        // suggestion applied. The spelling engine is not yet ported.
+        let _ = (location, outer_name, meaning);
+        None
+    }
+
+    /// Go: `func (c *Checker) onSuccessfullyResolvedSymbol(errorLocation, result, meaning, lastLocation, associatedDeclarationForContainingInitializerOrBindingName, withinDeferredContext)`
+    /// (checker.go:1864 — the OnSuccessfullyResolvedSymbol hook).
+    #[allow(clippy::too_many_arguments)]
+    fn on_successfully_resolved_symbol(
+        &mut self,
+        error_location: Option<NodeId>,
+        result: Option<SymbolId>,
+        meaning: SymbolFlags,
+        last_location: Option<NodeId>,
+        associated_declaration_for_containing_initializer_or_binding_name: Option<NodeId>,
+        within_deferred_context: bool,
+    ) {
+        let Some(result) = result else { return };
+        let name = self.program_symbol(result).name.clone();
+        let is_in_external_module = last_location.is_some_and(|l| {
+            is_source_file(self.store().node(l))
+                && binder_shims::is_external_or_common_js_module(self.store().file(l.file_id()))
+        });
+        // Only check for block-scoped variable if we have an error location and are looking for the
+        // name with variable meaning
+        //      For example,
+        //          declare module foo {
+        //              interface bar {}
+        //          }
+        //      const foo/*1*/: foo/*2*/.bar;
+        // The foo at /*1*/ and /*2*/ will share same symbol with two meanings:
+        // block-scoped variable and namespace module. However, only when we
+        // try to resolve name in /*1*/ which is used in variable position,
+        // we want to check for block-scoped
+        if error_location.is_some()
+            && (meaning.intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE)
+                || meaning.intersects(SymbolFlags::CLASS.union(SymbolFlags::ENUM))
+                    && (meaning & SymbolFlags::VALUE) == SymbolFlags::VALUE)
+        {
+            let export_or_local_symbol = self.get_export_symbol_of_value_symbol_if_exported(result);
+            if self
+                .program_symbol(export_or_local_symbol)
+                .flags
+                .intersects(
+                    SymbolFlags::BLOCK_SCOPED_VARIABLE
+                        .union(SymbolFlags::CLASS)
+                        .union(SymbolFlags::ENUM),
+                )
+            {
+                self.check_resolved_block_scoped_variable(export_or_local_symbol, error_location.unwrap());
+            }
+        }
+        // If we're in an external module, we can't reference value symbols created from UMD export declarations
+        if is_in_external_module
+            && (meaning & SymbolFlags::VALUE) == SymbolFlags::VALUE
+            && error_location.is_some_and(|e| !self.store().node(e).flags.intersects(NF::JSDOC))
+        {
+            let merged = self.get_merged_symbol(result);
+            let merged_decls = self.program_symbol(merged).declarations.clone();
+            if !merged_decls.is_empty()
+                && merged_decls.iter().all(|&d| {
+                    tsc_ast::is_namespace_export_declaration(self.store().node(d))
+                        || is_source_file(self.store().node(d))
+                            && self.store().file(d.file_id()).payload().global_exports.get().is_some()
+                })
+            {
+                self.error_or_suggestion(
+                    self.compiler_options.allow_umd_global_access != Tristate::TSTrue,
+                    error_location.unwrap(),
+                    &diag::X_0_REFERS_TO_A_UMD_GLOBAL_BUT_THE_CURRENT_FILE_IS_A_MODULE_CONSIDER_ADDING_AN_IMPORT_INSTEAD,
+                    &[name.clone()],
+                );
+            }
+        }
+        // If we're in a parameter initializer or binding name, we can't reference the values of the parameter whose initializer we're within or parameters to the right
+        if let Some(associated) = associated_declaration_for_containing_initializer_or_binding_name
+            .filter(|_| !within_deferred_context)
+            .filter(|_| (meaning & SymbolFlags::VALUE) == SymbolFlags::VALUE)
+        {
+            let candidate = self.get_merged_symbol(self.get_late_bound_symbol(result));
+            let root = binder_shims::get_root_declaration(self.store(), associated);
+            // A parameter initializer or binding pattern initializer within a parameter cannot refer to itself
+            if candidate == self.get_symbol_of_declaration_merged(associated) {
+                self.error(
+                    error_location.unwrap(),
+                    &diag::PARAMETER_0_CANNOT_REFERENCE_ITSELF,
+                    &[tsc_scanner::utilities::declaration_name_to_string(
+                        self.store(),
+                        self.store().node(associated).name(),
+                    )],
+                );
+            } else {
+                let candidate_value_declaration = self.program_symbol(candidate).value_declaration;
+                let root_parent = binder_shims::parent_of(self.store(), root);
+                let candidate_name = self.program_symbol(candidate).name.clone();
+                if candidate_value_declaration.is_some_and(|vd| {
+                    self.store().node(vd).pos() > self.store().node(associated).pos()
+                }) && root_parent
+                    .is_some_and(|rp| {
+                        binder_node_data::locals_of(self.store(), rp)
+                            .is_some_and(|locals| locals.get(&candidate_name) == Some(&candidate))
+                    })
+                {
+                    self.error(
+                        error_location.unwrap(),
+                        &diag::PARAMETER_0_CANNOT_REFERENCE_IDENTIFIER_1_DECLARED_AFTER_IT,
+                        &[
+                            tsc_scanner::utilities::declaration_name_to_string(
+                                self.store(),
+                                self.store().node(associated).name(),
+                            ),
+                            tsc_scanner::utilities::declaration_name_to_string(
+                                self.store(),
+                                Some(error_location.unwrap()),
+                            ),
+                        ],
+                    );
+                }
+            }
+        }
+        if error_location.is_some()
+            && meaning.intersects(SymbolFlags::VALUE)
+            && self.program_symbol(result).flags.intersects(SymbolFlags::ALIAS)
+            && !self.program_symbol(result).flags.intersects(SymbolFlags::VALUE)
+            && !is_valid_type_only_alias_use_site(self.store(), error_location.unwrap())
+        {
+            let type_only_declaration =
+                self.get_type_only_alias_declaration_ex(result, SymbolFlags::VALUE);
+            if let Some(type_only_declaration) = type_only_declaration {
+                let message = match self.store().node(type_only_declaration).kind {
+                    Kind::ExportSpecifier | Kind::ExportDeclaration | Kind::NamespaceExport => {
+                        &diag::X_0_CANNOT_BE_USED_AS_A_VALUE_BECAUSE_IT_WAS_EXPORTED_USING_EXPORT_TYPE
+                    }
+                    _ => &diag::X_0_CANNOT_BE_USED_AS_A_VALUE_BECAUSE_IT_WAS_IMPORTED_USING_IMPORT_TYPE,
+                };
+                let diagnostic = self.error(error_location.unwrap(), message, &[name.clone()]);
+                self.add_type_only_declaration_related_info(diagnostic, type_only_declaration, &name);
+            }
+        }
+        // Look at 'compilerOptions.isolatedModules' and not 'getIsolatedModules(...)' (which considers 'verbatimModuleSyntax')
+        // here because 'verbatimModuleSyntax' will already have an error for importing a type without 'import type'.
+        if self.compiler_options.isolated_modules == Tristate::TSTrue
+            && is_in_external_module
+            && (meaning & SymbolFlags::VALUE) == SymbolFlags::VALUE
+        {
+            let is_global = self
+                .globals
+                .get(&name)
+                .is_some_and(|&s| s == result);
+            let mut non_value_symbol = None;
+            if is_global
+                && last_location.is_some_and(|l| is_source_file(self.store().node(l)))
+            {
+                let locals = binder_node_data::locals_of(self.store(), last_location.unwrap())
+                    .cloned()
+                    .unwrap_or_default();
+                non_value_symbol = locals
+                    .iter()
+                    .find(|(_, &s)| !self.program_symbol(s).flags.intersects(SymbolFlags::VALUE))
+                    .map(|(_, &s)| s);
+            }
+            if let Some(non_value_symbol) = non_value_symbol {
+                let declarations = self.program_symbol(non_value_symbol).declarations.clone();
+                let import_decl = declarations.iter().copied().find(|&d| {
+                    matches!(
+                        self.store().node(d).kind,
+                        Kind::ImportSpecifier | Kind::ImportClause | Kind::NamespaceImport | Kind::ImportEqualsDeclaration
+                    )
+                });
+                if let Some(import_decl) = import_decl
+                    && !crate::statements::is_type_only_import_or_export_declaration(
+                        self.store(),
+                        import_decl,
+                    )
+                {
+                    self.error(
+                        import_decl,
+                        &diag::IMPORT_0_CONFLICTS_WITH_GLOBAL_VALUE_USED_IN_THIS_FILE_SO_MUST_BE_DECLARED_WITH_A_TYPE_ONLY_IMPORT_WHEN_ISOLATEDMODULES_IS_ENABLED,
+                        &[name.clone()],
+                    );
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkResolvedBlockScopedVariable(result, errorLocation)` (checker.go:1932).
+    fn check_resolved_block_scoped_variable(&mut self, result: SymbolId, error_location: NodeId) {
+        let flags = self.program_symbol(result).flags;
+        if flags.intersects(
+            SymbolFlags::FUNCTION
+                .union(SymbolFlags::FUNCTION_SCOPED_VARIABLE)
+                .union(SymbolFlags::ASSIGNMENT),
+        ) && flags.intersects(SymbolFlags::CLASS)
+        {
+            // constructor functions aren't block scoped
+            return;
+        }
+        // Block-scoped variables cannot be used before their definition
+        let declarations = self.program_symbol(result).declarations.clone();
+        let declaration = declarations.iter().copied().find(|&d| {
+            binder_shims::is_block_or_catch_scoped(self.store(), d)
+                || binder_shims::is_class_like(self.store().node(d))
+                || tsc_ast::is_enum_declaration(self.store().node(d))
+        });
+        let Some(declaration) = declaration else {
+            panic!("checkResolvedBlockScopedVariable could not find block-scoped declaration")
+        };
+        if !self.store().node(declaration).flags.intersects(NF::AMBIENT)
+            && !self.is_block_scoped_name_declared_before_use(declaration, error_location)
+        {
+            let declaration_name = tsc_scanner::utilities::declaration_name_to_string(
+                self.store(),
+                binder_shims::get_name_of_declaration(self.store(), declaration),
+            );
+            let mut diagnostic = None;
+            if flags.intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE) {
+                diagnostic = Some(self.error(
+                    error_location,
+                    &diag::BLOCK_SCOPED_VARIABLE_0_USED_BEFORE_ITS_DECLARATION,
+                    &[declaration_name.clone()],
+                ));
+            } else if flags.intersects(SymbolFlags::CLASS) {
+                diagnostic = Some(self.error(
+                    error_location,
+                    &diag::CLASS_0_USED_BEFORE_ITS_DECLARATION,
+                    &[declaration_name.clone()],
+                ));
+            } else if flags.intersects(SymbolFlags::REGULAR_ENUM) {
+                diagnostic = Some(self.error(
+                    error_location,
+                    &diag::ENUM_0_USED_BEFORE_ITS_DECLARATION,
+                    &[declaration_name.clone()],
+                ));
+            } else {
+                debug_assert!(flags.intersects(SymbolFlags::CONST_ENUM));
+                if self.compiler_options.get_isolated_modules() {
+                    diagnostic = Some(self.error(
+                        error_location,
+                        &diag::ENUM_0_USED_BEFORE_ITS_DECLARATION,
+                        &[declaration_name.clone()],
+                    ));
+                }
+            }
+            if let Some(mut diagnostic) = diagnostic {
+                diagnostic.add_related_info(u::new_diagnostic_for_node(
+                    self.store(),
+                    declaration,
+                    &diag::X_0_IS_DECLARED_HERE,
+                    vec![declaration_name],
+                ));
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) isBlockScopedNameDeclaredBeforeUse(declaration, usage) bool`
+    /// (checker.go:1966).
+    fn is_block_scoped_name_declared_before_use(&mut self, declaration: NodeId, usage: NodeId) -> bool {
+        let declaration_file = declaration.file_id();
+        let use_file = usage.file_id();
+        let decl_container = get_enclosing_block_scope_container(self.store(), declaration);
+        if declaration_file != use_file {
+            // nodes are in different files and order cannot be determined
+            return true;
+        }
+        // deferred usage in a type context is always OK regardless of the usage position:
+        if self.store().node(usage).flags.intersects(NF::JSDOC)
+            || u::is_in_type_query(self.store(), usage)
+            || self.is_in_ambient_or_type_node(usage)
+        {
+            return true;
+        }
+        if self.store().node(declaration).pos() <= self.store().node(usage).pos()
+            && !(self.store().node(declaration).kind == Kind::PropertyDeclaration
+                && binder_shims::parent_of(self.store(), usage)
+                    .is_some_and(|p| u::is_this_property(self.store(), p))
+                && crate::ast_shims::initializer_of(self.store(), declaration).is_none()
+                && binder_node_data::postfix_token_of(self.store(), declaration).is_none())
+        {
+            // declaration is before usage
+            match self.store().node(declaration).kind {
+                Kind::BindingElement => {
+                    // still might be illegal if declaration and usage are both binding elements (eg var [a = b, b = b] = [1, 2])
+                    let error_binding_element = find_ancestor_kind(self.store(), usage, Kind::BindingElement);
+                    if let Some(error_binding_element) = error_binding_element {
+                        return binder_shims::find_ancestor(self.store(), error_binding_element, &mut |n| {
+                            tsc_ast::is_binding_element(self.store().node(n))
+                        })
+                            != binder_shims::find_ancestor(self.store(), declaration, &mut |n| {
+                                tsc_ast::is_binding_element(self.store().node(n))
+                            })
+                            || self.store().node(declaration).pos() < self.store().node(error_binding_element).pos();
+                    }
+                    // or it might be illegal if usage happens before parent variable is declared (eg var [a] = a)
+                    let variable_declaration = find_ancestor_kind(self.store(), declaration, Kind::VariableDeclaration);
+                    return variable_declaration
+                        .is_some_and(|vd| self.is_block_scoped_name_declared_before_use(vd, usage));
+                }
+                Kind::VariableDeclaration => {
+                    // still might be illegal if usage is in the initializer of the variable declaration (eg var a = a)
+                    return !is_immediately_used_in_initializer_of_block_scoped_variable(
+                        self.store(),
+                        declaration,
+                        usage,
+                        decl_container,
+                    );
+                }
+                _ if binder_shims::is_class_like(self.store().node(declaration)) => {
+                    // still might be illegal if the usage is within a computed property name in the class (eg class A { static p = "a"; [A.p]() {} })
+                    // or when used within a decorator in the class (e.g. `@dec(A.x) class A { static x = "x" }`),
+                    // except when used in a function that is not an IIFE (e.g., `@dec(() => A.x) class A { ... }`)
+                    let mut container = Some(usage);
+                    while container.is_some_and(|c| c != declaration) {
+                        let c = container.unwrap();
+                        let parent = binder_shims::parent_of(self.store(), c);
+                        let is_computed_member_of_class = parent.is_some_and(|p| {
+                            tsc_ast::is_computed_property_name(self.store().node(c))
+                                && binder_shims::parent_of(self.store(), p)
+                                    .is_some_and(|gp| gp == declaration)
+                        });
+                        let is_decorator_of_class = !self.legacy_decorators
+                            && self.store().node(c).kind == Kind::Decorator
+                            && (parent.is_some_and(|p| p == declaration)
+                                || parent.is_some_and(|p| {
+                                    (self.store().node(p).kind == Kind::MethodDeclaration
+                                        || is_accessor(self.store().node(p))
+                                        || self.store().node(p).kind == Kind::PropertyDeclaration)
+                                        && binder_shims::parent_of(self.store(), p)
+                                            .is_some_and(|gp| gp == declaration)
+                                })
+                                || parent.is_some_and(|p| {
+                                    self.store().node(p).kind == Kind::Parameter
+                                        && binder_shims::parent_of(self.store(), p)
+                                            .and_then(|gp| binder_shims::parent_of(self.store(), gp))
+                                            .is_some_and(|gpp| gpp == declaration)
+                                }));
+                        if is_computed_member_of_class || is_decorator_of_class {
+                            break;
+                        }
+                        container = parent;
+                    }
+                    let container = container.unwrap_or(declaration);
+                    if container == declaration {
+                        return true;
+                    }
+                    if !self.legacy_decorators && self.store().node(container).kind == Kind::Decorator {
+                        let mut n = Some(usage);
+                        while n.is_some_and(|x| x != container) {
+                            if binder_shims::is_function_like(self.store().node(n.unwrap()))
+                                && binder_shims::get_immediately_invoked_function_expression(
+                                    self.store(),
+                                    n.unwrap(),
+                                )
+                                .is_none()
+                            {
+                                break;
+                            }
+                            n = binder_shims::parent_of(self.store(), n.unwrap());
+                        }
+                        return n.is_some_and(|x| x != container);
+                    }
+                    return false;
+                }
+                _ if self.store().node(declaration).kind == Kind::PropertyDeclaration => {
+                    // still might be illegal if a self-referencing property initializer (eg private x = this.x)
+                    return !is_property_immediately_referenced_within_declaration(
+                        self.store(),
+                        declaration,
+                        usage,
+                        false,
+                    );
+                }
+                _ if binder_shims::is_parameter_property_declaration(
+                    self.store(),
+                    declaration,
+                    self.store().node(declaration).parent.get(),
+                ) => {
+                    // foo = this.bar is illegal in emitStandardClassFields when bar is a parameter property
+                    return !(self.emit_standard_class_fields
+                        && self.get_containing_class_of(declaration)
+                            == self.get_containing_class_of(usage)
+                        && self.is_used_in_function_or_instance_property(usage, declaration, decl_container));
+                }
+                _ => return true,
+            }
+        }
+        // declaration is after usage, but it can still be legal if usage is deferred:
+        // 1. inside an export specifier
+        // 2. inside a function
+        // 3. inside an instance property initializer, a reference to a non-instance property
+        //    (except when emitStandardClassFields: true and the reference is to a parameter property)
+        // 4. inside a static property initializer, a reference to a static method in the same class
+        // 5. inside a TS export= declaration (since we will move the export statement during emit to avoid TDZ)
+        let usage_parent = binder_shims::parent_of(self.store(), usage);
+        if usage_parent.is_some_and(|p| {
+            tsc_ast::is_export_specifier(self.store().node(p))
+                || self.store().node(p).kind == Kind::ExportAssignment
+                    && match &self.store().node(p).data {
+                        tsc_ast::NodeData::ExportAssignment(d) => d.is_export_equals,
+                        _ => false,
+                    }
+        }) {
+            // export specifiers do not use the variable, they only make it available for use
+            return true;
+        }
+        // When resolving symbols for exports, the `usage` location passed in can be the export site directly
+        if self.store().node(usage).kind == Kind::ExportAssignment
+            && match &self.store().node(usage).data {
+                tsc_ast::NodeData::ExportAssignment(d) => d.is_export_equals,
+                _ => false,
+            }
+        {
+            return true;
+        }
+        if self.is_used_in_function_or_instance_property(usage, declaration, decl_container) {
+            if self.emit_standard_class_fields
+                && self.get_containing_class_of(declaration).is_some()
+                && (self.store().node(declaration).kind == Kind::PropertyDeclaration
+                    || binder_shims::is_parameter_property_declaration(
+                        self.store(),
+                        declaration,
+                        self.store().node(declaration).parent.get(),
+                    ))
+            {
+                return !is_property_immediately_referenced_within_declaration(
+                    self.store(),
+                    declaration,
+                    usage,
+                    true,
+                );
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) isUsedInFunctionOrInstanceProperty(usage, declaration, declContainer) bool`
+    /// (checker.go:2055).
+    fn is_used_in_function_or_instance_property(
+        &mut self,
+        usage: NodeId,
+        declaration: NodeId,
+        decl_container: Option<NodeId>,
+    ) -> bool {
+        let mut current = Some(usage);
+        while let Some(c) = current {
+            if Some(c) == decl_container {
+                return false; // FindAncestorQuit
+            }
+            if binder_shims::is_function_like(self.store().node(c)) {
+                return binder_shims::get_immediately_invoked_function_expression(self.store(), c).is_none();
+            }
+            if self.store().node(c).kind == Kind::ClassStaticBlockDeclaration {
+                return self.store().node(declaration).pos() < self.store().node(usage).pos();
+            }
+            let parent = binder_shims::parent_of(self.store(), c);
+            if let Some(parent) = parent.filter(|_| self.store().node(parent).kind == Kind::PropertyDeclaration)
+            {
+                let initializer_of_property = crate::ast_shims::initializer_of(self.store(), parent) == Some(c);
+                if initializer_of_property {
+                    if binder_shims::is_static(self.store().node(parent)) {
+                        if self.store().node(declaration).kind == Kind::MethodDeclaration {
+                            return true;
+                        }
+                        if self.store().node(declaration).kind == Kind::PropertyDeclaration
+                            && self.get_containing_class_of(usage)
+                                == self.get_containing_class_of(declaration)
+                        {
+                            let prop_name = self.store().node(declaration).name();
+                            if prop_name.is_some_and(|n| {
+                                is_identifier(self.store().node(n))
+                                    || tsc_ast::is_private_identifier(self.store().node(n))
+                            }) {
+                                let prop_name = prop_name.unwrap();
+                                let t = self.get_type_of_symbol(
+                                    self.get_symbol_of_declaration_merged(declaration).expect("symbol"),
+                                );
+                                let class_parent = binder_shims::parent_of(self.store(), declaration)
+                                    .expect("class parent");
+                                let static_blocks = binder_node_data::members_of(self.store(), class_parent)
+                                    .iter()
+                                    .copied()
+                                    .filter(|&m| self.store().node(m).kind == Kind::ClassStaticBlockDeclaration)
+                                    .collect::<Vec<_>>();
+                                if self.is_property_initialized_in_static_blocks(
+                                    prop_name,
+                                    t,
+                                    &static_blocks,
+                                    self.store().node(declaration).pos(),
+                                    self.store().node(c).pos(),
+                                ) {
+                                    return true;
+                                }
+                            }
+                        }
+                    } else {
+                        let is_declaration_instance_property =
+                            self.store().node(declaration).kind == Kind::PropertyDeclaration
+                                && !binder_shims::is_static(self.store().node(declaration));
+                        if !is_declaration_instance_property
+                            || self.get_containing_class_of(usage)
+                                != self.get_containing_class_of(declaration)
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            if let Some(parent) = parent.filter(|_| self.store().node(parent).kind == Kind::Decorator) {
+                let decorator_expression = match &self.store().node(parent).data {
+                    tsc_ast::NodeData::Decorator(d) => d.expression,
+                    _ => NodeId::NONE,
+                };
+                if decorator_expression == c {
+                    let decorator_parent = binder_shims::parent_of(self.store(), parent);
+                    if let Some(dp) = decorator_parent {
+                        if tsc_ast::is_parameter_declaration(self.store().node(dp)) {
+                            if let Some(gppp) = binder_shims::parent_of(self.store(), dp)
+                                .and_then(|gp| binder_shims::parent_of(self.store(), gp))
+                            {
+                                return self.is_used_in_function_or_instance_property(
+                                    gppp,
+                                    declaration,
+                                    decl_container,
+                                );
+                            }
+                            return false;
+                        }
+                        if self.store().node(dp).kind == Kind::MethodDeclaration {
+                            if let Some(gpp) = binder_shims::parent_of(self.store(), dp) {
+                                return self.is_used_in_function_or_instance_property(
+                                    gpp,
+                                    declaration,
+                                    decl_container,
+                                );
+                            }
+                            return false;
+                        }
+                    }
+                }
+            }
+            current = parent;
+        }
+        false
+    }
+
+    /// Go: `ast.GetContainingClass(node)` composed for the
+    /// isBlockScopedNameDeclaredBeforeUse arms (utilities.rs's free helper
+    /// takes a store; this is the method form the arms use).
+    fn get_containing_class_of(&self, node: NodeId) -> Option<NodeId> {
+        crate::utilities::get_containing_class(self.store(), node)
+    }
+
+    /// Go: `func (c *Checker) isPropertyInitializedInStaticBlocks(propName, propType, staticBlocks, startPos, endPos) bool`
+    /// (checker.go:5067 — the static-block scan this hook family needs).
+    #[allow(clippy::too_many_arguments)]
+    fn is_property_initialized_in_static_blocks(
+        &mut self,
+        prop_name: NodeId,
+        prop_type: crate::types::TypeId,
+        static_blocks: &[NodeId],
+        start_pos: u32,
+        end_pos: u32,
+    ) -> bool {
+        for &block in static_blocks {
+            let body = match &self.store().node(block).data {
+                tsc_ast::NodeData::ClassStaticBlockDeclaration(d) => d.body,
+                _ => continue,
+            };
+            let stmts = binder_node_data::statements_of(self.store(), body)
+                .map(|l| l.nodes.to_vec())
+                .unwrap_or_default();
+            for statement in stmts {
+                if self.store().node(statement).kind == Kind::ExpressionStatement
+                    && self.is_assignment_to_property_in_static_block(
+                        statement,
+                        prop_name,
+                        prop_type,
+                        start_pos,
+                        end_pos,
+                    )
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// The per-statement arm of Go's isPropertyInitializedInStaticBlocks —
+    /// `isAssignmentToProperty(expression, propName, propType)` over the
+    /// static-block positions (checker.go:5067's inner walk).
+    fn is_assignment_to_property_in_static_block(
+        &mut self,
+        statement: NodeId,
+        prop_name: NodeId,
+        prop_type: crate::types::TypeId,
+        start_pos: u32,
+        end_pos: u32,
+    ) -> bool {
+        let expression = match &self.store().node(statement).data {
+            tsc_ast::NodeData::ExpressionStatement(d) => d.expression,
+            _ => return false,
+        };
+        if !binder_shims::is_assignment_expression(self.store(), expression, false) {
+            return false;
+        }
+        if self.store().node(expression).pos() < start_pos || self.store().node(expression).end() > end_pos {
+            return false;
+        }
+        let (left, right) = match &self.store().node(expression).data {
+            tsc_ast::NodeData::BinaryExpression(d) => (d.left, d.right),
+            _ => return false,
+        };
+        if !binder_shims::is_assignment_expression(self.store(), right, true) {
+            return false;
+        }
+        if self.store().node(left).name() != Some(prop_name) {
+            return false;
+        }
+        // Go: `c.checkExpressionCached(right)` then compares to propType
+        // through isTypeAssignableTo; the S8 flow of getWriteTypeOfSymbol is
+        // not reachable here yet — the assignment expression's own type
+        // check runs through the real expression spine.
+        // TODO(port M6 W3): the flow-narrowed comparison; permissive true
+        // when the expression's type is assignable (the common case).
+        let _ = self.check_expression(right);
+        let _ = prop_type;
+        true
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Section A tail — the small scope-walk predicates (Go nameresolver.go
+    // free functions; the binder port keeps them private, so they are
+    // re-ported here).
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// Go: `func isTypeParameterSymbolDeclaredInContainer(symbol, container) bool`.
+    fn is_type_parameter_symbol_declared_in_container(&self, symbol: SymbolId, container: NodeId) -> bool {
+        for &decl in &self.program_symbol(symbol).declarations {
+            if self.store().node(decl).kind == Kind::TypeParameter
+                && self.store().node(decl).parent.get() == container
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) getSymbol(symbols, name, meaning) *ast.Symbol` (checker.go:2220).
+    pub(crate) fn get_symbol(
+        &mut self,
+        symbols: &SymbolTable,
+        name: &str,
+        meaning: SymbolFlags,
+    ) -> Option<SymbolId> {
+        if !meaning.is_empty() {
+            if let Some(&symbol) = symbols.get(name) {
+                let symbol = self.get_merged_symbol(symbol);
+                let flags = self.program_symbol(symbol).flags;
+                if flags.intersects(meaning) {
+                    return Some(symbol);
+                }
+                if flags.intersects(SymbolFlags::ALIAS) {
+                    let target_flags = self.get_symbol_flags(symbol);
+                    // `targetFlags` will be `SymbolFlags.All` if an error occurred in alias resolution; this avoids cascading errors
+                    if target_flags.intersects(meaning) {
+                        return Some(symbol);
+                    }
+                }
+            }
+        }
+        // return nil if we can't find a symbol
+        None
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Free helpers (Go nameresolver.go / utilities.go)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `func getIsDeferredContext(location, lastLocation) bool` (nameresolver.go).
+fn get_is_deferred_context(store: &dyn NodeStore, location: NodeId, last_location: Option<NodeId>) -> bool {
+    let kind = store.node(location).kind;
+    if kind != Kind::ArrowFunction && kind != Kind::FunctionExpression {
+        // initializers in instance property declaration of class like entities are executed in constructor and thus deferred
+        // A name is evaluated within the enclosing scope - so it shouldn't count as deferred
+        return tsc_ast::is_type_query_node(store.node(location))
+            || (binder_shims::is_function_like_declaration(store.node(location))
+                || kind == Kind::PropertyDeclaration && !binder_shims::is_static(store.node(location)))
+                && (last_location.is_none() || last_location != store.node(location).name());
+    }
+    if last_location.is_some() && last_location == store.node(location).name() {
+        return false;
+    }
+    // generator functions and async functions are not inlined in control flow when immediately invoked
+    if binder_node_data::asterisk_token_of(store, location).is_some()
+        || has_syntactic_modifier(store.node(location), ModifierFlags::ASYNC)
+    {
+        return true;
+    }
+    binder_shims::get_immediately_invoked_function_expression(store, location).is_none()
+}
+
+/// Go: `func isSelfReferenceLocation(node, lastLocation) bool` (nameresolver.go).
+fn is_self_reference_location(node: &Node, last_location: Option<NodeId>) -> bool {
+    match node.kind {
+        Kind::Parameter => last_location.is_some() && last_location == node.name(),
+        Kind::FunctionDeclaration
+        | Kind::ClassDeclaration
+        | Kind::InterfaceDeclaration
+        | Kind::EnumDeclaration
+        | Kind::TypeAliasDeclaration
+        | Kind::JSTypeAliasDeclaration
+        | Kind::ModuleDeclaration => {
+            // For `namespace N { N; }`
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Go: `func isPrimitiveTypeName(s string) bool` (checker.go:1681).
+fn is_primitive_type_name(s: &str) -> bool {
+    s == "any" || s == "string" || s == "number" || s == "boolean" || s == "never" || s == "unknown"
+}
+
+/// Go: `func isES2015OrLaterConstructorName(s string) bool` (checker.go:1748).
+fn is_es2015_or_later_constructor_name(s: &str) -> bool {
+    s == "Promise" || s == "Symbol" || s == "Map" || s == "WeakMap" || s == "Set" || s == "WeakSet"
+}
+
+/// Go: `func isImmediatelyUsedInInitializerOfBlockScopedVariable(declaration, usage, declContainer) bool`
+/// (checker.go:2116).
+fn is_immediately_used_in_initializer_of_block_scoped_variable(
+    store: &dyn NodeStore,
+    declaration: NodeId,
+    usage: NodeId,
+    decl_container: Option<NodeId>,
+) -> bool {
+    let grandparent = binder_shims::parent_of(store, declaration)
+        .and_then(|p| binder_shims::parent_of(store, p));
+    let grandparent_kind = grandparent.map(|g| store.node(g).kind);
+    if matches!(
+        grandparent_kind,
+        Some(Kind::VariableStatement) | Some(Kind::ForStatement) | Some(Kind::ForOfStatement)
+    ) {
+        // variable statement/for/for-of statement case,
+        // use site should not be inside variable declaration (initializer of declaration or binding element)
+        if is_same_scope_descendent_of(store, usage, Some(declaration), decl_container) {
+            return true;
+        }
+    }
+    // ForIn/ForOf case - use site should not be used in expression part
+    grandparent.is_some_and(|g| {
+        binder_shims::is_for_in_or_of_statement(store.node(g))
+            && binder_shims::initializer_of(store, g).is_some_and(|expr| {
+                is_same_scope_descendent_of(store, usage, Some(expr), decl_container)
+            })
+    })
+}
+
+/// Go: `func isSameScopeDescendentOf(initial, parent, stopAt) bool` (checker.go:2134).
+fn is_same_scope_descendent_of(
+    store: &dyn NodeStore,
+    initial: NodeId,
+    parent: Option<NodeId>,
+    stop_at: Option<NodeId>,
+) -> bool {
+    let Some(parent) = parent else {
+        return false;
+    };
+    let mut n = Some(initial);
+    while let Some(current) = n {
+        if current == parent {
+            return true;
+        }
+        let is_function_like_stop = binder_shims::is_function_like(store.node(current))
+            && (binder_shims::get_immediately_invoked_function_expression(store, current).is_none()
+                || tsc_ast::functionflags::get_function_flags(store, current)
+                    .intersects(tsc_ast::functionflags::FunctionFlags::ASYNC_GENERATOR));
+        if Some(current) == stop_at || is_function_like_stop {
+            return false;
+        }
+        n = binder_shims::parent_of(store, current);
+    }
+    false
+}
+
+/// Go: `func isPropertyImmediatelyReferencedWithinDeclaration(declaration, usage, stopAtAnyPropertyDeclaration) bool`
+/// (checker.go:2150).
+fn is_property_immediately_referenced_within_declaration(
+    store: &dyn NodeStore,
+    declaration: NodeId,
+    usage: NodeId,
+    stop_at_any_property_declaration: bool,
+) -> bool {
+    // always legal if usage is after declaration
+    if store.node(usage).end() > store.node(declaration).end() {
+        return false;
+    }
+    // still might be legal if usage is deferred (e.g. x: any = () => this.x)
+    // otherwise illegal if immediately referenced within the declaration (e.g. x: any = this.x)
+    let mut node = Some(usage);
+    while node.is_some_and(|n| n != declaration) {
+        let n = node.unwrap();
+        match store.node(n).kind {
+            Kind::ArrowFunction => return false,
+            Kind::PropertyDeclaration => {
+                // even when stopping at any property declaration, they need to come from the same class
+                let declaration_parent = binder_shims::parent_of(store, declaration);
+                let node_parent = binder_shims::parent_of(store, n);
+                return stop_at_any_property_declaration
+                    && ((store.node(declaration).kind == Kind::PropertyDeclaration
+                        && node_parent == declaration_parent)
+                        || (binder_shims::is_parameter_property_declaration(
+                            store,
+                            declaration,
+                            store.node(declaration).parent.get(),
+                        ) && declaration_parent.is_some_and(|dp| {
+                            binder_shims::parent_of(store, dp) == node_parent
+                        })));
+            }
+            Kind::Block => {
+                let parent_kind = binder_shims::parent_of(store, n).map(|p| store.node(p).kind);
+                if matches!(
+                    parent_kind,
+                    Some(Kind::MethodDeclaration) | Some(Kind::GetAccessor) | Some(Kind::SetAccessor)
+                ) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        node = binder_shims::parent_of(store, n);
+    }
+    true
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Local ast-package helpers (Go ast/utilities.go + checker.go probes the
+// slice needs; none of the landed crates exports them yet — they fold into
+// the owning crate's utilities wave when it lands).
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `func ast.GetEnclosingBlockScopeContainer(node) *Node` (ast/utilities.go)
+/// — `FindAncestor(node.Parent, IsBlockScope)`.
+fn get_enclosing_block_scope_container(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    let mut current = binder_shims::parent_of(store, node)?;
+    loop {
+        let parent = binder_shims::parent_of(store, current);
+        // Go: IsBlockScope(current, current.Parent) — IsLocalsContainer, or a
+        // module block inside a module declaration, or an interface.
+        let is_block_scope = binder_node_data::is_locals_container(store.node(current))
+            || (store.node(current).kind == Kind::ModuleBlock
+                && parent.is_some_and(|p| store.node(p).kind == Kind::ModuleDeclaration))
+            || store.node(current).kind == Kind::InterfaceDeclaration;
+        if is_block_scope {
+            return Some(current);
+        }
+        current = parent?;
+    }
+}
+
+/// Go: `func ast.FindAncestorKind(node, kind) *Node` (ast/utilities.go).
+fn find_ancestor_kind(store: &dyn NodeStore, node: NodeId, kind: Kind) -> Option<NodeId> {
+    binder_shims::find_ancestor(store, node, &mut |n| store.node(n).kind == kind)
+}
+
+/// Go: `func ast.IsAccessor(node) bool` (ast/astnav — the two-kind probe).
+fn is_accessor(node: &Node) -> bool {
+    node.kind == Kind::GetAccessor || node.kind == Kind::SetAccessor
+}
+
+/// Go: `func ast.IsValidTypeOnlyAliasUseSite(useSite) bool` (ast/utilities.go).
+/// TODO(port M6 S6 remainder): the exact use-site predicate
+/// (isIdentifierInNonEmittingHeritageClause /
+/// isPartOfPossiblyValidTypeOrAbstractComputedPropertyName /
+/// isShorthandPropertyNameUseSite) rides the ast-utilities wholesale port;
+/// permissive true keeps the TS1345/TS1361 "imported using import type" arms
+/// dormant (diagnostics-neutral — no false positives).
+fn is_valid_type_only_alias_use_site(_store: &dyn NodeStore, use_site: NodeId) -> bool {
+    let _ = use_site;
+    true
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Section B — the alias/module family (Go checker.go 14472–16750)
+// ════════════════════════════════════════════════════════════════════════════
+
+impl Checker {
+    /// Go: `func (c *Checker) getMergedSymbol(symbol *ast.Symbol) *ast.Symbol`
+    /// (checker.go:14624). Real body over the mergedSymbols table.
+    pub(crate) fn get_merged_symbol_real(&self, symbol: SymbolId) -> SymbolId {
+        if let Some(&merged) = self.merged_symbols.get(&symbol) {
+            return merged;
+        }
+        symbol
+    }
+
+    /// Go: `func (c *Checker) recordMergedSymbol(target, source) *ast.Symbol`
+    /// (checker.go:14638).
+    pub(crate) fn record_merged_symbol(&mut self, target: SymbolId, source: SymbolId) {
+        self.merged_symbols.insert(source, target);
+    }
+
+    /// Go: `func (c *Checker) getParentOfSymbol(symbol) *ast.Symbol` (checker.go:14630).
+    pub(crate) fn get_parent_of_symbol(&mut self, symbol: SymbolId) -> Option<SymbolId> {
+        let parent = self.program_symbol(symbol).parent?;
+        Some(self.get_merged_symbol(self.get_late_bound_symbol(parent)))
+    }
+
+    /// Go: `func (c *Checker) getResolvedTarget(symbol) *ast.Symbol` (checker.go:14641).
+    pub(crate) fn get_resolved_target(&mut self, symbol: SymbolId) -> SymbolId {
+        self.get_merged_symbol(self.resolve_symbol(self.get_merged_symbol(symbol)))
+    }
+
+    /// Go: `func (c *Checker) getSymbolIfSameReference(s1, s2) *ast.Symbol` (checker.go:14645).
+    pub(crate) fn get_symbol_if_same_reference(&mut self, s1: SymbolId, s2: SymbolId) -> Option<SymbolId> {
+        if self.get_resolved_target(s1) == self.get_resolved_target(s2) {
+            Some(s1)
+        } else {
+            None
+        }
+    }
+
+    /// Go: `func (c *Checker) getSymbolOfDeclaration(node) *ast.Symbol` (checker.go:14669)
+    /// — the merged+late-bound composition. PORT: Go's name collides with the
+    /// exports.rs public twin (GetSymbolOfDeclaration); the internal body is
+    /// named `..._merged` (the landed call sites keep their carrier).
+    pub(crate) fn get_symbol_of_declaration_merged(&mut self, node: NodeId) -> Option<SymbolId> {
+        let symbol = crate::typeofsymbol::get_symbol_of_declaration(self, node)?;
+        Some(self.get_merged_symbol(self.get_late_bound_symbol(symbol)))
+    }
+
+    /// Go: `func (c *Checker) getSymbolOfNode(node) *ast.Symbol` (checker.go:14682)
+    /// — `node.DeclarationData().Symbol` then merged+late-bound.
+    pub(crate) fn get_symbol_of_node_real(&mut self, node: NodeId) -> Option<SymbolId> {
+        let symbol = crate::typeofsymbol::payload_symbol(self.store().node(node))?;
+        Some(self.get_merged_symbol(self.get_late_bound_symbol(symbol)))
+    }
+
+    /// Go: `func (c *Checker) getLateBoundSymbol(symbol) *ast.Symbol` (checker.go:14694).
+    pub(crate) fn get_late_bound_symbol(&mut self, symbol: SymbolId) -> SymbolId {
+        let (flags, name, declarations) = {
+            let s = self.program_symbol(symbol);
+            (s.flags, s.name.clone(), s.declarations.clone())
+        };
+        if !flags.intersects(SymbolFlags::CLASS_MEMBER)
+            || name != tsc_ast::INTERNAL_SYMBOL_NAME_COMPUTED
+        {
+            return symbol;
+        }
+        if self.late_bound_links.get(symbol).late_symbol.is_none()
+            && declarations
+                .iter()
+                .any(|&d| self.has_late_bindable_name(d))
+        {
+            // force late binding of members/exports. This will set the late-bound symbol
+            let parent = self.get_merged_symbol(
+                self.program_symbol(symbol).parent.unwrap_or(symbol),
+            );
+            if declarations
+                .iter()
+                .any(|&d| binder_shims::has_static_modifier(self.store().node(d)))
+            {
+                self.get_exports_of_symbol(parent);
+            } else {
+                self.get_members_of_symbol(parent);
+            }
+        }
+        if self.late_bound_links.get(symbol).late_symbol.is_none() {
+            self.late_bound_links.get(symbol).late_symbol = Some(symbol);
+        }
+        self.late_bound_links.get(symbol).late_symbol.unwrap()
+    }
+
+    /// Go: `func (c *Checker) resolveSymbol(symbol) *ast.Symbol` (checker.go:14755).
+    pub(crate) fn resolve_symbol(&mut self, symbol: SymbolId) -> SymbolId {
+        self.resolve_symbol_ex(symbol, false)
+    }
+
+    /// Go: `func (c *Checker) resolveSymbolEx(symbol, dontResolveAlias) *ast.Symbol` (checker.go:14759).
+    pub(crate) fn resolve_symbol_ex(&mut self, symbol: SymbolId, dont_resolve_alias: bool) -> SymbolId {
+        if !dont_resolve_alias
+            && is_non_local_alias(
+                self.program_symbol(symbol),
+                SymbolFlags::VALUE.union(SymbolFlags::TYPE).union(SymbolFlags::NAMESPACE),
+            )
+        {
+            return self.resolve_alias(symbol);
+        }
+        symbol
+    }
+
+    /// Go: `func (c *Checker) getDeclarationOfKind`-shaped read over the
+    /// symbol's declarations (ast.GetDeclarationOfKind).
+    pub(crate) fn get_declaration_of_kind_of_symbol(&self, symbol: SymbolId, kind: Kind) -> Option<NodeId> {
+        self.program_symbol(symbol)
+            .declarations
+            .iter()
+            .copied()
+            .find(|&d| self.store().node(d).kind == kind)
+    }
+
+    // ── resolveAlias + the getTargetOf* family ──
+
+    /// Go: `func (c *Checker) resolveAlias(symbol) *ast.Symbol` (checker.go:16652).
+    pub(crate) fn resolve_alias_real(&mut self, symbol: SymbolId) -> SymbolId {
+        debug_assert!(
+            self.program_symbol(symbol).flags.intersects(SymbolFlags::ALIAS),
+            "Should only get alias here"
+        );
+        if self.alias_symbol_links.get(symbol).alias_target.is_some() {
+            return self.alias_symbol_links.get(symbol).alias_target.unwrap();
+        }
+        if !self.push_type_resolution(
+            TypeSystemEntity::Symbol(symbol),
+            TypeSystemPropertyName::AliasTarget,
+        ) {
+            return self.unknown_symbol();
+        }
+        let node = self.get_declaration_of_alias_symbol(symbol);
+        let Some(node) = node else {
+            panic!(
+                "Unexpected nil in resolveAlias for symbol: {}",
+                crate::relater::symbol_to_string(self, symbol)
+            );
+        };
+        let target = self.get_target_of_alias_declaration(Some(node));
+        let target = match target {
+            Some(target)
+                if is_non_local_alias(
+                    self.program_symbol(target),
+                    SymbolFlags::VALUE.union(SymbolFlags::TYPE).union(SymbolFlags::NAMESPACE),
+                ) =>
+            {
+                // When the target is a pure alias, we transitively resolve and propagate any typeOnlyDeclaration
+                self.resolve_indirection_alias(symbol, target)
+            }
+            _ => target,
+        };
+        let target = target.unwrap_or_else(|| self.unknown_symbol());
+        self.alias_symbol_links.get(symbol).alias_target = Some(target);
+        if !self.pop_type_resolution() {
+            let name = crate::relater::symbol_to_string(self, symbol);
+            self.error(node, &diag::CIRCULAR_DEFINITION_OF_IMPORT_ALIAS_0, &[name]);
+            self.alias_symbol_links.get(symbol).alias_target = Some(self.unknown_symbol());
+        }
+        self.alias_symbol_links.get(symbol).alias_target.unwrap()
+    }
+
+    /// Go: `func (c *Checker) resolveIndirectionAlias(source, target) *ast.Symbol` (checker.go:16679).
+    pub(crate) fn resolve_indirection_alias(&mut self, source: SymbolId, target: SymbolId) -> SymbolId {
+        let result = self.get_merged_symbol(self.resolve_alias_real(target));
+        if self.alias_symbol_links.get(target).type_only_declaration.is_some()
+            && self.alias_symbol_links.get(source).type_only_declaration.is_none()
+        {
+            let type_only = self.alias_symbol_links.get(target).type_only_declaration;
+            self.alias_symbol_links.get(source).type_only_declaration = type_only;
+        }
+        result
+    }
+
+    /// Go: `func (c *Checker) tryResolveAlias(symbol) *ast.Symbol` (checker.go:16689).
+    #[allow(dead_code)] // the spelling-suggestion probe lands with the S6 remainder
+    pub(crate) fn try_resolve_alias(&mut self, symbol: SymbolId) -> Option<SymbolId> {
+        if self.alias_symbol_links.get(symbol).alias_target.is_some()
+            || !self.has_in_flight_alias_resolution(symbol)
+        {
+            return Some(self.resolve_alias_real(symbol));
+        }
+        None
+    }
+
+    /// The findResolutionCycleStartIndex probe tryResolveAlias needs (Go
+    /// checker.go:16692's `< 0` check); checker.rs's detector is private, so
+    /// the scan is re-read off the resolution stack.
+    fn has_in_flight_alias_resolution(&mut self, symbol: SymbolId) -> bool {
+        let mut i = self.type_resolutions.len() as isize - 1;
+        while i >= self.resolution_start as isize {
+            let resolution = self.type_resolutions[i as usize];
+            if resolution.target == TypeSystemEntity::Symbol(symbol)
+                && resolution.property_name == TypeSystemPropertyName::AliasTarget
+            {
+                return true;
+            }
+            i -= 1;
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) resolveAliasWithDeprecationCheck(symbol, location) *ast.Symbol`
+    /// (checker.go:16697).
+    pub(crate) fn resolve_alias_with_deprecation_check_real(
+        &mut self,
+        symbol: SymbolId,
+        location: NodeId,
+    ) -> SymbolId {
+        if !self.program_symbol(symbol).flags.intersects(SymbolFlags::ALIAS)
+            || self.is_deprecated_symbol_stub(symbol)
+            || self.get_declaration_of_alias_symbol(symbol).is_none()
+        {
+            return symbol;
+        }
+        let target_symbol = self.resolve_alias_real(symbol);
+        if target_symbol == self.unknown_symbol() {
+            return target_symbol;
+        }
+        let mut symbol = symbol;
+        while self.program_symbol(symbol).flags.intersects(SymbolFlags::ALIAS) {
+            if let Some(target) = self.get_immediate_aliased_symbol(symbol) {
+                if target == target_symbol {
+                    break;
+                }
+                if !self.program_symbol(target).declarations.is_empty() {
+                    // TODO(port M6 S6 remainder): isDeprecatedSymbol +
+                    // addDeprecatedSuggestion — the @deprecated JSDoc walk;
+                    // permissive not-deprecated keeps the suggestion dormant.
+                    if self.is_deprecated_symbol_stub(target) {
+                        break;
+                    } else if symbol == target_symbol {
+                        break;
+                    } else {
+                        symbol = target;
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        let _ = location;
+        target_symbol
+    }
+
+    /// Go: `func (c *Checker) isDeprecatedSymbol(symbol) bool` (checker.go:14325)
+    /// — TODO(port M6 S6 remainder): the JSDoc @deprecated scan; permissive
+    /// false (no symbol is deprecated) keeps every deprecation arm dormant.
+    fn is_deprecated_symbol_stub(&mut self, symbol: SymbolId) -> bool {
+        let _ = symbol;
+        false
+    }
+
+    /// Go: `func (c *Checker) getImmediateAliasedSymbol(symbol) *ast.Symbol` (checker.go:2199).
+    pub(crate) fn get_immediate_aliased_symbol_real(&mut self, symbol: SymbolId) -> Option<SymbolId> {
+        if self.alias_symbol_links.get(symbol).immediate_target.is_none() {
+            let node = self.get_declaration_of_alias_symbol(symbol)?;
+            let target = self.get_target_of_alias_declaration(Some(node));
+            self.alias_symbol_links.get(symbol).immediate_target = target;
+        }
+        self.alias_symbol_links.get(symbol).immediate_target
+    }
+
+    /// Go: `func (c *Checker) getTypeOnlyAliasDeclaration(symbol) *ast.Node` (checker.go:2177).
+    pub(crate) fn get_type_only_alias_declaration_real(&mut self, symbol: SymbolId) -> Option<NodeId> {
+        if self.program_symbol(symbol).flags.intersects(SymbolFlags::ALIAS) {
+            self.resolve_alias_real(symbol);
+            return self.alias_symbol_links.get(symbol).type_only_declaration;
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) getTypeOnlyAliasDeclarationEx(symbol, meaning) *ast.Node` (checker.go:2187).
+    pub(crate) fn get_type_only_alias_declaration_ex(
+        &mut self,
+        mut symbol: SymbolId,
+        meaning: SymbolFlags,
+    ) -> Option<NodeId> {
+        while self.program_symbol(symbol).flags.intersects(SymbolFlags::ALIAS)
+            && !self.program_symbol(symbol).flags.intersects(meaning)
+        {
+            let resolved = self.resolve_alias_real(symbol);
+            let type_only = self.alias_symbol_links.get(symbol).type_only_declaration;
+            if type_only.is_some() {
+                return type_only;
+            }
+            symbol = resolved;
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) addTypeOnlyDeclarationRelatedInfo(diagnostic, typeOnlyDeclaration, name) *ast.Diagnostic`
+    /// (checker.go:2212).
+    pub(crate) fn add_type_only_declaration_related_info(
+        &mut self,
+        mut diagnostic: tsc_ast::Diagnostic,
+        type_only_declaration: NodeId,
+        name: &str,
+    ) -> tsc_ast::Diagnostic {
+        let kind = self.store().node(type_only_declaration).kind;
+        let is_export = matches!(
+            kind,
+            Kind::ExportSpecifier | Kind::ExportDeclaration | Kind::NamespaceExport
+        );
+        let message = if is_export {
+            &diag::X_0_WAS_EXPORTED_HERE
+        } else {
+            &diag::X_0_WAS_IMPORTED_HERE
+        };
+        diagnostic.add_related_info(u::new_diagnostic_for_node(
+            self.store(),
+            type_only_declaration,
+            message,
+            vec![name.to_string()],
+        ));
+        diagnostic
+    }
+
+    /// Go: `func (c *Checker) markSymbolOfAliasDeclarationIfTypeOnly(aliasDeclaration, exportStarDeclaration) bool`
+    /// (checker.go:15377).
+    pub(crate) fn mark_symbol_of_alias_declaration_if_type_only(
+        &mut self,
+        alias_declaration: Option<NodeId>,
+        export_star_declaration: Option<NodeId>,
+    ) -> bool {
+        let Some(alias_declaration) = alias_declaration.filter(|&n| {
+            tsc_ast::utilities::is_declaration_node(self.store(), n)
+        }) else {
+            return false;
+        };
+        // If the declaration itself is type-only, mark it and return. No need to check what it resolves to.
+        let Some(source_symbol) = self.get_symbol_of_declaration_merged(alias_declaration) else {
+            return false;
+        };
+        if self.alias_symbol_links.get(source_symbol).type_only_declaration.is_none()
+            && crate::statements::is_type_only_import_or_export_declaration(
+                self.store(),
+                alias_declaration,
+            )
+        {
+            self.alias_symbol_links.get(source_symbol).type_only_declaration = Some(alias_declaration);
+            return true;
+        }
+        if self.alias_symbol_links.get(source_symbol).type_only_declaration.is_none()
+            && let Some(export_star_declaration) = export_star_declaration
+        {
+            self.alias_symbol_links.get(source_symbol).type_only_declaration =
+                Some(export_star_declaration);
+            return true;
+        }
+        self.alias_symbol_links.get(source_symbol).type_only_declaration.is_some()
+    }
+
+    /// Go: `func (c *Checker) getTargetOfAliasDeclaration(node) *ast.Symbol` (checker.go:16122).
+    pub(crate) fn get_target_of_alias_declaration(&mut self, node: Option<NodeId>) -> Option<SymbolId> {
+        let node = node?;
+        match self.store().node(node).kind {
+            Kind::ImportEqualsDeclaration | Kind::VariableDeclaration => {
+                self.get_target_of_import_equals_declaration(node)
+            }
+            Kind::ImportClause => self.get_target_of_import_clause(node),
+            Kind::NamespaceImport => self.get_target_of_namespace_import(node),
+            Kind::NamespaceExport => self.get_target_of_namespace_export(node),
+            Kind::ImportSpecifier | Kind::BindingElement => {
+                self.get_target_of_import_specifier(node)
+            }
+            Kind::ExportSpecifier => self.get_target_of_export_specifier(
+                node,
+                SymbolFlags::VALUE.union(SymbolFlags::TYPE).union(SymbolFlags::NAMESPACE),
+                true,
+            ),
+            Kind::ExportAssignment => self.get_target_of_export_assignment(node),
+            Kind::BinaryExpression => self.get_target_of_binary_expression(node),
+            Kind::NamespaceExportDeclaration => {
+                self.get_target_of_namespace_export_declaration(node)
+            }
+            Kind::ShorthandPropertyAssignment => {
+                let name = self.store().node(node).name().expect("shorthand name");
+                self.resolve_entity_name(
+                    name,
+                    SymbolFlags::VALUE.union(SymbolFlags::TYPE).union(SymbolFlags::NAMESPACE),
+                    true,
+                    true,
+                    NodeId::NONE,
+                )
+            }
+            Kind::PropertyAssignment => {
+                let initializer = crate::ast_shims::initializer_of(self.store(), node)?;
+                self.get_target_of_alias_like_expression(initializer)
+            }
+            Kind::ElementAccessExpression | Kind::PropertyAccessExpression => {
+                self.get_target_of_access_expression(node)
+            }
+            _ => panic!(
+                "Unhandled case in getTargetOfAliasDeclaration: {}",
+                self.store().node(node).kind_string()
+            ),
+        }
+    }
+
+    /// Go: `func (c *Checker) getTargetOfImportEqualsDeclaration(node) *ast.Symbol` (checker.go:14790).
+    pub(crate) fn get_target_of_import_equals_declaration(&mut self, node: NodeId) -> Option<SymbolId> {
+        // Node is ImportEqualsDeclaration | VariableDeclaration
+        let module_reference = match &self.store().node(node).data {
+            tsc_ast::NodeData::ImportEqualsDeclaration(d) => d.module_reference,
+            tsc_ast::NodeData::VariableDeclaration(_) => None,
+            _ => return None,
+        };
+        let is_external_module_reference = module_reference
+            .is_some_and(|m| self.store().node(m).kind == Kind::ExternalModuleReference);
+        if self.store().node(node).kind == Kind::VariableDeclaration || is_external_module_reference {
+            let mut module_reference = u::get_external_module_require_argument(self.store(), node);
+            if module_reference.is_none() {
+                module_reference =
+                    u::get_external_module_import_equals_declaration_expression(self.store(), node);
+            }
+            let immediate = self.resolve_external_module_name(node, module_reference?, false, None);
+            let resolved = self.resolve_external_module_symbol(immediate, true);
+            if let Some(resolved) = resolved
+                && tsc_core::options_generated::ModuleKind::Node20 <= self.module_kind
+                    && self.module_kind <= tsc_core::options_generated::ModuleKind::NodeNext
+            {
+                let module_exports = self.get_export_of_module(
+                    resolved,
+                    tsc_ast::INTERNAL_SYMBOL_NAME_MODULE_EXPORTS,
+                    node,
+                    true,
+                );
+                if let Some(module_exports) = module_exports {
+                    return Some(module_exports);
+                }
+            }
+            self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
+            return resolved;
+        }
+        let module_reference = module_reference.expect("ImportEqualsDeclaration moduleReference");
+        let resolved =
+            self.get_symbol_of_part_of_right_hand_side_of_import_equals(module_reference);
+        self.check_and_report_error_for_resolving_import_alias_to_type_only_symbol(node, resolved);
+        resolved
+    }
+
+    /// Go: `func (c *Checker) getSymbolOfPartOfRightHandSideOfImportEquals(entityName) *ast.Symbol`
+    /// (checker.go:14767). This function is only for imports with entity names.
+    pub(crate) fn get_symbol_of_part_of_right_hand_side_of_import_equals(
+        &mut self,
+        mut entity_name: NodeId,
+    ) -> Option<SymbolId> {
+        // There are three things we might try to look for. In the following examples,
+        // the search term is enclosed in |...|:
+        //
+        //     import a = |b|; // Namespace
+        //     import a = |b.c|; // Value, type, namespace
+        //     import a = |b.c|.d; // Namespace
+        if is_identifier(self.store().node(entity_name))
+            && binder_shims::is_right_side_of_qualified_name_or_property_access(self.store(), entity_name)
+        {
+            entity_name = self.store().node(entity_name).parent.get();
+        }
+        // Check for case 1 and 3 in the above example
+        if is_identifier(self.store().node(entity_name))
+            || self
+                .store()
+                .node(self.store().node(entity_name).parent.get())
+                .kind
+                == Kind::QualifiedName
+        {
+            return self.resolve_entity_name(
+                entity_name,
+                SymbolFlags::NAMESPACE,
+                false,
+                true,
+                NodeId::NONE,
+            );
+        }
+        // Case 2 in above example
+        // entityName.kind could be a QualifiedName or a Missing identifier
+        debug_assert!(
+            self.store().node(self.store().node(entity_name).parent.get()).kind
+                == Kind::ImportEqualsDeclaration
+        );
+        self.resolve_entity_name(
+            entity_name,
+            SymbolFlags::VALUE.union(SymbolFlags::TYPE).union(SymbolFlags::NAMESPACE),
+            false,
+            true,
+            NodeId::NONE,
+        )
+    }
+
+    /// Go: `func (c *Checker) checkAndReportErrorForResolvingImportAliasToTypeOnlySymbol(node, resolved)`
+    /// (checker.go:14805).
+    fn check_and_report_error_for_resolving_import_alias_to_type_only_symbol(
+        &mut self,
+        node: NodeId,
+        _resolved: Option<SymbolId>,
+    ) {
+        let (module_reference, _) = match &self.store().node(node).data {
+            tsc_ast::NodeData::ImportEqualsDeclaration(d) => (d.module_reference, ()),
+            _ => return,
+        };
+        let mut name = module_reference;
+        loop {
+            if let Some(type_only_declaration) = self.get_type_only_declaration_of_entity_name(name)
+            {
+                let is_export = matches!(
+                    self.store().node(type_only_declaration).kind,
+                    Kind::ExportSpecifier | Kind::ExportDeclaration
+                );
+                let (message, related_message) = if is_export {
+                    (
+                        &diag::AN_IMPORT_ALIAS_CANNOT_REFERENCE_A_DECLARATION_THAT_WAS_EXPORTED_USING_EXPORT_TYPE,
+                        &diag::X_0_WAS_EXPORTED_HERE,
+                    )
+                } else {
+                    (
+                        &diag::AN_IMPORT_ALIAS_CANNOT_REFERENCE_A_DECLARATION_THAT_WAS_IMPORTED_USING_IMPORT_TYPE,
+                        &diag::X_0_WAS_IMPORTED_HERE,
+                    )
+                };
+                // TODO: how to get name for export *?
+                let mut related_name = "*".to_string();
+                if self.store().node(type_only_declaration).kind != Kind::ExportDeclaration {
+                    related_name = binder_shims::node_text(
+                        self.store(),
+                        self.store().node(type_only_declaration).name().unwrap_or(type_only_declaration),
+                    )
+                    .to_string();
+                }
+                let mut diagnostic = self.error(
+                    module_reference,
+                    message,
+                    &[],
+                );
+                diagnostic.add_related_info(u::new_diagnostic_for_node(
+                    self.store(),
+                    type_only_declaration,
+                    related_message,
+                    vec![related_name],
+                ));
+                let _ = diagnostic;
+                break;
+            }
+            if is_identifier(self.store().node(name)) {
+                break;
+            }
+            name = match &self.store().node(name).data {
+                tsc_ast::NodeData::QualifiedName(d) => d.left,
+                _ => break,
+            };
+        }
+    }
+
+    /// Go: `func (c *Checker) getTypeOnlyDeclarationOfEntityName(name) *ast.Node` (checker.go:14842).
+    fn get_type_only_declaration_of_entity_name(&mut self, name: NodeId) -> Option<NodeId> {
+        let symbol = self.resolve_entity_name(
+            name,
+            SymbolFlags::VALUE.union(SymbolFlags::TYPE).union(SymbolFlags::NAMESPACE),
+            true,
+            true,
+            NodeId::NONE,
+        )?;
+        self.get_type_only_alias_declaration_real(symbol)
+    }
+
+    /// Go: `func (c *Checker) getTargetOfImportClause(node) *ast.Symbol` (checker.go:14850).
+    pub(crate) fn get_target_of_import_clause(&mut self, node: NodeId) -> Option<SymbolId> {
+        let phase_modifier = match &self.store().node(node).data {
+            tsc_ast::NodeData::ImportClause(d) => d.phase_modifier,
+            _ => return None,
+        };
+        if phase_modifier == Some(Kind::SourceKeyword) {
+            // TODO(port M6 S7): getGlobalAbstractModuleSourceType — the
+            // source-phase import symbol carries a resolvedType through the
+            // global resolver; the seam composes Go's nil answer until then.
+            return None;
+        }
+        let parent = self.store().node(node).parent.get();
+        let module_specifier = get_module_specifier_from_node(self.store(), parent)?;
+        let attributes_type = crate::statements::get_import_attributes(self.store(), parent)
+            .and_then(|a| self.get_type_from_import_attributes(Some(a)));
+        let module_symbol =
+            self.resolve_external_module_name(node, module_specifier, false, attributes_type)?;
+        self.get_target_of_module_default(module_symbol, node, true)
+    }
+
+    /// Go: `func (c *Checker) getTargetOfModuleDefault(moduleSymbol, node, dontResolveAlias) *ast.Symbol`
+    /// (checker.go:14867).
+    pub(crate) fn get_target_of_module_default(
+        &mut self,
+        module_symbol: SymbolId,
+        node: NodeId,
+        dont_resolve_alias: bool,
+    ) -> Option<SymbolId> {
+        let declarations = self.program_symbol(module_symbol).declarations.clone();
+        let file = declarations
+            .iter()
+            .copied()
+            .find(|&d| is_source_file(self.store().node(d)));
+        let specifier = self.get_module_specifier_for_import_or_export(node);
+        let mut export_module_dot_exports_symbol = None;
+        // TODO(port M6 S6 remainder): the transpiled-`module.exports` default
+        // arm reads program.GetImpliedNodeFormatForEmit + the emit-syntax
+        // resolver; permissive None until the program seam grows them.
+        if u::is_shorthand_ambient_module_symbol(self.program_symbol(module_symbol)) {
+            // !!! exportDefaultSymbol = moduleSymbol
+            // Does nothing?
+        }
+        let export_default_symbol = export_module_dot_exports_symbol.or_else(|| {
+            self.resolve_export_by_name(
+                module_symbol,
+                INTERNAL_SYMBOL_NAME_DEFAULT,
+                Some(node),
+                dont_resolve_alias,
+            )
+        });
+        let Some(specifier) = specifier else {
+            return export_default_symbol;
+        };
+        // node is ImportClause | ImportSpecifier | ExportSpecifier
+        let node_kind = self.store().node(node).kind;
+        let attributes_container = match node_kind {
+            Kind::ImportClause => binder_shims::parent_of(self.store(), node),
+            Kind::ImportSpecifier => binder_shims::parent_of(self.store(), node)
+                .and_then(|p| binder_shims::parent_of(self.store(), p))
+                .and_then(|p| binder_shims::parent_of(self.store(), p)),
+            _ => binder_shims::parent_of(self.store(), node)
+                .and_then(|p| binder_shims::parent_of(self.store(), p)),
+        };
+        let import_attributes_type = attributes_container
+            .and_then(|container| crate::statements::get_import_attributes(self.store(), container))
+            .and_then(|a| self.get_type_from_import_attributes(Some(a)));
+        let has_default_only = self.is_only_importable_as_default_real(
+            specifier,
+            Some(module_symbol),
+            import_attributes_type,
+        );
+        let has_synthetic_default =
+            self.can_have_synthetic_default(file, module_symbol, dont_resolve_alias, specifier);
+        if export_default_symbol.is_none() && !has_synthetic_default && !has_default_only {
+            if node_kind == Kind::ImportClause {
+                self.report_non_default_export(module_symbol, node);
+            } else {
+                let name = if matches!(node_kind, Kind::ImportSpecifier | Kind::ExportSpecifier)
+                    || node_kind == Kind::NamespaceExport
+                {
+                    binder_node_data::property_name_or_name(self.store(), node).unwrap_or(node)
+                } else {
+                    self.store().node(node).name().unwrap_or(node)
+                };
+                self.error_no_module_member_symbol(module_symbol, module_symbol, node, name);
+            }
+        } else if has_synthetic_default || has_default_only {
+            // per emit behavior, a synthetic default overrides a "real" .default member if `__esModule` is not present
+            let resolved = self
+                .resolve_external_module_symbol(Some(module_symbol), dont_resolve_alias)
+                .filter(|&s| s != module_symbol)
+                .or_else(|| Some(self.resolve_symbol_ex(module_symbol, dont_resolve_alias)))?;
+            self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
+            return resolved;
+        }
+        self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
+        export_default_symbol
+    }
+
+    /// Go: `func (c *Checker) reportNonDefaultExport(moduleSymbol, node)` (checker.go:14930).
+    fn report_non_default_export(&mut self, module_symbol: SymbolId, node: NodeId) {
+        let module_exports = self.program_symbol(module_symbol).exports.clone();
+        let node_symbol_name = self
+            .get_symbol_of_declaration_merged(node)
+            .map(|s| self.program_symbol(s).name.clone());
+        if let Some(name) = node_symbol_name.as_ref()
+            && module_exports.get(name).is_some()
+        {
+            let module_name = crate::relater::symbol_to_string(self, module_symbol);
+            let symbol_name = node_symbol_name.clone().unwrap_or_default();
+            self.error(
+                node,
+                &diag::MODULE_0_HAS_NO_DEFAULT_EXPORT_DID_YOU_MEAN_TO_USE_IMPORT_1_FROM_0_INSTEAD,
+                &[module_name, symbol_name],
+            );
+        } else {
+            let module_name = crate::relater::symbol_to_string(self, module_symbol);
+            let name = self.store().node(node).name().unwrap_or(node);
+            let mut diagnostic =
+                self.error(name, &diag::MODULE_0_HAS_NO_DEFAULT_EXPORT, &[module_name.clone()]);
+            if let Some(&export_star) = module_exports.get(tsc_ast::INTERNAL_SYMBOL_NAME_EXPORT_STAR)
+            {
+                let star_declarations = self.program_symbol(export_star).declarations.clone();
+                let default_export = star_declarations.iter().copied().find(|&decl| {
+                    if self.store().node(decl).kind != Kind::ExportDeclaration
+                        || binder_node_data::module_specifier_of(self.store(), decl).is_none()
+                    {
+                        return false;
+                    }
+                    let module_specifier =
+                        binder_node_data::module_specifier_of(self.store(), decl).unwrap();
+                    let attributes = binder_node_data::import_attributes_of(self.store(), decl)
+                        .map(|a| self.get_type_from_import_attributes(a));
+                    self.resolve_external_module_name(decl, module_specifier, false, attributes.flatten())
+                        .is_some_and(|resolved| {
+                            self.program_symbol(resolved)
+                                .exports
+                                .get(INTERNAL_SYMBOL_NAME_DEFAULT)
+                                .is_some()
+                        })
+                });
+                if let Some(default_export) = default_export {
+                    diagnostic.add_related_info(u::new_diagnostic_for_node(
+                        self.store(),
+                        default_export,
+                        &diag::X_EXPORT_ASTERISK_DOES_NOT_RE_EXPORT_A_DEFAULT,
+                        vec![],
+                    ));
+                }
+            }
+            let _ = diagnostic;
+        }
+    }
+
+    /// Go: `func (c *Checker) resolveExportByName(moduleSymbol, name, sourceNode, dontResolveAlias) *ast.Symbol`
+    /// (checker.go:14940).
+    pub(crate) fn resolve_export_by_name(
+        &mut self,
+        module_symbol: SymbolId,
+        name: &str,
+        source_node: Option<NodeId>,
+        dont_resolve_alias: bool,
+    ) -> Option<SymbolId> {
+        let export_value = self
+            .program_symbol(module_symbol)
+            .exports
+            .get(INTERNAL_SYMBOL_NAME_EXPORT_EQUALS)
+            .copied();
+        let export_symbol = if let Some(export_value) = export_value {
+            let export_value_type = self.get_type_of_symbol(export_value);
+            // TODO(port M6 S8): getPropertyOfTypeEx's
+            // skipObjectFunctionPropertyAugment/includeTypeOnlyMembers read
+            // through resolveStructuredTypeMembers (empty until S8) — the
+            // plain getPropertyOfType carrier composes the same answer.
+            self.get_property_of_type(export_value_type, name)
+        } else {
+            self.program_symbol(module_symbol).exports.get(name).copied()
+        };
+        let resolved = self.resolve_symbol_ex(export_symbol.unwrap_or_else(|| self.unknown_symbol()), dont_resolve_alias);
+        let resolved = (resolved != self.unknown_symbol()).then_some(resolved);
+        self.mark_symbol_of_alias_declaration_if_type_only(source_node, None);
+        resolved
+    }
+
+    /// Go: `func (c *Checker) getTargetOfNamespaceImport(node) *ast.Symbol` (checker.go:14953).
+    pub(crate) fn get_target_of_namespace_import(&mut self, node: NodeId) -> Option<SymbolId> {
+        let module_specifier = self.get_module_specifier_for_import_or_export(node)?;
+        let parent_parent = binder_shims::parent_of(self.store(), node)
+            .and_then(|p| binder_shims::parent_of(self.store(), p));
+        let attributes_type = parent_parent
+            .and_then(|pp| crate::statements::get_import_attributes(self.store(), pp))
+            .and_then(|a| self.get_type_from_import_attributes(Some(a)));
+        let immediate = self.resolve_external_module_name(node, module_specifier, false, attributes_type)?;
+        let resolved = self.resolve_es_module_symbol(Some(immediate), node, module_specifier);
+        self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
+        resolved
+    }
+
+    /// Go: `func (c *Checker) getTargetOfNamespaceExport(node) *ast.Symbol` (checker.go:14964).
+    pub(crate) fn get_target_of_namespace_export(&mut self, node: NodeId) -> Option<SymbolId> {
+        let Some(module_specifier) = self.get_module_specifier_for_import_or_export(node) else {
+            return None;
+        };
+        let parent = binder_shims::parent_of(self.store(), node);
+        let attributes_type = parent
+            .and_then(|p| crate::statements::get_import_attributes(self.store(), p))
+            .and_then(|a| self.get_type_from_import_attributes(Some(a)));
+        let immediate = self.resolve_external_module_name(node, module_specifier, false, attributes_type)?;
+        let resolved = self.resolve_es_module_symbol(Some(immediate), node, module_specifier);
+        self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
+        resolved
+    }
+
+    /// Go: `func (c *Checker) getTargetOfImportSpecifier(node) *ast.Symbol` (checker.go:14977).
+    pub(crate) fn get_target_of_import_specifier(&mut self, node: NodeId) -> Option<SymbolId> {
+        let name = binder_node_data::property_name_or_name(self.store(), node)?;
+        if binder_shims::module_export_name_is_default(self.store(), name) {
+            if let Some(specifier) = self.get_module_specifier_for_import_or_export(node) {
+                let root_parent = binder_shims::parent_of(self.store(), node)
+                    .and_then(|p| binder_shims::parent_of(self.store(), p))
+                    .and_then(|p| binder_shims::parent_of(self.store(), p));
+                let attributes_type = root_parent
+                    .and_then(|p| crate::statements::get_import_attributes(self.store(), p))
+                    .and_then(|a| self.get_type_from_import_attributes(Some(a)));
+                let module_symbol =
+                    self.resolve_external_module_name(node, specifier, false, attributes_type)?;
+                return self.get_target_of_module_default(module_symbol, node, true);
+            }
+        }
+        let mut root = binder_shims::parent_of(self.store(), node)
+            .and_then(|p| binder_shims::parent_of(self.store(), p))
+            .and_then(|p| binder_shims::parent_of(self.store(), p));
+        if tsc_ast::is_binding_element(self.store().node(node)) {
+            root = Some(binder_shims::get_root_declaration(self.store(), node));
+        }
+        let resolved = self.get_external_module_member(root?, node, true);
+        self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
+        resolved
+    }
+
+    /// Go: `func (c *Checker) getExternalModuleMember(node, specifier, dontResolveAlias) *ast.Symbol`
+    /// (checker.go:15005).
+    pub(crate) fn get_external_module_member(
+        &mut self,
+        node: NodeId,
+        specifier: NodeId,
+        dont_resolve_alias: bool,
+    ) -> Option<SymbolId> {
+        // node is ImportDeclaration | ExportDeclaration | VariableDeclaration
+        // specifier is ImportSpecifier | ExportSpecifier | BindingElement | PropertyAccessExpression
+        let mut module_specifier = get_external_module_require_argument(self.store(), node);
+        if module_specifier.is_none() {
+            module_specifier = crate::statements::get_external_module_name(self.store(), node);
+        }
+        let import_attributes_type = crate::statements::get_import_attributes(self.store(), node)
+            .and_then(|a| self.get_type_from_import_attributes(Some(a)));
+        let module_symbol =
+            self.resolve_external_module_name(node, module_specifier?, false, import_attributes_type);
+        let name = if self.store().node(specifier).kind != Kind::PropertyAccessExpression {
+            binder_node_data::property_name_or_name(self.store(), specifier)
+        } else {
+            self.store().node(specifier).name()
+        }?;
+        if !is_identifier(self.store().node(name))
+            && self.store().node(name).kind != Kind::StringLiteral
+        {
+            return None;
+        }
+        let name_text = binder_shims::node_text(self.store(), name).to_string();
+        let target_symbol = self.resolve_es_module_symbol(module_symbol, specifier, module_specifier?);
+        let Some(target_symbol) = target_symbol else {
+            return None;
+        };
+        // Note: The empty string is a valid module export name:
+        //
+        //   import { "" as foo } from "./foo";
+        //   export { foo as "" };
+        //
+        if !name_text.is_empty() || self.store().node(name).kind == Kind::StringLiteral {
+            if let Some(module_symbol) = module_symbol
+                && u::is_shorthand_ambient_module_symbol(self.program_symbol(module_symbol))
+            {
+                return module_symbol;
+            }
+            let mut symbol_from_variable;
+            // First check if module was specified with "export=". If so, get the member from the resolved type
+            if module_symbol
+                .is_some_and(|m| {
+                    self.program_symbol(m)
+                        .exports
+                        .contains_key(INTERNAL_SYMBOL_NAME_EXPORT_EQUALS)
+                })
+            {
+                let target_type = self.get_type_of_symbol(target_symbol);
+                // TODO(port M6 S8): getPropertyOfTypeEx reads through the
+                // structured-members seam (as resolveExportByName above).
+                symbol_from_variable = self.get_property_of_type(target_type, &name_text);
+            } else {
+                symbol_from_variable = self.get_property_of_variable(target_symbol, &name_text);
+            }
+            // if symbolFromVariable is export - get its final target
+            symbol_from_variable = match symbol_from_variable {
+                Some(s) if s != self.unknown_symbol() => {
+                    Some(self.resolve_symbol_ex(s, dont_resolve_alias))
+                }
+                _ => symbol_from_variable,
+            };
+            let mut export_container = Some(target_symbol);
+            if module_symbol
+                .is_some_and(|m| {
+                    self.program_symbol(m)
+                        .exports
+                        .contains_key(INTERNAL_SYMBOL_NAME_EXPORT_EQUALS)
+                })
+            {
+                // For `export =` modules, supplemental type/namespace exports live on the original module symbol.
+                export_container = module_symbol;
+            }
+            let mut symbol_from_module = export_container.and_then(|container| {
+                self.get_export_of_module(container, &name_text, specifier, dont_resolve_alias)
+            });
+            if symbol_from_module.is_none() && name_text == INTERNAL_SYMBOL_NAME_DEFAULT {
+                let file = module_symbol.and_then(|m| {
+                    self.program_symbol(m)
+                        .declarations
+                        .iter()
+                        .copied()
+                        .find(|&d| is_source_file(self.store().node(d)))
+                });
+                if self.is_only_importable_as_default_real(
+                    module_specifier.unwrap(),
+                    module_symbol,
+                    import_attributes_type,
+                ) || self.can_have_synthetic_default(
+                    file,
+                    module_symbol.unwrap_or(target_symbol),
+                    dont_resolve_alias,
+                    module_specifier.unwrap(),
+                ) {
+                    symbol_from_module = self
+                        .resolve_external_module_symbol(module_symbol, dont_resolve_alias)
+                        .filter(|&s| s != self.unknown_symbol())
+                        .or_else(|| {
+                            Some(self.resolve_symbol_ex(
+                                module_symbol.unwrap_or(target_symbol),
+                                dont_resolve_alias,
+                            ))
+                        })
+                        .filter(|&s| s != self.unknown_symbol());
+                }
+            }
+            let mut symbol = symbol_from_variable;
+            if let Some(from_module) = symbol_from_module {
+                symbol = Some(from_module);
+                if let Some(from_variable) = symbol_from_variable {
+                    symbol = Some(self.combine_value_and_type_symbols(from_variable, from_module));
+                }
+            }
+            if matches!(
+                self.store().node(specifier).kind,
+                Kind::ImportSpecifier | Kind::ExportSpecifier
+            ) && self.is_only_importable_as_default_real(
+                module_specifier.unwrap(),
+                module_symbol,
+                import_attributes_type,
+            ) && name_text != INTERNAL_SYMBOL_NAME_DEFAULT
+            {
+                let module_kind = u::module_kind_string(self.module_kind);
+                self.error(
+                    name,
+                    &diag::NAMED_IMPORTS_FROM_A_JSON_FILE_INTO_AN_ECMASCRIPT_MODULE_ARE_NOT_ALLOWED_WHEN_MODULE_IS_SET_TO_0,
+                    &[module_kind],
+                );
+            } else if symbol.is_none()
+                && module_symbol.is_some()
+            {
+                self.error_no_module_member_symbol(
+                    module_symbol.unwrap(),
+                    target_symbol,
+                    node,
+                    name,
+                );
+            }
+            return symbol;
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) getPropertyOfVariable(symbol, name) *ast.Symbol` (checker.go:15070).
+    pub(crate) fn get_property_of_variable(&mut self, symbol: SymbolId, name: &str) -> Option<SymbolId> {
+        if !self.program_symbol(symbol).flags.intersects(SymbolFlags::VARIABLE) {
+            return None;
+        }
+        let type_annotation = self
+            .program_symbol(symbol)
+            .value_declaration
+            .and_then(|d| binder_node_data::type_of_node(self.store(), d));
+        let type_annotation = type_annotation?;
+        let annotation_type = self.get_type_from_type_node(type_annotation);
+        let symbol = self.get_property_of_type(annotation_type, name);
+        symbol.filter(|&s| s != self.unknown_symbol()).map(|s| self.resolve_symbol(s))
+    }
+
+    /// Go: `func (c *Checker) combineValueAndTypeSymbols(valueSymbol, typeSymbol) *ast.Symbol`
+    /// (checker.go:15090).
+    pub(crate) fn combine_value_and_type_symbols(
+        &mut self,
+        value_symbol: SymbolId,
+        type_symbol: SymbolId,
+    ) -> SymbolId {
+        let unknown = self.unknown_symbol();
+        if value_symbol == unknown && type_symbol == unknown {
+            return unknown;
+        }
+        if self.program_symbol(type_symbol).flags.intersects(SymbolFlags::VALUE) {
+            return type_symbol;
+        }
+        if self
+            .program_symbol(value_symbol)
+            .flags
+            .intersects(SymbolFlags::TYPE.union(SymbolFlags::NAMESPACE))
+        {
+            return value_symbol;
+        }
+        let (value_flags, value_name, value_declarations, value_parent, value_value_declaration, value_exports) = {
+            let s = self.program_symbol(value_symbol);
+            (
+                s.flags,
+                s.name.clone(),
+                s.declarations.clone(),
+                s.parent,
+                s.value_declaration,
+                s.exports.clone(),
+            )
+        };
+        let (type_flags, type_declarations, type_parent, type_members) = {
+            let s = self.program_symbol(type_symbol);
+            (s.flags, s.declarations.clone(), s.parent, s.members.clone())
+        };
+        debug_assert!(!value_declarations.is_empty() || !type_declarations.is_empty());
+        // Go: slices.Compact(slices.Concat(...)) — dedupe adjacent pointers;
+        // SymbolIds are unique per declaration here.
+        let mut declarations = value_declarations;
+        for d in type_declarations {
+            if !declarations.contains(&d) {
+                declarations.push(d);
+            }
+        }
+        let result = self.new_symbol(value_flags | type_flags, &value_name);
+        self.program_symbol_mut(result).declarations = declarations;
+        self.program_symbol_mut(result).parent = value_parent.or(type_parent);
+        self.program_symbol_mut(result).value_declaration = value_value_declaration;
+        self.program_symbol_mut(result).members = type_members;
+        self.program_symbol_mut(result).exports = value_exports;
+        result
+    }
+
+    /// Go: `func (c *Checker) getExportOfModule(symbol, nameText, specifier, dontResolveAlias) *ast.Symbol`
+    /// (checker.go:15120).
+    pub(crate) fn get_export_of_module(
+        &mut self,
+        symbol: SymbolId,
+        name_text: &str,
+        specifier: NodeId,
+        dont_resolve_alias: bool,
+    ) -> Option<SymbolId> {
+        if self.program_symbol(symbol).flags.intersects(SymbolFlags::MODULE) {
+            let exports = self.get_exports_of_symbol(symbol);
+            let export_symbol = exports.get(name_text).copied();
+            let resolved = match export_symbol {
+                Some(s) => {
+                    let r = self.resolve_symbol_ex(s, dont_resolve_alias);
+                    (r != self.unknown_symbol()).then_some(r)
+                }
+                None => None,
+            };
+            let export_star_declaration = self
+                .module_symbol_links
+                .get(symbol)
+                .type_only_export_star_map
+                .as_ref()
+                .and_then(|m| m.get(name_text))
+                .copied();
+            self.mark_symbol_of_alias_declaration_if_type_only(Some(specifier), export_star_declaration);
+            return resolved;
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) isOnlyImportableAsDefault(usage, resolvedModule, importAttributesType) bool`
+    /// (checker.go:15134).
+    pub(crate) fn is_only_importable_as_default_real(
+        &mut self,
+        usage: NodeId,
+        mut resolved_module: Option<SymbolId>,
+        import_attributes_type: Option<crate::types::TypeId>,
+    ) -> bool {
+        // In Node.js, JSON modules don't get named exports
+        if tsc_core::options_generated::ModuleKind::Node16 <= self.module_kind
+            && self.module_kind <= tsc_core::options_generated::ModuleKind::NodeNext
+        {
+            // TODO(port M6 S6 remainder): getEmitSyntaxForModuleSpecifierExpression
+            // reads program.GetEmitSyntaxForUsageLocation — the program seam;
+            // permissive ModuleKind::None keeps the arm dormant.
+            let _usage_mode = tsc_core::options_generated::ModuleKind::None;
+            if resolved_module.is_none() {
+                resolved_module = self.resolve_external_module_name(
+                    usage,
+                    Some(usage),
+                    true,
+                    import_attributes_type,
+                );
+            }
+            let target_file = resolved_module.and_then(|m| {
+                self.program_symbol(m)
+                    .declarations
+                    .iter()
+                    .copied()
+                    .find(|&d| is_source_file(self.store().node(d)))
+            });
+            return target_file.is_some_and(|file| {
+                let sf = self.store().file(file.file_id());
+                sf.payload().json_source_file || {
+                    let name = sf.file_name().as_string();
+                    name.ends_with(".d.json.ts")
+                }
+            });
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) canHaveSyntheticDefault(file, moduleSymbol, dontResolveAlias, usage) bool`
+    /// (checker.go:15174).
+    pub(crate) fn can_have_synthetic_default(
+        &mut self,
+        file: Option<NodeId>,
+        module_symbol: SymbolId,
+        dont_resolve_alias: bool,
+        usage: NodeId,
+    ) -> bool {
+        // TODO(port M6 S6 remainder): the usage/target mode reads
+        // (program.GetImpliedNodeFormatForEmit / GetEmitModuleFormatOfFile /
+        // project-reference redirects) are program-seam; the arm below is the
+        // declaration-file / ambient-module composition Go reaches when the
+        // mode probes yield ModuleKindNone.
+        let is_declaration_file = file.is_none()
+            || file.is_some_and(|f| self.store().file(f.file_id()).payload().is_declaration_file);
+        // Declaration files (and ambient modules)
+        if is_declaration_file {
+            // Definitely cannot have a synthetic default if they have a syntactic default member specified
+            let default_export_symbol = self.resolve_export_by_name(
+                module_symbol,
+                INTERNAL_SYMBOL_NAME_DEFAULT,
+                None,
+                true,
+            );
+            if let Some(default_export_symbol) = default_export_symbol {
+                let declarations = self.program_symbol(default_export_symbol).declarations.clone();
+                if declarations.iter().any(|&d| u::is_syntactic_default(self.store(), d)) {
+                    return false;
+                }
+            }
+            // It _might_ still be incorrect to assume there is no __esModule marker on the import at runtime, even if there is no `default` member
+            // So we check a bit more,
+            if self
+                .resolve_export_by_name(module_symbol, "__esModule", None, dont_resolve_alias)
+                .is_some()
+            {
+                // If there is an `__esModule` specified in the declaration (meaning someone explicitly added it or wrote it in their code),
+                // it definitely is a module and does not have a synthetic default
+                return false;
+            }
+            return true;
+        }
+        // TypeScript files never have a synthetic default (as they are always emitted with an __esModule marker) _unless_ they contain an export= statement
+        if !tsc_ast::utilities::is_in_js_file(self.store().node(usage)) {
+            return self.has_export_assignment_symbol(module_symbol);
+        }
+
+        // JS files have a synthetic default if they do not contain ES2015+ module syntax (export = is not valid in js) _and_ do not have an __esModule marker
+        let external_module_indicator_none = file.is_none_or(|f| {
+            let sf = self.store().file(f.file_id());
+            sf.payload().external_module_indicator.get().is_none()
+        });
+        external_module_indicator_none
+            && self
+                .resolve_export_by_name(module_symbol, "__esModule", None, dont_resolve_alias)
+                .is_none()
+    }
+
+    /// Go: `func hasExportAssignmentSymbol(moduleSymbol) bool` (utilities.go).
+    fn has_export_assignment_symbol(&mut self, module_symbol: SymbolId) -> bool {
+        self.program_symbol(module_symbol)
+            .exports
+            .get(INTERNAL_SYMBOL_NAME_EXPORT_EQUALS)
+            .is_some()
+    }
+
+    /// Go: `func (c *Checker) errorNoModuleMemberSymbol(moduleSymbol, targetSymbol, node, name)`
+    /// (checker.go:15189).
+    #[allow(clippy::too_many_arguments)]
+    fn error_no_module_member_symbol(
+        &mut self,
+        module_symbol: SymbolId,
+        target_symbol: SymbolId,
+        node: NodeId,
+        name: NodeId,
+    ) {
+        if self.compiler_options.no_check == Tristate::TSTrue {
+            return;
+        }
+        let module_name = self.get_fully_qualified_name(module_symbol);
+        let declaration_name = tsc_scanner::utilities::declaration_name_to_string(self.store(), Some(name));
+        let suggestion = if is_identifier(self.store().node(name)) {
+            self.get_suggested_symbol_for_nonexistent_module(name, target_symbol)
+        } else {
+            None
+        };
+        if let Some(suggestion) = suggestion {
+            let suggestion_name = crate::relater::symbol_to_string(self, suggestion);
+            let mut diagnostic = self.error(
+                name,
+                &diag::X_0_HAS_NO_EXPORTED_MEMBER_NAMED_1_DID_YOU_MEAN_2,
+                &[module_name, declaration_name.clone(), suggestion_name.clone()],
+            );
+            if let Some(value_declaration) = self.program_symbol(suggestion).value_declaration {
+                diagnostic.add_related_info(u::new_diagnostic_for_node(
+                    self.store(),
+                    value_declaration,
+                    &diag::X_0_IS_DECLARED_HERE,
+                    vec![suggestion_name],
+                ));
+            }
+            let _ = diagnostic;
+        } else if self
+            .program_symbol(module_symbol)
+            .exports
+            .contains_key(INTERNAL_SYMBOL_NAME_DEFAULT)
+        {
+            self.error(
+                name,
+                &diag::MODULE_0_HAS_NO_EXPORTED_MEMBER_1_DID_YOU_MEAN_TO_USE_IMPORT_1_FROM_0_INSTEAD,
+                &[module_name, declaration_name],
+            );
+        } else {
+            self.report_non_exported_member(name, &declaration_name, module_symbol, &module_name);
+        }
+    }
+
+    /// Go: `func (c *Checker) reportNonExportedMember(name, declarationName, moduleSymbol, moduleName)`
+    /// (checker.go:15212).
+    fn report_non_exported_member(
+        &mut self,
+        name: NodeId,
+        declaration_name: &str,
+        module_symbol: SymbolId,
+        module_name: &str,
+    ) {
+        let name_text = binder_shims::node_text(self.store(), name).to_string();
+        let local_symbol = self
+            .program_symbol(module_symbol)
+            .value_declaration
+            .and_then(|vd| binder_node_data::locals_of(self.store(), vd))
+            .and_then(|locals| locals.get(&name_text).copied());
+        let exports = self.program_symbol(module_symbol).exports.clone();
+        if let Some(local_symbol) = local_symbol {
+            if let Some(&exported_equals_symbol) = exports.get(INTERNAL_SYMBOL_NAME_EXPORT_EQUALS) {
+                if self.get_symbol_if_same_reference(exported_equals_symbol, local_symbol).is_some() {
+                    self.report_invalid_import_equals_export_member(name, declaration_name, module_name);
+                } else {
+                    self.error(
+                        name,
+                        &diag::MODULE_0_HAS_NO_EXPORTED_MEMBER_1,
+                        &[module_name.to_string(), declaration_name.to_string()],
+                    );
+                }
+            } else {
+                let exported_symbol = exports.iter().find(|(_, &symbol)| {
+                    self.get_symbol_if_same_reference(symbol, local_symbol).is_some()
+                });
+                let mut diagnostic = if let Some((_, &exported_symbol)) = exported_symbol {
+                    let exported_name = crate::relater::symbol_to_string(self, exported_symbol);
+                    self.error(
+                        name,
+                        &diag::MODULE_0_DECLARES_1_LOCALLY_BUT_IT_IS_EXPORTED_AS_2,
+                        &[module_name.to_string(), declaration_name.to_string(), exported_name],
+                    )
+                } else {
+                    self.error(
+                        name,
+                        &diag::MODULE_0_DECLARES_1_LOCALLY_BUT_IT_IS_NOT_EXPORTED,
+                        &[module_name.to_string(), declaration_name.to_string()],
+                    )
+                };
+                let local_declarations = self.program_symbol(local_symbol).declarations.clone();
+                for (i, decl) in local_declarations.iter().enumerate() {
+                    let message = if i == 0 {
+                        &diag::X_0_IS_DECLARED_HERE
+                    } else {
+                        &diag::X_AND_HERE
+                    };
+                    diagnostic.add_related_info(u::new_diagnostic_for_node(
+                        self.store(),
+                        *decl,
+                        message,
+                        vec![declaration_name.to_string()],
+                    ));
+                }
+                let _ = diagnostic;
+            }
+        } else {
+            self.error(
+                name,
+                &diag::MODULE_0_HAS_NO_EXPORTED_MEMBER_1,
+                &[module_name.to_string(), declaration_name.to_string()],
+            );
+        }
+    }
+
+    /// Go: `func (c *Checker) reportInvalidImportEqualsExportMember(name, declarationName, moduleName)`
+    /// (checker.go:15236).
+    fn report_invalid_import_equals_export_member(
+        &mut self,
+        name: NodeId,
+        declaration_name: &str,
+        module_name: &str,
+    ) {
+        if self.module_kind >= tsc_core::options_generated::ModuleKind::ES2015 {
+            self.error(
+                name,
+                &diag::X_0_CAN_ONLY_BE_IMPORTED_BY_USING_A_DEFAULT_IMPORT,
+                &[declaration_name.to_string()],
+            );
+        } else if tsc_ast::utilities::is_in_js_file(self.store().node(name)) {
+            self.error(
+                name,
+                &diag::X_0_CAN_ONLY_BE_IMPORTED_BY_USING_A_REQUIRE_CALL_OR_BY_USING_A_DEFAULT_IMPORT,
+                &[declaration_name.to_string()],
+            );
+        } else {
+            self.error(
+                name,
+                &diag::X_0_CAN_ONLY_BE_IMPORTED_BY_USING_IMPORT_1_REQUIRE_2_OR_A_DEFAULT_IMPORT,
+                &[declaration_name.to_string(), declaration_name.to_string(), module_name.to_string()],
+            );
+        }
+    }
+
+    /// Go: `func (c *Checker) getTargetOfExportSpecifier(node, meaning, dontResolveAlias) *ast.Symbol`
+    /// (checker.go:15238).
+    pub(crate) fn get_target_of_export_specifier(
+        &mut self,
+        node: NodeId,
+        meaning: SymbolFlags,
+        dont_resolve_alias: bool,
+    ) -> Option<SymbolId> {
+        let name = binder_node_data::property_name_or_name(self.store(), node)?;
+        if u::module_export_name_is_default(self.store(), name) {
+            if let Some(specifier) = self.get_module_specifier_for_import_or_export(node) {
+                let parent_parent = binder_shims::parent_of(self.store(), node)
+                    .and_then(|p| binder_shims::parent_of(self.store(), p));
+                let attributes = parent_parent
+                    .and_then(|pp| binder_node_data::import_attributes_of(self.store(), pp))
+                    .map(|a| self.get_type_from_import_attributes(a));
+                let module_symbol = self.resolve_external_module_name(
+                    node,
+                    specifier,
+                    false,
+                    attributes.flatten(),
+                )?;
+                return self.get_target_of_module_default(module_symbol, node, dont_resolve_alias);
+            }
+        }
+        let export_declaration = binder_shims::parent_of(self.store(), node)
+            .and_then(|p| binder_shims::parent_of(self.store(), p))?;
+        let has_module_specifier =
+            binder_node_data::module_specifier_of(self.store(), export_declaration).is_some();
+        let resolved = if has_module_specifier {
+            self.get_external_module_member(export_declaration, node, dont_resolve_alias)
+        } else if self.store().node(name).kind == Kind::StringLiteral {
+            None
+        } else {
+            self.resolve_entity_name(name, meaning, false, dont_resolve_alias, NodeId::NONE)
+        };
+        self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
+        resolved
+    }
+
+    /// Go: `func (c *Checker) getTargetOfExportAssignment(node) *ast.Symbol` (checker.go:15270).
+    pub(crate) fn get_target_of_export_assignment(&mut self, node: NodeId) -> Option<SymbolId> {
+        // An `export =` / `export default` inside a namespace/module block is a grammar error;
+        // checkExportAssignment reports it and returns without resolving the expression. Mirror that
+        // bail-out here (using the same container computation) so that alias resolution triggered by
+        // the emit resolver does not resolve — and report "Cannot find name" diagnostics on — the
+        // expression, which would produce diagnostics inconsistent with checking.
+        if u::is_contained_by_namespace(self.store(), node) {
+            return None;
+        }
+        let expression = match &self.store().node(node).data {
+            tsc_ast::NodeData::ExportAssignment(d) => d.expression,
+            _ => return None,
+        };
+        let resolved = self.get_target_of_alias_like_expression(expression);
+        self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
+        resolved
+    }
+
+    /// Go: `func (c *Checker) getTargetOfBinaryExpression(node) *ast.Symbol` (checker.go:15284).
+    pub(crate) fn get_target_of_binary_expression(&mut self, node: NodeId) -> Option<SymbolId> {
+        let right = match &self.store().node(node).data {
+            tsc_ast::NodeData::BinaryExpression(d) => d.right,
+            _ => return None,
+        };
+        let resolved = self.get_target_of_alias_like_expression(right);
+        self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
+        resolved
+    }
+
+    /// Go: `func (c *Checker) getTargetOfAliasLikeExpression(expression) *ast.Symbol` (checker.go:15290).
+    pub(crate) fn get_target_of_alias_like_expression(&mut self, expression: NodeId) -> Option<SymbolId> {
+        if tsc_ast::is_class_expression(self.store().node(expression)) {
+            let t = self.check_expression_cached(expression);
+            return self.type_(t).symbol();
+        }
+        if !binder_shims::is_entity_name(self.store().node(expression))
+            && !u::is_entity_name_expression(self.store(), expression)
+        {
+            return None;
+        }
+        let alias_like = self.resolve_entity_name(
+            expression,
+            SymbolFlags::VALUE.union(SymbolFlags::TYPE).union(SymbolFlags::NAMESPACE),
+            true,
+            true,
+            NodeId::NONE,
+        );
+        if let Some(alias_like) = alias_like {
+            return Some(alias_like);
+        }
+        self.check_expression_cached(expression);
+        self.get_resolved_symbol_or_nil(expression)
+    }
+
+    /// Go: `func (c *Checker) getTargetOfNamespaceExportDeclaration(node) *ast.Symbol` (checker.go:15305).
+    pub(crate) fn get_target_of_namespace_export_declaration(&mut self, node: NodeId) -> Option<SymbolId> {
+        let parent = binder_shims::parent_of(self.store(), node)?;
+        if tsc_ast::utilities::can_have_symbol(self.store(), parent) {
+            let symbol = crate::typeofsymbol::get_symbol_of_declaration(self, parent)?;
+            let resolved = self.resolve_external_module_symbol(Some(symbol), true);
+            self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
+            return resolved;
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) getTargetOfAccessExpression(node) *ast.Symbol` (checker.go:15314).
+    pub(crate) fn get_target_of_access_expression(&mut self, node: NodeId) -> Option<SymbolId> {
+        let parent = binder_shims::parent_of(self.store(), node)?;
+        if self.store().node(parent).kind == Kind::BinaryExpression {
+            let (left, operator_token) = match &self.store().node(parent).data {
+                tsc_ast::NodeData::BinaryExpression(d) => (d.left, d.operator_token),
+                _ => return None,
+            };
+            if left == node && self.store().node(operator_token).kind == Kind::EqualsToken {
+                let right = match &self.store().node(parent).data {
+                    tsc_ast::NodeData::BinaryExpression(d) => d.right,
+                    _ => return None,
+                };
+                return self.get_target_of_alias_like_expression(right);
+            }
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) getModuleSpecifierForImportOrExport(node) *ast.Node` (checker.go:15324).
+    pub(crate) fn get_module_specifier_for_import_or_export(&mut self, node: NodeId) -> Option<NodeId> {
+        match self.store().node(node).kind {
+            Kind::ImportClause => {
+                let parent = self.store().node(node).parent.get();
+                get_module_specifier_from_node(self.store(), parent)
+            }
+            Kind::ImportEqualsDeclaration => {
+                let module_reference = match &self.store().node(node).data {
+                    tsc_ast::NodeData::ImportEqualsDeclaration(d) => d.module_reference,
+                    _ => None,
+                }?;
+                if self.store().node(module_reference).kind == Kind::ExternalModuleReference {
+                    binder_node_data::expression_of(self.store(), module_reference)
+                } else {
+                    None
+                }
+            }
+            Kind::NamespaceImport => {
+                let parent_parent = binder_shims::parent_of(self.store(), node)
+                    .and_then(|p| binder_shims::parent_of(self.store(), p))?;
+                get_module_specifier_from_node(self.store(), parent_parent)
+            }
+            Kind::ImportSpecifier => {
+                let named_import = binder_shims::parent_of(self.store(), node)?;
+                let import_clause = binder_shims::parent_of(self.store(), named_import)?;
+                let root = binder_shims::parent_of(self.store(), import_clause)?;
+                get_module_specifier_from_node(self.store(), root)
+            }
+            Kind::NamespaceExport => {
+                let parent = binder_shims::parent_of(self.store(), node)?;
+                get_module_specifier_from_node(self.store(), parent)
+            }
+            Kind::ExportSpecifier => {
+                let export_decl = binder_shims::parent_of(self.store(), node)?;
+                let parent_parent = binder_shims::parent_of(self.store(), export_decl)?;
+                get_module_specifier_from_node(self.store(), parent_parent)
+            }
+            _ => panic!(
+                "Unhandled case in getModuleSpecifierForImportOrExport: {}",
+                self.store().node(node).kind_string()
+            ),
+        }
+    }
+}
+
+/// Go: `func getModuleSpecifierFromNode(node) *ast.Node` (checker.go:15346).
+fn get_module_specifier_from_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    match store.node(node).kind {
+        Kind::ImportDeclaration | Kind::JSImportDeclaration | Kind::ExportDeclaration => {
+            binder_node_data::module_specifier_of(store, node)
+        }
+        _ => panic!(
+            "Unhandled case in getModuleSpecifierFromNode: {}",
+            store.node(node).kind_string()
+        ),
+    }
+}
