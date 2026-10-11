@@ -1364,7 +1364,12 @@ impl Checker {
                 } else {
                     None
                 };
-                let mut diags: Vec<tsc_ast::Diagnostic> = Vec::new();
+                // Go passes `diagnosticOutput` straight through here (no
+                // local buffer): the failed assignability's 2345 chain-head
+                // and related info land in the CALLER's output even though
+                // this returns false — the W3T7 fix for the missing 2345 on
+                // classAbstractFactoryFunction (the port's local `diags` was
+                // dropped on the failure path).
                 let applicable = self.check_type_related_to_and_optionally_elaborate(
                     check_arg_type,
                     param_type,
@@ -1372,11 +1377,7 @@ impl Checker {
                     error_node,
                     Some(effective_check_argument_node),
                     Some(head_message),
-                    if diagnostic_output.is_some() || report_errors {
-                        Some(&mut diags)
-                    } else {
-                        None
-                    },
+                    diagnostic_output.as_deref_mut(),
                 );
                 if !applicable {
                     self.maybe_add_missing_await_info(
@@ -1388,9 +1389,6 @@ impl Checker {
                         diagnostic_output.as_deref_mut(),
                     );
                     return false;
-                }
-                if let Some(out) = diagnostic_output.as_deref_mut() {
-                    out.extend(diags);
                 }
             }
         }
@@ -1416,23 +1414,17 @@ impl Checker {
                 } else {
                     None
                 };
-                let mut diags: Vec<tsc_ast::Diagnostic> = Vec::new();
+                // Go: the rest-type spread check — diagnosticOutput passes
+                // straight through (same W3T7 fix as the argument loop).
                 if !self.check_type_related_to_ex(
                     spread_type,
                     rest_type,
                     relation,
                     error_node,
                     Some(head_message),
-                    if diagnostic_output.is_some() || report_errors {
-                        Some(&mut diags)
-                    } else {
-                        None
-                    },
+                    diagnostic_output.as_deref_mut(),
                 ) {
                     return false;
-                }
-                if let Some(out) = diagnostic_output {
-                    out.extend(diags);
                 }
             }
         }

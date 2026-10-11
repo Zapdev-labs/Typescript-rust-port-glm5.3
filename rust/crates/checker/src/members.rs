@@ -887,13 +887,13 @@ impl Checker {
         sibling_symbols: Vec<SymbolId>,
     ) -> Vec<IndexInfoId> {
         let mut index_infos: Vec<IndexInfoId> = Vec::new();
-        let has_computed_string_property = false;
-        let has_computed_number_property = false;
-        let has_computed_symbol_property = false;
-        let readonly_computed_string_property = true;
-        let readonly_computed_number_property = true;
-        let readonly_computed_symbol_property = true;
-        let property_symbols: Vec<SymbolId> = Vec::new();
+        let mut has_computed_string_property = false;
+        let mut has_computed_number_property = false;
+        let mut has_computed_symbol_property = false;
+        let mut readonly_computed_string_property = true;
+        let mut readonly_computed_number_property = true;
+        let mut readonly_computed_symbol_property = true;
+        let mut property_symbols: Vec<SymbolId> = Vec::new();
         let declarations = self.program_symbol(index_symbol).declarations.clone();
         for declaration in declarations {
             if self.store().node(declaration).kind == Kind::IndexSignature {
@@ -934,27 +934,116 @@ impl Checker {
                     }
                 }
             } else if self.has_late_bindable_index_signature(declaration) {
-                // TODO(port M6 S4): the JS computed-name index signature arm —
-                // hasLateBindableIndexSignature only holds in JS files; the
-                // S4 JS wave owns checkComputedPropertyName-on-declaration
-                // side effects. Permissive skip preserves Go's .ts behavior.
-                continue;
+                // W3T7: the REAL computed-member arm (was the S4 permissive
+                // skip). Go's computed-name members whose name type is
+                // assignable to string/number/symbol seed the synthetic
+                // hasComputed* flags; the aggregation below turns them into
+                // index infos (ES5SymbolProperty5's `[Symbol.iterator]()`
+                // member → the symbol-keyed index info the element access
+                // resolves through).
+                let decl_name = if self.store().node(declaration).kind == Kind::BinaryExpression {
+                    crate::ast_shims::expression_of(self.store(), declaration)
+                        .expect("BinaryExpression left operand")
+                } else {
+                    tsc_binder::ast_shims::get_name_of_declaration(self.store(), declaration)
+                        .expect("member declaration name")
+                };                let key_type = if self.store().node(decl_name).kind == Kind::ElementAccessExpression {
+                    let arg = self
+                        .store()
+                        .node(decl_name)
+                        .as_element_access_expression()
+                        .expect("ElementAccessExpression data")
+                        .argument_expression;
+                    self.check_expression_cached(arg)
+                } else {
+                    self.check_computed_property_name(decl_name)
+                };
+                if find_index_info(self, &index_infos, key_type).is_some() {
+                    // Explicit index for key type takes priority
+                    continue;
+                }
+                let string_number_symbol = self.string_number_symbol_type();
+                if self.is_type_assignable_to(key_type, string_number_symbol) {
+                    let number_type = self.number_type();
+                    let es_symbol_type = self.es_symbol_type();
+                    if self.is_type_assignable_to(key_type, number_type) {
+                        has_computed_number_property = true;
+                        if !crate::ast_shims::has_modifier(
+                            self.store().node(declaration),
+                            ModifierFlags::READONLY,
+                        ) {
+                            readonly_computed_number_property = false;
+                        }
+                    } else if self.is_type_assignable_to(key_type, es_symbol_type) {
+                        has_computed_symbol_property = true;
+                        if !crate::ast_shims::has_modifier(
+                            self.store().node(declaration),
+                            ModifierFlags::READONLY,
+                        ) {
+                            readonly_computed_symbol_property = false;
+                        }
+                    } else {
+                        has_computed_string_property = true;
+                        if !crate::ast_shims::has_modifier(
+                            self.store().node(declaration),
+                            ModifierFlags::READONLY,
+                        ) {
+                            readonly_computed_string_property = false;
+                        }
+                    }
+                    property_symbols.push(crate::typeofsymbol::get_symbol_of_declaration(
+                        self, declaration,
+                    )
+                    .expect("member declaration symbol"));
+                }
             }
         }
-        // Go aggregates computed string/number/symbol properties into
-        // synthetic index infos — that arm is JS-only (the declarations that
-        // reach it are late-bindable JS class members); the permissive skip
-        // above means none of the hasComputed* flags ever set in .ts files.
-        let _ = (
-            has_computed_string_property,
-            has_computed_number_property,
-            has_computed_symbol_property,
-            readonly_computed_string_property,
-            readonly_computed_number_property,
-            readonly_computed_symbol_property,
-            property_symbols,
-            sibling_symbols,
-        );
+        // Go: aggregate similar index infos implied to be the same key to
+        // the same combined index info.
+        if has_computed_string_property || has_computed_number_property || has_computed_symbol_property
+        {
+            for &sym in &sibling_symbols {
+                if sym != index_symbol {
+                    property_symbols.push(sym);
+                }
+            }
+            let string_type = self.string_type();
+            let number_type = self.number_type();
+            let es_symbol_type = self.es_symbol_type();
+            if has_computed_string_property
+                && find_index_info(self, &index_infos, string_type).is_none()
+            {
+                let props = property_symbols.clone();
+                let info = self.get_object_literal_index_info(
+                    readonly_computed_string_property,
+                    &props,
+                    string_type,
+                );
+                index_infos.push(info);
+            }
+            if has_computed_number_property
+                && find_index_info(self, &index_infos, number_type).is_none()
+            {
+                let props = property_symbols.clone();
+                let info = self.get_object_literal_index_info(
+                    readonly_computed_number_property,
+                    &props,
+                    number_type,
+                );
+                index_infos.push(info);
+            }
+            if has_computed_symbol_property
+                && find_index_info(self, &index_infos, es_symbol_type).is_none()
+            {
+                let props = property_symbols.clone();
+                let info = self.get_object_literal_index_info(
+                    readonly_computed_symbol_property,
+                    &props,
+                    es_symbol_type,
+                );
+                index_infos.push(info);
+            }
+        }
         index_infos
     }
 

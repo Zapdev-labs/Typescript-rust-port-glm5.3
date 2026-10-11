@@ -3918,10 +3918,24 @@ impl Checker {
         if !is_late_bindable_ast(self.store(), node) {
             return false;
         }
-        // TODO(port M6 S7): isTypeUsableAsIndexSignatureDeclaration needs
-        // stringNumberSymbolType (the S7 union-type machinery); permissive
-        // false until then, so late-bound index signatures stay dormant.
-        false
+        // Go: `isTypeUsableAsIndexSignatureDeclaration` — the name's type
+        // must be assignable to stringNumberSymbolType. W3T7: was the S7
+        // permissive-false stub; the REAL arm un-dormants the
+        // ES5SymbolProperty5 computed `[Symbol.iterator]()` member's
+        // synthetic symbol-keyed index info.
+        let t = if tsc_ast::is_computed_property_name(self.store().node(node)) {
+            self.check_computed_property_name(node)
+        } else {
+            let arg = self
+                .store()
+                .node(node)
+                .as_element_access_expression()
+                .expect("isLateBindableAST narrows to ElementAccessExpression")
+                .argument_expression;
+            self.check_expression_cached(arg)
+        };
+        let string_number_symbol = self.string_number_symbol_type();
+        self.is_type_assignable_to(t, string_number_symbol)
     }
 
     /// Go: `func (c *Checker) getResolvedSymbolOrNil(node) *ast.Symbol`
