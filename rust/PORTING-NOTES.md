@@ -1983,3 +1983,22 @@ Rig validation (2026-10-10, post-9fd24bb2f3): fresh release build, all
 three twin gates green on the rig — fixture matrix 9/9 identical,
 300-slice byte-identical (143/143), program twin 15/15 identical.
 S4 CLOSED.
+
+## M6 S5 — type-nodes landed (2026-10-10)
+
+typenodes.rs 3,351 lines: get_type_from_type_node 30+ arm routing,
+conditional-flow/implied-constraint, type-reference + class/interface
+reference ladders (2314/2315, deferred-reference, fill-missing-args),
+TupleNormalizer + normalized tuples, alias instantiation + intrinsics,
+mapped (S8 seam)/conditional (ConditionalRoot real; S9 get_conditional
+deferred)/infer/import chains, defaults machinery, real
+get_generic_object_flags. Cross-file: empty_type_literal_type seeded in
+new_checker (Go 1044 — fixed a walk panic), is_array_type real,
+IntersectionFlags iota mispin corrected (behavior-neutral under S7),
+~20 relater predicates real, check_expression_with_type_arguments
+fixed for TypeQuery data (Go 10868 dual-form read; the old expect
+panicked on typeof queries). S6 resolve_entity_name stays permissive —
+the 2314/2315 ladders dormant by design until S6. Orchestrator
+re-verified fresh: 128 tests (8 new s5), clippy 0, fixture 9/9,
+300-slice twins identical 143/143, program twin 15/15. Next: S6
+resolution.
