@@ -2121,3 +2121,9 @@ spread index-infos. One honest open banner: resolveNameForSymbolSuggestion
 re-verified fresh: 188 tests (6 new), clippy 0, fixture 9/9, 300-slice
 twins identical 143/143, program twin 15/15. ALL TEN S-SLICES CLOSED.
 Next: W3 flow/grammarchecks/services + check-stage wiring (climb %).
+
+Rig validation (S10, 2026-10-12): forced clean + rebuild — all three
+twin gates green (fixture 9/9, 300-slice 143/143 byte-identical,
+program twin 15/15). S10 CLOSED. ALL TEN S-SLICES (S1-S10) CLOSED AND
+RIG-VALIDATED. W3 (flow/grammarchecks/services + check-stage wiring)
+dispatched.
