@@ -2153,3 +2153,15 @@ all three twin gates green at parse+bind (fixture 9/9, 300-slice
 Rust-side live (69/153/162/7); tranche 2 (grammarchecks + services +
 the Go driver check stage + the 7 panic arms) dispatched with the
 go-driver scope granted.
+
+## M6 W3 tranche 2 landed (902475a583, 2026-10-12)
+
+grammarchecks ~5.3k + Go driver check stage + the 7 panic arms fixed
+(three real shape bugs). Orchestrator re-verified fresh: 16 suites ok,
+clippy 0, fixture identical at all three stages, bind slice 143/143,
+program twin 15/15; check slice: Rust 85 vs Go 128 of 384, 126
+divergent (my measured count; the worker reported ~179 by a different
+fold — both recorded) — the check-stage climb queue is now concrete:
+services slice + the leading divergence families (ambient/async
+rust-fewer), the special-globals arm, checkUnused semantics. Tranche 3
+dispatched.

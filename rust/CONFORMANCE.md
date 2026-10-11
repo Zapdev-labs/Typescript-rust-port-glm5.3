@@ -310,3 +310,21 @@ merge — PORT-noted above).
   parent), so the check stage is Rust-only for now — the parse+bind
   twins are unchanged and byte-identical (fixture 9/9, 300-slice
   384/384, program 15/15 all re-verified after the wiring).
+
+## W3 tranche 2 — the check stage is live on BOTH drivers (2026-10-12, 902475a583)
+
+grammarchecks.rs ~5.3k lines + call-site wiring; the GO driver's check
+stage wired (single-file map FS, real Go checker, GetDiagnostics +
+GetGlobalDiagnostics; TS2316/2317/2318/2468 special-globals arm
+filtered to match the Rust S2 seam; panic recovery prints to stderr).
+The 7 residual panic arms fixed at the root (three §5.1 shape/reorder
+bugs: the relater TYPE_PARAMETER hoist vs Go's short-circuit, the
+tuple-embeds-interface layer for instantiations, the InterfaceType
+data layer in get_base_types). Orchestrator fresh-binary verification:
+fixture twins IDENTICAL at parse, bind, AND check; bind 300-slice
+identical 143/143; program twin 15/15; check 300-slice (fresh
+measurement): Rust 85 match / 135 mismatch / 164 missing-baseline vs
+Go 128 / 96 / 160 — **126 records divergent driver-to-driver** (the
+remaining checker gap: services slice, special-globals arm, W4/W5
+families, the documented checkUnused semantics difference). The climb
+targets: drive Rust 85 -> 128 with twin convergence.
