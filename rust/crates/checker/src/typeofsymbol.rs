@@ -2806,16 +2806,27 @@ impl Checker {
             return self.get_regular_type_of_literal_type(t);
         }
         if node.kind == Kind::ComputedPropertyName {
-            // TODO(port M6 S4): checkComputedPropertyName — the permissive
-            // neverType matches Go's missing-name answer.
-            return self.never_type();
+            // Go: getRegularTypeOfLiteralType(checkComputedPropertyName(name))
+            // (checker.go:27311) — REAL (W3T5 fix: was the S2-era permissive
+            // neverType, which made computed binding-pattern property names
+            // index as never and suppressed Go's TS2538 on
+            // `async function f({[z]: x})`).
+            let t = self.check_computed_property_name(name);
+            return self.get_regular_type_of_literal_type(t);
         }
         let property_name = ast_shims::get_property_name_for_property_name_node(self.store(), name);
         if property_name != "__missing" {
             return self.get_string_literal_type(&property_name);
         }
         // Go: IsExpression(name) → checkExpression — identifiers inside
-        // computed names; the neverType arm below is the fallback.
+        // computed names. PORT: the IsExpression predicate (utilities.go:451,
+        // isExpressionKind over SkipPartiallyEmittedExpressions) has no exact
+        // twin yet; grammarchecks' is_expression_node covers the reachable
+        // expression kinds (identifier/literal names resolve above).
+        if crate::grammarchecks::is_expression_node(self.store(), name) {
+            let t = self.check_expression(name);
+            return self.get_regular_type_of_literal_type(t);
+        }
         self.never_type()
     }
 }
@@ -3890,7 +3901,7 @@ impl Checker {
         if widened == original {
             return prop;
         }
-        self.create_symbol_with_type(prop, widened)
+        self.create_symbol_with_type(prop, Some(widened))
     }
 
     /// Go: `func (c *Checker) getUndefinedProperty(prop *ast.Symbol) *ast.Symbol`.
@@ -3899,7 +3910,7 @@ impl Checker {
             return cached;
         }
         let undefined_or_missing = self.undefined_or_missing_type();
-        let result = self.create_symbol_with_type(prop, undefined_or_missing);
+        let result = self.create_symbol_with_type(prop, Some(undefined_or_missing));
         self.program.symbol_mut(result).flags |= SymbolFlags::OPTIONAL;
         let name = self.program.symbol(result).name.clone();
         self.undefined_properties.insert(name, result);
@@ -3907,8 +3918,11 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) createSymbolWithType(source, t) *ast.Symbol`
-    /// (checker.go:22128).
-    pub(crate) fn create_symbol_with_type(&mut self, source: SymbolId, t: TypeId) -> SymbolId {
+    /// (checker.go:22128). PORT: `t *Type` is Go-nullable (the
+    /// assignContextualParameterTypes thisParameter arm passes nil — the
+    /// created symbol's resolvedType stays unset so assignParameterType
+    /// proceeds) — the port takes `Option<TypeId>`.
+    pub(crate) fn create_symbol_with_type(&mut self, source: SymbolId, t: Option<TypeId>) -> SymbolId {
         let (flags, name, check_flags, declarations, parent, value_declaration) = {
             let s = self.program.symbol(source);
             (
@@ -3934,7 +3948,7 @@ impl Checker {
         let name_type = self.value_symbol_links.get(source).name_type;
         {
             let links = self.value_symbol_links.get(symbol);
-            links.resolved_type = Some(t);
+            links.resolved_type = t;
             links.target = Some(source);
             links.name_type = name_type;
         }
@@ -5299,7 +5313,7 @@ mod tests {
         let source = c.get_unknown_symbol();
         let source_type_before = c.value_symbol_links.get(source).resolved_type;
         let t = c.string_type();
-        let created = c.create_symbol_with_type(source, t);
+        let created = c.create_symbol_with_type(source, Some(t));
         assert_ne!(created, source);
         assert_eq!(c.program_symbol(created).name, c.program_symbol(source).name);
         assert_eq!(c.program_symbol(created).flags, c.program_symbol(source).flags);

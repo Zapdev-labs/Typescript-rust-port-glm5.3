@@ -2240,3 +2240,28 @@ Rig validation (W4, 2026-10-13): forced clean + rebuild — all rails
 green (fixture x3 identical, bind 143/143, program 15/15). W4
 RIG-VALIDATED. W3 tranche 5 (async-2697 + the four printer-probed
 gaps + 2304/2683) dispatched.
+
+## M6 W3 tranche 5 landed (2026-10-13) — divergence 99 -> 83; async-2697 collapsed
+
+Root cause CORRECTED (W3T4's hypothesis falsified): Go forces
+unannotated function-expression/arrow return types in
+checkFunctionExpressionOrObjectLiteralMethodDeferred (checker.go:10449),
+NOT checkFunctionOrMethodDeclaration (that one forces only generators,
+3487). Landed: the contextuallyCheckFunctionExpressionOrObjectLiteral-
+Method family REAL (infer_from_annotated_parameters_and_return,
+assign_contextual/non_contextual_parameter_types, assign_parameter_
+type, assign_binding_element_types), Go's resolvingSignature recursion
+guard (30330 — stack-overflowed without it), checkComputedPropertyName
+miswiring (both arms called the grammar stub — TS2304s now fire),
+getLiteralTypeFromPropertyName computed arm, is_object_literal_type
+misport (symbol-flags -> Go's object-flags, utilities.go:867). The
+worker root-caused 2537 x11 via a TEMPORARY probe patch of the Go
+checker (restored; orchestrator VERIFIED the tsc/packages/tools trees
+are untouched). Clippy: the worker's "zero" did not fully reproduce (1
+empty-lines-after-doc-comment warning at spine.rs:4162 — fixed by the
+orchestrator; recorded as a verify catch). Orchestrator re-verified
+fresh: 16 suites ok, fixture x3 identical, bind 143/143, program
+15/15, check divergent 83 confirmed (rust-fewer 55->20; async-2697 now
+count-equal with 23 span-only diffs in createPromiseReturnType error-
+node choice). Remaining census: 2683 x17, 2322 spans, 2355 x9, 7033 x7,
+2697 spans, 2537 (fix direction documented), + the four W4-probed gaps.

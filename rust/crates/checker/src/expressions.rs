@@ -7258,17 +7258,11 @@ impl Checker {
         // Grammar checking
         let _ = self.check_grammar_function_like_declaration(node);
         // TODO(port M6 S3): checkGrammarForGenerator (function expression arm).
-        // contextuallyCheckFunctionExpressionOrObjectLiteralMethod:
-        // (the getContextualSignature S9 seam is None — the contextual
-        // parameter/return typing stays dormant; the CONTEXT_CHECKED flag
-        // still marks the node like Go).
-        let flags = self.node_links.get(node).flags;
-        if !flags.intersects(crate::types::NodeCheckFlags::CONTEXT_CHECKED) {
-            self.node_links.get(node).flags |= crate::types::NodeCheckFlags::CONTEXT_CHECKED;
-            // Go: signature := FirstOrNil(getSignaturesOfType(getTypeOfSymbol(...))) — the
-            // S8 read seam is empty, so the signature==nil early return fires.
-            let _ = self.get_signatures_of_type(self.error_type(), crate::types::SignatureKind::Call);
-        }
+        // contextuallyCheckFunctionExpressionOrObjectLiteralMethod — REAL
+        // (W3T5, contextual.rs checker.go:10387): the contextual
+        // parameter/return typing + checkSignatureDeclaration run exactly
+        // where Go runs them (was the S9 seam's CONTEXT_CHECKED-only stub).
+        self.contextually_check_function_expression_or_object_literal_method(node, check_mode);
         let symbol = self.get_symbol_of_declaration(node)
             .expect("function expression has a symbol");
         self.get_type_of_symbol(symbol)

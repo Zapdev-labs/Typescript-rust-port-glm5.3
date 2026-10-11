@@ -7737,10 +7737,14 @@ pub(crate) fn type_to_string(c: &mut Checker, t: TypeId) -> String {
     crate::nodebuilder::type_to_string(c, t)
 }
 
-/// Go: `func isObjectLiteralType(t) bool` (utilities.go — `t.flags&(TypeFlagsObject|TypeFlagsIntersection) != 0 && t.symbol != nil && t.symbol.Flags&SymbolFlagsObjectLiteral != 0`).
+/// Go: `func isObjectLiteralType(t *Type) bool` (utilities.go:867 —
+/// `t.objectFlags&ObjectFlagsObjectLiteral != 0`, the OBJECT-FLAGS check
+/// only; W3T5 fix: was misread as the ObjectLiteral SYMBOL flag, which
+/// failed for symbol-less anonymous pattern-implied types and let the
+/// AccessFlagsAllowMissing arm fall through to a spurious TS2537 on
+/// binding patterns with defaulted computed-name elements).
 pub(crate) fn is_object_literal_type(c: &Checker, t: TypeId) -> bool {
-    c.type_(t).flags.intersects(TypeFlags::OBJECT | TypeFlags::INTERSECTION)
-        && c.type_(t).symbol.is_some_and(|s| c.program_symbol(s).flags.intersects(SymbolFlags::OBJECT_LITERAL))
+    crate::utilities::is_object_literal_type(c.type_(t))
 }
 
 /// Go: `func isUnitType(t) bool` (utilities.go).

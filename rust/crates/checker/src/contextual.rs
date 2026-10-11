@@ -1307,9 +1307,19 @@ impl Checker {
         // ImportCallOptions / anyType) rides the global resolvers wave.
         // If we're already in the process of resolving the given signature,
         // don't resolve again as that could cause infinite recursion.
-        // Instead, return anySignature (Go's comment) — the resolved answer
-        // below suppresses the recursion via resolvingSignature.
-        let signature = self.get_resolved_signature(call_target)?;
+        // Instead, return anySignature (Go's comment, checker.go:30330) —
+        // the resolvingSignature marker read, NOT a second
+        // getResolvedSignature (re-resolving mid-resolution recurses; the
+        // marker signature's empty parameter list makes getTypeAtPosition
+        // answer anyType — W3T5 fix, Go-exact).
+        let signature = if self.signature_node_links.get(call_target).resolved_signature
+            == self.resolving_signature
+            && self.resolving_signature.is_some()
+        {
+            self.resolving_signature
+        } else {
+            self.get_resolved_signature(call_target)
+        }?;
         // TODO(port W5): the JsxOpeningLikeElement first-argument arm rides
         // the W5 JSX wave.
         let parameters = self.signatures[signature.0 as usize].parameters.clone();
@@ -1713,6 +1723,403 @@ impl Checker {
             return None;
         }
         self.get_type_of_property_of_type_impl(t, name)
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // The contextual function-expression check + the parameter-assign
+    // family (Go checker.go:10387-10436 + 10470-10680 — the W3T5 tranche:
+    // the async-2697 root cause; the S8/S9 seam this composed around is
+    // now real, so the deferred signature resolution is forced exactly
+    // where Go forces it).
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// Go: `func (c *Checker) contextuallyCheckFunctionExpressionOrObjectLiteralMethod(node, checkMode)`
+    /// (checker.go:10387) — REAL (W3T5; was the expressions.rs stub that
+    /// bailed at the S8 `signature == nil` seam).
+    pub(crate) fn contextually_check_function_expression_or_object_literal_method(
+        &mut self,
+        node: NodeId,
+        check_mode: crate::checker::CheckMode,
+    ) {
+        // Check if function expression is contextually typed and assign
+        // parameter types if so (Go's comment).
+        if !self
+            .node_links
+            .get(node)
+            .flags
+            .intersects(crate::types::NodeCheckFlags::CONTEXT_CHECKED)
+        {
+            let contextual_signature = self.get_contextual_signature(node);
+            // If a type check is started at a function expression that is an
+            // argument of a function call, obtaining the contextual type may
+            // recursively get back to here during overload resolution of the
+            // call. If so, we will have already assigned contextual types
+            // (Go's comment).
+            if !self
+                .node_links
+                .get(node)
+                .flags
+                .intersects(crate::types::NodeCheckFlags::CONTEXT_CHECKED)
+            {
+                self.node_links.get(node).flags |=
+                    crate::types::NodeCheckFlags::CONTEXT_CHECKED;
+                let symbol = crate::typeofsymbol::get_symbol_of_declaration(self, node)
+                    .expect("function expression has a symbol");
+                let symbol_type = self.get_type_of_symbol(symbol);
+                let signature = self
+                    .get_signatures_of_type_impl(symbol_type, crate::types::SignatureKind::Call)
+                    .first()
+                    .copied();
+                let Some(signature) = signature else {
+                    return;
+                };
+                if self.is_context_sensitive(node) {
+                    if let Some(contextual_signature) = contextual_signature {
+                        let inference_context = self.get_inference_context(node);
+                        let mut instantiated_contextual_signature: Option<crate::types::SignatureId> = None;
+                        if check_mode.intersects(crate::checker::CheckMode::INFERENTIAL) {
+                            self.infer_from_annotated_parameters_and_return(
+                                signature,
+                                contextual_signature,
+                                inference_context,
+                            );
+                            let rest_type = self.get_effective_rest_type(contextual_signature);
+                            if let Some(rest_type) =
+                                rest_type.filter(|&t| self.type_(t).flags.intersects(TypeFlags::TYPE_PARAMETER))
+                            {
+                                let _ = rest_type;
+                                // Go: instantiateSignature(contextualSignature,
+                                // inferenceContext.nonFixingMapper).
+                                instantiated_contextual_signature = Some(
+                                    self.instantiate_signature(
+                                        contextual_signature,
+                                        inference_context
+                                            .and_then(|n| self.inference_contexts[n.0 as usize].non_fixing_mapper),
+                                    ),
+                                );
+                            }
+                        }
+                        if instantiated_contextual_signature.is_none() {
+                            // PORT: Go branches on `inferenceContext != nil`
+                            // (its mapper is always non-nil once the context
+                            // exists; the port's instantiate_signature(None)
+                            // is the identity seam — the None-mapper case
+                            // never carries the fixing mapper's inferences).
+                            instantiated_contextual_signature = Some(match inference_context {
+                                Some(n) => self.instantiate_signature(
+                                    contextual_signature,
+                                    self.inference_contexts[n.0 as usize].mapper,
+                                ),
+                                None => contextual_signature,
+                            });
+                        }
+                        let instantiated = instantiated_contextual_signature
+                            .expect("set in both arms above");
+                        self.assign_contextual_parameter_types(signature, instantiated);
+                    } else {
+                        // Force resolution of all parameter types such that
+                        // the absence of a contextual type is consistently
+                        // reflected (Go's comment).
+                        self.assign_non_contextual_parameter_types(signature);
+                    }
+                } else if contextual_signature.is_some()
+                    && type_parameters_of_node(self.store(), node).is_none()
+                    && self.signatures[contextual_signature.expect("checked some").0 as usize]
+                        .parameters
+                        .len()
+                        > crate::ast_shims::parameters_of(self.store(), node).len()
+                {
+                    let inference_context = self.get_inference_context(node);
+                    if check_mode.intersects(crate::checker::CheckMode::INFERENTIAL) {
+                        self.infer_from_annotated_parameters_and_return(
+                            signature,
+                            contextual_signature.expect("checked some"),
+                            inference_context,
+                        );
+                    }
+                }
+                if contextual_signature.is_some()
+                    && self.get_return_type_from_annotation(node).is_none()
+                    && self.signatures[signature.0 as usize].resolved_return_type.is_none()
+                {
+                    // resolvedReturnType is cached indefinitely, so the
+                    // return type here has to be computed without
+                    // CheckModeSkipContextSensitive; otherwise anyFunctionType
+                    // could leak as part of the computed (and cached) return
+                    // type (Go's comment).
+                    let return_type = self.get_return_type_from_body(
+                        node,
+                        check_mode & !crate::checker::CheckMode::SKIP_CONTEXT_SENSITIVE,
+                    );
+                    if self.signatures[signature.0 as usize]
+                        .resolved_return_type
+                        .is_none()
+                    {
+                        self.signatures[signature.0 as usize].resolved_return_type = Some(return_type);
+                    }
+                }
+                self.check_signature_declaration(node);
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) inferFromAnnotatedParametersAndReturn(sig, context, inferenceContext)`
+    /// (checker.go:10470).
+    ///
+    /// PORT: Go passes `inferenceContext *InferenceContext` and dereferences
+    /// `.inferences` unconditionally — at both call sites the context is
+    /// non-nil whenever CheckModeInferential is set (createInferenceContext
+    /// always seeds the mapper pair); the port carries the Option and
+    /// no-ops on None (a nil dereference in Go, never reached on the
+    /// corpus).
+    pub(crate) fn infer_from_annotated_parameters_and_return(
+        &mut self,
+        sig: crate::types::SignatureId,
+        context: crate::types::SignatureId,
+        inference_context: Option<crate::todo_shapes::InferenceContextId>,
+    ) {
+        let Some(inference_context) = inference_context else {
+            return;
+        };
+        let parameters = self.signatures[sig.0 as usize].parameters.clone();
+        let length =
+            parameters.len() - usize::from(self.signatures[sig.0 as usize].has_rest_parameter());
+        for (i, &parameter) in parameters.iter().enumerate().take(length) {
+            let Some(declaration) = self.program_symbol(parameter).value_declaration else {
+                // PORT: Go dereferences the (never-nil-on-corpus)
+                // ValueDeclaration; the transient-symbol case is skipped.
+                continue;
+            };
+            if let Some(type_node) = crate::ast_shims::type_of_node(self.store(), declaration) {
+                let from_node = self.get_type_from_type_node(type_node);
+                let source = self.add_optionality_ex(
+                    from_node,
+                    false, /*isProperty*/
+                    crate::utilities::is_optional_declaration(self.store(), declaration),
+                );
+                let target = self.get_type_at_position(context, i);
+                self.infer_types(
+                    inference_context,
+                    source,
+                    target,
+                    crate::inference::InferencePriority::NONE,
+                    false, /*contravariant*/
+                );
+            }
+        }
+        if let Some(declaration) = self.signatures[sig.0 as usize].declaration {
+            if let Some(return_type_node) = crate::ast_shims::type_of_node(self.store(), declaration) {
+                let source = self.get_type_from_type_node(return_type_node);
+                let target = self.get_return_type_of_signature_impl(context);
+                self.infer_types(
+                    inference_context,
+                    source,
+                    target,
+                    crate::inference::InferencePriority::NONE,
+                    false, /*contravariant*/
+                );
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) assignContextualParameterTypes(sig, context)`
+    /// (checker.go:10580).
+    pub(crate) fn assign_contextual_parameter_types(
+        &mut self,
+        sig: crate::types::SignatureId,
+        context: crate::types::SignatureId,
+    ) {
+        let context_type_parameters =
+            self.signatures[context.0 as usize].type_parameters.clone();
+        if !context_type_parameters.is_empty() {
+            if !self.signatures[sig.0 as usize].type_parameters.is_empty() {
+                // This signature has already has a contextual inference
+                // performed and cached on it (Go's comment).
+                return;
+            }
+            self.signatures[sig.0 as usize].type_parameters = context_type_parameters;
+        }
+        let context_this_parameter = self.signatures[context.0 as usize].this_parameter;
+        if let Some(context_this_parameter) = context_this_parameter {
+            let parameter = self.signatures[sig.0 as usize].this_parameter;
+            // PORT: Go's short-circuit `parameter == nil || (parameter.ValueDeclaration != nil && parameter.ValueDeclaration.Type() == nil)`.
+            let needs_assign = match parameter {
+                None => true,
+                Some(parameter) => {
+                    let value_declaration = self.program_symbol(parameter).value_declaration;
+                    match value_declaration {
+                        Some(declaration) => {
+                            crate::ast_shims::type_of_node(self.store(), declaration).is_none()
+                        }
+                        None => false,
+                    }
+                }
+            };
+            if needs_assign {
+                let this_parameter = match parameter {
+                    None => {
+                        let created = self.create_symbol_with_type(context_this_parameter, None);
+                        self.signatures[sig.0 as usize].this_parameter = Some(created);
+                        created
+                    }
+                    Some(parameter) => parameter,
+                };
+                let t = self.get_type_of_symbol(context_this_parameter);
+                self.assign_parameter_type(this_parameter, Some(t));
+            }
+        }
+        let parameters = self.signatures[sig.0 as usize].parameters.clone();
+        let length = parameters.len()
+            - usize::from(self.signatures[sig.0 as usize].has_rest_parameter());
+        for (i, &parameter) in parameters.iter().enumerate().take(length) {
+            let declaration = self.program_symbol(parameter).value_declaration;
+            let has_annotation = declaration
+                .and_then(|d| crate::ast_shims::type_of_node(self.store(), d))
+                .is_some();
+            if !has_annotation {
+                let mut t = self.try_get_type_at_position(context, i);
+                if let (Some(t_some), Some(declaration)) = (t, declaration) {
+                    if crate::ast_shims::initializer_of(self.store(), declaration).is_some() {
+                        let initializer_type = self.check_declaration_initializer(
+                            declaration,
+                            crate::checker::CheckMode::CHECK_MODE_NORMAL,
+                            None, /*contextualType*/
+                        );
+                        if !self.is_type_assignable_to(initializer_type, t_some) {
+                            let widened =
+                                self.widen_type_inferred_from_initializer(declaration, initializer_type);
+                            if self.is_type_assignable_to(t_some, widened) {
+                                t = Some(widened);
+                            }
+                        }
+                    }
+                }
+                self.assign_parameter_type(parameter, t);
+            }
+        }
+        if self.signatures[sig.0 as usize].has_rest_parameter() {
+            // parameter might be a transient symbol generated by use of
+            // `arguments` in the function body (Go's comment).
+            let Some(parameter) = parameters.last().copied() else {
+                return;
+            };
+            let value_declaration = self.program_symbol(parameter).value_declaration;
+            let needs_assign = match value_declaration {
+                Some(declaration) => {
+                    crate::ast_shims::type_of_node(self.store(), declaration).is_none()
+                }
+                None => self
+                    .program_symbol(parameter)
+                    .check_flags
+                    .intersects(tsc_ast::CheckFlags::DEFERRED_TYPE),
+            };
+            if needs_assign {
+                let contextual_parameter_type =
+                    self.get_rest_type_at_position(context, length, false /*readonly*/);
+                self.assign_parameter_type(parameter, contextual_parameter_type);
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) assignNonContextualParameterTypes(signature)`
+    /// (checker.go:10626).
+    pub(crate) fn assign_non_contextual_parameter_types(
+        &mut self,
+        signature: crate::types::SignatureId,
+    ) {
+        if let Some(this_parameter) = self.signatures[signature.0 as usize].this_parameter {
+            self.assign_parameter_type(this_parameter, None);
+        }
+        let parameters = self.signatures[signature.0 as usize].parameters.clone();
+        for parameter in parameters {
+            self.assign_parameter_type(parameter, None);
+        }
+    }
+
+    /// Go: `func (c *Checker) assignParameterType(parameter, contextualType)`
+    /// (checker.go:10635).
+    pub(crate) fn assign_parameter_type(
+        &mut self,
+        parameter: tsc_ast::SymbolId,
+        contextual_type: Option<TypeId>,
+    ) {
+        if self.value_symbol_links.get(parameter).resolved_type.is_some() {
+            return;
+        }
+        let declaration = self.program_symbol(parameter).value_declaration;
+        let t = match contextual_type {
+            Some(t) => Some(t),
+            None => match declaration {
+                Some(declaration) => Some(
+                    self.get_widened_type_for_variable_like_declaration(
+                        declaration,
+                        true, /*reportErrors*/
+                    ),
+                ),
+                None => Some(self.get_type_of_symbol(parameter)),
+            },
+        };
+        let t = t.expect("either the contextual type or a resolved type");
+        let is_optional = match declaration {
+            Some(declaration) => {
+                crate::ast_shims::initializer_of(self.store(), declaration).is_none()
+                    && crate::utilities::is_optional_declaration(self.store(), declaration)
+            }
+            None => false,
+        };
+        let resolved = self.add_optionality_ex(t, false /*isProperty*/, is_optional);
+        self.value_symbol_links.get(parameter).resolved_type = Some(resolved);
+        if let Some(declaration) = declaration {
+            let name = self.store().node(declaration).name();
+            let is_identifier = name.is_some_and(|n| self.store().node(n).kind == Kind::Identifier);
+            if !is_identifier {
+                let name = name.expect("parameter declarations carry a name");
+                // if inference didn't come up with anything but unknown,
+                // fall back to the binding pattern if present (Go's comment).
+                if resolved == self.unknown_type() {
+                    let from_pattern =
+                        self.get_type_from_binding_pattern(name, false, false);
+                    self.value_symbol_links.get(parameter).resolved_type = Some(from_pattern);
+                    self.assign_binding_element_types(name, from_pattern);
+                } else {
+                    self.assign_binding_element_types(name, resolved);
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) assignBindingElementTypes(pattern, parentType)`
+    /// (checker.go:10661) — when contextual typing assigns a type to a
+    /// parameter that contains a binding pattern, we also need to push the
+    /// destructured type into the contained binding elements (Go's comment).
+    pub(crate) fn assign_binding_element_types(&mut self, pattern: NodeId, parent_type: TypeId) {
+        let elements: Vec<NodeId> = self
+            .store()
+            .node(pattern)
+            .as_binding_pattern()
+            .expect("BindingPattern data")
+            .elements
+            .clone()
+            .map(|list| list.nodes.to_vec())
+            .unwrap_or_default();
+        for element in elements {
+            if let Some(name) = self.store().node(element).name() {
+                let t = self.get_binding_element_type_from_parent_type(
+                    element,
+                    parent_type,
+                    false, /*noTupleBoundsCheck*/
+                );
+                if self.store().node(name).kind == Kind::Identifier {
+                    if let Some(symbol) =
+                        crate::typeofsymbol::get_symbol_of_declaration(self, element)
+                    {
+                        self.value_symbol_links.get(symbol).resolved_type = Some(t);
+                    }
+                } else {
+                    self.assign_binding_element_types(name, t);
+                }
+            }
+        }
     }
 }
 

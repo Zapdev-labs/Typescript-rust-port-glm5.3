@@ -2893,7 +2893,7 @@ impl Checker {
             } else {
                 (None, None)
             };
-            let clone = self.create_symbol_with_type(single, single_prop_type.unwrap_or(self.any_type()));
+            let clone = self.create_symbol_with_type(single, Some(single_prop_type.unwrap_or(self.any_type())));
             let value_declaration = self.program_symbol(single).value_declaration;
             if let Some(value_declaration) = value_declaration {
                 let parent_symbol = crate::typeofsymbol::get_symbol_of_declaration(self, value_declaration)
@@ -4497,7 +4497,7 @@ impl Checker {
                                     .collect();
                                 let this_type = self.get_intersection_type(&this_types);
                                 this_parameter =
-                                    Some(self.create_symbol_with_type(first_this, this_type));
+                                    Some(self.create_symbol_with_type(first_this, Some(this_type)));
                             }
                             s = self.create_union_signature(signature, union_signatures);
                             self.signatures[s.0 as usize].this_parameter = this_parameter;
@@ -4798,7 +4798,7 @@ impl Checker {
             None => self.get_type_of_symbol(right),
         };
         let this_type = self.get_union_or_intersection_type(&[left_type, right_type], !is_union);
-        Some(self.create_symbol_with_type(left, this_type))
+        Some(self.create_symbol_with_type(left, Some(this_type)))
     }
 
     /// Go: `func (c *Checker) resolveIntersectionTypeMembers(t)` (checker.go:21706)

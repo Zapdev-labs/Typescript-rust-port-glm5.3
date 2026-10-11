@@ -4073,6 +4073,95 @@ mod tests {
     }
 
     // ────────────────────────────────────────────────────────────────────────
+    // M6 W3 tranche-5 pins — the deferred signature-resolution forcing +
+    // the contextual parameter-assign family (checker.go:10387-10680) +
+    // the computed binding-pattern property names. Every expectation was
+    // verified against the go-bench twin over the same source shapes (the
+    // async-2697 x37 census family + asyncFunctionDeclarationParameter-
+    // Evaluation's 2304/2538 pairs).
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// W3T5 PIN (the async-2697 root cause): the deferred
+    /// checkFunctionExpressionOrObjectLiteralMethodDeferred forces
+    /// getReturnTypeOfSignature for UNANNOTATED function expressions
+    /// (checker.go:10449) — for an async arrow under the lib-less shape
+    /// that reaches createPromiseReturnType and emits TS2697 ("An async
+    /// function or method must return a 'Promise'"). The port carried the
+    /// forcing call as a TODO until S8 landed; Go's
+    /// checkFunctionOrMethodDeclaration forces only GENERATORS
+    /// (checker.go:3487), so the deferral is the ONLY forcing site for
+    /// arrows.
+    #[test]
+    fn w3t5_deferred_async_arrow_forces_2697() {
+        let mut c = spine_checker("var v = async () => { };\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        assert_eq!(
+            diags.iter().filter(|d| d.code() == 2697).count(),
+            1,
+            "exactly one TS2697 for the unannotated async arrow; got {:?}",
+            diags.iter().map(|d| d.code()).collect::<Vec<_>>()
+        );
+    }
+
+    /// W3T5 PIN (contextuallyCheckFunctionExpressionOrObjectLiteralMethod,
+    /// checker.go:10387 — now REAL): with no contextual signature the
+    /// assignNonContextualParameterTypes + checkSignatureDeclaration arms
+    /// run for a plain arrow, so the parameter default `x = zzz` is
+    /// checked and TS2304 fires for the unresolved name.
+    #[test]
+    fn w3t5_noncontextual_arrow_parameter_defaults_report_2304() {
+        let mut c = spine_checker("var v = (x = zzz) => { };\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        assert_eq!(
+            diags.iter().filter(|d| d.code() == 2304).count(),
+            1,
+            "exactly one TS2304 for the arrow's unresolved default; got {:?}",
+            diags.iter().map(|d| d.code()).collect::<Vec<_>>()
+        );
+    }
+
+    /// W3T5 PIN (getLiteralTypeFromPropertyName's computed-name arm,
+    /// checker.go:27311 — REAL checkComputedPropertyName, was the
+    /// neverType stub): `async function f({[zz]: x})` reports TS2304 for
+    /// the computed binding-pattern property name AND TS2538 when the
+    /// any-typed name indexes the empty pattern-implied parent type
+    /// (Go's getBindingElementTypeFromParentType → getIndexedAccessTypeEx
+    /// tail, checker.go:27740).
+    #[test]
+    fn w3t5_computed_binding_pattern_property_name_checks() {
+        let mut c = spine_checker("async function f({[zz]: x}) { }\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        assert_eq!(
+            diags.iter().filter(|d| d.code() == 2304).count(),
+            1,
+            "exactly one TS2304 for zz; got {:?}",
+            diags.iter().map(|d| d.code()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            diags.iter().filter(|d| d.code() == 2538).count(),
+            1,
+            "exactly one TS2538 (any used as an index type); got {:?}",
+            diags.iter().map(|d| d.code()).collect::<Vec<_>>()
+        );
+    }
+
+    /// W3T5 NOTE: the 2537-avoidance for defaulted computed-name elements
+    /// was investigated down to the any-parent path (Go's resolvingSignature
+    /// marker makes getContextualSignature answer the any-signature, so
+    /// assignContextualParameterTypes caches any and the object arm's
+    /// IsTypeAny early-return skips the access) — see the continuation
+    /// file. The widened pattern-implied param type is flagless in BOTH
+    /// twins (Go's getWidenedTypeOfObjectLiteral keeps only
+    /// JSLiteral|NonInferrableType), so no OBJECT_LITERAL pin is possible
+    /// here yet.
+    //
+    // ────────────────────────────────────────────────────────────────────────
     // M6 W4 pins — the nodebuilder printer (nodebuilder.rs). Every expected
     // string below was verified byte-same against the go-bench twin's
     // check-stage diagnostic renders over the same source shape (the

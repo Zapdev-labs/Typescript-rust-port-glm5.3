@@ -3777,7 +3777,11 @@ impl Checker {
         }
         // For a computed property, just check the initializer and exit.
         if self.store().node(name).kind == Kind::ComputedPropertyName {
-            self.check_grammar_computed_property_name(name);
+            // Go: checkComputedPropertyName (checker.go:5993) — the REAL
+            // computed-name check (the S10 body in expressions.rs; W3T5
+            // fix: was miswired to checkGrammarComputedPropertyName, so
+            // `async function f({[z]: x})` never reported z's TS2304).
+            let _ = self.check_computed_property_name(name);
             if let Some(initializer) = initializer {
                 self.check_expression_cached(initializer);
             }
@@ -3820,11 +3824,13 @@ impl Checker {
             {
                 self.check_external_emit_helpers_stub(node, ExternalEmitHelpers::REST);
             }
-            // check computed properties inside property names of binding elements
+            // check computed properties inside property names of binding
+            // elements (Go: checkComputedPropertyName, checker.go:6011 —
+            // the real S10 body; W3T5 fix: was the grammar stub).
             if prop_name
                 .is_some_and(|p| self.store().node(p).kind == Kind::ComputedPropertyName)
             {
-                self.check_grammar_computed_property_name(prop_name.expect("checked"));
+                let _ = self.check_computed_property_name(prop_name.expect("checked"));
             }
             // check private/protected variable access
             let grandparent = self.store().node(parent).parent.get();
@@ -11396,10 +11402,13 @@ impl Checker {
                 // was never an appropriate time to do this during the main
                 // walk of the file (see the comment at the top of
                 // checkFunctionExpressionBodies). So it must be done now.
-                // TODO(port M6 S2/S8): getReturnTypeOfSignature(
-                // getSignatureFromDeclaration(node)) — the deferred
-                // signature-resolution seam (getSignatureFromDeclaration is
-                // the S8 permissive None); rests until S2/S8 land.
+                // Go: getReturnTypeOfSignature(getSignatureFromDeclaration(
+                // node)) — REAL (W3T5; S8 landed): the forced deferred
+                // signature-resolution that reaches createPromiseReturnType
+                // for unannotated async arrows (the async-2697 family).
+                if let Some(sig) = self.get_signature_from_declaration(node) {
+                    self.get_return_type_of_signature_impl(sig);
+                }
             }
             if self.store().node(body).kind == Kind::Block {
                 self.check_source_element(Some(body));
