@@ -2034,3 +2034,7 @@ cutoff (tree left non-compiling; resumed session finished it).
 Orchestrator re-verified fresh: 138 tests (10 new s6), clippy 0,
 fixture 9/9, 300-slice twins identical 143/143, program twin 15/15.
 Next: S7 BEFORE S8.
+
+Rig validation (S6, 2026-10-11): forced clean + rebuild — all three
+twin gates green (fixture 9/9, 300-slice 143/143 byte-identical,
+program twin 15/15). S6 CLOSED.
