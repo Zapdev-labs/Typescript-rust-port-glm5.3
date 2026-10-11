@@ -2053,3 +2053,7 @@ create_type_reference_ex real in the FROM_TYPE_NODE arm. Orchestrator
 re-verified fresh: 153 tests (15 new s7), clippy 0, fixture 9/9,
 300-slice twins identical 143/143, program twin 15/15. Next: S8
 (removes S6's TS2507 guard; owns resolveStructuredTypeMembers).
+
+Rig validation (S7, 2026-10-11): forced clean + rebuild — all three
+twin gates green (fixture 9/9, 300-slice 143/143 byte-identical,
+program twin 15/15). S7 CLOSED.
