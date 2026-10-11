@@ -2057,3 +2057,20 @@ re-verified fresh: 153 tests (15 new s7), clippy 0, fixture 9/9,
 Rig validation (S7, 2026-10-11): forced clean + rebuild — all three
 twin gates green (fixture 9/9, 300-slice 143/143 byte-identical,
 program twin 15/15). S7 CLOSED.
+
+## M6 S8 — structured-members machinery landed (2026-10-11)
+
+members.rs 4,936 lines: resolveStructuredTypeMembers (dispatch per Go
+19430: OBJECT flags first, Reference->ClassOrInterface->ReverseMapped-
+>Anonymous->Mapped), real getSignaturesOfType, getPropertyOfType
+family, the deferred-members protocol, relater member-comparison arms
+on real members, S6's TS2507 guard removed. REAL BUG root-caused:
+payload_symbol was missing TypeLiteralNode/MappedTypeNode arms (binder
+sets those symbols; getSymbolOfDeclaration returned None) — every
+type-literal annotation collapsed onto emptyTypeLiteralType and unions
+of object literals deduped to one OBJECT; two payload arms fixed it.
+TS2339 union-missing-property gate retired ( getPropertyOfType None is
+now Go-faithful). Orchestrator re-verified fresh: 166 tests (13 new
+s8), clippy 0, fixture 9/9, 300-slice twins identical 143/143, program
+twin 15/15. Remaining S8 banners (65) are forward-references to
+S9/S10 consumers. Next: S9.

@@ -100,17 +100,16 @@ fn s6_block_scope_ladder_reports_2448() {
     assert!(!got.contains(&2304), "b resolves once declared: {got:?}");
 }
 
-/// `let o = { x: 1 }; o.x;` — Go: clean (the property exists). The port
-/// resolves the property access through the S8 getPropertyOfType seam,
-/// which stays diagnostics-neutral (no false TS2339/TS2304 before the
-/// member resolution lands). (A `this.x`-form pin is blocked until S8:
-/// noImplicitThis fires TS2683 for the seam-typed `this`.)
+/// `let o = { x: 1 }; o.x;` — Go: clean (the property exists). M6 S8
+/// flipped the member machinery to the REAL bodies (members.rs):
+/// getPropertyOfType resolves `x` through resolveAnonymousTypeMembers and
+/// the widened-literal initializer check compares two structurally-equal
+/// anonymous object types — no diagnostics. (A `this.x`-form pin stays
+/// blocked: noImplicitThis TS2683 needs the S9 contextual `this` flow.)
 #[test]
 fn s6_property_access_composes_the_s8_seam() {
     let got = codes("let o = { x: 1 };
 o.x;");
-    // TODO(port M6 S8): the property-access path routes through the member
-    // seam; TS2339-class errors fire once getPropertyOfType is real.
     assert!(got.is_empty(), "unexpected diagnostics: {got:?}");
 }
 
@@ -127,15 +126,13 @@ fn s6_missing_module_reports_2307() {
 }
 
 /// `function f() {} f(1,2,3);` — Go: TS2554 (expected 0 arguments, got 3).
-/// The port resolves the callee and composes the untyped-call path over the
-/// S8 zero-signature seam (the arity ladder — hasCorrectArity through
-/// chooseOverload — runs only once getSignaturesOfType is real, so no false
-/// arity error fires for an ordinary call before then).
+/// M6 S8 flipped getSignaturesOfType to the REAL body (members.rs): the
+/// arity ladder (hasCorrectArity through chooseOverload) now runs over the
+/// resolved call signature and reports Go's exact answer.
 #[test]
 fn s6_ordinary_call_composes_untyped_call_under_s8_seam() {
     let got = codes("function f() {}\nf(1,2,3);");
-    // TODO(port M6 S8): flips to [2554] when the members seam lands.
-    assert!(got.is_empty(), "unexpected diagnostics: {got:?}");
+    assert_eq!(got, vec![2554]);
 }
 
 /// `class B {} class D extends B { constructor() { super(); } }` — Go:
@@ -181,10 +178,12 @@ fn s6_super_call_in_base_class_reports_2335() {
 }
 
 /// A resolved-signature API pin: the 1-arg `GetResolvedSignature` carrier
-/// delegates to the real family, and an ordinary call resolves to the
-/// any-signature composition of the S8 seam (anySignature's return type is
-/// NewChecker's anyType — not the None of the old stub, and not a typed
-/// answer before S8).
+/// delegates to the real family. M6 S8 flipped the signature machinery to
+/// the REAL bodies (members.rs getSignatureFromDeclaration +
+/// getSignaturesOfType): an ordinary call on a declared function now
+/// resolves to the function's OWN signature (no longer the seam-era
+/// anySignature composition), and its return type is the inferred `void`
+/// for an empty body (Go's getReturnTypeFromBody answer).
 #[test]
 fn s6_get_resolved_signature_answers_for_ordinary_calls() {
     let mut sf = parse_source_file(Default::default(), "function f() {}\nf();\n", ScriptKind::TS);
@@ -210,14 +209,14 @@ fn s6_get_resolved_signature_answers_for_ordinary_calls() {
     let mut c = new_checker(Box::new(program));
     c.check_source_file(file, true);
     assert!(c.get_file_diagnostics(file).is_empty());
-    // The call resolved through the real family: anySignature under the S8
-    // zero-signature seam — an any-flagged return type (Go's anySignature
-    // carries anyType; the seed's exact id is internal).
+    // The call resolved through the real signature family: f's own
+    // declaration signature with the inferred void return.
     let signature = c.get_resolved_signature(call);
     let signature = signature.expect("ordinary call must resolve");
     let return_type = c.get_return_type_of_signature(signature);
     assert!(
-        c.type_(return_type).flags.intersects(tsc_checker::TypeFlags::ANY),
-        "the S8 seam composes the untyped-call (any) answer, got {return_type:?}"
+        c.type_(return_type).flags.intersects(tsc_checker::TypeFlags::VOID),
+        "the S8 signature machinery infers f's void return, got {return_type:?} flags={:?}",
+        c.type_(return_type).flags
     );
 }

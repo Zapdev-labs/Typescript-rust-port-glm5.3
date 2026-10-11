@@ -3188,25 +3188,11 @@ impl Checker {
                     } else {
                         left_type
                     };
-                    // TODO(port M6 S8): getPropertyOfType's permissive-None is
-                    // indistinguishable between "members machinery not wired"
-                    // and "property genuinely missing" until
-                    // resolveStructuredTypeMembers lands. Keep the TS2339
-                    // class dormant under the seam (the pre-S7 contract this
-                    // test pins — the M6 S7 union constructor flipped the
-                    // left types from errorType to real unions/objects, which
-                    // would otherwise fabricate diagnostics Go's real member
-                    // walk never emits) by requiring the containing type to
-                    // have at least one resolvable property.
-                    let containing_has_resolved_properties =
-                        !crate::relater::get_properties_of_type(self, containing).is_empty();
-                    if containing_has_resolved_properties {
-                        // Go: addDeferredDiagnostic — must be deferred because
-                        // reporting this error can cause us to materialize the
-                        // containing type completely (to print it), leading to
-                        // erroneous circularity errors.
-                        self.report_nonexistent_property(right, containing, is_unchecked_js);
-                    }
+                    // M6 S8 landed resolveStructuredTypeMembers, so
+                    // getPropertyOfType's None is now Go-faithful "genuinely
+                    // missing" — the pre-S8 containing-has-resolved-properties
+                    // gate is retired.
+                    self.report_nonexistent_property(right, containing, is_unchecked_js);
                 }
                 return self.error_type();
             }
@@ -4433,8 +4419,7 @@ impl Checker {
         let this_arg = self
             .type_(class_type)
             .as_interface_type()
-            .and_then(|d| d.this_type)
-            .unwrap_or(base_class_type);
+            .and_then(|d| d.this_type);
         relater::get_type_with_this_argument(self, base_class_type, this_arg, false)
     }
 

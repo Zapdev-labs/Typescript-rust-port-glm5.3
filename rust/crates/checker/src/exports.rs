@@ -141,12 +141,11 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) GetTargetSymbol(symbol *ast.Symbol) *ast.Symbol`
-    /// → `c.getTargetSymbol(symbol)` (checker.go — S6).
+    /// → `c.getTargetSymbol(symbol)` (checker.go:22087) — S8's REAL body
+    /// (members.rs) corrected the S6-era merged+aliased walk to Go's
+    /// instantiation-target walk.
     pub fn get_target_symbol(&mut self, symbol: SymbolId) -> Option<SymbolId> {
-        // M6 S6: the merged + immediate-aliased walk (Go's getTargetSymbol =
-        // getMergedSymbol(getImmediateAliasedSymbol(symbol))).
-        let immediate = self.get_immediate_aliased_symbol_real(symbol)?;
-        Some(self.get_merged_symbol_real(immediate))
+        Some(self.get_target_symbol_impl(symbol))
     }
 
     /// Go: `func (c *Checker) GetTypeOnlyAliasDeclaration(symbol *ast.Symbol) *ast.Node`
@@ -203,25 +202,19 @@ impl Checker {
     /// Go: `func (c *Checker) GetPropertiesOfType(t *Type) []*ast.Symbol` →
     /// `c.getPropertiesOfType(t)` (checker.go — S8's member resolution).
     pub fn get_properties_of_type(&mut self, t: TypeId) -> Vec<SymbolId> {
-        // TODO(port M6 S8): resolveStructuredTypeMembers plumbing.
-        let _ = t;
-        Vec::new()
+        self.get_properties_of_type_impl(t)
     }
 
     /// Go: `func (c *Checker) GetPropertyOfType(t *Type, name string) *ast.Symbol`
     /// → `c.getPropertyOfType(t, name)` (checker.go — S8).
     pub fn get_property_of_type(&mut self, t: TypeId, name: &str) -> Option<SymbolId> {
-        // TODO(port M6 S8): getPropertyOfObjectType/getPropertyOfUnionOrIntersectionType.
-        let _ = (t, name);
-        None
+        self.get_property_of_type_impl(t, name)
     }
 
     /// Go: `func (c *Checker) TypeHasCallOrConstructSignatures(t *Type) bool`
     /// → `c.typeHasCallOrConstructSignatures(t)` (checker.go — S8).
     pub fn type_has_call_or_construct_signatures(&mut self, t: TypeId) -> bool {
-        // TODO(port M6 S8): the structured-type signature probes.
-        let _ = t;
-        false
+        crate::relater::type_has_call_or_construct_signatures(self, t)
     }
 
     // Checks if a property can be accessed in a location.
@@ -269,9 +262,7 @@ impl Checker {
     /// Go: `func (c *Checker) GetSignaturesOfType(t *Type, kind SignatureKind) []*Signature`
     /// → `c.getSignaturesOfType(t, kind)` (checker.go — S8).
     pub fn get_signatures_of_type(&mut self, t: TypeId, kind: SignatureKind) -> Vec<SignatureId> {
-        // TODO(port M6 S8): getSignaturesOfStructuredType.
-        let _ = (t, kind);
-        Vec::new()
+        self.get_signatures_of_type_impl(t, kind)
     }
 
     /// Go: `func (c *Checker) GetDeclaredTypeOfSymbol(symbol *ast.Symbol) *Type`
@@ -355,9 +346,7 @@ impl Checker {
     /// → `c.getReturnTypeOfSignature(sig)` (checker.go — S8; unresolved
     /// bodies resolve to errorType in Go).
     pub fn get_return_type_of_signature(&mut self, sig: SignatureId) -> TypeId {
-        // TODO(port M6 S8): resolvedReturnType + getReturnTypeFromBody.
-        let _ = sig;
-        self.error_type()
+        self.get_return_type_of_signature_impl(sig)
     }
 
     /// Go: `func (c *Checker) HasEffectiveRestParameter(signature *Signature) bool`
@@ -407,7 +396,8 @@ impl Checker {
         signature: SignatureId,
         skip_union_expanding: bool,
     ) -> Vec<Vec<SymbolId>> {
-        // TODO(port M6 S8): the union-parameter cross product.
+        // TODO(port M6 W4): getExpandedParameters (nodebuilderimpl.go:1985)
+        // — the union-parameter cross product.
         let _ = (signature, skip_union_expanding);
         Vec::new()
     }
@@ -425,9 +415,7 @@ impl Checker {
     /// Go: `func (c *Checker) GetTypeOfPropertyOfType(t *Type, name string) *Type`
     /// → `c.getTypeOfPropertyOfType(t, name)` (checker.go — S8).
     pub fn get_type_of_property_of_type(&mut self, t: TypeId, name: &str) -> Option<TypeId> {
-        // TODO(port M6 S8): getPropertyOfType + its type links.
-        let _ = (t, name);
-        None
+        self.get_type_of_property_of_type_impl(t, name)
     }
 
     /// Go: `func (c *Checker) GetContextualTypeForArgumentAtIndex(node *ast.Node, argIndex int) *Type`
@@ -453,7 +441,8 @@ impl Checker {
     /// Go: `func (c *Checker) GetIndexSignaturesAtLocation(node *ast.Node) []*ast.Node`
     /// → `c.getIndexSignaturesAtLocation(node)` (checker.go — S8).
     pub fn get_index_signatures_at_location(&mut self, node: NodeId) -> Vec<NodeId> {
-        // TODO(port M6 S8): the location's apparent-type index signatures.
+        // TODO(port M6 S10): the location's apparent-type index signatures
+        // (checker.go:32317).
         let _ = node;
         Vec::new()
     }
@@ -532,17 +521,14 @@ impl Checker {
     /// Go: `func (c *Checker) GetBaseTypes(t *Type) []*Type` →
     /// `c.getBaseTypes(t)` (checker.go — S8's base-type resolution).
     pub fn get_base_types(&mut self, t: TypeId) -> Vec<TypeId> {
-        // TODO(port M6 S8): resolveBaseTypesOfClass/OfInterface.
-        let _ = t;
-        Vec::new()
+        self.get_base_types_impl(t)
     }
 
     /// Go: `func (c *Checker) GetApparentType(t *Type) *Type` →
     /// `c.getApparentType(t)` (checker.go — S8/S9). Identity is the
     /// permissive value (Go returns `t` for primitive/already-apparent types).
     pub fn get_apparent_type(&mut self, t: TypeId) -> TypeId {
-        // TODO(port M6 S8/S9): the apparent-type mapping table.
-        t
+        self.get_apparent_type_impl(t)
     }
 
     // Go: `func (c *Checker) GetReducedType(t *Type) *Type` →
@@ -765,7 +751,11 @@ mod tests {
         // Identity stubs.
         assert_eq!(c.get_base_type_of_literal_type(t), t);
         assert_eq!(c.get_awaited_type(t), t);
-        assert_eq!(c.get_apparent_type(t), t);
+        // M6 S8 flipped getApparentType to the REAL body (members.rs): the
+        // string-like arm maps to the global String wrapper type (Go's
+        // apparentType), which the empty checker seeds as errorType (the
+        // getGlobalType report-errors answer) — the identity pin is retired.
+        assert_eq!(c.get_apparent_type(t), c.global_string_type.expect("global resolver seeded"));
         assert_eq!(c.get_reduced_type(t), t);
         assert_eq!(c.get_widened_literal_type(t), t);
         assert_eq!(c.get_widened_type(t), t);
@@ -785,7 +775,12 @@ mod tests {
         // so GetDeclaredTypeOfSymbol still resolves to errorType (Go's nil
         // arm) — the pin survives the flip.
         assert_eq!(c.get_declared_type_of_symbol(sym), c.error_type());
-        assert_eq!(c.get_return_type_of_signature(SignatureId(0)), c.error_type());
+        // M6 S8 flipped getReturnTypeOfSignature to the REAL body
+        // (members.rs): the seeded signature 0 (NewChecker's anySignature,
+        // whose resolvedReturnType is anyType — see spine.rs's own seed
+        // asserts) now resolves its return type instead of the stub-era
+        // errorType — the any-signature pin.
+        assert_eq!(c.get_return_type_of_signature(SignatureId(0)), c.any_type());
         // The W1 `get_base_constructor_type_of_class == errorType` pin is
         // SUPERSEDED (M6 S2): the real base-constructor resolution asserts
         // InterfaceType data — Go's `t.AsInterfaceType()` nil-deref on a
@@ -818,7 +813,11 @@ mod tests {
         assert_eq!(c.get_merged_symbol(sym), sym);
         assert_eq!(c.get_parent_of_symbol(sym), c.program.symbol(sym).parent);
         assert_eq!(c.get_immediate_aliased_symbol(sym), None);
-        assert_eq!(c.get_target_symbol(sym), None);
+        // M6 S8 flipped getTargetSymbol to the REAL instantiation-target
+        // walk (members.rs, Go checker.go:22087): a non-instantiated symbol
+        // resolves to itself (Go returns the symbol, never nil here) — the
+        // stub-era None pin is retired.
+        assert_eq!(c.get_target_symbol(sym), Some(sym));
         // M6 S6 flipped the resolved-signature twin to the REAL family
         // (resolvecall.rs): resolveSignature is only ever called on
         // call-like nodes by contract (Go panics "Unhandled case in

@@ -1458,7 +1458,7 @@ impl Checker {
     /// Go: `func (c *Checker) createPromiseType(promisedType) *Type` (checker.go:20752)
     /// — the JSDoc `promise` arm's constructor, composed over the S7
     /// createTypeReference seam and the S9 awaited-type seam.
-    fn create_promise_type(&mut self, promised_type: TypeId) -> TypeId {
+    pub(crate) fn create_promise_type(&mut self, promised_type: TypeId) -> TypeId {
         // Creates a `Promise<T>` type where T is the promisedType argument.
         let global_promise_type = self.get_global_promise_type_checked();
         if Some(global_promise_type) != self.empty_generic_type {
@@ -1589,7 +1589,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getTypeFromClassOrInterfaceReference(node, symbol) *Type` (checker.go:23670).
-    fn get_type_from_class_or_interface_reference(&mut self, node: NodeId, symbol: SymbolId) -> TypeId {
+    pub(crate) fn get_type_from_class_or_interface_reference(&mut self, node: NodeId, symbol: SymbolId) -> TypeId {
         let t = self.get_declared_type_of_class_or_interface(self.get_merged_symbol(symbol));
         let (type_parameters, outer_type_parameters) = {
             let d = self.type_(t).as_interface_type().expect("InterfaceType data");
@@ -1667,7 +1667,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getTypeArgumentsFromNode(node) []*Type` (checker.go:23740).
-    fn get_type_arguments_from_node(&mut self, node: NodeId) -> Vec<TypeId> {
+    pub(crate) fn get_type_arguments_from_node(&mut self, node: NodeId) -> Vec<TypeId> {
         crate::statements::type_arguments_of(self.store(), node)
             .into_iter()
             .map(|n| self.get_type_from_type_node(n))

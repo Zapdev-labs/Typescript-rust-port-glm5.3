@@ -3288,13 +3288,13 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) instantiateIndexInfos(infos []*IndexInfo, m *TypeMapper) []*IndexInfo`
-    /// (checker.go:23284) — the arena form (IndexInfoId in, out).
-#[allow(dead_code)] // TODO(port M6 S8/S9/S10): Go-mirrored; the member/conditional/index waves consume it
+    /// (checker.go:23284) — the arena form (IndexInfoId in, out; S8 flipped
+    /// the payload fields to the handle form).
     pub(crate) fn instantiate_index_infos(
         &mut self,
-        infos: &[usize],
+        infos: &[crate::types::IndexInfoId],
         m: Option<TypeMapperId>,
-    ) -> Vec<usize> {
+    ) -> Vec<crate::types::IndexInfoId> {
         let mut result = Vec::with_capacity(infos.len());
         for &info in infos {
             result.push(self.instantiate_index_info(info, m));
@@ -3304,10 +3304,13 @@ impl Checker {
 
     /// Go: `func (c *Checker) instantiateIndexInfo(info *IndexInfo, m *TypeMapper) *IndexInfo`
     /// (checker.go:21034) — the arena form.
-#[allow(dead_code)] // TODO(port M6 S8/S9/S10): Go-mirrored; the member/conditional/index waves consume it
-    pub(crate) fn instantiate_index_info(&mut self, info: usize, m: Option<TypeMapperId>) -> usize {
+    pub(crate) fn instantiate_index_info(
+        &mut self,
+        info: crate::types::IndexInfoId,
+        m: Option<TypeMapperId>,
+    ) -> crate::types::IndexInfoId {
         let (key_type, value_type, is_readonly, declaration, components) = {
-            let info = &self.index_infos[info];
+            let info = &self.index_infos[info.0 as usize];
             (
                 info.key_type.expect("keyType"),
                 info.value_type.expect("valueType"),
@@ -3323,7 +3326,10 @@ impl Checker {
         if new_value_type == value_type {
             return info;
         }
-        self.new_index_info(key_type, new_value_type, is_readonly, declaration, components)
+        crate::types::IndexInfoId(
+            self.new_index_info(key_type, new_value_type, is_readonly, declaration, components)
+                as u32,
+        )
     }
 
     /// Go: `func (c *Checker) instantiateSignature(sig *Signature, m *TypeMapper) *Signature`
@@ -3533,8 +3539,7 @@ impl Checker {
         }
         // If the constraint type of the instantiation is the wildcard type,
         // return the wildcard type (Go's comment, checker.go:23131).
-        let constraint = crate::relater::get_constraint_type_from_mapped_type(self, t)
-            .unwrap_or_else(|| self.error_type());
+        let constraint = crate::relater::get_constraint_type_from_mapped_type(self, t);
         if self.instantiate_type(constraint, m) == self.wildcard_type() {
             return self.wildcard_type();
         }
@@ -3599,8 +3604,8 @@ impl Checker {
 
     /// Go: `func (c *Checker) getHomomorphicTypeVariable(t *Type) *Type`
     /// (checker.go:22972).
-    fn get_homomorphic_type_variable(&mut self, t: TypeId) -> Option<TypeId> {
-        let constraint = crate::relater::get_constraint_type_from_mapped_type(self, t)?;
+    pub(crate) fn get_homomorphic_type_variable(&mut self, t: TypeId) -> Option<TypeId> {
+        let constraint = crate::relater::get_constraint_type_from_mapped_type(self, t);
         if !self.type_(constraint).flags.intersects(TypeFlags::INDEX) {
             return None;
         }

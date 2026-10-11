@@ -224,6 +224,20 @@ impl Checker {
         }
     }
 
+    /// Go: the resolver pair's `getGlobalIterableIteratorTypeChecked` closure
+    /// (the createGeneratorType error-probe).
+    pub(crate) fn get_global_iterable_iterator_type_checked_of_resolver(
+        &mut self,
+        r: IterationTypesResolver,
+    ) -> TypeId {
+        match r.kind {
+            IterationTypesResolverKind::Sync => self.get_global_iterable_iterator_type_checked(),
+            IterationTypesResolverKind::Async => {
+                self.get_global_async_iterable_iterator_type_checked()
+            }
+        }
+    }
+
     /// Go: the resolver pair's `getGlobalIteratorObjectType` closure.
     pub(crate) fn get_global_iterator_object_type_of_resolver(&mut self, r: IterationTypesResolver) -> TypeId {
         match r.kind {
@@ -3255,10 +3269,10 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getReturnTypeFromAnnotation(declaration) *Type`
-    /// (checker.go:20462).
+    /// (checker.go:20462) — delegates to S8's FULL body (members.rs; the
+    /// S3-era annotation-only read is retired).
     pub(crate) fn get_return_type_from_annotation(&mut self, declaration: NodeId) -> Option<TypeId> {
-        let type_node = crate::ast_shims::type_of_node(self.store(), declaration);
-        type_node.map(|tn| self.get_type_from_type_node(tn))
+        self.get_return_type_from_annotation_impl(declaration)
     }
 
     /// Go: `func (c *Checker) checkAllCodePathsInNonVoidFunctionReturnOrThrow(fn, returnType)`
@@ -5075,7 +5089,7 @@ impl Checker {
             let mapper = self.new_simple_type_mapper(type_parameter, default_type);
             let instantiated = self.instantiate_type(constraint_type, mapper);
             let with_this =
-                relater::get_type_with_this_argument(self, instantiated, default_type, false);
+                relater::get_type_with_this_argument(self, instantiated, Some(default_type), false);
             self.check_type_assignable_to(
                 default_type,
                 with_this,
@@ -7084,11 +7098,9 @@ impl Checker {
             return;
         };
         let class_type = self.get_declared_type_of_symbol(symbol);
-        // Go: c.getTypeWithThisArgument(classType, nil, false) — the
-        // relater free fn's this_arg is non-optional; the anyType stand-in
-        // for Go's nil keeps the mapper a no-op.
-        let any_type = self.any_type();
-        let type_with_this = relater::get_type_with_this_argument(self, class_type, any_type, false);
+        // Go: c.getTypeWithThisArgument(classType, nil, false) — the S8
+        // Option<this_arg> seam carries Go's nil verbatim.
+        let type_with_this = relater::get_type_with_this_argument(self, class_type, None, false);
         let static_type = self.get_type_of_symbol(symbol);
         self.check_type_parameter_lists_identical(symbol);
         self.check_function_or_constructor_symbol(symbol);
@@ -7133,11 +7145,10 @@ impl Checker {
                     .as_interface_type()
                     .expect("InterfaceType data")
                     .this_type;
-                let this_arg = this_type.unwrap_or_else(|| self.any_type());
                 let base_with_this = relater::get_type_with_this_argument(
                     self,
                     base_type,
-                    this_arg,
+                    this_type,
                     false,
                 );
                 let class_name = self.store().node(node).name();
@@ -7256,7 +7267,7 @@ impl Checker {
                         .expect("InterfaceType data")
                         .this_type;
                     let base_with_this =
-                        relater::get_type_with_this_argument(self, t, this_type.unwrap_or_else(|| self.any_type()), false);
+                        relater::get_type_with_this_argument(self, t, this_type, false);
                     if !self.check_type_assignable_to(type_with_this, base_with_this, None, None)
                     {
                         self.issue_member_specific_error(node, type_with_this, base_with_this, generic_diag);
@@ -7892,7 +7903,7 @@ impl Checker {
                 base_with_this = Some(relater::get_type_with_this_argument(
                     self,
                     base_types[0],
-                    this_type.unwrap_or_else(|| self.any_type()),
+                    this_type,
                     false,
                 ));
             }
@@ -7991,8 +8002,8 @@ impl Checker {
             return MemberOverrideStatus::None;
         };
         let t = self.get_declared_type_of_symbol(class_symbol);
-        let any_type = self.any_type();
-        let type_with_this = relater::get_type_with_this_argument(self, t, any_type, false);
+        // Go: getTypeWithThisArgument(t, nil, false).
+        let type_with_this = relater::get_type_with_this_argument(self, t, None, false);
         let static_type = self.get_type_of_symbol(class_symbol);
         let mut base_with_this: Option<TypeId> = None;
         if get_class_extends_heritage_element(self.store(), node).is_some() {
@@ -8006,7 +8017,7 @@ impl Checker {
                 base_with_this = Some(relater::get_type_with_this_argument(
                     self,
                     base_types[0],
-                    this_type.unwrap_or_else(|| self.any_type()),
+                    this_type,
                     false,
                 ));
             }
@@ -8488,8 +8499,8 @@ impl Checker {
             let first_interface_declaration =
                 get_declaration_of_kind(self.store(), self.program_symbol(symbol), Kind::InterfaceDeclaration);
             let t = self.get_declared_type_of_symbol(symbol);
-            let any_type = self.any_type();
-            let type_with_this = relater::get_type_with_this_argument(self, t, any_type, false);
+            // Go: getTypeWithThisArgument(t, nil, false).
+            let type_with_this = relater::get_type_with_this_argument(self, t, None, false);
             // run subsequent checks only if first set succeeded
             let first_name = first_interface_declaration
                 .and_then(|d| self.store().node(d).name());
@@ -8504,7 +8515,7 @@ impl Checker {
                     let base_with_this = relater::get_type_with_this_argument(
                         self,
                         base_type,
-                        this_type.unwrap_or_else(|| self.any_type()),
+                        this_type,
                         false,
                     );
                     self.check_type_assignable_to(
@@ -8574,8 +8585,7 @@ impl Checker {
             .expect("InterfaceType data")
             .this_type;
         for base in base_types {
-            let this_arg = this_type.unwrap_or_else(|| self.any_type());
-            let base_with_this = relater::get_type_with_this_argument(self, base, this_arg, false);
+            let base_with_this = relater::get_type_with_this_argument(self, base, this_type, false);
             let properties = relater::get_properties_of_type(self, base_with_this);
             for prop in properties {
                 let prop_name = self.program_symbol(prop).name.clone();
@@ -9219,11 +9229,9 @@ impl Checker {
         Vec::new()
     }
 
-    /// TODO(port M6 S7): `isValidBaseType` — the statics-known-members fact;
-    /// permissive true (the implement-check proceeds like an object type).
-    fn is_valid_base_type(&mut self, _t: TypeId) -> bool {
-        true
-    }
+    // Go: `func (c *Checker) isValidBaseType(t) bool` — S8's REAL body
+    // (members.rs) replaced the S7 permissive stub; the method resolves
+    // there on this shared type.
 }
 
 // ────────────────────────────────────────────────────────────────────────────

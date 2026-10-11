@@ -268,7 +268,17 @@ pub struct Checker {
     pub(crate) apparent_argument_count: Option<i32>,
     /// Go: `cachedSignatures map[CachedSignatureKey]*Signature` —
     /// getOptionalCallSignature's clone cache (inner/outer call-chain keys).
-    pub(crate) cached_signatures: FxHashMap<(crate::types::SignatureId, u8), crate::types::SignatureId>,
+    /// PORT (M6 S8): Go keys by the full `CacheHashKey` (the type-list key
+    /// OR the erased/canonical/base sentinels); the S7 `u8` compression
+    /// collided distinct type-argument lists — the full u64 is the load-
+    /// bearing form (the call-chain keys 1/2 ride the same map).
+    pub(crate) cached_signatures: FxHashMap<(crate::types::SignatureId, u64), crate::types::SignatureId>,
+    /// Go: `enumNumberIndexInfo *IndexInfo{numberType, stringType, readonly}`
+    /// (checker.go:1058 — seeded in new_checker; arena form).
+    pub(crate) enum_number_index_info: Option<crate::types::IndexInfoId>,
+    /// Go: `anyBaseTypeIndexInfo *IndexInfo{stringType, anyType, false}`
+    /// (checker.go:1059 — seeded in new_checker; arena form).
+    pub(crate) any_base_type_index_info: Option<crate::types::IndexInfoId>,
     // TODO(port M6): jsxElementLinks (JsxElementLinks), the
     // RegExpScanner, patternForType, contextFreeTypes, flow caches.
     // ── Arenas (§5.5) ──
@@ -1534,6 +1544,8 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         is_inference_partially_blocked: false,
         apparent_argument_count: None,
         cached_signatures: FxHashMap::default(),
+        enum_number_index_info: None,
+        any_base_type_index_info: None,
         free_inference_states: Vec::new(),
         reverse_mapped_cache: FxHashMap::default(),
         reverse_homomorphic_mapped_cache: FxHashMap::default(),
@@ -1956,10 +1968,17 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     let any_type = c.any_type.expect("just created");
     let error_type = c.error_type.expect("just created");
     let silent_never_type = c.silent_never_type.expect("just created");
-    c.any_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(any_type), -1));
-    c.unknown_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(error_type), -1));
-    c.resolving_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(error_type), -1));
-    c.silent_never_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(silent_never_type), -1));
+    c.any_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(any_type), 0));
+    c.unknown_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(error_type), 0));
+    c.resolving_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(any_type), 0));
+    c.silent_never_signature = Some(c.new_signature(SignatureFlags::NONE, None, Vec::new(), None, Vec::new(), Some(silent_never_type), 0));
+    // Go (checker.go:1058-1059): enumNumberIndexInfo/anyBaseTypeIndexInfo —
+    // the two sentinel index infos (arena form; numberType/stringType seeded
+    // above, anyType too).
+    let number_type = c.number_type.expect("just created");
+    let string_type = c.string_type.expect("just created");
+    c.enum_number_index_info = Some(crate::types::IndexInfoId(c.new_index_info(number_type, string_type, true, None, Vec::new()) as u32));
+    c.any_base_type_index_info = Some(crate::types::IndexInfoId(c.new_index_info(string_type, any_type, false, None, Vec::new()) as u32));
     // Go: getVariancesMap's markerSubTypeForCheck/markerSuperTypeForCheck
     // (relater.go's relation pair — same construction as the markers above).
     let marker_super_for_check = c.new_type(

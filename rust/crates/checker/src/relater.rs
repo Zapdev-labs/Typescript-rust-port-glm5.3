@@ -136,6 +136,36 @@ impl MappedTypeModifiers {
     pub const EXCLUDE_OPTIONAL: MappedTypeModifiers = MappedTypeModifiers(1 << 3);
 }
 
+/// Go: `type MappedTypeNameTypeKind int32` (checker.go) — the name-type
+/// classification `getMappedTypeNameTypeKind` produces (iota order pinned).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(i32)]
+pub(crate) enum MappedTypeNameTypeKind {
+    None = 0,
+    Filtering = 1,
+    Remapping = 2,
+}
+
+/// Go: checker.go:178 `SignatureKeyErased/Canonical/Base = CacheHashKey(xxh3.HashString128(...))`
+/// — the cachedSignatures sentinel keys. PORT: the crate hashes keys with
+/// FNV-1a (see KeyBuilder::hash's PORT note), so the sentinels derive from
+/// the same fixed hash over Go's sentinel strings; collision with real
+/// type-list keys is impossible in practice (real keys hash a length +
+/// TypeId stream, never a single byte).
+const fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut i = 0;
+    while i < bytes.len() {
+        h ^= bytes[i] as u64;
+        h = h.wrapping_mul(0x1000_0000_01b3);
+        i += 1;
+    }
+    h
+}
+pub(crate) const SIGNATURE_KEY_ERASED: u64 = fnv1a(b"-");
+pub(crate) const SIGNATURE_KEY_CANONICAL: u64 = fnv1a(b"*");
+pub(crate) const SIGNATURE_KEY_BASE: u64 = fnv1a(b"#");
+
 /// Go: `type DiagnosticAndArguments struct` (message + args; used by the
 /// elaborate* family's deferred diagnostics).
 pub struct DiagnosticAndArguments {
@@ -4310,8 +4340,7 @@ impl Relater {
             // keyof T is related to Q and X is related to T[Q] (Go comment,
             // verbatim).
             let target_index_type = get_index_type(c, target);
-            let source_mapped_constraint =
-                get_constraint_type_from_mapped_type(c, source).unwrap_or_else(|| c.never_type());
+            let source_mapped_constraint = get_constraint_type_from_mapped_type(c, source);
             if c.type_(source).object_flags.intersects(ObjectFlags::MAPPED)
                 && mapped_type_name_type_is_none(c, source)
                 && ternary_not_false(self.is_related_to(c, target_index_type, source_mapped_constraint, RecursionFlags::BOTH, false))
@@ -4419,14 +4448,13 @@ impl Relater {
                         Some(name_type) if is_mapped_type_with_keyof_constraint_declaration(c, target_type) => {
                             // TODO(port M6 S7): getApparentMappedTypeKeys +
                             // the union construction — the mapped-key union arm.
-                            Some(get_union_type(c, vec![name_type, name_type]))
+                            get_union_type(c, vec![name_type, name_type])
                         }
-                        _ => name_type.or(constraint_type),
+                        Some(name_type) => name_type,
+                        None => constraint_type,
                     };
-                    if let Some(target_keys) = target_keys {
-                        if self.is_related_to(c, source, target_keys, RecursionFlags::TARGET, report_errors) == Ternary::True {
-                            return Ternary::True;
-                        }
+                    if self.is_related_to(c, source, target_keys, RecursionFlags::TARGET, report_errors) == Ternary::True {
+                        return Ternary::True;
                     }
                 }
             }
@@ -4513,11 +4541,15 @@ impl Relater {
                     // If target has shape `{ [P in Q as R]: T }` (Go
                     // comment, verbatim).
                     let target_keys = if keys_remapped {
-                        get_name_type_from_mapped_type(c, target)
+                        // Go: nameType may be nil on a remapped mapped type
+                        // with an unresolved NameType; the Option carries it.
+                        match get_name_type_from_mapped_type(c, target) {
+                            Some(keys) => keys,
+                            None => return Ternary::False,
+                        }
                     } else {
                         get_constraint_type_from_mapped_type(c, target)
                     };
-                    let Some(target_keys) = target_keys else { return Ternary::False };
                     let source_keys = get_index_type_ex(c, source, IndexFlags::NO_INDEX_SIGNATURES);
                     let include_optional = modifiers.intersects(MappedTypeModifiers::INCLUDE_OPTIONAL);
                     let filtered_by_applicability = if include_optional {
@@ -4584,7 +4616,7 @@ impl Relater {
                 if result != Ternary::False {
                     return result;
                 }
-                let constraint_with_this = get_type_with_this_argument(c, constraint, source, false /*needApparentType*/);
+                let constraint_with_this = get_type_with_this_argument(c, constraint, Some(source), false /*needApparentType*/);
                 let report = report_errors && constraint != c.unknown_type() && !TypeFlags(c.type_(target).flags.0 & s_flags.0).intersects(TypeFlags::TYPE_PARAMETER);
                 result = self.is_related_to_ex(c, constraint_with_this, target, RecursionFlags::SOURCE, report, None, intersection_state);
                 if result != Ternary::False {
@@ -4622,7 +4654,7 @@ impl Relater {
                     // TODO(port M6 S7): getApparentMappedTypeKeys.
                     name_type
                 } else {
-    name_type.or_else(|| get_constraint_type_from_mapped_type(c, mapped_type))
+                    Some(get_constraint_type_from_mapped_type(c, mapped_type))
                 };
                 if let Some(source_mapped_keys) = source_mapped_keys {
                     result = self.is_related_to(c, source_mapped_keys, target, RecursionFlags::SOURCE, report_errors);
@@ -4935,10 +4967,8 @@ impl Relater {
             || self.relation != RelationKind::Identity
                 && get_combined_mapped_type_optionality(c, source) <= get_combined_mapped_type_optionality(c, target);
         if modifiers_related {
-            let target_constraint =
-                get_constraint_type_from_mapped_type(c, target).unwrap_or_else(|| c.never_type());
-            let source_mapped_constraint =
-                get_constraint_type_from_mapped_type(c, source).unwrap_or_else(|| c.never_type());
+            let target_constraint = get_constraint_type_from_mapped_type(c, target);
+            let source_mapped_constraint = get_constraint_type_from_mapped_type(c, source);
             let source_mapper = if get_combined_mapped_type_optionality(c, source) < 0 {
                 report_unmeasurable_mapper(c)
             } else {
@@ -7140,75 +7170,57 @@ fn ast_is_const_assertion(c: &Checker, node: NodeId) -> bool {
 /// Go: `ResolvedTypeMembers`-shaped carrier (checker.go) — the S8 wave owns
 /// the real struct; the permissive stub resolves to no members/signatures.
 pub(crate) struct ResolvedTypeMembers {
+    /// Go: `t.StructuredType().members` — the full member table (properties,
+    /// call/new/index sentinels included).
+    pub members: tsc_collections::OrderedMap<String, SymbolId>,
+    /// Go: `t.StructuredType().properties` — the named, sorted member list.
     pub properties: Vec<SymbolId>,
+    /// Go: call + construct signatures, concatenated.
     pub signatures: Vec<crate::types::SignatureId>,
+    /// Go: `t.StructuredType().callSignatureCount` — the split point between
+    /// the call and construct signature ranges above.
+    pub call_signature_count: i32,
     pub index_infos: Vec<crate::types::IndexInfoId>,
 }
 
 /// Go: `func (c *Checker) resolveStructuredTypeMembers(t) *ResolvedTypeMembers`.
 pub(crate) fn resolve_structured_type_members(c: &mut Checker, t: TypeId) -> ResolvedTypeMembers {
-    // TODO(port M6 S8): the members resolver (resolveObjectTypeMembers +
-    // resolveUnionTypeMembers etc.) — permissive: no members.
-    let _ = (c, t);
-    ResolvedTypeMembers {
-        properties: Vec::new(),
-        signatures: Vec::new(),
-        index_infos: Vec::new(),
-    }
+    c.resolve_structured_type_members_impl(t)
 }
 
 /// Go: `func (c *Checker) getPropertiesOfType(t) []*ast.Symbol`.
 pub(crate) fn get_properties_of_type(c: &mut Checker, t: TypeId) -> Vec<SymbolId> {
-    if c.type_(t).flags.intersects(TypeFlags::OBJECT) {
-        return get_properties_of_object_type(c, t);
-    }
-    if c.type_(t).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
-        return get_properties_of_union_or_intersection_type(c, t);
-    }
-    // TODO(port M6 S8): intersection reduction etc.
-    Vec::new()
+    c.get_properties_of_type_impl(t)
 }
 
 /// Go: `func (c *Checker) getPropertiesOfObjectType(t) []*ast.Symbol`.
 pub(crate) fn get_properties_of_object_type(c: &mut Checker, t: TypeId) -> Vec<SymbolId> {
-    // TODO(port M6 S8): resolveStructuredTypeMembers — empty until then.
-    let _ = (c, t);
-    Vec::new()
+    c.get_properties_of_object_type_impl(t)
 }
 
 /// Go: `func (c *Checker) getPropertiesOfUnionOrIntersectionType(t) []*ast.Symbol`.
 pub(crate) fn get_properties_of_union_or_intersection_type(c: &mut Checker, t: TypeId) -> Vec<SymbolId> {
-    // TODO(port M6 S8): the union/intersection property walk.
-    let _ = (c, t);
-    Vec::new()
+    c.get_properties_of_union_or_intersection_type(t)
 }
 
 /// Go: `func (c *Checker) getPropertyOfObjectType(t, name) *ast.Symbol`.
 pub(crate) fn get_property_of_object_type(c: &mut Checker, t: TypeId, name: &str) -> Option<SymbolId> {
-    // TODO(port M6 S8): the member lookup (case-insensitive fallback etc.).
-    let _ = (c, t, name);
-    None
+    c.get_property_of_object_type_impl(t, name)
 }
 
 /// Go: `func (c *Checker) getPropertyOfUnionOrIntersectionType(t, name, skipObjectFunctionPropertyAugment) *ast.Symbol`.
-pub(crate) fn get_property_of_union_or_intersection_type(c: &mut Checker, t: TypeId, name: &str, _skip_object_function_property_augment: bool) -> Option<SymbolId> {
-    // TODO(port M6 S8): the union/intersection synthetic property.
-    let _ = (c, t, name);
-    None
+pub(crate) fn get_property_of_union_or_intersection_type(c: &mut Checker, t: TypeId, name: &str, skip_object_function_property_augment: bool) -> Option<SymbolId> {
+    c.get_property_of_union_or_intersection_type_impl(t, name, skip_object_function_property_augment)
 }
 
 /// Go: `func (c *Checker) getPropertyOfType(t, name) *ast.Symbol`.
 pub(crate) fn get_property_of_type(c: &mut Checker, t: TypeId, name: &str) -> Option<SymbolId> {
-    if c.type_(t).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
-        return get_property_of_union_or_intersection_type(c, t, name, false);
-    }
-    let apparent = get_apparent_type(c, t);
-    get_property_of_object_type(c, apparent, name)
+    c.get_property_of_type_impl(t, name)
 }
 
 /// Go: `func (c *Checker) getTypeOfPropertyOfType(t, name) *Type`.
 pub(crate) fn get_type_of_property_of_type(c: &mut Checker, t: TypeId, name: &str) -> Option<TypeId> {
-    get_property_of_type(c, t, name).map(|p| c.get_type_of_symbol(p))
+    c.get_type_of_property_of_type_impl(t, name)
 }
 
 /// Go: `func (c *Checker) getTypeOfPropertyOrIndexSignatureOfType(t, name) *Type`.
@@ -7223,66 +7235,55 @@ pub(crate) fn get_type_of_property_or_index_signature_of_type(c: &mut Checker, t
 }
 
 /// Go: `func (c *Checker) getSignaturesOfType(t, kind) []*Signature`.
-pub(crate) fn get_signatures_of_type(c: &mut Checker, _t: TypeId, kind: SignatureKind) -> Vec<crate::types::SignatureId> {
-    // TODO(port M6 S8): resolveStructuredTypeMembers' signature lists.
-    let _ = (c, kind);
-    Vec::new()
+pub(crate) fn get_signatures_of_type(c: &mut Checker, t: TypeId, kind: SignatureKind) -> Vec<crate::types::SignatureId> {
+    c.get_signatures_of_type_impl(t, kind)
 }
 
 /// Go: `func (c *Checker) getSignaturesOfStructuredType(t, kind) []*Signature`.
-pub(crate) fn get_signatures_of_structured_type(c: &mut Checker, _t: TypeId, kind: SignatureKind) -> Vec<crate::types::SignatureId> {
-    // TODO(port M6 S8): as above (the structured-type variant).
-    let _ = (c, kind);
-    Vec::new()
+pub(crate) fn get_signatures_of_structured_type(c: &mut Checker, t: TypeId, kind: SignatureKind) -> Vec<crate::types::SignatureId> {
+    c.get_signatures_of_structured_type_impl(t, kind)
 }
 
-/// Go: `func (c *Checker) typeHasCallOrConstructSignatures(t) bool`.
+/// Go: `func (c *Checker) typeHasCallOrConstructSignatures(t) bool` (checker.go:28395)
+/// — `t.flags&TypeFlagsStructuredType != 0 && len(c.resolveStructuredTypeMembers(t).signatures) != 0`.
 pub(crate) fn type_has_call_or_construct_signatures(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S8): the signature-existence check.
-    let _ = (c, t);
-    false
+    c.type_(t).flags.intersects(TypeFlags::STRUCTURED_TYPE)
+        && !c.resolve_structured_type_members_impl(t).signatures.is_empty()
 }
 
 /// Go: `func (c *Checker) getIndexInfosOfType(t) []*IndexInfo`.
 pub(crate) fn get_index_infos_of_type(c: &mut Checker, t: TypeId) -> Vec<crate::types::IndexInfoId> {
-    // TODO(port M6 S8): resolveStructuredTypeMembers' indexInfos.
-    let _ = (c, t);
-    Vec::new()
+    c.get_index_infos_of_type_impl(t)
 }
 
 /// Go: `func (c *Checker) getIndexInfoOfType(t, key) *IndexInfo`.
-pub(crate) fn get_index_info_of_type(c: &mut Checker, _t: TypeId, key: TypeId) -> Option<crate::types::IndexInfoId> {
-    // TODO(port M6 S8): the indexInfo map lookup.
-    let _ = (c, key);
-    None
+pub(crate) fn get_index_info_of_type(c: &mut Checker, t: TypeId, key: TypeId) -> Option<crate::types::IndexInfoId> {
+    c.get_index_info_of_type_impl(t, key)
 }
 
 /// Go: `func (c *Checker) getApplicableIndexInfo(t, key) *IndexInfo`.
-pub(crate) fn get_applicable_index_info(c: &mut Checker, _t: TypeId, key: TypeId) -> Option<crate::types::IndexInfoId> {
-    // TODO(port M6 S8): isApplicableIndexType over the indexInfos.
-    let _ = (c, key);
-    None
+pub(crate) fn get_applicable_index_info(c: &mut Checker, t: TypeId, key: TypeId) -> Option<crate::types::IndexInfoId> {
+    c.get_applicable_index_info_impl(t, key)
 }
 
 /// Go: `func (c *Checker) getApplicableIndexInfoForName(t, name) *IndexInfo`.
 pub(crate) fn get_applicable_index_info_for_name(c: &mut Checker, t: TypeId, name: &str) -> Option<crate::types::IndexInfoId> {
-    // TODO(port M6 S8): the name-keyed indexInfo path.
-    let _ = (c, t, name);
-    None
+    c.get_applicable_index_info_for_name_impl(t, name)
 }
 
-/// Go: `func (c *Checker) isApplicableIndexType(source, target) bool`.
+/// Go: `func (c *Checker) isApplicableIndexType(source, target) bool` —
+/// Go's callers guard the nil source (getLiteralTypeFromProperty's None);
+/// the port surfaces that as `None → false`.
 pub(crate) fn is_applicable_index_type(c: &mut Checker, source: Option<TypeId>, target: TypeId) -> bool {
-    // TODO(port M6 S8): getIndexType / isKeyTypeValidForIndex.
-    let _ = (c, source, target);
-    false
+    match source {
+        Some(source) => c.is_applicable_index_type(source, target),
+        None => false,
+    }
 }
 
 /// Go: `func (c *Checker) getLiteralTypeFromProperty(prop, flags, checkOverflow) *Type`.
-pub(crate) fn get_literal_type_from_property(c: &mut Checker, prop: SymbolId, _flags: TypeFlags, _check_overflow: bool) -> Option<TypeId> {
-    // TODO(port M6 S8): the declared-literal-from-name machinery.
-    let _ = (c, prop);
-    None
+pub(crate) fn get_literal_type_from_property(c: &mut Checker, prop: SymbolId, flags: TypeFlags, check_overflow: bool) -> Option<TypeId> {
+    c.get_literal_type_from_property_impl(prop, flags, check_overflow)
 }
 
 /// Go: `func (c *Checker) getNonMissingTypeOfSymbol(sym) *Type`.
@@ -7446,12 +7447,10 @@ pub(crate) fn is_generic_tuple_type(c: &Checker, t: TypeId) -> bool {
 pub(crate) fn is_generic_mapped_type(c: &mut Checker, t: TypeId) -> bool {
     if c.type_(t).object_flags.intersects(ObjectFlags::MAPPED) {
         let constraint = get_constraint_type_from_mapped_type(c, t);
-        // Go: c.isGenericIndexType(constraint) — the S8 constraint seam
-        // answers None until the mapped-type component resolution lands, in
-        // which case the whole probe rests.
-        if let Some(constraint) = constraint
-            && crate::typenodes::get_generic_object_flags(c, constraint)
-                .intersects(ObjectFlags::IS_GENERIC_INDEX_TYPE)
+        // Go: c.isGenericIndexType(constraint) — REAL since S8's component
+        // resolution.
+        if crate::typenodes::get_generic_object_flags(c, constraint)
+            .intersects(ObjectFlags::IS_GENERIC_INDEX_TYPE)
         {
             return true;
         }
@@ -7459,8 +7458,7 @@ pub(crate) fn is_generic_mapped_type(c: &mut Checker, t: TypeId) -> bool {
         // other than the iteration type. To determine this, we substitute the
         // constraint type (that we now know isn't generic) for the iteration
         // type and check whether the resulting type is generic.
-        let name_type = get_name_type_from_mapped_type(c, t);
-        if let (Some(name_type), Some(constraint)) = (name_type, constraint) {
+        if let Some(name_type) = get_name_type_from_mapped_type(c, t) {
             let type_parameter = get_type_parameter_from_mapped_type(c, t);
             let mapper = new_simple_type_mapper(c, type_parameter, constraint);
             let substituted = c.instantiate_type(name_type, mapper);
@@ -7474,11 +7472,12 @@ pub(crate) fn is_generic_mapped_type(c: &mut Checker, t: TypeId) -> bool {
     false
 }
 
-/// Go: `func isPartialMappedType(t) bool`.
+/// Go: `func isPartialMappedType(t) bool` — REAL since S8 (the modifiers
+/// reader landed with the mapped-members wave).
 pub(crate) fn is_partial_mapped_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7).
-    let _ = (c, t);
-    false
+    c.type_(t).object_flags.intersects(ObjectFlags::MAPPED)
+        && c.mapped_type_modifiers_impl(t)
+            .intersects(MappedTypeModifiers::INCLUDE_OPTIONAL)
 }
 
 /// Go: `func (c *Checker) isGenericObjectType(t) bool` (checker.go:25489) —
@@ -7612,10 +7611,8 @@ pub(crate) fn has_non_circular_base_constraint(c: &mut Checker, t: TypeId) -> bo
 }
 
 /// Go: `func (c *Checker) getTypeWithThisArgument(t, thisArgument, needApparentType) *Type`.
-pub(crate) fn get_type_with_this_argument(_c: &mut Checker, t: TypeId, this_arg: TypeId, _need_apparent_type: bool) -> TypeId {
-    // TODO(port M6 S9): the this-mapper instantiation.
-    let _ = this_arg;
-    t
+pub(crate) fn get_type_with_this_argument(c: &mut Checker, t: TypeId, this_arg: Option<TypeId>, need_apparent_type: bool) -> TypeId {
+    c.get_type_with_this_argument_impl(t, this_arg, need_apparent_type)
 }
 
 /// Go: `func (c *Checker) removeMissingType(t, isOptional) *Type` — delegates
@@ -7630,9 +7627,8 @@ pub(crate) fn add_optionality_ex(c: &mut Checker, t: TypeId, is_property: bool, 
 }
 
 /// Go: `func (c *Checker) getApparentType(t) *Type`.
-pub(crate) fn get_apparent_type(_c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S8): apparentTypeOfObjectLiteral/enum etc.
-    t
+pub(crate) fn get_apparent_type(c: &mut Checker, t: TypeId) -> TypeId {
+    c.get_apparent_type_impl(t)
 }
 
 /// Go: `func (c *Checker) getRegularTypeOfObjectLiteral(t) *Type`.
@@ -7987,50 +7983,39 @@ pub(crate) fn alias_symbol_value_declaration_in_js_file(c: &Checker, symbol: Sym
     false
 }
 
-// ── Mapped-type accessors (S7 seams) ──
+// ── Mapped-type accessors (S7 seams → S8 real bodies; members.rs) ──
 
 /// Go: `func (c *Checker) getMappedTypeModifiers(t) MappedTypeModifiers`.
-pub(crate) fn get_mapped_type_modifiers(_c: &mut Checker, t: TypeId) -> MappedTypeModifiers {
-    // TODO(port M6 S7): the declaration-driven modifier computation.
-    let _ = t;
-    MappedTypeModifiers::NONE
+pub(crate) fn get_mapped_type_modifiers(c: &mut Checker, t: TypeId) -> MappedTypeModifiers {
+    c.mapped_type_modifiers_impl(t)
 }
 
 /// Go: `func (c *Checker) getCombinedMappedTypeOptionality(t) int`.
-pub(crate) fn get_combined_mapped_type_optionality(_c: &mut Checker, t: TypeId) -> i32 {
-    // TODO(port M6 S7).
-    let _ = t;
-    0
+pub(crate) fn get_combined_mapped_type_optionality(c: &mut Checker, t: TypeId) -> i32 {
+    c.get_combined_mapped_type_optionality_impl(t)
 }
 
-/// Go: `func (c *Checker) getConstraintTypeFromMappedType(t) *Type`.
-pub(crate) fn get_constraint_type_from_mapped_type(_c: &mut Checker, t: TypeId) -> Option<TypeId> {
-    // TODO(port M6 S7): the mapped-type constraint type parameter (Go's
-    // nullable return ports as Option; None until the mapped-type
-    // constructor lands).
-    let _ = t;
-    None
+/// Go: `func (c *Checker) getConstraintTypeFromMappedType(t) *Type` — Go
+/// returns errorType on a missing constraint (never nil); the S7 Option
+/// seam is superseded by the S8 real body.
+pub(crate) fn get_constraint_type_from_mapped_type(c: &mut Checker, t: TypeId) -> TypeId {
+    c.get_constraint_type_from_mapped_type_impl(t)
 }
 
 /// Go: `func (c *Checker) getTemplateTypeFromMappedType(t) *Type`.
 pub(crate) fn get_template_type_from_mapped_type(c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S7).
-    let _ = t;
-    c.never_type()
+    c.get_template_type_from_mapped_type_impl(t)
 }
 
 /// Go: `func (c *Checker) getTypeParameterFromMappedType(t) *Type`.
 pub(crate) fn get_type_parameter_from_mapped_type(c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S7).
-    let _ = t;
-    c.never_type()
+    c.get_type_parameter_from_mapped_type_impl(t)
 }
 
-/// Go: `func (c *Checker) getNameTypeFromMappedType(t) *Type`.
-pub(crate) fn get_name_type_from_mapped_type(_c: &mut Checker, t: TypeId) -> Option<TypeId> {
-    // TODO(port M6 S7).
-    let _ = t;
-    None
+/// Go: `func (c *Checker) getNameTypeFromMappedType(t) *Type` — Go's nil
+/// return (no NameType on the declaration) ports as Option.
+pub(crate) fn get_name_type_from_mapped_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
+    c.get_name_type_from_mapped_type_impl(t)
 }
 
 /// Go: `target.AsMappedType().declaration.NameType == nil`.
@@ -8039,10 +8024,8 @@ pub(crate) fn mapped_type_name_type_is_none(c: &mut Checker, t: TypeId) -> bool 
 }
 
 /// Go: `func (c *Checker) isMappedTypeWithKeyofConstraintDeclaration(t) bool`.
-pub(crate) fn is_mapped_type_with_keyof_constraint_declaration(_c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7).
-    let _ = t;
-    false
+pub(crate) fn is_mapped_type_with_keyof_constraint_declaration(c: &mut Checker, t: TypeId) -> bool {
+    c.is_mapped_type_with_keyof_constraint_declaration_impl(t)
 }
 
 /// Go: `func (c *Checker) shouldDeferIndexType(target, indexFlags) bool`.
@@ -8096,9 +8079,7 @@ pub(crate) fn new_simple_type_mapper(c: &mut Checker, source: TypeId, target: Ty
 
 /// Go: `func (c *Checker) getErasedSignature(s) *Signature`.
 pub(crate) fn get_erased_signature(c: &mut Checker, s: crate::types::SignatureId) -> crate::types::SignatureId {
-    // TODO(port M6 S6): eraseTypeParameters.
-    let _ = c;
-    s
+    c.get_erased_signature(s)
 }
 
 /// Go: `c.stringNumberSymbolType` — the keyof domain union (M6 S7: the REAL
@@ -8260,12 +8241,9 @@ pub(crate) fn get_base_type_of_enum_like_type(c: &mut Checker, t: TypeId) -> Opt
     None
 }
 
-/// Go: `func (c *Checker) hasBaseType(t, s) bool` — S8 stub.
-#[allow(dead_code)] // TODO(port M6 W2): Go-mirrored; callers land with inference.rs
+/// Go: `func (c *Checker) hasBaseType(t, s) bool`.
 pub(crate) fn has_base_type(c: &mut Checker, t: TypeId, s: TypeId) -> bool {
-    // TODO(port M6 S8): the base-type walk.
-    let _ = (c, t, s);
-    false
+    c.has_base_type_impl(t, s)
 }
 
 /// Go: `func (c *Checker) isFunctionObjectType(t) bool` — S8 stub.
@@ -8491,11 +8469,9 @@ impl Checker {
     // superseded by uniontypes.rs's real signature instantiator (same
     // signature).
 
-    /// Go: `func (c *Checker) getCanonicalSignature(s) *Signature`.
-    pub(crate) fn get_canonical_signature(&mut self, s: crate::types::SignatureId) -> crate::types::SignatureId {
-        // TODO(port M6 S6): the canonical-signature resolution.
-        s
-    }
+    // Go: `func (c *Checker) getCanonicalSignature(s) *Signature` — S8's
+    // REAL body (members.rs) replaced the S6 identity seam; resolves there
+    // on this shared Checker type.
 
     /// Go: `func (c *Checker) instantiateSignatureInContextOf(source, target, compareTypes) *Signature`.
     pub(crate) fn instantiate_signature_in_context_of(

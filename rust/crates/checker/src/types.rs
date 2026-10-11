@@ -1396,6 +1396,24 @@ impl Type {
         }
     }
 
+    /// Mutable form of [`Type::as_structured_type`] (M6 S8 —
+    /// set_structured_type_members writes through it).
+    pub fn as_structured_type_mut(&mut self) -> Option<&mut StructuredType> {
+        match &mut self.data {
+            TypeData::Object(d) => Some(&mut d.base),
+            TypeData::TypeReference(d) => Some(&mut d.base.base),
+            TypeData::Interface(d) => Some(&mut d.base.base.base),
+            TypeData::Tuple(d) => Some(&mut d.base.base.base.base),
+            TypeData::InstantiationExpression(d) => Some(&mut d.base.base),
+            TypeData::Mapped(d) => Some(&mut d.base.base),
+            TypeData::ReverseMapped(d) => Some(&mut d.base.base),
+            TypeData::EvolvingArray(d) => Some(&mut d.base.base),
+            TypeData::Union(d) => Some(&mut d.base.base),
+            TypeData::Intersection(d) => Some(&mut d.base.base),
+            _ => None,
+        }
+    }
+
     /// Go: `func (t *Type) AsObjectType() *ObjectType`.
     pub fn as_object_type(&self) -> Option<&ObjectType> {
         match &self.data {
@@ -1753,7 +1771,10 @@ pub struct StructuredType {
     pub signatures: Vec<SignatureId>,
     /// Count of call signatures
     pub call_signature_count: i32,
-    pub index_infos: Vec<Box<IndexInfo>>,
+    /// Index signatures. PORT (M6 S8): Go stores `[]*IndexInfo`; the port
+    /// stores arena ids into `Checker::index_infos` (the §5.4 handle idiom —
+    /// the form S7's instantiate_index_info(s) already speaks).
+    pub index_infos: Vec<IndexInfoId>,
     pub object_type_without_abstract_construct_signatures: Option<TypeId>,
 }
 
@@ -1855,8 +1876,8 @@ pub struct InterfaceType {
     pub declared_call_signatures: Vec<SignatureId>,
     /// Declared construct signatures
     pub declared_construct_signatures: Vec<SignatureId>,
-    /// Declared index signatures
-    pub declared_index_infos: Vec<Box<IndexInfo>>,
+    /// Declared index signatures (arena ids — see StructuredType::index_infos)
+    pub declared_index_infos: Vec<IndexInfoId>,
 }
 
 impl InterfaceType {

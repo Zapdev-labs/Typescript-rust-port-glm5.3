@@ -176,11 +176,10 @@ impl Checker {
                         self.store(),
                         base_type_node,
                     );
-                    // TODO(port M6 S8): getInstantiatedConstructorsForTypeArguments
-                    // composes resolveStructuredTypeMembers' constructor arms;
-                    // the S8 seam returns the un-instantiated constructor set,
-                    // which is empty until then (the untyped-call fallback
-                    // below is the composed answer).
+                    // S8: getInstantiatedConstructorsForTypeArguments is the
+                    // REAL members.rs body (checker.go:19717) — the
+                    // constructor set instantiates with the extends-clause
+                    // type arguments.
                     let base_constructors = self
                         .get_instantiated_constructors_for_type_arguments(
                             super_type,
@@ -259,11 +258,10 @@ impl Checker {
         // If FuncExpr's apparent type is a function type, the call is a typed
         // function call (overload resolution applies).
         if call_signatures.is_empty() {
-            // TODO(port M6 S8): getSignaturesOfType is the members seam —
-            // zero signatures here is the SEAM's answer, not the program's,
-            // until S8 lands. Compose Go's untyped-call path (anySignature)
-            // rather than firing the not-callable/invocationError ladder
-            // falsely; the arms below revive unchanged with S8.
+            // S8: the members are REAL — Go's checker.go:8749 arm, verbatim
+            // (the S8-seam-era untyped-call composition is retired). The
+            // missing-semicolon related-information probe rides the scanner
+            // surface (TODO(port M6 scanner wave)).
             if num_construct_signatures != 0 {
                 let func_type_string = self.type_to_string(func_type);
                 self.error(
@@ -271,9 +269,15 @@ impl Checker {
                     &diag::VALUE_OF_TYPE_0_IS_NOT_CALLABLE_DID_YOU_MEAN_TO_INCLUDE_NEW,
                     &[func_type_string],
                 );
-                return self.resolve_error_call(node);
+            } else {
+                self.invocation_error(
+                    node,
+                    apparent_type,
+                    crate::types::SignatureKind::Call,
+                    None,
+                );
             }
-            return self.resolve_untyped_call(node);
+            return self.resolve_error_call(node);
         }
         // The deferred-generic-function heuristic (resolvingSignature).
         if check_mode.intersects(CheckMode::SKIP_GENERIC_FUNCTIONS)
@@ -327,8 +331,11 @@ impl Checker {
         let construct_signatures =
             self.get_signatures_of_type(expression_type, crate::types::SignatureKind::Construct);
         if !construct_signatures.is_empty() {
-            let accessibility_error =
-                self.get_constructor_accessibility_error(node, &construct_signatures);
+            let accessibility_error = self.get_constructor_accessibility_error(
+                node,
+                &construct_signatures,
+                ModifierFlags::NON_PUBLIC_ACCESSIBILITY_MODIFIER,
+            );
             if let Some((kind, declaring_class)) = accessibility_error {
                 let declaring_class_string = self.type_to_string(declaring_class);
                 if kind.intersects(ModifierFlags::PRIVATE) {
@@ -417,12 +424,10 @@ impl Checker {
             }
             return signature;
         }
-        // TODO(port M6 S8): the members seam returns zero signatures for
-        // real constructible class types until S8; compose Go's
-        // untyped-call answer rather than the false not-constructable error.
-        if self.is_untyped_function_call(expression_type, expression_type, 0, 0) {
-            return self.resolve_untyped_call(node);
-        }
+        // No construct signatures and no call signatures (Go's tail,
+        // checker.go:8856): invocationError directly — IsTypeAny was handled
+        // above, so there is no untyped-call arm here (the S8-seam-era
+        // `0, 0` guard is retired).
         self.invocation_error(
             expression,
             expression_type,
@@ -474,9 +479,11 @@ impl Checker {
                 );
                 return self.resolve_error_call(node);
             }
-            // TODO(port M6 S8): the members seam composes the untyped-call
-            // path (same guard as resolveCallExpression).
-            return self.resolve_untyped_call(node);
+            // S8: members are real — Go's invocationError arm
+            // (checker.go:8932), verbatim (the seam-era untyped-call
+            // composition is retired).
+            self.invocation_error(tag, apparent_type, crate::types::SignatureKind::Call, None);
+            return self.resolve_error_call(node);
         }
         self.resolve_call(
             node,
@@ -521,14 +528,26 @@ impl Checker {
         ) {
             return self.resolve_untyped_call(node);
         }
-        // TODO(port M6 decorator wave): isPotentiallyUncalledDecorator reads
-        // getDecoratorCallSignature's synthetic argument list; the decorator
-        // resolution surface lands with that wave. Until then the zero-
-        // signature arm composes the untyped-call path (S8 seam guard).
-        if call_signatures.is_empty() {
-            return self.resolve_untyped_call(node);
-        }
+        // Go's len(callSignatures) == 0 arm (checker.go:8985): the
+        // invocationError chain — the S8-seam-era untyped-call composition
+        // is retired (members are real). The decorator-wave surfaces
+        // (isPotentiallyUncalledDecorator, getDecoratorCallSignature) stay
+        // bannered until that wave.
+        // TODO(port M6 decorator wave): isPotentiallyUncalledDecorator's
+        // accepts-too-few-arguments error + getDecoratorCallSignature's
+        // synthetic-argument applicability filter.
         let head_message = self.get_diagnostic_head_message_for_decorator_resolution(node);
+        if call_signatures.is_empty() {
+            let chain = self.invocation_error_details(node, apparent_type, crate::types::SignatureKind::Call);
+            let diagnostic = match head_message {
+                Some(head) => {
+                    u::new_diagnostic_chain_for_node(Some(&chain), self.store(), node, head, vec![])
+                }
+                None => chain,
+            };
+            self.add_diagnostic(diagnostic);
+            return self.resolve_error_call(node);
+        }
         self.resolve_call(
             node,
             &call_signatures,
@@ -832,7 +851,7 @@ impl Checker {
         if flags & SignatureFlags::CALL_CHAIN_FLAGS == call_chain_flags {
             return signature;
         }
-        let key: u8 = if call_chain_flags.intersects(SignatureFlags::IS_INNER_CALL_CHAIN) {
+        let key: u64 = if call_chain_flags.intersects(SignatureFlags::IS_INNER_CALL_CHAIN) {
             1
         } else {
             2
@@ -840,25 +859,13 @@ impl Checker {
         if let Some(&cached) = self.cached_signatures.get(&(signature, key)) {
             return cached;
         }
+        // Go: cloneSignature — the S8 real body (members.rs) replaced this
+        // local shallow copy (Go's clone masks flags with
+        // SignatureFlagsPropagatingFlags; the call-chain flags ride on top).
         let result = self.clone_signature(signature);
         self.signatures[result.0 as usize].flags |= call_chain_flags;
         self.cached_signatures.insert((signature, key), result);
         result
-    }
-
-    /// Go: `func (c *Checker) cloneSignature(signature) *Signature` — the
-    /// shallow copy getOptionalCallSignature needs.
-    fn clone_signature(&mut self, signature: SignatureId) -> SignatureId {
-        let source = &self.signatures[signature.0 as usize];
-        self.new_signature(
-            source.flags,
-            source.declaration,
-            source.type_parameters.clone(),
-            source.this_parameter,
-            source.parameters.clone(),
-            source.resolved_return_type,
-            source.min_argument_count,
-        )
     }
 
     /// Go: `func (c *Checker) chooseOverload(s *CallState, relation *Relation) *Signature`
@@ -2352,115 +2359,70 @@ impl Checker {
         }
     }
 
-    /// Go: `func (c *Checker) getInstantiatedConstructorsForTypeArguments(type, typeArguments, node) []*Signature`
-    /// (checker.go:8733).
-    fn get_instantiated_constructors_for_type_arguments(
-        &mut self,
-        type_: TypeId,
-        type_arguments: &[NodeId],
-        _base_type_node: NodeId,
-    ) -> Vec<SignatureId> {
-        // TODO(port M6 S8): the constructor set composes
-        // resolveStructuredTypeMembers' construct arms + instantiation with
-        // the extends-clause type arguments; the seam returns empty (the
-        // super-call arm then composes the untyped-call fallback).
-        let _ = (type_, type_arguments);
-        Vec::new()
-    }
+    // Go: `func (c *Checker) getInstantiatedConstructorsForTypeArguments(type, typeArguments, node) []*Signature`
+    // (checker.go:8733) — S8's REAL body (members.rs) replaced this seam;
+    // the method resolves there now (the local duplicate is deleted).
 
-    /// Go: `func (c *Checker) getConstructorAccessibilityError(node, signatures, modifierFlags) (ModifierFlags, *Type)`
-    /// (checker.go:8810) — the private/protected constructor walk.
-    fn get_constructor_accessibility_error(
-        &mut self,
-        node: NodeId,
-        signatures: &[SignatureId],
-    ) -> Option<(ModifierFlags, TypeId)> {
-        // TODO(port M6 S8): the constructor accessibility walk composes the
-        // resolved constructor set's declaring class symbols + the
-        // member-visibility checks; permissive None (no accessibility error)
-        // until then.
-        let _ = (node, signatures);
-        None
-    }
+    // Go: `func (c *Checker) getConstructorAccessibilityError(node, signatures, modifierFlags) (ModifierFlags, *Type)`
+    // (checker.go:8810) — S8's REAL body (members.rs) replaced this seam.
 
-    /// Go: `func (c *Checker) getSignatureInstantiation(signature, typeArguments, eraseTypeParameters, inferredTypeParameters) *Signature`
-    /// (checker.go — instantiateSignature). The S7 identity seam.
+    /// Go: `func (c *Checker) getSignatureInstantiation(signature, typeArguments, isJavaScript, inferredTypeParameters) *Signature`
+    /// (checker.go:19745) — S8's REAL body (members.rs
+    /// get_signature_instantiation_for_members) replaced the S7 seam. PORT:
+    /// the old local stub's `eraseTypeParameters: bool` third parameter was
+    /// the S7-era shape; Go's real parameter is `isJavaScript`, and the
+    /// call sites already pass Go's `false` literal.
     fn get_signature_instantiation(
         &mut self,
         signature: SignatureId,
         type_arguments: &[TypeId],
-        erase_type_parameters: bool,
+        is_javascript: bool,
         inferred_type_parameters: &[TypeId],
     ) -> SignatureId {
-        // M6 S7: REAL — instantiateSignatureEx over the type-argument mapper
-        // (the cached instantiated-signature construction; the Go
-        // inferredTypeParameters arm rides the S8 return-signature family).
-        let _ = erase_type_parameters;
-        let type_parameters = self.signatures[signature.0 as usize].type_parameters.clone();
-        let min_count = self.get_min_type_argument_count(&type_parameters);
-        let is_js = self
-            .signatures[signature.0 as usize]
-            .declaration
-            .is_some_and(|d| tsc_ast::utilities::is_in_js_file(self.store().node(d)));
-        let filled = self.fill_missing_type_arguments(type_arguments, &type_parameters, min_count, is_js);
-        let instantiated = self.get_signature_instantiation_without_filling_in_type_arguments(signature, &filled);
-        // TODO(port M6 S8): the inferredTypeParameters return-signature
-        // replacement (cloneSignature/getOrCreateTypeFromSignature over the
-        // instantiated return type).
-        let _ = inferred_type_parameters;
-        instantiated
+        self.get_signature_instantiation_for_members(
+            signature,
+            type_arguments,
+            is_javascript,
+            inferred_type_parameters,
+        )
     }
 
+    #[allow(dead_code)] // S8 surface — the later-wave consumers land with M6
     /// Go: `func (c *Checker) getSignatureInstantiationWithoutFillingInTypeArguments(sig, typeArguments) *Signature`
-    /// (checker.go — the cachedSignatures interning) — REAL (M6 S7).
+    /// (checker.go — the cachedSignatures interning) — S8's REAL body
+    /// (members.rs) replaced the S7 twin (the local duplicate is deleted).
     fn get_signature_instantiation_without_filling_in_type_arguments(
         &mut self,
         signature: SignatureId,
         type_arguments: &[TypeId],
     ) -> SignatureId {
-        let key = crate::typeofsymbol::get_type_list_key(type_arguments);
-        if let Some(&cached) = self.cached_signatures.get(&(signature, key.0 as u8)) {
-            return cached;
-        }
-        let result = self.create_signature_instantiation(signature, type_arguments);
-        self.cached_signatures.insert((signature, key.0 as u8), result);
-        result
+        self.get_signature_instantiation_without_filling_in_type_arguments_for_members(signature, type_arguments)
     }
 
     /// Go: `func (c *Checker) createSignatureInstantiation(signature, typeArguments) *Signature`
-    /// (checker.go — the overload-failure instantiator). The S7 identity seam.
+    /// (checker.go — the overload-failure instantiator) — S8's REAL body
+    /// (members.rs) replaced the S7 seam (the local duplicate is deleted).
     fn create_signature_instantiation(
         &mut self,
         signature: SignatureId,
         type_arguments: &[TypeId],
     ) -> SignatureId {
-        // M6 S7: REAL — instantiateSignatureEx over createSignatureTypeMapper.
-        let mapper = self.create_signature_type_mapper(signature, type_arguments);
-        self.instantiate_signature_ex(signature, Some(mapper), true /*eraseTypeParameters*/)
+        self.create_signature_instantiation_for_members(signature, type_arguments)
     }
 
+    #[allow(dead_code)] // S8 surface — the later-wave consumers land with M6
     /// Go: `func (c *Checker) createSignatureTypeMapper(sig, typeArguments) *TypeMapper`
-    /// → newTypeMapper(getTypeParametersForMapper(sig), typeArguments) — REAL
-    /// (M6 S7; the type parameters instantiate under their own mappers).
+    /// → newTypeMapper(getTypeParametersForMapper(sig), typeArguments) —
+    /// S8's REAL body (members.rs) replaced the S7 twin.
     fn create_signature_type_mapper(&mut self, signature: SignatureId, type_arguments: &[TypeId]) -> crate::todo_shapes::TypeMapperId {
-        let type_parameters = self.get_type_parameters_for_mapper(signature);
-        self.new_type_mapper(&type_parameters, type_arguments)
+        self.create_signature_type_mapper_for_members(signature, type_arguments)
     }
 
-    /// Go: `func (c *Checker) getTypeParametersForMapper(sig) []*Type` — REAL
-    /// (M6 S7).
+    #[allow(dead_code)] // S8 surface — the later-wave consumers land with M6
+    /// Go: `func (c *Checker) getTypeParametersForMapper(sig) []*Type` —
+    /// S8's REAL body (members.rs) replaced the S7 twin.
     fn get_type_parameters_for_mapper(&mut self, signature: SignatureId) -> Vec<TypeId> {
-        let type_parameters = self.signatures[signature.0 as usize].type_parameters.clone();
-        type_parameters
-            .iter()
-            .map(|&tp| {
-                let mapper = self.type_(tp).as_type_parameter().and_then(|d| d.mapper);
-                match mapper {
-                    Some(mapper) => self.instantiate_type(tp, mapper),
-                    None => tp,
-                }
-            })
-            .collect()
+        self.get_type_parameters_for_mapper_for_members(signature)
     }
 
     /// Go: the hasTrailingComma probe resolveCall's signature-help path needs

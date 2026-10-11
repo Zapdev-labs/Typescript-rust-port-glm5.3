@@ -2199,26 +2199,33 @@ fn is_class_element(node: &Node) -> bool {
 }
 
 /// Go: `func forEachYieldExpression(body *ast.Node, visitor func(expr *ast.Node) bool) bool`.
+///
+/// PORT (M6 S8): the visitor needs the checker (Go's closures capture `c`);
+/// the store rides the checker (`c.store()`), which also lifts the
+/// store-vs-checker split borrow the NodeId-only shape forced.
 pub fn for_each_yield_expression(
-    store: &dyn NodeStore,
+    c: &mut crate::checker::Checker,
     body: NodeId,
-    visitor: &mut dyn FnMut(NodeId) -> bool,
+    visitor: &mut dyn FnMut(&mut crate::checker::Checker, NodeId) -> bool,
 ) -> bool {
     fn traverse(
-        store: &dyn NodeStore,
+        c: &mut crate::checker::Checker,
         node: NodeId,
-        visitor: &mut dyn FnMut(NodeId) -> bool,
+        visitor: &mut dyn FnMut(&mut crate::checker::Checker, NodeId) -> bool,
     ) -> bool {
-        let n = store.node(node);
-        match n.kind {
+        // PORT: `kind` is Copy; binding it first ends the store borrow so
+        // the arms can take the checker mutably.
+        let kind = c.store().node(node).kind;
+        match kind {
             Kind::YieldExpression => {
-                if visitor(node) {
+                if visitor(c, node) {
                     return true;
                 }
+                let store = c.store();
                 let Some(operand) = ast_shims::expression_of(store, node) else {
                     return false;
                 };
-                traverse(store, operand, visitor)
+                traverse(c, operand, visitor)
             }
             Kind::EnumDeclaration
             | Kind::InterfaceDeclaration
@@ -2230,25 +2237,34 @@ pub fn for_each_yield_expression(
                 false
             }
             _ => {
+                let n = c.store().node(node);
                 if tsc_ast::utilities::is_function_like(n) {
                     if let Some(name) = n.name() {
-                        if store.node(name).kind == Kind::ComputedPropertyName {
+                        if c.store().node(name).kind == Kind::ComputedPropertyName {
                             // Note that we will not include methods/accessors
                             // of a class because they would require first
                             // descending into the class. This is by design.
-                            return traverse(store, name, visitor);
+                            return traverse(c, name, visitor);
                         }
                     }
-                } else if !is_part_of_type_node(store, node) {
+                } else if !is_part_of_type_node(c.store(), node) {
                     // This is the general case, which should include mostly
                     // expressions and statements. Also includes NodeArrays.
-                    return for_each_child_stopping(store, node, visitor);
+                    // PORT: children are collected before the visitor runs so
+                    // the checker can be re-borrowed mutably per child.
+                    let mut children: Vec<NodeId> = Vec::new();
+                    collect_children_shim(c.store().node(node), &mut children);
+                    for child in children {
+                        if traverse(c, child, visitor) {
+                            return true;
+                        }
+                    }
                 }
                 false
             }
         }
     }
-    traverse(store, body, visitor)
+    traverse(c, body, visitor)
 }
 
 /// The `ast.IsPartOfTypeNode` walk, partial surface: the type-node kind range
@@ -2306,6 +2322,7 @@ pub(crate) fn is_part_of_type_node(store: &dyn NodeStore, node: NodeId) -> bool 
 /// ast/utilities.go wholesale wave's job; the generator-shaped walk below
 /// covers the statement/expression kinds reachable from `forEachYieldExpression`
 /// and panics on anything else rather than silently missing children.
+#[allow(dead_code)] // TODO(port M7): the generated ForEachChild table wave owns it
 fn for_each_child_stopping(
     store: &dyn NodeStore,
     node: NodeId,

@@ -1329,11 +1329,9 @@ impl Checker {
     fn infer_from_generic_mapped_types(&mut self, n: &mut InferenceState, source: TypeId, target: TypeId) {
         // The source and target types are generic types { [P in S]: X } and { [P in T]: Y }, so we infer
         // from S to T and from X to Y. (Go comment, verbatim.)
-        if let Some(s_constraint) = get_constraint_type_from_mapped_type(self, source) {
-            if let Some(t_constraint) = get_constraint_type_from_mapped_type(self, target) {
-                self.infer_from_types(n, s_constraint, t_constraint);
-            }
-        }
+        let s_constraint = get_constraint_type_from_mapped_type(self, source);
+        let t_constraint = get_constraint_type_from_mapped_type(self, target);
+        self.infer_from_types(n, s_constraint, t_constraint);
         let s_template = get_template_type_from_mapped_type(self, source);
         let t_template = get_template_type_from_mapped_type(self, target);
         self.infer_from_types(n, s_template, t_template);
@@ -1363,10 +1361,9 @@ impl Checker {
         if self.type_(target).object_flags.intersects(ObjectFlags::MAPPED)
             && get_name_type_from_mapped_type(self, target).is_none()
         {
-            if let Some(constraint_type) = get_constraint_type_from_mapped_type(self, target) {
-                if self.infer_to_mapped_type(n, source, target, constraint_type) {
-                    return;
-                }
+            let constraint_type = get_constraint_type_from_mapped_type(self, target);
+            if self.infer_to_mapped_type(n, source, target, constraint_type) {
+                return;
             }
         }
         // Infer from the members of source and target only if the two types are possibly related (Go comment, verbatim.)
@@ -1752,7 +1749,7 @@ impl Checker {
         }
         for &target_info in &index_infos {
             let target_key_type = self.index_info_key_type(target_info);
-            if let Some(source_info) = self.get_applicable_index_info(source, target_key_type) {
+            if let Some(source_info) = self.get_applicable_index_info_impl(source, target_key_type) {
                 let source_value_type = self.index_info_value_type(source_info);
                 let target_value_type = self.index_info_value_type(target_info);
                 self.infer_with_priority(n, source_value_type, target_value_type, priority);
@@ -1897,11 +1894,127 @@ impl Checker {
         None
     }
 
-    /// Go: `func (c *Checker) resolveReverseMappedTypeMembers(t)`.
-    fn resolve_reverse_mapped_type_members(&mut self, t: TypeId) {
-        // TODO(port M6 S7): setStructuredTypeMembers + newSymbolEx plumbing
-        // (the reverse-mapped member resolution); permissive no-op.
-        let _ = t;
+    /// Go: `func (c *Checker) resolveReverseMappedTypeMembers(t) *Type` (inference.go:1110)
+    /// — the REAL body (S8: setStructuredTypeMembers + the mapped-member
+    /// plumbing landed; `inferReverseMappedType` stays the engines-wave
+    /// seam, permissive None → unknownType).
+    pub(crate) fn resolve_reverse_mapped_type_members(&mut self, t: TypeId) {
+        let (source, mapped_type, constraint_type) = {
+            let r = self
+                .type_(t)
+                .as_reverse_mapped_type()
+                .expect("ReverseMappedType data");
+            (
+                r.source.expect("reverse-mapped source"),
+                r.mapped_type.expect("reverse-mapped mapped type"),
+                r.constraint_type.expect("reverse-mapped constraint"),
+            )
+        };
+        let source_index_infos = self.get_index_infos_of_type_impl(source);
+        let string_type = self.string_type();
+        let index_info = crate::members::find_index_info(
+            self,
+            &source_index_infos,
+            string_type,
+        );
+        let modifiers = self.mapped_type_modifiers_impl(mapped_type);
+        let readonly_mask = !modifiers
+            .intersects(crate::relater::MappedTypeModifiers::INCLUDE_READONLY);
+        let optional_mask = if modifiers
+            .intersects(crate::relater::MappedTypeModifiers::INCLUDE_OPTIONAL)
+        {
+            tsc_ast::SymbolFlags::NONE
+        } else {
+            tsc_ast::SymbolFlags::OPTIONAL
+        };
+        let mut index_infos: Vec<crate::types::IndexInfoId> = Vec::new();
+        if let Some(index_info) = index_info {
+            let value_type = self.index_info_value_type(index_info);
+            let inferred = self
+                .infer_reverse_mapped_type(value_type, mapped_type, constraint_type)
+                .unwrap_or_else(|| self.unknown_type());
+            let is_readonly =
+                readonly_mask && self.index_info_is_readonly(index_info);
+            index_infos.push(crate::types::IndexInfoId(
+                self.new_index_info(self.string_type(), inferred, is_readonly, None, Vec::new())
+                    as u32,
+            ));
+        }
+        let mut members = tsc_collections::OrderedMap::new();
+        let limited_constraint = self.get_limited_constraint(t);
+        for prop in self.get_properties_of_type_impl(source) {
+            // In case of a reverse mapped type with an intersection
+            // constraint, if we were able to extract the filtering type
+            // literals we skip those properties that are not assignable to
+            // them, because the extra properties wouldn't get through the
+            // application of the mapped type anyway (Go's comment).
+            if let Some(limited_constraint) = limited_constraint {
+                if let Some(property_name_type) = self.get_literal_type_from_property_impl(
+                    prop,
+                    TypeFlags::STRING_OR_NUMBER_LITERAL_OR_UNIQUE,
+                    false,
+                ) {
+                    if !self.is_type_assignable_to(property_name_type, limited_constraint) {
+                        continue;
+                    }
+                }
+            }
+            let check_flags = tsc_ast::CheckFlags::REVERSE_MAPPED
+                | if readonly_mask && self.is_readonly_symbol(prop) {
+                    tsc_ast::CheckFlags::READONLY
+                } else {
+                    tsc_ast::CheckFlags::NONE
+                };
+            let prop_flags = tsc_ast::SymbolFlags::PROPERTY
+                | (self.program_symbol(prop).flags & optional_mask);
+            let prop_name = self.program_symbol(prop).name.clone();
+            let inferred_prop = self.new_symbol_ex(prop_flags, &prop_name, check_flags);
+            let declarations = self.program_symbol(prop).declarations.clone();
+            self.program_symbol_mut(inferred_prop).declarations = declarations;
+            let name_type = self.value_symbol_links.get(prop).name_type;
+            self.value_symbol_links.get(inferred_prop).name_type = name_type;
+            let property_type = self.get_type_of_symbol(prop);
+            self.reverse_mapped_symbol_links.get(inferred_prop).property_type = Some(property_type);
+            let constraint_target = self
+                .type_(constraint_type)
+                .as_index_type()
+                .expect("IndexType data")
+                .target
+                .expect("IndexType target");
+            let (object_type, index_type) = {
+                let d = self
+                    .type_(constraint_target)
+                    .as_indexed_access_type()
+                    .expect("IndexedAccessType data");
+                (
+                    d.object_type.expect("objectType"),
+                    d.index_type.expect("indexType"),
+                )
+            };
+            if self.type_(constraint_target).flags.intersects(TypeFlags::INDEXED_ACCESS)
+                && self.type_(object_type).flags.intersects(TypeFlags::TYPE_PARAMETER)
+                && self.type_(index_type).flags.intersects(TypeFlags::TYPE_PARAMETER)
+            {
+                // A reverse mapping of `{[K in keyof T[K_1]]: T[K_1]}` is the
+                // same as that of `{[K in keyof T]: T}`, since all we care
+                // about is inferring to the "type parameter" (or indexed
+                // access) shared by the constraint and template. So, to
+                // reduce the number of type identities produced, we simplify
+                // such indexed access occurrences (Go's comment).
+                let new_type_param = object_type;
+                let new_mapped_type = self.replace_indexed_access(mapped_type, constraint_target, new_type_param);
+                let new_constraint = crate::relater::get_index_type(self, new_type_param);
+                let links = self.reverse_mapped_symbol_links.get(inferred_prop);
+                links.mapped_type = Some(new_mapped_type);
+                links.constraint_type = Some(new_constraint);
+            } else {
+                let links = self.reverse_mapped_symbol_links.get(inferred_prop);
+                links.mapped_type = Some(mapped_type);
+                links.constraint_type = Some(constraint_type);
+            }
+            members.set(prop_name, inferred_prop);
+        }
+        self.set_structured_type_members(t, members, Vec::new(), Vec::new(), index_infos);
     }
 
     // Go: `func (c *Checker) getTypeOfReverseMappedSymbol(symbol) *Type` —
@@ -1919,7 +2032,7 @@ impl Checker {
             .as_reverse_mapped_type()
             .and_then(|d| d.mapped_type)
             .expect("reverse mapped");
-        let constraint = get_constraint_type_from_mapped_type(self, mapped_type)?;
+        let constraint = get_constraint_type_from_mapped_type(self, mapped_type);
         if !(self.type_(constraint).flags.intersects(TypeFlags::UNION)
             || self.type_(constraint).flags.intersects(TypeFlags::INTERSECTION))
         {
@@ -2325,7 +2438,7 @@ impl Checker {
                     || inference_priority == InferencePriority::RETURN_TYPE
                 {
                     let constraint_with_this =
-                        get_type_with_this_argument(self, instantiated_constraint, current, false);
+                        get_type_with_this_argument(self, instantiated_constraint, Some(current), false);
                     let compare_types = self.inference_contexts[n.0 as usize].compare_types;
                     if compare_types.compare(self, current, constraint_with_this, false) == Ternary::False {
                         let filtered_by_constraint: Option<TypeId> = None;
@@ -2352,7 +2465,7 @@ impl Checker {
                 inferred_type = match fallback_type {
                     Some(fallback) => {
                         let constraint_with_this =
-                            get_type_with_this_argument(self, instantiated_constraint, fallback, false);
+                            get_type_with_this_argument(self, instantiated_constraint, Some(fallback), false);
                         let compare_types = self.inference_contexts[n.0 as usize].compare_types;
                         if compare_types.compare(self, fallback, constraint_with_this, false) != Ternary::False {
                             Some(fallback)
@@ -2867,20 +2980,11 @@ fn is_mutable_array_like_type(c: &mut Checker, t: TypeId) -> bool {
             && c.is_type_assignable_to(t, c.any_array_type)
 }
 
-/// Go: `func (c *Checker) getBaseSignature(signature) *Signature`.
-fn get_base_signature(c: &mut Checker, signature: crate::types::SignatureId) -> crate::types::SignatureId {
-    // TODO(port M6 S7): the CachedSignatureKey{Base} instantiation through
-    // the type-parameter constraint mapper; permissive identity.
-    let _ = c;
-    signature
-}
-
-/// Go: `func (c *Checker) getApplicableIndexInfo(t, keyType) *IndexInfo`.
+/// Go: `func (c *Checker) getApplicableIndexInfo(t, keyType) *IndexInfo` —
+/// S8's REAL body (members.rs find_applicable_index_info) replaced the
+/// S10-banner seam.
 fn get_applicable_index_info(c: &mut Checker, t: TypeId, key_type: TypeId) -> Option<crate::types::IndexInfoId> {
-    // TODO(port M6 S10): findApplicableIndexInfo (incl. the synthetic
-    // multi-applicable IndexInfo); permissive None.
-    let _ = (c, t, key_type);
-    None
+    c.get_applicable_index_info_impl(t, key_type)
 }
 
 /// Go: `func (c *Checker) isFromInferenceBlockedSource(t) bool`.
@@ -3069,15 +3173,11 @@ impl Checker {
         is_const_type_variable(self, t, depth)
     }
 
-    /// Go: `func (c *Checker) getBaseSignature(signature) *Signature`.
-    fn get_base_signature(&mut self, signature: crate::types::SignatureId) -> crate::types::SignatureId {
-        get_base_signature(self, signature)
-    }
-
-    /// Go: `func (c *Checker) getApplicableIndexInfo(t, keyType) *IndexInfo`.
-    fn get_applicable_index_info(&mut self, t: TypeId, key_type: TypeId) -> Option<crate::types::IndexInfoId> {
-        get_applicable_index_info(self, t, key_type)
-    }
+    // Go: `func (c *Checker) getBaseSignature(signature) *Signature` — S8's
+    // REAL body (members.rs) replaced the S7 twin; resolves there.
+    // Go: `func (c *Checker) getApplicableIndexInfo(t, keyType) *IndexInfo`
+    // — S8's REAL body (members.rs) replaced the S10-banner seam; resolves
+    // through the free-fn delegate above.
 
     /// Go: `func (c *Checker) isSkipDirectInferenceNode(node) bool` — the
     /// symbol-declaration filter form (inferFromProperties).

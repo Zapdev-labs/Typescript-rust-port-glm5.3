@@ -989,9 +989,9 @@ impl Checker {
         {
             // Resolving the members of a class requires us to resolve the base
             // class of that class. We force resolution here such that we catch
-            // circularities now.
-            // TODO(port M6 S8): resolveStructuredTypeMembers.
-            self.resolve_structured_type_members_stub(base_constructor_type);
+            // circularities now. (Go's comment; S8's resolveStructuredTypeMembers
+            // is REAL — members.rs.)
+            self.resolve_structured_type_members_impl(base_constructor_type);
         }
         if !self.pop_type_resolution() {
             let symbol = self.type_(t).symbol.expect("class symbol");
@@ -1021,15 +1021,12 @@ impl Checker {
                 .expect("just set");
         }
         let ctor_flags = self.type_(base_constructor_type).flags;
-        // TODO(port M6 S8): isConstructorType reads getSignaturesOfType
-        // (the structured-members seam, which answers zero signatures until
-        // S8), so every real `extends C` base fires a false TS2507 under the
-        // seam. The guard below only fires the message for non-object bases
-        // — remove `|| ctor_flags.intersects(TypeFlags::OBJECT)` with S8.
+        // S8: isConstructorType reads the REAL structured-member signatures
+        // now — the temporary `!ctor_flags.intersects(TypeFlags::OBJECT)`
+        // guard is retired (Go's condition, verbatim).
         if !ctor_flags.intersects(TypeFlags::ANY)
             && Some(base_constructor_type) != self.null_widening_type
             && !self.is_constructor_type(base_constructor_type)
-            && !ctor_flags.intersects(TypeFlags::OBJECT)
         {
             let type_string = self.type_to_string(base_constructor_type);
             self.error(
@@ -1657,6 +1654,11 @@ pub(crate) fn payload_symbol(node: &Node) -> Option<SymbolId> {
         NodeData::CallSignatureDeclaration(d) => d.symbol,
         NodeData::ConstructSignatureDeclaration(d) => d.symbol,
         NodeData::IndexSignatureDeclaration(d) => d.symbol,
+        // DeclarationBase carriers the binder symbolizes via
+        // bindAnonymousDeclaration (checker.go:23404's TypeLiteral read +
+        // the mapped-type family).
+        NodeData::TypeLiteralNode(d) => d.symbol,
+        NodeData::MappedTypeNode(d) => d.symbol,
         NodeData::SourceFile(d) => d.symbol,
         _ => None,
     }
@@ -1709,14 +1711,9 @@ impl Checker {
         }
     }
 
-    /// Go: `func (c *Checker) getAnnotatedAccessorType(accessor *ast.Node) *Type`.
-    fn get_annotated_accessor_type(&mut self, accessor: Option<NodeId>) -> Option<TypeId> {
-        let node = self.get_annotated_accessor_type_node(accessor)?;
-        // TODO(port M6 S5): getTypeFromTypeNode — the type-node family; the
-        // stub's errorType keeps the "annotation present" distinction Go's
-        // nil check reads (an errorType annotation is still a type).
-        Some(self.get_type_from_type_node(node))
-    }
+    // Go: `func (c *Checker) getAnnotatedAccessorType(accessor *ast.Node) *Type`
+    // — S8's REAL body (members.rs) replaced the S5-era stub; resolves
+    // there on this shared Checker type.
 
     /// Go: `func (c *Checker) resolveAlias(symbol *ast.Symbol) *ast.Symbol`
     /// (checker.go:16652). REAL body landed in resolution.rs
@@ -1808,23 +1805,19 @@ impl Checker {
         t
     }
 
-    /// Go: `func (c *Checker) resolveStructuredTypeMembers(t *Type)` (S8) —
-    /// the permissive no-op (S1's anonymous types are constructed resolved;
-    /// the declared-type members resolution is S8's wave).
-    fn resolve_structured_type_members_stub(&mut self, t: TypeId) {
-        let _ = t;
-    }
-
     /// Go: `func (c *Checker) getSignatureFromDeclaration(declaration) *Signature`
-    /// (S8). TODO(port M6 S8): the declaration→signature resolution;
-    /// permissive None.
+    /// (S8 real body in members.rs). Go never returns nil; the Option here
+    /// preserves the pre-S8 callers' guards (None for non-function-like
+    /// declarations, which Go never passes).
     pub(crate) fn get_signature_from_declaration(&mut self, declaration: NodeId) -> Option<SignatureId> {
-        let _ = declaration;
-        None
+        if !tsc_ast::utilities::is_function_like(self.store().node(declaration)) {
+            return None;
+        }
+        Some(self.get_signature_from_declaration_impl(declaration))
     }
 
     /// Go: `func (c *Checker) getAccessorThisParameter(accessor *ast.Node) *ast.Node`.
-    fn get_accessor_this_parameter(&mut self, accessor: NodeId) -> Option<NodeId> {
+    pub(crate) fn get_accessor_this_parameter(&mut self, accessor: NodeId) -> Option<NodeId> {
         let expected = if self.store().node(accessor).kind == Kind::GetAccessor {
             1
         } else {
@@ -2759,9 +2752,9 @@ impl Checker {
         }
         // PORT: Go hands newAnonymousType the indexInfos list; the port's
         // member-carrying constructor fills the members table and the index
-        // infos slot below (the S8 members-resolution seam). The info clone
-        // happens before the `type_mut` borrow (§5.4 idiom).
-        let string_index_info_data = string_index_info.map(|index| self.index_infos[index].clone());
+        // infos slot below (the S8 members-resolution machinery). The arena
+        // id is stored directly (M6 S8's IndexInfoId payload form).
+        let string_index_info_data = string_index_info;
         let result = self.new_anonymous_type_with_members(None, members, ObjectFlags::NONE);
         {
             let data = self
@@ -2769,7 +2762,7 @@ impl Checker {
                 .as_object_type_mut()
                 .expect("ObjectType data");
             if let Some(info) = string_index_info_data {
-                data.base.index_infos.push(Box::new(info));
+                data.base.index_infos.push(crate::types::IndexInfoId(info as u32));
             }
         }
         self.type_mut(result).object_flags |= object_flags;
@@ -2997,12 +2990,15 @@ impl Checker {
 // widen* helpers (Go checker.go 18645–18834, 17269–17288)
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Go: `type WideningKind int32` — the implicit-any report flavor (iota order).
+/// Go: `type WideningKind int32` — the implicit-any report flavor (iota
+/// order pinned to checker.go:96).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(i32)]
 pub enum WideningKind {
     Normal = 0,
-    GeneratorYield = 1,
+    FunctionReturn = 1,
+    GeneratorNext = 2,
+    GeneratorYield = 3,
 }
 
     // TODO(port M6 S8/S9: getPropertiesOfObjectType’s widened walk): the bannered permissive/stub bodies below
@@ -3049,7 +3045,7 @@ impl Checker {
         let _ = parent_kind;
 
         if report_errors {
-            self.report_errors_from_widening(declaration, t);
+            self.report_errors_from_widening(declaration, t, WideningKind::Normal);
         }
 
         // always widen a 'unique symbol' type if the type was created for a
@@ -3060,16 +3056,9 @@ impl Checker {
         self.get_widened_type(t)
     }
 
-    /// Go: `func (c *Checker) reportErrorsFromWidening(declaration, t, wideningKind)`
-    /// (utilities.go — the widening kind classification: a widening error is
-    /// reported when a type contains a widening literal in an initializer).
-    fn report_errors_from_widening(&mut self, declaration: NodeId, t: TypeId) {
-        // TODO(port M6 W3/S9): getWidenedLiteralKind — the recursive
-        // widening-kind scan (needs the object-literal member walks); the
-        // diagnostics seam is real (self.error below) but the classifier
-        // lands with the widening completion.
-        let _ = (declaration, t);
-    }
+    // Go: `func (c *Checker) reportErrorsFromWidening(declaration, t, wideningKind)`
+    // (checker.go:20856) — S8's REAL body (members.rs) replaced the S5-era
+    // no-op stub; resolves there on this shared Checker type.
 
     /// Go: `func (c *Checker) widenTypeInferredFromInitializer(declaration, t) *Type`.
     pub(crate) fn widen_type_inferred_from_initializer(
@@ -3319,7 +3308,7 @@ impl Checker {
     fn get_widened_type_of_object_literal(
         &mut self,
         t: TypeId,
-        context: Option<(&mut Vec<WideningContext>, usize)>,
+        mut context: Option<(&mut Vec<WideningContext>, usize)>,
     ) -> TypeId {
         if let Some((arena, index)) = &context {
             if let Some(cached) = arena[*index].widened_types.as_ref().and_then(|m| m.get(&t)) {
@@ -3327,18 +3316,53 @@ impl Checker {
             }
         }
         let mut members = SymbolTable::new();
-        // TODO(port M6 S8): getPropertiesOfObjectType — the member-resolution
-        // stub returns no properties, so the widened object literal keeps
-        // only the context-undefined additions below until S8 lands.
-        let _ = &mut members;
+        // Go: `for _, prop := range c.getPropertiesOfObjectType(t) {`
+        //     `members[prop.Name] = c.getWidenedProperty(prop, context)` —
+        // S8's real member resolution feeds the widened table (the S5-era
+        // stub built the empty table; the S8 wave flips it).
+        // PORT: the context reborrow is per-property (the &mut is not
+        // Copy); Go passes the same pointer each iteration.
+        for prop in self.get_properties_of_object_type_impl(t) {
+            let name = self.program.symbol(prop).name.clone();
+            // PORT: per-property reborrow of the context (Go passes the
+            // same pointer each iteration; the &mut isn't Copy).
+            let prop_context: Option<(&mut Vec<WideningContext>, usize)> = match context.as_mut()
+            {
+                Some((arena, index)) => Some((&mut **arena, *index)),
+                None => None,
+            };
+            let widened_prop = self.get_widened_property(prop, prop_context);
+            members.set(name, widened_prop);
+        }
         if context.is_some() {
             // TODO(port M6 S9): getPropertiesOfContext — the sibling
             // undefined-property additions.
         }
         let symbol = self.type_(t).symbol;
-        // TODO(port M6 S7/S8): getIndexInfosOfType widened remap — the
-        // index-info construction; empty at this depth.
         let result = self.new_anonymous_type_with_members(symbol, members, crate::types::ObjectFlags::NONE);
+        // Go: `core.SameMap(c.getIndexInfosOfType(t), ...)` — the widened
+        // value-type remap (S8's real index-info readers feed it).
+        let source_infos = self.get_index_infos_of_type_impl(t);
+        if !source_infos.is_empty() {
+            let mut index_infos: Vec<crate::types::IndexInfoId> = Vec::new();
+            for info in source_infos {
+                let key_type = self.index_info_key_type(info);
+                let value_type = self.index_info_value_type(info);
+                let is_readonly = self.index_infos[info.0 as usize].is_readonly;
+                let declaration = self.index_infos[info.0 as usize].declaration;
+                let components = self.index_infos[info.0 as usize].components.clone();
+                let widened_value_type = self.get_widened_type(value_type);
+                index_infos.push(crate::types::IndexInfoId(
+                    self.new_index_info(key_type, widened_value_type, is_readonly, declaration, components)
+                        as u32,
+                ));
+            }
+            let data = self
+                .type_mut(result)
+                .as_object_type_mut()
+                .expect("ObjectType data");
+            data.base.index_infos = index_infos;
+        }
         // Retain js literal flag through widening
         let retained = self.type_(t).object_flags
             & (ObjectFlags::JS_LITERAL.union(ObjectFlags::NON_INFERRABLE_TYPE));
