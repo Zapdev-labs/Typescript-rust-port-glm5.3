@@ -1,0 +1,55 @@
+rust/crates/checker/src/members.rs
+  s_feb527b32d4b21::t_2dda774d69a224 4801
+  s_feb527b32d4b21::t_a2c3862ce1a369 4500
+  s_feb527b32d4b21::t_7cf4ed367d5f9e 2896
+rust/crates/checker/src/typeofsymbol.rs
+  s_feb527b32d4b21::t_01c417937a4ae7 3904
+  s_feb527b32d4b21::t_05c4bfec410ff6 5316
+  s_feb527b32d4b21::t_d859e787870bea 2809-2815,2822-2829
+  s_feb527b32d4b21::t_2d471fd341c78e 3921-3925
+  s_feb527b32d4b21::t_eab22aac1f8574 3913
+  s_feb527b32d4b21::t_7ade533f6c3ed8 3951
+rust/crates/checker/src/expressions.rs
+  s_feb527b32d4b21::t_b3633c04e0f4e3 7261-7265
+rust/crates/checker/src/relater.rs
+  s_feb527b32d4b21::t_639b42d488b8b2 7740-7745,7747
+rust/crates/checker/src/statements.rs
+  s_feb527b32d4b21::t_913c698e237ef9 3780-3784
+  s_feb527b32d4b21::t_62420328d4f04f 3827-3829,3833
+  s_feb527b32d4b21::t_718f20011315da 11405-11411
+rust/crates/checker/src/spine.rs
+  s_c760161dda2d19::t_1a5fa856918127 4163
+  s_feb527b32d4b21::t_00c94824147e28 4076-4153
+  s_feb527b32d4b21::t_8d831bba3231fb 4154-4162
+rust/crates/checker/src/contextual.rs
+  s_feb527b32d4b21::t_41bd9352b63f74 1727-1886,1889-1893,1895,1897-2042,2044-2123
+  s_feb527b32d4b21::t_b40ab0e93f4b87 1894,1896
+  s_feb527b32d4b21::t_5743e3751da6bc 2043
+  s_feb527b32d4b21::t_e19e33468e0859 1310-1320
+  s_feb527b32d4b21::t_f6d669cd0572bc 1887-1888
+  s_feb527b32d4b21::t_36345c8c38f381 1321-1322
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d91792f55919e510556ab241fc5decaf3bc13e10",
+  "prompts": {},
+  "sessions": {
+    "s_c760161dda2d19": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "e48660fc-43c1-451f-9234-7c7ba6128c6a",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    },
+    "s_feb527b32d4b21": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "224fb212-e223-47b3-a2e3-312703b3aee1",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
