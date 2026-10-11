@@ -143,6 +143,18 @@ pub trait Program {
     fn bind_source_files(&mut self);
     /// The node arena backing every `NodeId` the checker walks.
     fn node_store(&self) -> &dyn NodeStore;
+    /// Go: the checker mutates the node graph through factory-created
+    /// synthetic nodes (`getFlowTypeInConstructor`/`getFlowTypeInStaticBlocks`
+    /// allocate a `this.x` property access, flow.go:2906+). The mutable store
+    /// seam (Go: the shared `core.Arena` the factory allocates in).
+    fn node_store_mut(&mut self) -> &mut dyn NodeStore;
+    /// Go: the binder's flow-node/flow-list arenas — the checker READS the
+    /// flow graph (`BindResult.flow_nodes`/`flow_lists`; Go walks GC
+    /// `*ast.FlowNode` pointers). Copied into the Checker at NewChecker.
+    /// Default: empty (a program that didn't bind produces no flow graph).
+    fn flow_arena(&self) -> (&[tsc_ast::flow::FlowNode], &[tsc_ast::flow::FlowList]) {
+        (&[], &[])
+    }
     // ── §5.5 program-level symbol store (see the module PORT note) ──
     /// The symbol arena slot for `id`.
     fn symbol(&self, id: SymbolId) -> &Symbol;
@@ -473,9 +485,44 @@ pub struct Checker {
     pub(crate) inference_context_infos: Vec<crate::spine::InferenceContextInfo>,
     /// Go: `flowTypeCache map[*ast.Node]*Type` — keyed by the node id (§5.1).
     pub(crate) flow_type_cache: FxHashMap<NodeId, TypeId>,
-    /// Go: `flowLoopStack []*FlowLoop` — the flow engine is W3; the
-    /// save/restore shape carries through todo_shapes' placeholder.
-    pub(crate) flow_loop_stack: Vec<crate::todo_shapes::FlowLoopInfo>,
+    /// Go: `flowLoopStack []*FlowLoop` (flow.go:1320) — REAL since W3
+    /// (flow.rs's FlowLoopInfo: the loop-junction cache key + partial types).
+    pub(crate) flow_loop_stack: Vec<crate::flow::FlowLoopInfo>,
+    // ── M6 W3 (flow.rs): the flow-graph consumer + narrowing engine ──
+    /// Go: the flow-node arena (`*ast.FlowNode` graph; PORT: copied from the
+    /// binder's BindResult at NewChecker — the checker only reads it).
+    pub(crate) flow_nodes: Vec<tsc_ast::flow::FlowNode>,
+    /// Go: the flow-list cons-cell arena (`*ast.FlowList`).
+    pub(crate) flow_lists: Vec<tsc_ast::flow::FlowList>,
+    /// Go: `sharedFlowTypes []*SharedFlow` (flow.go:53).
+    pub(crate) shared_flows: Vec<crate::flow::SharedFlow>,
+    /// Go: the `*FlowState` free list (`freeFlowState`) — PORT: a value pool
+    /// (flow.rs's FlowState is a value type; see its module PORT note).
+    pub(crate) free_flow_states: Vec<crate::flow::FlowState>,
+    /// Go: `antecedentTypes []*Type` (flow.go's getTypeAtFlowBranchLabel).
+    pub(crate) antecedent_types: Vec<TypeId>,
+    /// Go: `flowLoopCache map[flowLoopCacheKey]*Type` (flow.go:1318).
+    pub(crate) flow_loop_cache:
+        FxHashMap<(tsc_ast::FlowNodeId, crate::todo_shapes::CacheHashKey), TypeId>,
+    /// Go: `flowNodeReachable map[*ast.FlowNode]bool` (flow.go:2595).
+    pub(crate) flow_node_reachable: FxHashMap<tsc_ast::FlowNodeId, bool>,
+    /// Go: `flowNodePostSuper map[*ast.FlowNode]bool` (flow.go:2688).
+    pub(crate) flow_node_post_super: FxHashMap<tsc_ast::FlowNodeId, bool>,
+    /// Go: `lastFlowNode *ast.FlowNode` / `lastFlowNodeReachable bool`
+    /// (flow.go's isReachableFlowNode single-entry cache).
+    pub(crate) last_flow_node: Option<tsc_ast::FlowNodeId>,
+    pub(crate) last_flow_node_reachable: bool,
+    /// Go: `narrowedTypes map[narrowedTypeKey]*Type` (flow.go:846).
+    pub(crate) narrowed_types: FxHashMap<(TypeId, TypeId, bool, bool), TypeId>,
+    /// Go: `assignmentReducedTypes map[assignmentReducedTypeKey]*Type`
+    /// (flow.go:3499).
+    pub(crate) assignment_reduced_types: FxHashMap<(TypeId, TypeId), TypeId>,
+    /// Go: `inlineLevel uint32` (flow.go's getTypeAtFlowBranchLabel inlining).
+    pub(crate) inline_level: u32,
+    /// Go: `resolvingExplicitTypeOfSymbol *ast.Symbol` — PORT: the recursive
+    /// guard is an OrderedSet keyed by SymbolId (the single-symbol Go field
+    /// only ever guards one recursion level).
+    pub(crate) resolving_explicit_type_of_symbol: tsc_collections::OrderedSet<SymbolId>,
     /// Go: `flowInvocationCount uint32`.
     pub(crate) flow_invocation_count: usize,
     /// Go: `contextFreeTypes map[*ast.Node]*Type`.
@@ -1417,6 +1464,18 @@ pub fn is_fresh_literal_type(c: &Checker, t: TypeId) -> bool {
 // line positions).
 // ────────────────────────────────────────────────────────────────────────────
 
+/// The W3 check-stage runner seam: Go program.go's `GetSemanticDiagnostics`
+/// read (the harness-side diagnostic source for the `.errors.txt` baseline).
+/// The port's checker is per-file by construction (the §5.1 single-file
+/// NodeId space), so the read returns the whole `diagnostics` collection —
+/// file-paired and global entries, insertion order (the baseline renderer
+/// sorts). Suggestion diagnostics stay a separate collection, as in Go.
+impl Checker {
+    pub fn semantic_diagnostics(&self) -> Vec<tsc_ast::Diagnostic> {
+        self.diagnostics.all()
+    }
+}
+
 /// Go: `func NewChecker(program Program, tracer *Tracer) (*Checker, *sync.Mutex)`.
 ///
 /// PORT: the `*sync.Mutex` return is the pool's per-checker lock (§5.5) —
@@ -1427,6 +1486,11 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     let id = NEXT_CHECKER_ID.fetch_add(1, Ordering::SeqCst);
     let compiler_options = program.options().clone();
     let file_index_map = create_file_index_map(program.source_files());
+    // The binder's flow graph (Go: the checker reads the GC-heap
+    // `*ast.FlowNode`s the binder allocated; the port copies the arenas).
+    let (flow_nodes, flow_lists) = program.flow_arena();
+    let flow_nodes = flow_nodes.to_vec();
+    let flow_lists = flow_lists.to_vec();
 
     let mut c = Checker {
         id,
@@ -1603,6 +1667,20 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         inference_context_infos: Vec::new(),
         flow_type_cache: FxHashMap::default(),
         flow_loop_stack: Vec::new(),
+        flow_nodes,
+        flow_lists,
+        shared_flows: Vec::new(),
+        free_flow_states: Vec::new(),
+        antecedent_types: Vec::new(),
+        flow_loop_cache: FxHashMap::default(),
+        flow_node_reachable: FxHashMap::default(),
+        flow_node_post_super: FxHashMap::default(),
+        last_flow_node: None,
+        last_flow_node_reachable: false,
+        narrowed_types: FxHashMap::default(),
+        assignment_reduced_types: FxHashMap::default(),
+        inline_level: 0,
+        resolving_explicit_type_of_symbol: tsc_collections::OrderedSet::new(),
         flow_invocation_count: 0,
         context_free_types: FxHashMap::default(),
         renamed_binding_elements_in_types: Vec::new(),
@@ -2069,6 +2147,15 @@ mod tests {
         fn bind_source_files(&mut self) {}
         fn node_store(&self) -> &dyn NodeStore {
             &self.file
+        }
+        fn node_store_mut(&mut self) -> &mut dyn NodeStore {
+            &mut self.file
+        }
+        fn flow_arena(&self) -> (&[tsc_ast::flow::FlowNode], &[tsc_ast::flow::FlowList]) {
+            match &self.bind {
+                Some(bind) => (&bind.flow_nodes, &bind.flow_lists),
+                None => (&[], &[]),
+            }
         }
         fn symbol(&self, id: SymbolId) -> &Symbol {
             let bind = self.bind.as_ref().expect("bound");

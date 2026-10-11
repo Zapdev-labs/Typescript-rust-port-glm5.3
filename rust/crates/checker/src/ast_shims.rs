@@ -543,3 +543,13 @@ pub fn parameters_of(store: &dyn NodeStore, fun: NodeId) -> &[NodeId] {
         _ => panic!("Node has no FunctionLikeData"),
     }
 }
+
+/// Go: the generated `nodeData.ModuleSpecifier()` accessor family (ast.go)
+/// — the import/export declaration kinds that carry a module specifier.
+pub fn module_specifier_of(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    match &store.node(node).data {
+        tsc_ast::NodeData::ImportDeclaration(d) => Some(d.module_specifier),
+        tsc_ast::NodeData::ExportDeclaration(d) => d.module_specifier,
+        _ => None,
+    }
+}

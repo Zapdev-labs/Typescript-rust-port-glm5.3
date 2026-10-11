@@ -402,6 +402,12 @@ pub(crate) mod jsdoc_tests_support {
         fn node_store(&self) -> &dyn tsc_ast::NodeStore {
             &self.source_file
         }
+        fn node_store_mut(&mut self) -> &mut dyn tsc_ast::NodeStore {
+            &mut self.source_file
+        }
+        fn flow_arena(&self) -> (&[tsc_ast::flow::FlowNode], &[tsc_ast::flow::FlowList]) {
+            (&self.bind.flow_nodes, &self.bind.flow_lists)
+        }
         fn symbol(&self, id: SymbolId) -> &Symbol {
             if id.0 < self.binder_symbol_count {
                 &self.bind.symbols[id.0 as usize]

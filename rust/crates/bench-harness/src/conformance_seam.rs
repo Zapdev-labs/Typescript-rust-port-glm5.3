@@ -8,8 +8,8 @@
 //! `--limit`), both drivers parse the case into @filename units, construct
 //! the per-case tsconfig (the case's own options marshaled through the
 //! generated table), build the program at the wired depth (`--stage
-//! parse|bind` — the check stage is explicitly unwired), collect the
-//! depth's diagnostics, render the `.errors.txt` baseline content, and
+//! parse|bind|check` — since the W3 checker wave the check stage drives the
+//! ported checker spine per in-test unit), collect the depth's diagnostics, render the `.errors.txt` baseline content, and
 //! emit one NDJSON line per (case, configuration):
 //! `{"case","baseline","verdict","errors_count","shape_hash"}` —
 //! `diff(1)` over the two drivers' outputs is the verdict (the twin
@@ -18,7 +18,7 @@
 //!
 //!   tsc-bench conformance --corpus <dir> --baselines <dir>
 //!       [--suite name] [--limit N] [--filter pattern]
-//!       [--stage parse|bind] [--local-root <dir>]
+//!       [--stage parse|bind|check] [--local-root <dir>]
 //!
 //! Record contract (both drivers byte-identical):
 //!   - `case`: the case path relative to the corpus root (posix).

@@ -3885,9 +3885,7 @@ impl Checker {
         reference: NodeId,
         check_mode: CheckMode,
     ) -> TypeId {
-        // TODO(port M6 W3): getNarrowableTypeForReferenceWorker.
-        let _ = (reference, check_mode);
-        t
+        self.get_narrowable_type_for_reference_real(t, reference, check_mode)
     }
 
     /// Go: `func (c *Checker) containsUndefinedType(t) bool` (checker.go:27545 region).
@@ -5712,10 +5710,10 @@ impl Checker {
         };
         let flow_type = if is_automatic_type_in_non_null {
             let non_nullable =
-                self.get_flow_type_of_reference_ex(node, t, initial_type, flow_container);
+                self.get_flow_type_of_reference_ex(node, t, initial_type, flow_container, None);
             relater::get_non_nullable_type(self, non_nullable)
         } else {
-            self.get_flow_type_of_reference_ex(node, t, initial_type, flow_container)
+            self.get_flow_type_of_reference_ex(node, t, initial_type, flow_container, None)
         };
         // A variable is considered uninitialized when it is possible to analyze the entire control flow graph
         // from declaration to use, and when the variable's declared type doesn't include undefined but the
@@ -5979,6 +5977,7 @@ impl Checker {
                                     parent_type_constraint,
                                     parent_type_constraint,
                                     NodeId::NONE,
+                                    None,
                                 );
                                 if self.type_(narrowed_type).flags.intersects(TypeFlags::NEVER) {
                                     t = self.never_type();
@@ -5999,47 +5998,18 @@ impl Checker {
         t
     }
 
-    /// Go: `func (c *Checker) getFlowTypeOfReferenceEx(node, declaredType, initialType, flowContainer, flowNode) *Type`
-    /// (flow.go — W3). Permissive: the initial type (Go's answer when the
-    /// reference carries no flow node).
-    pub(crate) fn get_flow_type_of_reference_ex(
-        &mut self,
-        node: NodeId,
-        declared_type: TypeId,
-        initial_type: TypeId,
-        flow_container: NodeId,
-    ) -> TypeId {
-        // TODO(port M6 W3): the flow-node walk. Under the no-flow seam the
-        // port is in Go's `flowNode == nil` arm exactly (flow.go:86-89):
-        // `getFlowNodeOfNode(reference)` answers nil, and Go returns
-        // declaredType — NOT initialType (which carries the optional-ized
-        // `undefined | T` union of the uninitialized-variable probe; feeding
-        // it onward would fabricate diagnostics Go's real flow walk always
-        // narrows away). The initial_type parameter stays wired for the W3
-        // wave.
-        let _ = (node, initial_type, flow_container);
-        declared_type
-    }
-
     /// Go: `func (c *Checker) isPastLastAssignment(symbol, location) bool`
-    /// (flow.go — W3). Permissive false. Dormant until the W3 caller loop in
-    /// checkIdentifier composes (the container-hop seam).
-    #[allow(dead_code)]
+    /// (flow.go — W3): the REAL flow-epoch probe (flow.rs).
+    #[allow(dead_code)] // The checkIdentifier caller loop lands with the W3 check-stage runner wiring.
     pub(crate) fn is_past_last_assignment(&mut self, symbol: SymbolId, location: NodeId) -> bool {
-        // TODO(port M6 W3): the assignment flow-epoch probe.
-        let _ = (symbol, location);
-        false
+        self.is_past_last_assignment_real(symbol, Some(location))
     }
 
     /// Go: `func (c *Checker) isSymbolAssignedDefinitely(symbol) bool` — the
-    /// flow-engine helper (W3). Permissive true (every variable counts as
-    /// assigned; keeps the never-initialized probe dormant under the seam).
-    /// Dormant until the W3 caller probe composes.
-    #[allow(dead_code)]
+    /// REAL definite-assignment flow walk (flow.rs).
+    #[allow(dead_code)] // The checkIdentifier caller loop lands with the W3 check-stage runner wiring.
     pub(crate) fn is_symbol_assigned_definitely(&mut self, symbol: SymbolId) -> bool {
-        // TODO(port M6 W3): the definite-assignment flow walk.
-        let _ = symbol;
-        true
+        self.is_symbol_assigned_definitely_real(symbol)
     }
 
     /// Go: `func (c *Checker) isDestructuringAssignmentTarget(parent) bool`
@@ -6196,7 +6166,7 @@ fn should_mark_identifier_alias_referenced(store: &dyn NodeStore, node: NodeId) 
 
 /// Go: `func IsThisInTypeQuery(node *Node) bool` (ast/utilities.go) — REAL
 /// body (the qualified-name left-chain walk to the TypeQuery parent).
-fn is_this_in_type_query(store: &dyn NodeStore, node: NodeId) -> bool {
+pub(crate) fn is_this_in_type_query(store: &dyn NodeStore, node: NodeId) -> bool {
     if !tsc_ast::is_this_identifier(store, node) {
         return false;
     }

@@ -65,7 +65,7 @@ use tsc_module::{
     ModeAwareCache, ModeAwareCacheKey, ResolutionHost, ResolvedModule, ResolverOptions,
     ResolvedTypeReferenceDirective,
 };
-use tsc_tspath::{CaseSensitivity, PathKey, RootedDirectoryPath, RootedFilePath, RootedPath};
+use tsc_tspath::{CaseSensitivity, PathKey, RootedDirectoryPath, RootedFilePath};
 
 use crate::diagnostics_collection::{
     FileDiagnostic, sort_and_deduplicate_diagnostics,

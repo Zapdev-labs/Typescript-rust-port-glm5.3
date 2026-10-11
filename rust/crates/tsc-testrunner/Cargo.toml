@@ -7,10 +7,13 @@ license.workspace = true
 
 [dependencies]
 tsc-ast = { path = "../ast" }
+tsc-binder = { path = "../binder" } # W3 check stage: the per-file bind feeding the checker seam
 tsc-bundled = { path = "../bundled" }
+tsc-checker = { path = "../checker" } # W3 check stage: the semantic-diagnostics engine (Stage::Check)
 tsc-compiler = { path = "../compiler" }
 tsc-core = { path = "../core" }
 tsc-diagnostics = { path = "../diagnostics" }
+tsc-parser = { path = "../parser" } # W3 check stage: the per-file parse feeding the checker seam
 tsc-scanner = { path = "../scanner" }
 tsc-testutil = { path = "../tsc-testutil" }
 tsc-tsoptions = { path = "../tsoptions" }

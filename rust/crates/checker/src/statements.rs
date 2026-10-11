@@ -2190,14 +2190,6 @@ if candidates.is_empty() {
         self.symbol_node_links.get(node).resolved_symbol
     }
 
-    /// Go: `func (c *Checker) isReachableFlowNode(flowNode) bool` (flow.go —
-    /// W3). Permissive reachable (matches spine's is_reachable_flow_node_stub).
-    #[allow(dead_code)] // wired with the W3 flow-narrowing batch
-    pub(crate) fn is_reachable_flow_node(&mut self, flow_node: tsc_ast::FlowNodeId) -> bool {
-        let _ = flow_node;
-        true
-    }
-
     /// Go: `func (c *Checker) getAwaitedType(t) *Type` (checker.go:31802) —
     /// REAL (M6 S9): the awaited type of a type (identity for non-thenables).
     /// (The `_impl` suffix keeps the pub GetAwaitedType twin in exports.rs
@@ -9738,22 +9730,35 @@ impl Checker {
         flags_to_check: ModifierFlags,
     ) -> ModifierFlags {
         let mut flags = tsc_binder::ast_shims::get_combined_modifier_flags(self.store(), n);
+        // Go (checker.go:3736): `!ast.IsInterfaceDeclaration(n.Parent) && …`
+        // reads n.Parent unconditionally — the callers pass declaration
+        // nodes whose parents exist. The port's node ids reach the same
+        // body for synthetic/parentless nodes (the NodeId::NONE sentinel);
+        // a missing parent makes every IsX(n.Parent) arm false (Go's nil
+        // shape would deref — the sentinel guard keeps the observable
+        // "no parent-kind exclusion" result without the store panic).
         let parent = self.store().node(n).parent.get();
-        let parent_kind = self.store().node(parent).kind;
+        let parent_kind = if parent.is_none() {
+            Kind::Unknown
+        } else {
+            self.store().node(parent).kind
+        };
         if parent_kind != Kind::InterfaceDeclaration
             && parent_kind != Kind::ClassDeclaration
             && parent_kind != Kind::ClassExpression
             && self.store().node(n).flags.intersects(NF::AMBIENT)
         {
             if let Some(container) = u::get_enclosing_container(self.store(), n) {
+                // Go: `!(ast.IsModuleBlock(n.Parent) && ast.IsGlobalScopeAugmentation(n.Parent.Parent))`
+                // — the n.Parent.Parent read is gated by Go's && short-circuit
+                // (only a module-block parent consults the grandparent); the
+                // stub below preserves the same laziness.
                 let is_module_block = parent_kind == Kind::ModuleBlock;
-                // TODO(port M6 W3): IsGlobalScopeAugmentation on the module
-                // block's parent — the ambient module seam; permissive false.
-                let grandparent_kind =
-                    self.store().node(self.store().node(parent).parent.get()).kind;
+                let is_global_scope_augmentation =
+                    is_module_block && Self::is_global_scope_augmentation_of(parent);
                 if self.store().node(container).flags.intersects(NF::EXPORT_CONTEXT)
                     && !flags.intersects(ModifierFlags::AMBIENT)
-                    && !(is_module_block && grandparent_kind == Kind::ModuleDeclaration && false)
+                    && !is_global_scope_augmentation
                 {
                     // It is nested in an ambient export context, which
                     // means it is automatically exported
@@ -9763,6 +9768,15 @@ impl Checker {
             flags |= ModifierFlags::AMBIENT;
         }
         ModifierFlags(flags.bits() & flags_to_check.bits())
+    }
+
+    /// TODO(port M6 W3): `ast.IsGlobalScopeAugmentation` (the `global`-keyword
+    /// module augmentation check) — the ambient module seam; permissive false
+    /// (the Go grandparent read is gated by getEffectiveDeclarationFlags's
+    /// && short-circuit, which the false stub preserves).
+    #[allow(dead_code)]
+    fn is_global_scope_augmentation_of(_module_block: NodeId) -> bool {
+        false
     }
 
     /// TODO(port M6 S7): `LocalTypeParameters` — the resolved local type-

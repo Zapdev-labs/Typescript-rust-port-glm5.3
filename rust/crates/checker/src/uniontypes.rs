@@ -2447,7 +2447,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) isNoInferTargetType(t *Type) bool` (checker.go:27932).
-    fn is_no_infer_target_type(&mut self, t: TypeId) -> bool {
+    pub(crate) fn is_no_infer_target_type(&mut self, t: TypeId) -> bool {
         let flags = self.type_(t).flags;
         if flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
             let snapshot = self.type_(t).types().to_vec();

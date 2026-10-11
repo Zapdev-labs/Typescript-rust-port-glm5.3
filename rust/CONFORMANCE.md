@@ -2,7 +2,8 @@
 
 The M6 conformance runner (SPEC §8): a port of tsc's `testrunner` +
 `testutil` baseline machinery driving the Rust compiler at the wired
-depth (**parse + bind**), with a byte-identical Go twin proving the
+depth (**parse + bind + check** — the check stage since the M6 W3 checker
+wave), with a byte-identical Go twin proving the
 runner-structure parity, and this file tracking the climb — the match
 fraction of the Rust pipeline's rendered `.errors.txt` against
 `tsc/testdata/baselines/reference/`.
@@ -15,11 +16,15 @@ fraction of the Rust pipeline's rendered `.errors.txt` against
   the generated 88-entry option table, the per-case pipeline).
 - **Depth control** — `Stage::{Parse,Bind,Check}` in
   `tsc-testrunner/src/compiler_runner.rs`. `Parse` builds the program,
-  `Bind` (default) additionally calls `bind_source_files`, and `Check`
-  is the explicit unwired boundary: asking for it is an error, no fake
-  output. The plug point is the Go program layer's `GetSemanticDiagnostics`
-  (`tsc/internal/compiler/program.go`), landing with the checker wave
-  (`crates/checker`).
+  `Bind` (default) additionally calls `bind_source_files`, and — since
+  the M6 W3 checker wave — `Check` additionally drives the ported
+  checker spine per in-test unit (`semantic_diagnostics_of_unit`: parse +
+  bind + `check_source_file` over the unit's own bytes, the case's
+  marshaled `CompilerOptions`, the checker's `semantic_diagnostics()`
+  read). Go's counterpart is program.go's `GetSemanticDiagnostics`; the
+  single-file seam is the §5.1 NodeId space (one file per checker, as in
+  Go's CheckerPool) — PORT-noted: cross-file symbols resolve with the M5
+  program merge.
 - **Twin discipline**: both drivers run the *same ported pipeline* —
   `tsc-bench conformance` (Rust) and `go-bench conformance`
   (`rust/bench/go-driver/conformance.go`, mirroring the port, not the
@@ -272,3 +277,36 @@ option diagnostics class). **S4 introduced zero new divergences.** Each
 side shows one panic-sentinel stderr line for the same case (part of
 the identical-stream contract, not a regression). Streams on the rig at
 `/tmp/full_rust.ndjson` / `/tmp/full_go.ndjson`.
+
+## 2026-10-11 — W3: the check stage goes live
+
+`Stage::Check` is wired (the M6 W3 checker wave): per in-test unit the
+runner parses + binds the unit's own bytes and drives the ported
+checker spine (`check_source_file`), reading
+`Checker::semantic_diagnostics()` into the `.errors.txt` render — Go
+`GetSemanticDiagnostics`'s harness read, at the single-file seam
+(§5.1 NodeId space; cross-file symbols resolve with the M5 program
+merge — PORT-noted above).
+
+- **300-slice at check** (384 records): **69 match (18.0%) / 153
+  mismatch / 162 missing-baseline / 7 panic-sentinel**. The histogram
+  moved exactly as the climb metric predicts: cases that rendered
+  NoContent at parse+bind (auto-`match`) now produce real semantic
+  content — matched when the ported checker agrees with the reference,
+  `missing-baseline` where the reference itself is absent for the
+  synthetic configs, `mismatch` where the checker's partial depth
+  (grammarchecks, services, emit-resolver diagnostics unported) shows.
+- **Panic containment**: 70 → 7 sentinels. The dominant
+  `getEffectiveDeclarationFlags` crash was a port bug — the body
+  dereferenced `parent.parent` unconditionally (Go reads
+  `container.Parent` behind an `&&` short-circuit) and the source file's
+  NONE-parent sentinel panicked the store; fixed to Go's exact shape
+  (PORT-noted at `statements.rs`). The residual 7 are genuine unported
+  arms (MappedType/InterfaceType structure resolution), contained as
+  `errors_count: -1` sentinel records per the contract.
+- **Twin discipline at check**: the Rust driver now accepts
+  `--stage check`; the Go driver's check stage is a separate wave
+  (rust/bench/go-driver — out of the W3 writable scope, flagged to the
+  parent), so the check stage is Rust-only for now — the parse+bind
+  twins are unchanged and byte-identical (fixture 9/9, 300-slice
+  384/384, program 15/15 all re-verified after the wiring).

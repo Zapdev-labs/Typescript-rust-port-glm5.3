@@ -425,6 +425,12 @@ impl KeyBuilder {
         }
     }
 
+    /// Go: `writeNode(node *ast.Node)` with a non-nil node — the common
+    /// flow.go call shape (`writeFlowCacheKey` writes node ids directly).
+    pub(crate) fn write_node(&mut self, node: NodeId) {
+        self.write_uint64(node.0);
+    }
+
     pub(crate) fn write_alias(&mut self, alias: Option<&crate::types::TypeAlias>) {
         if let Some(alias) = alias {
             self.write_byte(1);
@@ -7726,6 +7732,23 @@ pub(crate) fn is_object_literal_type(c: &Checker, t: TypeId) -> bool {
 
 /// Go: `func isUnitType(t) bool` (utilities.go).
 pub(crate) fn is_unit_type(c: &Checker, t: TypeId) -> bool {
+    c.type_(t).flags.intersects(TypeFlags::UNIT)
+}
+
+/// Go: `func (c *Checker) isUnitLikeType(t) bool` (checker.go:25948).
+pub(crate) fn is_unit_like_type(c: &mut Checker, t: TypeId) -> bool {
+    // Intersections that reduce to 'never' (e.g. 'T & null' where 'T extends {}') are not unit types.
+    let t = get_base_constraint_or_type(c, t);
+    if c.type_(t).flags.intersects(TypeFlags::INTERSECTION) {
+        let types = c
+            .type_(t)
+            .as_intersection_type()
+            .expect("checked INTERSECTION")
+            .base
+            .types
+            .clone();
+        return types.iter().any(|&u| c.type_(u).flags.intersects(TypeFlags::UNIT));
+    }
     c.type_(t).flags.intersects(TypeFlags::UNIT)
 }
 

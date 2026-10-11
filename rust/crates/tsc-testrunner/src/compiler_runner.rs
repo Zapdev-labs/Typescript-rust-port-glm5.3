@@ -3,20 +3,21 @@
 // baseline runner, at the DEPTH CONTROLLED stage (SPEC §8 M6).
 //
 // The Go runner drives the whole compiler; the port drives the pipeline
-// only as deep as it exists TODAY (the M5 program layer): per-case tsconfig
-// construction → program build (parse) → bind → diagnostics collection at
-// the wired depth → `.errors.txt` baseline render → verdict vs
-// baselines/reference. The per-case NDJSON record (case / baseline /
-// verdict / errors_count / shape_hash) is the conformance TWIN's contract:
-// the Go driver (rust/bench/go-driver) mirrors this module byte-for-byte —
-// `diff(1)` over the two outputs is the verdict.
+// as deep as it exists (the M5 program layer + the W3 checker wave):
+// per-case tsconfig construction → program build (parse) → bind →
+// check (the per-unit checker seam — `semantic_diagnostics_of_unit`) →
+// diagnostics collection at the wired depth → `.errors.txt` baseline
+// render → verdict vs baselines/reference. The per-case NDJSON record
+// (case / baseline / verdict / errors_count / shape_hash) is the
+// conformance TWIN's contract: the Go driver (rust/bench/go-driver)
+// mirrors this module byte-for-byte — `diff(1)` over the two outputs is
+// the verdict.
 //
 // DEPTH CONTROL — [`Stage`]: `Parse` (program build only), `Bind` (+
-// `bind_source_files`, the default), `Check` (explicitly UNWIRED — no fake
-// output; the plug point is Go program.go's check entry points
-// `GetSemanticDiagnostics` / `GetSemanticDiagnosticsForIncremental`, whose
-// Rust counterpart lands with the checker wave in rust/crates/checker via
-// the compiler crate's CheckerPool).
+// `bind_source_files`, the default), `Check` (+ the checker crate's
+// spine per in-test unit — Go program.go's `GetSemanticDiagnostics`
+// counterpart, driving `check_source_file` through the ported checker;
+// the single-file seam is PORT-noted in CONFORMANCE.md).
 //
 // PORT notes (Go → Rust):
 //   - `harnessutil.CompileFiles` (cached host, tracer, output recorder,
@@ -75,9 +76,108 @@ use crate::test_case_parser::{
     TestUnit, extract_compiler_settings, parse_test_files_and_symlinks,
 };
 
+// ──────────────────────────────────────────────────────────────────────
+// The W3 check stage: the per-file checker seam
+// ──────────────────────────────────────────────────────────────────────
+
+use tsc_ast::{NodeStore, SourceFile, Symbol, SymbolId};
+use tsc_binder::{BindResult, bind_source_file};
+use tsc_checker::{Program, new_checker};
+use tsc_core::options_generated::CompilerOptions;
+use tsc_core::scriptkind::ScriptKind;
+use tsc_parser::parse_source_file;
+
 /// Go: `srcFolder = tspath.RootedDirectoryPathFromNormalized("/.src")`.
 pub fn src_folder() -> RootedDirectoryPath {
     rooted_directory_path_from_normalized("/.src")
+}
+
+/// The single-file `Program` the check stage hands the checker — mirrors
+/// rust/crates/checker's own test seam (tests/w3_flow.rs's TestProgram):
+/// the parsed unit + its bind result (the checker reads the binder's flow
+/// arenas through `flow_arena`), the §5.5 symbol-store split (binder ids
+/// below `binder_symbol_count`, checker-created ids above), and the case's
+/// marshaled CompilerOptions.
+struct CheckerUnitProgram {
+    options: CompilerOptions,
+    source_file: SourceFile,
+    bind: BindResult,
+    binder_symbol_count: u32,
+    checker_symbols: Vec<Symbol>,
+}
+
+impl Program for CheckerUnitProgram {
+    fn options(&self) -> &CompilerOptions {
+        &self.options
+    }
+    fn source_files(&self) -> &[SourceFile] {
+        std::slice::from_ref(&self.source_file)
+    }
+    // The unit is bound before the adapter is built (the bind result must
+    // be kept for `flow_arena`); NewChecker's BindSourceFiles call is the
+    // no-op — the same shape the checker's own tests use.
+    fn bind_source_files(&mut self) {}
+    fn node_store(&self) -> &dyn NodeStore {
+        &self.source_file
+    }
+    fn node_store_mut(&mut self) -> &mut dyn NodeStore {
+        &mut self.source_file
+    }
+    fn flow_arena(&self) -> (&[tsc_ast::flow::FlowNode], &[tsc_ast::flow::FlowList]) {
+        (&self.bind.flow_nodes, &self.bind.flow_lists)
+    }
+    fn symbol(&self, id: SymbolId) -> &Symbol {
+        if id.0 < self.binder_symbol_count {
+            &self.bind.symbols[id.0 as usize]
+        } else {
+            &self.checker_symbols[(id.0 - self.binder_symbol_count) as usize]
+        }
+    }
+    fn symbol_mut(&mut self, id: SymbolId) -> &mut Symbol {
+        if id.0 < self.binder_symbol_count {
+            &mut self.bind.symbols[id.0 as usize]
+        } else {
+            &mut self.checker_symbols[(id.0 - self.binder_symbol_count) as usize]
+        }
+    }
+    fn alloc_symbol(&mut self, symbol: Symbol) -> SymbolId {
+        self.checker_symbols.push(symbol);
+        SymbolId(self.binder_symbol_count + self.checker_symbols.len() as u32 - 1)
+    }
+}
+
+/// The unit's semantic diagnostics — Go program.go `GetSemanticDiagnostics`'s
+/// per-file read, driven through the full ported spine
+/// (`check_source_file(checkUnused=false)`), over the unit's own parse+bind
+/// (the bytes are the program's bytes; the §5.1 single-file checker is the
+/// W3 seam — PORT-noted in CONFORMANCE.md). Panics inside the checker stay
+/// contained by the case-level catch_unwind (the -1 sentinel record).
+fn semantic_diagnostics_of_unit(
+    name: &str,
+    content: &str,
+    options: &CompilerOptions,
+) -> Vec<tsc_ast::Diagnostic> {
+    let script_kind = match tsc_compiler::ensure_script_kind_from_file_name(&RootedFilePath::from(name)) {
+        // Go's checker skips JSON sources — the caller filters .json units;
+        // Unknown-forced-TS mirrors GetScriptKindFromFileName's harness rule.
+        ScriptKind::JSON => return Vec::new(),
+        kind => kind,
+    };
+    let mut source_file = parse_source_file(Default::default(), content, script_kind);
+    let Some(bind) = bind_source_file(&mut source_file) else {
+        return Vec::new();
+    };
+    let binder_symbol_count = bind.symbol_count as u32;
+    let file = source_file.as_node_id();
+    let mut checker = new_checker(Box::new(CheckerUnitProgram {
+        options: options.clone(),
+        source_file,
+        bind,
+        binder_symbol_count,
+        checker_symbols: Vec::new(),
+    }));
+    checker.check_source_file(file, false);
+    checker.semantic_diagnostics()
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -86,20 +186,20 @@ pub fn src_folder() -> RootedDirectoryPath {
 
 /// The pipeline depth the runner drives (SPEC §8 M6's depth control).
 ///
-/// `Check` is the explicit unwired boundary: asking for it is an error (no
-/// fake output). The plug point is the Go program layer's check entry points
-/// (`GetSemanticDiagnostics` / `GetSemanticDiagnosticsForIncremental` in
-/// tsc/internal/compiler/program.go) — the Rust counterpart lands with the
-/// checker wave (rust/crates/checker) through the compiler crate's
-/// CheckerPool.
+/// `Check` is wired through the W3 checker wave (rust/crates/checker's
+/// spine: `check_source_file` + the flow engine) via the per-file checker
+/// seam (`semantic_diagnostics_of_unit`) — Go's program-layer entry points
+/// (`GetSemanticDiagnostics` in tsc/internal/compiler/program.go) are the
+/// shape the M5 program merge will grow; the port drives the same spine
+/// per in-test unit today (PORT-noted in CONFORMANCE.md).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Stage {
     /// Program construction only (parse).
     Parse,
-    /// Program construction + `bind_source_files` — today's wired depth.
+    /// Program construction + `bind_source_files`.
     #[default]
     Bind,
-    /// The check stage — NOT WIRED YET (see the type docs).
+    /// Bind + the per-unit semantic layer (the checker spine).
     Check,
 }
 
@@ -118,15 +218,11 @@ impl Stage {
         match value {
             "parse" => Ok(Stage::Parse),
             "bind" => Ok(Stage::Bind),
-            "check" => Err(CHECK_NOT_WIRED.to_string()),
-            other => Err(format!("unknown stage {other:?} (parse|bind)")),
+            "check" => Ok(Stage::Check),
+            other => Err(format!("unknown stage {other:?} (parse|bind|check)")),
         }
     }
 }
-
-const CHECK_NOT_WIRED: &str = "the check stage is not wired yet: the checker wave (rust/crates/checker) \
-plugs in at the compiler layer's check entry points (Go program.go GetSemanticDiagnostics / \
-GetSemanticDiagnosticsForIncremental); no fake check output";
 
 // ──────────────────────────────────────────────────────────────────────
 // The verdict / record contract
@@ -312,12 +408,8 @@ pub fn enumerate_case_files(config: &ConformanceConfig) -> Result<Vec<String>, S
 // ──────────────────────────────────────────────────────────────────────
 
 /// Runs the suite at the wired depth, emitting one record per
-/// (case, configuration). Returns the record count, or the depth-control
-/// error for [`Stage::Check`].
+/// (case, configuration). Returns the record count.
 pub fn run_conformance(config: &ConformanceConfig, mut emit: impl FnMut(&CaseRecord)) -> Result<usize, String> {
-    if config.stage == Stage::Check {
-        return Err(CHECK_NOT_WIRED.to_string());
-    }
     let files = enumerate_case_files(config)?;
     let mut count = 0usize;
     for file in files {
@@ -568,6 +660,10 @@ fn run_configuration_pipeline(
 
     // The M5 program-twin construction.
     let parsed = get_parsed_command_line_of_config_file_path(&config_path, fs.as_ref(), None);
+    // The W3 check stage: the checker reads the same CompilerOptions the
+    // program was built from (Go: the checker reads
+    // `program.CompilerOptions()`; the parsed copy predates the Arc move).
+    let checker_options = parsed.compiler_options.options.clone();
     let host = new_compiler_host(
         Arc::<dyn Fs>::clone(&fs),
         tsc_bundled::lib_path(),
@@ -582,7 +678,7 @@ fn run_configuration_pipeline(
         hosts: ProgramHosts { host: Some(host) },
         factories: ProgramFactories::default(),
     });
-    if config.stage == Stage::Bind {
+    if config.stage != Stage::Parse {
         program.bind_source_files();
     }
 
@@ -644,6 +740,34 @@ fn run_configuration_pipeline(
     for file_diagnostic in program.get_program_diagnostics() {
         let (name, text) = file_diagnostic_text(&file_diagnostic, &program, &config_path, &config_text);
         owned.push((name, text, file_diagnostic.diagnostic));
+    }
+    // ── The W3 check stage: the semantic layer ──
+    // Go: the harness reads `GetSemanticDiagnostics(file)` for every file in
+    // the program (the compiler result's Diagnostics). The port's checker
+    // is single-file by construction (the §5.1 NodeId space; the M5 program
+    // merge is the seam that swaps this for a program-wide checker), so the
+    // stage drives the per-file pipeline over each unit's own bytes
+    // (identical content → identical locations), in Go's input-file order:
+    // the in-test tsconfig unit is the config (not checked — Go parses it
+    // as JSON), and .json/.tsbuildinfo units are not TS sources (Go's
+    // checker skips them too).
+    if config.stage == Stage::Check {
+        for (index, unit) in units.iter().enumerate() {
+            if Some(index) == ts_config_unit {
+                continue;
+            }
+            let ext = any_extension(&units[index].name);
+            if ext == ".json" || ext == ".tsbuildinfo" {
+                continue;
+            }
+            let diags = semantic_diagnostics_of_unit(&rooted_names[index], &unit.content, &checker_options);
+            if !diags.is_empty() {
+                let text = unit.content.clone();
+                for d in diags {
+                    owned.push((rooted_names[index].clone(), text.clone(), d));
+                }
+            }
+        }
     }
     let errors_count = owned.len() as i64;
     for (name, text, diagnostic) in &owned {
@@ -841,9 +965,10 @@ mod tests {
     fn stage_flags() {
         assert_eq!(Stage::parse("parse"), Ok(Stage::Parse));
         assert_eq!(Stage::parse("bind"), Ok(Stage::Bind));
-        assert!(Stage::parse("check").unwrap_err().contains("check stage is not wired"));
+        assert_eq!(Stage::parse("check"), Ok(Stage::Check));
         assert!(Stage::parse("other").is_err());
         assert_eq!(Stage::Bind.as_str(), "bind");
+        assert_eq!(Stage::Check.as_str(), "check");
     }
 
     #[test]

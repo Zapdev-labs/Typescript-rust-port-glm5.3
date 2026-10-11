@@ -2127,3 +2127,22 @@ twin gates green (fixture 9/9, 300-slice 143/143 byte-identical,
 program twin 15/15). S10 CLOSED. ALL TEN S-SLICES (S1-S10) CLOSED AND
 RIG-VALIDATED. W3 (flow/grammarchecks/services + check-stage wiring)
 dispatched.
+
+## M6 W3 tranche 1 — flow engine + the check stage goes LIVE (2026-10-12)
+
+Flow engine landed (per the continuation file); 6 flow pins drive the
+real spine (typeof guard, assignment reduction, truthiness, branch-label
+recovery, equality literal, function walk). CHECK STAGE WIRED
+Rust-side: semantic_diagnostics (GetSemanticDiagnostics read side),
+CheckerUnitProgram adapter (§5.5 symbol split, case-marshaled options,
+skip tsconfig/json/tsbuildinfo units), --stage check accepted. REAL
+PORT-BUG: get_effective_declaration_flags dereferenced parent.parent
+unconditionally (Go 3736-3745 gates it behind IsModuleBlock &&
+IsGlobalScopeAugmentation) — fixed; check-stage panics 70 -> 7
+(residual: 4 MappedType, 3 InterfaceType — genuine unported arms,
+contained as -1 sentinels). Orchestrator re-verified fresh: 217 tests
+(checker + testrunner), fixture 9/9, parse+bind twins identical
+143/163/78/0, program twin 15/15, CHECK-STAGE HISTOGRAM MOVED:
+69 match / 153 mismatch / 162 missing / 7 panic of 384 (18.0% — the
+climb is live). Tranche 2: grammarchecks + services + the GO DRIVER
+check stage (scope granted) + the 7 panic arms.

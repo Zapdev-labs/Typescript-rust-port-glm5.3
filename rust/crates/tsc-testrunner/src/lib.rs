@@ -16,14 +16,15 @@
 //   testrunner/compiler_test_filter.go → compiler_test_filter.rs
 //   testrunner/options_generated.go → options_generated.rs
 //
-// DEPTH CONTROL (SPEC §8 M6): the checker is not ported (only the
-// rust/crates/checker spike, owned by a parallel worker), so the runner
-// drives the pipeline only through [`Stage::Parse`] and [`Stage::Bind`].
-// [`Stage::Check`] exists as the explicit unwired boundary — asking for it
-// is an error, never fake output. The plug point is the Go program layer's
-// check entry points (tsc/internal/compiler/program.go: `GetSemanticDiagnostics`
-// / `GetSemanticDiagnosticsForIncremental` → rust/crates/compiler's
-// CheckerPool) — PORT-noted in compiler_runner.rs.
+// DEPTH CONTROL (SPEC §8 M6): the runner drives the pipeline through
+// [`Stage::Parse`] and [`Stage::Bind`] (the M5 program layer), and — since
+// the W3 checker wave — [`Stage::Check`]: the per-in-test-unit checker seam
+// (`semantic_diagnostics_of_unit` in compiler_runner.rs) drives the ported
+// checker spine (`check_source_file`) over each unit's own parse+bind,
+// Go program.go `GetSemanticDiagnostics`'s read side. The single-file
+// seam is PORT-noted in compiler_runner.rs and rust/CONFORMANCE.md (the
+// §5.1 NodeId space is single-file by construction; the M5 program merge
+// swaps it for the program-wide checker through the CheckerPool).
 //
 // NOT PORTED (PORT notes, also in compiler_runner.rs):
 //   - testrunner/transpile_runner.go — needs the Layer-5 emit path (not yet

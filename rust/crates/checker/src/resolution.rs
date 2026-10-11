@@ -1503,7 +1503,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) isBlockScopedNameDeclaredBeforeUse(declaration, usage) bool`
     /// (checker.go:1966).
-    fn is_block_scoped_name_declared_before_use(&mut self, declaration: NodeId, usage: NodeId) -> bool {
+    pub(crate) fn is_block_scoped_name_declared_before_use(&mut self, declaration: NodeId, usage: NodeId) -> bool {
         let declaration_file = declaration.file_id();
         let use_file = usage.file_id();
         let decl_container = get_enclosing_block_scope_container(self.store(), declaration);

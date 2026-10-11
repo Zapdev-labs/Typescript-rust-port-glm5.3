@@ -871,6 +871,9 @@ pub(crate) mod tests_support {
         fn node_store(&self) -> &dyn tsc_ast::NodeStore {
             &self.source_file
         }
+        fn node_store_mut(&mut self) -> &mut dyn tsc_ast::NodeStore {
+            &mut self.source_file
+        }
         fn symbol(&self, id: tsc_ast::SymbolId) -> &tsc_ast::Symbol {
             &self.symbols[id.0 as usize]
         }

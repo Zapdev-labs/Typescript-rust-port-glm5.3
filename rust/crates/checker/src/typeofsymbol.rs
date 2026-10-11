@@ -2340,19 +2340,6 @@ impl Checker {
         None
     }
 
-    /// TODO(port M6 W3): `getFlowTypeInConstructor(symbol, constructor)` —
-    /// permissive None (Go: no assignments found ⇒ nil).
-    fn get_flow_type_in_constructor(&mut self, symbol: SymbolId, constructor: NodeId) -> Option<TypeId> {
-        let _ = (symbol, constructor);
-        None
-    }
-
-    /// TODO(port M6 W3): `getFlowTypeInStaticBlocks(symbol, staticBlocks)`.
-    fn get_flow_type_in_static_blocks(&mut self, symbol: SymbolId, static_blocks: Vec<NodeId>) -> Option<TypeId> {
-        let _ = (symbol, static_blocks);
-        None
-    }
-
     /// TODO(port M6 S3): `getTypeOfPropertyInBaseClass(symbol)` — permissive None.
     pub(crate) fn get_type_of_property_in_base_class(&mut self, symbol: SymbolId) -> Option<TypeId> {
         let _ = symbol;
@@ -2397,18 +2384,10 @@ impl Checker {
         )
     }
 
-    /// Go: `func (c *Checker) getTypeOfInitializer(initializer *ast.Node) *Type`
-    /// — `getTypeOfExpression(initializer)` (Go passes the initializer
-    /// expression node directly; M6 S4 tranche 2 fixed the misport that
-    /// re-read an initializer off the expression node).
-    fn get_type_of_initializer(&mut self, initializer: NodeId) -> TypeId {
-        self.get_type_of_expression(initializer)
-    }
-
     /// Go: `func (c *Checker) getNonUndefinedType(t *Type) *Type` — REAL
     /// (M6 S10, checker.go:32097): the generic-undefined-constraint map +
     /// getTypeWithFacts (index.rs's body).
-    fn get_non_undefined_type(&mut self, t: TypeId) -> TypeId {
+    pub(crate) fn get_non_undefined_type(&mut self, t: TypeId) -> TypeId {
         self.get_non_undefined_type_impl(t)
     }
 

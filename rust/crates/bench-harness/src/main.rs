@@ -60,7 +60,7 @@ fn usage() -> ! {
     eprintln!("       tsc-bench resolvereact --corpus <dir>   (per-specifier NDJSON + summary)");
     eprintln!("       tsc-bench symbols --corpus <dir> [--fuzz <dir>]   (per-file NDJSON: binder symbol tables)");
     eprintln!("       tsc-bench program --corpus <dir> | --file <path>   (per-root NDJSON: Program load/bind/parse-diag counts)");
-    eprintln!("       tsc-bench conformance --corpus <dir> --baselines <dir> [--suite S] [--limit N] [--filter P] [--stage parse|bind] [--local-root <dir>]");
+    eprintln!("       tsc-bench conformance --corpus <dir> --baselines <dir> [--suite S] [--limit N] [--filter P] [--stage parse|bind|check] [--local-root <dir>]");
     std::process::exit(2);
 }
 

@@ -370,6 +370,24 @@ impl DiagnosticsCollection {
         diagnostic
     }
 
+    /// The W3 check-stage runner seam (Go program.go `GetSemanticDiagnostics`'s
+    /// read side): every diagnostic in the collection — file-paired and
+    /// global — cloned in insertion order (the baseline renderer sorts; a
+    /// checker instance is per-file in Go's pool and per-case in the port,
+    /// so the unspecific read carries the whole collection).
+    pub(crate) fn all(&self) -> Vec<tsc_ast::Diagnostic> {
+        let mut out = Vec::with_capacity(self.count);
+        for entries in self.file_diagnostics.values() {
+            out.extend(entries.iter().map(|e| e.diagnostic.clone()));
+        }
+        out.extend(
+            self.non_file_diagnostics
+                .iter()
+                .map(|e| e.diagnostic.clone()),
+        );
+        out
+    }
+
     /// Go: `func (c *DiagnosticsCollection) GetGlobalDiagnostics() []*Diagnostic`.
     fn get_global_diagnostics(&mut self) -> Vec<tsc_ast::Diagnostic> {
         if !self.non_file_diagnostics_sorted {
@@ -1207,11 +1225,9 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) isReachableFlowNode(flowNode) bool` (flow.go —
-    /// the flow-graph walk). TODO(port M6 W3): the real reachability walk;
-    /// permissive true = reachable (no unreachable diagnostics from flow).
+    /// the flow-graph walk). REAL since W3: flow.rs's body.
     fn is_reachable_flow_node_stub(&mut self, flow_node: tsc_ast::FlowNodeId) -> bool {
-        let _ = flow_node;
-        true
+        self.is_reachable_flow_node(flow_node)
     }
 
     /// Go: `func (c *Checker) checkJSDocComments(node *ast.Node)` (checker.go:2585).
@@ -3319,6 +3335,15 @@ mod tests {
         fn bind_source_files(&mut self) {}
         fn node_store(&self) -> &dyn NodeStore {
             &self.file
+        }
+        fn node_store_mut(&mut self) -> &mut dyn NodeStore {
+            &mut self.file
+        }
+        fn flow_arena(&self) -> (&[tsc_ast::flow::FlowNode], &[tsc_ast::flow::FlowList]) {
+            match &self.bind {
+                Some(bind) => (&bind.flow_nodes, &bind.flow_lists),
+                None => (&[], &[]),
+            }
         }
         fn symbol(&self, id: SymbolId) -> &Symbol {
             let base = self.bind.as_ref().expect("bound").symbol_count as u32;
