@@ -2210,3 +2210,8 @@ ok, clippy 0, fixture x3 identical, bind 143/143, program 15/15,
 check divergent 111 confirmed. W4 dispatched (collapses the 41
 type_to_string hash-diffs; then tranche 5 chases async-2697/2304/2683
 with the printer real).
+
+Rig validation (W3 tranche 4, 2026-10-12): forced clean + rebuild —
+all rails green (fixture x3 identical, bind 143/143, program 15/15).
+W3 tranche 4 RIG-VALIDATED. W4 (nodebuilder/type_to_string printer)
+dispatched.
