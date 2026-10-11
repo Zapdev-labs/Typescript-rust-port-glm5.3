@@ -1379,6 +1379,31 @@ impl Type {
         }
     }
 
+    /// Mutable form of [`Type::as_constrained_type`] (M6 S9: the resolved
+    /// base-constraint write).
+    pub fn as_constrained_type_mut(&mut self) -> Option<&mut ConstrainedType> {
+        match &mut self.data {
+            TypeData::Intrinsic(_) | TypeData::Literal(_) | TypeData::UniqueESSymbol(_) => None,
+            TypeData::Object(d) => Some(&mut d.base.base),
+            TypeData::TypeReference(d) => Some(&mut d.base.base.base),
+            TypeData::Interface(d) => Some(&mut d.base.base.base.base),
+            TypeData::Tuple(d) => Some(&mut d.base.base.base.base.base),
+            TypeData::InstantiationExpression(d) => Some(&mut d.base.base.base),
+            TypeData::Mapped(d) => Some(&mut d.base.base.base),
+            TypeData::ReverseMapped(d) => Some(&mut d.base.base.base),
+            TypeData::EvolvingArray(d) => Some(&mut d.base.base.base),
+            TypeData::Union(d) => Some(&mut d.base.base.base),
+            TypeData::Intersection(d) => Some(&mut d.base.base.base),
+            TypeData::TypeParameter(d) => Some(&mut d.base),
+            TypeData::Index(d) => Some(&mut d.base),
+            TypeData::IndexedAccess(d) => Some(&mut d.base),
+            TypeData::TemplateLiteral(d) => Some(&mut d.base),
+            TypeData::StringMapping(d) => Some(&mut d.base),
+            TypeData::Substitution(d) => Some(&mut d.base),
+            TypeData::Conditional(d) => Some(&mut d.base),
+        }
+    }
+
     /// Go: `func (t *Type) AsStructuredType() *StructuredType`.
     pub fn as_structured_type(&self) -> Option<&StructuredType> {
         match &self.data {

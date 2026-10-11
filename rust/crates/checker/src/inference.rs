@@ -2824,7 +2824,7 @@ fn has_inference_candidates(info: &InferenceInfo) -> bool {
 
 /// Go: `func hasInferenceCandidatesOrDefault(info) bool`.
 #[allow(dead_code)]
-fn has_inference_candidates_or_default(info: &InferenceInfo) -> bool {
+pub(crate) fn has_inference_candidates_or_default(info: &InferenceInfo) -> bool {
     has_inference_candidates(info) || has_type_parameter_default(info.type_parameter)
 }
 

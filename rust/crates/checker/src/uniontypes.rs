@@ -2934,7 +2934,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) isTypeParameterPossiblyReferenced(tp *Type, node *ast.Node) bool`
     /// (checker.go:22855).
-    fn is_type_parameter_possibly_referenced(&mut self, tp: TypeId, node: NodeId) -> bool {
+    pub(crate) fn is_type_parameter_possibly_referenced(&mut self, tp: TypeId, node: NodeId) -> bool {
         // PORT: Go's recursive `containsReference` closure walks the subtree
         // through ForEachChild; the port walks through the node store's child
         // edges with the same case arms (see ast_shims).
@@ -3198,19 +3198,16 @@ impl Checker {
                                 constituent,
                                 Some(new_mapper),
                             );
-                            let root = root_box.clone();
-                            Some(c.get_conditional_type(&root, Some(mapper), for_constraint, None))
+                            Some(c.get_conditional_type(root_box.clone(), Some(mapper), for_constraint, None))
                         },
                         alias.as_deref(),
                     )
                     .unwrap_or_else(|| self.error_type())
                 } else {
-                    let root = root_box.clone();
-                    self.get_conditional_type(&root, Some(new_mapper), for_constraint, alias.clone())
+                    self.get_conditional_type(root_box.clone(), Some(new_mapper), for_constraint, alias.clone())
                 }
             } else {
-                let root = root_box.clone();
-                self.get_conditional_type(&root, Some(new_mapper), for_constraint, alias.clone())
+                self.get_conditional_type(root_box.clone(), Some(new_mapper), for_constraint, alias.clone())
             };
             if let Some(d) = self.type_mut(t).as_conditional_type_mut()
                 && let Some(root) = d.root.as_deref_mut()

@@ -1503,10 +1503,16 @@ impl Checker {
     #[allow(dead_code)] // TODO(port M6 W2): Go-mirrored; callers land with inference.rs
 pub(crate) fn symbol_value_declaration_is_context_sensitive(
         &mut self,
-        _symbol: Option<SymbolId>,
+        symbol: Option<SymbolId>,
     ) -> bool {
-        // TODO(port M6 S9): isContextSensitive (contextual typing wave).
-        false
+        // Go: `c.isContextSensitive(symbol.ValueDeclaration)` — the REAL
+        // isContextSensitive scan (contextual.rs, checker.go:31405).
+        match symbol
+            .and_then(|s| self.program_symbol(s).value_declaration)
+        {
+            Some(declaration) => self.is_context_sensitive_impl(declaration),
+            None => false,
+        }
     }
 
     /// Go: `func (c *Checker) typeCouldHaveTopLevelSingletonTypes(t) bool`.
@@ -3165,6 +3171,9 @@ impl TypeFacts {
     pub const EQ_UNDEFINED_OR_NULL: TypeFacts = TypeFacts(1 << 18);
     /// Go: `TypeFactsNEUndefined TypeFacts = 1 << 19`.
     pub const NE_UNDEFINED: TypeFacts = TypeFacts(1 << 19);
+    /// Go: `TypeFactsNEUndefinedOrNull TypeFacts = 1 << 21` (M6 S9: the
+    /// awaited-family's onfulfilled-parameter reads).
+    pub const NE_UNDEFINED_OR_NULL: TypeFacts = TypeFacts(1 << 21);
     /// Go: `TypeFactsTruthy TypeFacts = 1 << 22` (M6 S4: added with the
     /// checkBinaryLikeExpression &&/|| arms).
     pub const TRUTHY: TypeFacts = TypeFacts(1 << 22);
@@ -7580,13 +7589,18 @@ pub(crate) fn get_constraint_of_type_parameter(c: &Checker, t: TypeId) -> Option
     c.type_(t).as_type_parameter().and_then(|d| d.constraint)
 }
 
-/// Go: `func (c *Checker) getBaseConstraintOfType(t) *Type` — the cycle-safe
-/// constraint walk.
+/// Go: `func (c *Checker) getBaseConstraintOfType(t) *Type` — REAL (M6 S9):
+/// delegates to the resolved-base-constraint engine (typeofsymbol.rs).
 pub(crate) fn get_base_constraint_of_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
-    // TODO(port M6 S9): the getBaseConstraint worker with the
-    // circular-constraint sentinel; the payload read suffices until the
-    // constrained-instantiation waves construct deeper chains.
-    get_constraint_of_type(c, t)
+    c.get_base_constraint_of_type_impl(t)
+}
+
+/// Go: `func (c *Checker) getSimplifiedType(t, writing) *Type` (checker.go:28436)
+/// — TODO(port M6 S10): the simplified-conditional/indexed-access family; the
+/// permissive identity is exact for non-simplifiable types (the current S9
+/// constraint surface never hand it a simplifiable conditional).
+pub(crate) fn get_simplified_type(_c: &mut Checker, t: TypeId, _writing: bool) -> TypeId {
+    t
 }
 
 /// Go: `func (c *Checker) getBaseConstraintOrType(t) *Type`.
@@ -7754,21 +7768,19 @@ pub(crate) fn contains_type(_c: &Checker, types: &[TypeId], t: TypeId) -> bool {
     types.contains(&t)
 }
 
-/// Go: `func (c *Checker) getTrueTypeFromConditionalType(t) *Type` — payload
-/// read (the instantiation path is S10).
+/// Go: `func (c *Checker) getTrueTypeFromConditionalType(t) *Type` — REAL
+/// (M6 S9): delegates to the lazily-resolving body (typeofsymbol.rs,
+/// checker.go:25073 — the resolved-branch read plus the
+/// getTypeFromTypeNode+instantiateType resolution when unresolved).
 pub(crate) fn get_true_type_from_conditional_type(c: &mut Checker, t: TypeId) -> TypeId {
-    c.type_(t)
-        .as_conditional_type()
-        .and_then(|d| d.resolved_true_type)
-        .unwrap_or_else(|| c.error_type())
+    c.get_true_type_from_conditional_type_impl(t)
 }
 
-/// Go: `func (c *Checker) getFalseTypeFromConditionalType(t) *Type`.
+/// Go: `func (c *Checker) getFalseTypeFromConditionalType(t) *Type` — REAL
+/// (M6 S9): delegates to the lazily-resolving body (typeofsymbol.rs,
+/// checker.go:25081).
 pub(crate) fn get_false_type_from_conditional_type(c: &mut Checker, t: TypeId) -> TypeId {
-    c.type_(t)
-        .as_conditional_type()
-        .and_then(|d| d.resolved_false_type)
-        .unwrap_or_else(|| c.error_type())
+    c.get_false_type_from_conditional_type_impl(t)
 }
 
 /// Go: the ConditionalRoot payload readers (identity = Box pointer).

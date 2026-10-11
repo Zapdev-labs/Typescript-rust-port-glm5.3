@@ -688,7 +688,7 @@ impl Checker {
         if !self.is_type_assignable_to(t, number_or_big_int_type) {
             let mut awaited_type = None;
             if is_await_valid {
-                awaited_type = self.get_awaited_type_of_promise_stub(t);
+                awaited_type = self.get_awaited_type_of_promise(t);
             }
             let suggest_await = match awaited_type {
                 Some(at) => self.is_type_assignable_to(at, number_or_big_int_type),
@@ -2734,7 +2734,7 @@ impl Checker {
             None => {
                 let t = self.any_type();
                 if self.no_implicit_any && !u::expression_result_is_unused(self.store(), node) {
-                    let contextual_type = self.get_contextual_type_stub(node, crate::types::ContextFlags::NONE);
+                    let contextual_type = self.get_contextual_type(node, crate::types::ContextFlags::NONE);
                     if contextual_type.is_none() || u::is_type_any(contextual_type.as_ref().map(|t| self.type_(*t))) {
                         self.error(
                             node,
@@ -2783,11 +2783,11 @@ impl Checker {
         }
         Some(self.get_awaited_type_ex(
             yielded_type,
-            error_node,
+            Some(error_node),
             if is_yield_star {
-                &TYPE_OF_ITERATED_ELEMENTS_OF_A_YIELD_ASTERISK_OPERAND_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER
+                Some(&TYPE_OF_ITERATED_ELEMENTS_OF_A_YIELD_ASTERISK_OPERAND_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER)
             } else {
-                &TYPE_OF_YIELD_OPERAND_IN_AN_ASYNC_GENERATOR_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER
+                Some(&TYPE_OF_YIELD_OPERAND_IN_AN_ASYNC_GENERATOR_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER)
             },
         ))
     }
@@ -2842,19 +2842,9 @@ impl Checker {
         true
     }
 
-    /// Go: `func (c *Checker) getAwaitedTypeEx(t, errorNode, diagnosticMessage, args...) *Type`
-    /// (checker.go:31806 — S9). Permissive identity (Go's answer for every
-    /// non-thenable type).
-    pub(crate) fn get_awaited_type_ex(
-        &mut self,
-        t: TypeId,
-        error_node: NodeId,
-        diagnostic_message: &'static Message,
-    ) -> TypeId {
-        // TODO(port M6 S9): unwrapAwaitedType + the thenable resolution.
-        let _ = (error_node, diagnostic_message);
-        t
-    }
+    // Go: `func (c *Checker) getAwaitedTypeEx(t, errorNode, diagnosticMessage, args...) *Type`
+    // (checker.go:31806) — REAL (M6 S9): the body lives in statements.rs with
+    // the rest of the awaited family; this stub was removed.
 }
 
 /// Go: `isNodeDescendantOf(node, parent.AsBinaryExpression().Right)` on the
@@ -4510,7 +4500,7 @@ impl Checker {
             return self.get_fresh_type_of_literal_type(literal);
         }
         let contextual = self
-            .get_contextual_type_stub(node, crate::types::ContextFlags::NONE)
+            .get_contextual_type(node, crate::types::ContextFlags::NONE)
             .unwrap_or_else(|| self.unknown_type());
         // Go: someType(contextualType, isTemplateLiteralContextualType) —
         // PORT: the constituent walk inlined (the closure captures &mut self).
@@ -5007,7 +4997,7 @@ impl Checker {
         self.push_cached_contextual_type(node);
         let in_destructuring_pattern = tsc_binder::ast_shims::is_assignment_target(self.store(), node);
         let in_const_context = self.is_const_context(node);
-        let contextual_type = self.get_apparent_type_of_contextual_type(node);
+        let contextual_type = self.get_apparent_type_of_contextual_type(node, crate::types::ContextFlags::NONE);
         let in_tuple_context = self.is_spread_into_call_or_new(node)
             || contextual_type.is_some_and(|contextual_type| {
                 // Go: someType(contextualType, isTupleLike || homomorphic
@@ -5184,7 +5174,7 @@ impl Checker {
             return t;
         }
         let contextual_type = {
-            let raw = self.get_contextual_type_stub(node, crate::types::ContextFlags::NONE);
+            let raw = self.get_contextual_type(node, crate::types::ContextFlags::NONE);
             self.instantiate_contextual_type_stub(
                 raw,
                 node,
@@ -5281,17 +5271,14 @@ impl Checker {
 
     /// Go: `func (c *Checker) pushCachedContextualType(node)` (checker.go:31421).
     pub(crate) fn push_cached_contextual_type(&mut self, node: NodeId) {
-        let t = self.get_contextual_type_stub(node, crate::types::ContextFlags::NONE);
+        let t = self.get_contextual_type(node, crate::types::ContextFlags::NONE);
         self.push_contextual_type(Some(node), t, true /*isCache*/);
     }
 
-    /// Go: `func (c *Checker) getApparentTypeOfContextualType(node, contextFlags) *Type`
-    /// (checker.go — S9's contextual-typing family). Permissive None.
-    pub(crate) fn get_apparent_type_of_contextual_type(&mut self, node: NodeId) -> Option<TypeId> {
-        // TODO(port M6 S9): getApparentTypeOfContextualType.
-        let _ = node;
-        None
-    }
+    // Go: `func (c *Checker) getApparentTypeOfContextualType(node, contextFlags) *Type`
+    // (checker.go:31235 — S9): MOVED — the REAL body (instantiateContextualType +
+    // the apparent-type constituent map) lives in contextual.rs as
+    // `get_apparent_type_of_contextual_type(node, contextFlags)` (same signature).
 
     /// Go: `func (c *Checker) isConstContext(node) bool` (checker.go:13935).
     pub(crate) fn is_const_context(&mut self, node: NodeId) -> bool {
@@ -5303,7 +5290,7 @@ impl Checker {
         }
         if self.is_valid_const_assertion_argument(node) {
             let contextual_type =
-                self.get_contextual_type_stub(node, crate::types::ContextFlags::NONE);
+                self.get_contextual_type(node, crate::types::ContextFlags::NONE);
             if self.is_const_type_variable_opt(contextual_type, 0) {
                 return true;
             }
@@ -5390,7 +5377,7 @@ impl Checker {
 
 /// Go: `func IsConstAssertion(node *Node) bool` (ast/utilities.go) —
 /// `IsConstTypeReference(node.Type())` over the as/type-assertion pair.
-fn is_const_assertion(store: &dyn NodeStore, node: NodeId) -> bool {
+pub(crate) fn is_const_assertion(store: &dyn NodeStore, node: NodeId) -> bool {
     let n = store.node(node);
     match n.kind {
         Kind::AsExpression | Kind::TypeAssertionExpression => {
@@ -6209,7 +6196,7 @@ impl Checker {
         let empty_object_type = self.empty_object_type();
         let mut spread = empty_object_type;
         self.push_cached_contextual_type(node);
-        let contextual_type = self.get_apparent_type_of_contextual_type(node);
+        let contextual_type = self.get_apparent_type_of_contextual_type(node, crate::types::ContextFlags::NONE);
         let mut contextual_type_has_pattern = false;
         if let Some(contextual_type) = contextual_type
             && let Some(pattern) = self.pattern_for_type.get(&contextual_type).copied()
@@ -6533,7 +6520,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) checkContextualDeprecations(node)` (checker.go:13605).
     pub(crate) fn check_contextual_deprecations(&mut self, node: NodeId) {
-        let contextual_type = self.get_apparent_type_of_contextual_type(node);
+        let contextual_type = self.get_apparent_type_of_contextual_type(node, crate::types::ContextFlags::NONE);
         let property_nodes: Vec<NodeId> = {
             let d = self
                 .store()
@@ -7166,18 +7153,10 @@ impl Checker {
         self.register_for_unused_identifiers_check(node);
     }
 
-    /// Go: `func (c *Checker) getContextualSignature(node) *Signature`
-    /// (checker.go:10437 — S9). Permissive None. Dormant until the S9
-    /// contextual-signature callers (checkArrayLiteral et al.) compose.
-    #[allow(dead_code)]
-    pub(crate) fn get_contextual_signature(
-        &mut self,
-        node: NodeId,
-    ) -> Option<crate::types::SignatureId> {
-        // TODO(port M6 S9): the contextual call-signature family.
-        let _ = node;
-        None
-    }
+    // Go: `func (c *Checker) getContextualSignature(node) *Signature`
+    // (checker.go:10472 — S9): MOVED — the REAL body (the
+    // contextual-signature family dispatcher) lives in contextual.rs as
+    // `get_contextual_signature` (same signature).
 }
 
 /// Go: the property/shorthand/method membership probe of checkObjectLiteral's

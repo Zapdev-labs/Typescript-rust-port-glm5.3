@@ -80,6 +80,40 @@ fn type_node_type(store: &dyn tsc_ast::NodeStore, node: NodeId) -> Option<NodeId
     }
 }
 
+/// Go: `func (c *Checker) isSimpleTupleType(node) bool` (checker.go:24968) —
+/// a plain-tuple check with no optional/rest/variadic-named elements.
+/// PORT: a free function (Go's receiver only carries the node store).
+fn is_simple_tuple_type(store: &dyn tsc_ast::NodeStore, node: NodeId) -> bool {
+    use tsc_ast::Kind;
+    if store.node(node).kind != Kind::TupleType {
+        return false;
+    }
+    let elements = elements_of(store, node);
+    !elements.is_empty()
+        && !elements.iter().any(|&e| {
+            let n = store.node(e);
+            n.kind == Kind::OptionalType
+                || n.kind == Kind::RestType
+                || (n.kind == Kind::NamedTupleMember
+                    && n.as_named_tuple_member()
+                        .is_some_and(|d| d.question_token.is_some() || d.dot_dot_dot_token.is_some()))
+        })
+}
+
+/// Go: `someType(c.getPermissiveInstantiation(inferredExtendsType), t =>
+/// c.isTypeAssignableTo(t, c.getPermissiveInstantiation(checkType)))`
+/// (checker.go:24893) — the forConstraint reverse-assignability probe.
+/// PORT: the constituents are collected before the mutable probe (the
+/// closure can't capture `&mut Checker` under `some_type`'s borrow).
+fn some_type_extends_assignable_to_check(c: &mut Checker, extends: TypeId, check: TypeId) -> bool {
+    let constituents: Vec<TypeId> = if c.type_(extends).flags.intersects(TypeFlags::UNION) {
+        c.type_(extends).types().to_vec()
+    } else {
+        vec![extends]
+    };
+    constituents.iter().any(|&t| c.is_type_assignable_to(t, check))
+}
+
 /// Go: `ast.SkipTypeParentheses(node)` (utilities.go:833).
 #[allow(dead_code)] // the element-access/spread waves consume it
 fn skip_type_parentheses(store: &dyn tsc_ast::NodeStore, mut node: NodeId) -> NodeId {
@@ -1457,15 +1491,36 @@ impl Checker {
 
     /// Go: `func (c *Checker) createPromiseType(promisedType) *Type` (checker.go:20752)
     /// — the JSDoc `promise` arm's constructor, composed over the S7
-    /// createTypeReference seam and the S9 awaited-type seam.
+    /// createTypeReference seam and the S9 awaited-type seam (REAL — M6 S9:
+    /// the Awaited<T> unwrap composes the landed awaited family).
     pub(crate) fn create_promise_type(&mut self, promised_type: TypeId) -> TypeId {
         // Creates a `Promise<T>` type where T is the promisedType argument.
         let global_promise_type = self.get_global_promise_type_checked();
         if Some(global_promise_type) != self.empty_generic_type {
             // If the promised type is itself a promise, get the underlying
             // type; otherwise, fallback to the promised type.
-            // TODO(port M6 S9): getAwaitedTypeNoAlias(unwrapAwaitedType(...)).
+            // Unwrap an `Awaited<T>` to `T` to improve inference (Go's comment).
+            let unwrapped = self.unwrap_awaited_type(promised_type);
+            let promised_type = self
+                .get_awaited_type_no_alias(unwrapped)
+                .unwrap_or_else(|| self.unknown_type());
             return self.create_type_reference(global_promise_type, vec![promised_type]);
+        }
+        self.unknown_type()
+    }
+
+    /// Go: `func (c *Checker) createPromiseLikeType(promisedType) *Type`
+    /// (checker.go:20764) — REAL (M6 S9): the contextual await/yield arm's
+    /// constructor over the global PromiseLike resolver.
+    pub(crate) fn create_promise_like_type(&mut self, promised_type: TypeId) -> TypeId {
+        // Creates a `PromiseLike<T>` type where T is the promisedType argument.
+        let global_promise_like_type = self.get_global_promise_like_type();
+        if Some(global_promise_like_type) != self.empty_generic_type {
+            let unwrapped = self.unwrap_awaited_type(promised_type);
+            let promised_type = self
+                .get_awaited_type_no_alias(unwrapped)
+                .unwrap_or_else(|| self.unknown_type());
+            return self.create_type_reference(global_promise_like_type, vec![promised_type]);
         }
         self.unknown_type()
     }
@@ -2604,13 +2659,11 @@ impl Checker {
                 if alias.as_deref().is_some_and(|a| !a.type_arguments.is_empty()) {
                     all_outer_type_parameters.clone()
                 } else {
-                    // TODO(port M6 S9): isTypeParameterPossiblyReferenced
-                    // (checker.go:22891 — the instantiation wave's reference
-                    // scan); permissive drop-all keeps the conditional's
-                    // instantiation cache unseeded.
+                    // REAL (M6 S9): isTypeParameterPossiblyReferenced
+                    // (checker.go:22891 — uniontypes.rs's reference scan).
                     all_outer_type_parameters
                         .iter()
-                        .filter(|_| false)
+                        .filter(|&&tp| self.is_type_parameter_possibly_referenced(tp, node))
                         .copied()
                         .collect()
                 };
@@ -2627,12 +2680,12 @@ impl Checker {
                 instantiations: None,
                 alias: alias.clone(),
             });
-            // TODO(port M6 S9): getConditionalType — the deferred-conditional
-            // resolution loop (checker.go:24806–25137: the tail-recursion
-            // ladder over checkType/extendsType with the inference context,
-            // permissive/restrictive instantiations and the definite-true/false
-            // assignability probes). Permissive errorType.
-            let t = self.get_conditional_type(&root, None, false, None);
+            // REAL (M6 S9): getConditionalType — the deferred-conditional
+            // resolution loop (checker.go:24834). The root Box is MOVED into
+            // get_conditional_type; a deferred result carries the same Box
+            // (Go's shared pointer), so the identity-instantiation seed below
+            // lands on the type's own root.
+            let t = self.get_conditional_type(root, None, false, None);
             self.type_node_links.get(node).resolved_type = Some(t);
             if !outer_type_parameters.is_empty() {
                 let key = crate::typeofsymbol::get_conditional_type_key(
@@ -2640,13 +2693,18 @@ impl Checker {
                     None,
                     false,
                 );
+                // PORT: Go seeds root.instantiations with the identity
+                // instantiation (checker.go:24829) — the root is shared with
+                // the deferred conditional type, so the seed is visible to
+                // getConditionalTypeInstantiation. When the conditional
+                // resolves eagerly (the result is a branch type, not a
+                // conditional), Go's seed is only reachable from the
+                // discarded standalone root object — dead — so the port
+                // seeds only the deferred case.
                 if let Some(d) = self.type_mut(t).as_conditional_type_mut()
                     && let Some(root) = d.root.as_deref_mut()
                 {
-                    // Go seeds root.instantiations with the identity
-                    // instantiation; the errorType placeholder carries it
-                    // structurally until S9's real resolution.
-                    let mut map = rustc_hash::FxHashMap::default();
+                    let mut map = root.instantiations.take().unwrap_or_default();
                     map.insert(key, t);
                     root.instantiations = Some(map);
                 }
@@ -2658,20 +2716,401 @@ impl Checker {
             .expect("just cached")
     }
 
-    /// Go: `func (c *Checker) getConditionalType(root, mapper, forConstraint, alias) *Type` (checker.go:24806)
-    /// — the S9 deferred-conditional machinery. TODO(port M6 S9): the
-    /// resolution loop (tail-recursion ladder, inference context,
-    /// permissive/restrictive instantiation probes, newConditionalType);
-    /// permissive errorType.
+    /// Go: `func (c *Checker) getConditionalType(root *ConditionalRoot, mapper *TypeMapper, forConstraint bool, alias *TypeAlias) *Type`
+    /// (checker.go:24834) — REAL (M6 S9): the deferred-conditional
+    /// resolution loop (tail-recursion ladder over checkType/extendsType
+    /// with the inference context, permissive/restrictive instantiations and
+    /// the definite-true/false assignability probes).
+    ///
+    /// PORT: Go reassigns the local `root` pointer (the immediate-nested
+    /// false-type and tail-recursion switches); the port moves the owned
+    /// `Box<ConditionalRoot>` — a deferred result carries the CURRENT box,
+    /// mirroring Go's shared-pointer identity for the
+    /// identity-instantiation seed.
     pub(crate) fn get_conditional_type(
         &mut self,
-        _root: &types::ConditionalRoot,
-        _mapper: Option<TypeMapperId>,
-        _for_constraint: bool,
-        _alias: Option<Box<TypeAlias>>,
+        mut root: Box<types::ConditionalRoot>,
+        mut mapper: Option<TypeMapperId>,
+        for_constraint: bool,
+        mut alias: Option<Box<TypeAlias>>,
     ) -> TypeId {
-        // TODO(port M6 S9).
-        self.error_type()
+        let result: TypeId;
+        let mut extra_types: Vec<TypeId> = Vec::new();
+        let mut tail_count: i32 = 0;
+        // We loop here for an immediately nested conditional type in the
+        // false position, effectively treating types of the form
+        // 'A extends B ? X : C extends D ? Y : E extends F ? Z : ...' as a
+        // single construct for purposes of resolution. We also loop here when
+        // resolution of a conditional type ends in resolution of another (or,
+        // through recursion, possibly the same) conditional type. In the
+        // potentially tail-recursive cases we increment the tail recursion
+        // counter and stop after 1000 iterations (Go's comment, verbatim).
+        loop {
+            if tail_count == 1000 {
+                let node = self.current_node.unwrap_or(NodeId::NONE);
+                self.error(
+                    node,
+                    &diag::TYPE_INSTANTIATION_IS_EXCESSIVELY_DEEP_AND_POSSIBLY_INFINITE,
+                    &[],
+                );
+                return self.error_type();
+            }
+            let root_check_type = root.check_type.expect("root.checkType");
+            let root_extends_type = root.extends_type.expect("root.extendsType");
+            let actual_check = crate::inference::get_actual_type_variable(self, root_check_type);
+            let check_type = self.instantiate_type_with_alias(actual_check, mapper, None);
+            let extends_type = self.instantiate_type_with_alias(root_extends_type, mapper, None);
+            if check_type == self.error_type() || extends_type == self.error_type() {
+                return self.error_type();
+            }
+            if check_type == self.wildcard_type() || extends_type == self.wildcard_type() {
+                return self.wildcard_type();
+            }
+            let root_node = root.node.expect("root.node");
+            let (check_type_node, extends_type_node, true_type_node, false_type_node) = {
+                let d = self
+                    .store()
+                    .node(root_node)
+                    .as_conditional_type_node()
+                    .expect("ConditionalTypeNode data");
+                (
+                    skip_type_parentheses(self.store(), d.check_type),
+                    skip_type_parentheses(self.store(), d.extends_type),
+                    d.true_type,
+                    d.false_type,
+                )
+            };
+            // When the check and extends types are simple tuple types of the
+            // same arity, we defer resolution of the conditional type when any
+            // tuple elements are generic. This is such that non-distributable
+            // conditional types can be written `[X] extends [Y] ? ...` and be
+            // deferred similarly to `X extends Y ? ...` (Go's comment).
+            let check_tuples = is_simple_tuple_type(self.store(), check_type_node)
+                && is_simple_tuple_type(self.store(), extends_type_node)
+                && elements_of(self.store(), check_type_node).len()
+                    == elements_of(self.store(), extends_type_node).len();
+            let check_type_deferred = self.is_deferred_type(check_type, check_tuples);
+            let mut combined_mapper: Option<TypeMapperId> = None;
+            if !root.infer_type_parameters.is_empty() {
+                // When we're looking at making an inference for an infer type,
+                // when we get its constraint, it'll automagically be
+                // instantiated with the context, so it doesn't need the mapper
+                // for the inference context (Go's comment, checker.go:24859 —
+                // the full prose is preserved in checker.go).
+                let context = self.new_inference_context(
+                    &root.infer_type_parameters,
+                    None, /*signature*/
+                    crate::inference::InferenceFlags::NONE,
+                    crate::inference::InferenceComparer::Assignable,
+                );
+                if let Some(mapper) = mapper {
+                    let combined = self.combine_type_mappers(
+                        self.inference_contexts[context.0 as usize].non_fixing_mapper,
+                        Some(mapper),
+                    );
+                    self.inference_contexts[context.0 as usize].non_fixing_mapper = combined;
+                }
+                if !check_type_deferred {
+                    // We don't want inferences from constraints as they may
+                    // cause us to eagerly resolve the conditional type instead
+                    // of deferring resolution. Also, we always want strict
+                    // function types rules (i.e. proper contravariance) for
+                    // inferences (Go's comment).
+                    self.infer_types(
+                        context,
+                        check_type,
+                        extends_type,
+                        crate::inference::InferencePriority::NO_CONSTRAINTS
+                            | crate::inference::InferencePriority::ALWAYS_STRICT,
+                        false, /*contravariant*/
+                    );
+                }
+                // It's possible for 'infer T' type parameters to be given
+                // uninstantiated constraints when those type parameters are
+                // used in type references (see getInferredTypeParameterConstraint).
+                // For that reason we need context.mapper to be first in the
+                // combined mapper. See #42636 for examples (Go's comment).
+                let context_mapper = crate::inference::inference_context_mapper(self, context);
+                combined_mapper = match (context_mapper, mapper) {
+                    (Some(cm), Some(m)) => self.combine_type_mappers(Some(cm), Some(m)),
+                    (cm, None) => cm,
+                    (None, Some(m)) => Some(m),
+                };
+            }
+            // Instantiate the extends type including inferences for
+            // 'infer T' type parameters.
+            let inferred_extends_type = match combined_mapper {
+                Some(cm) => self.instantiate_type_with_alias(root_extends_type, Some(cm), None),
+                None => extends_type,
+            };
+            // We attempt to resolve the conditional type only when the check
+            // and extends types are non-generic.
+            if !check_type_deferred && !self.is_deferred_type(inferred_extends_type, check_tuples)
+            {
+                // Return falseType for a definitely false extends check. We
+                // check an instantiations of the two types with type
+                // parameters mapped to the wildcard type, the most permissive
+                // instantiations possible (the wildcard type is assignable to
+                // and from all types). If those are not related, then no
+                // instantiations will be and we can just return the false
+                // branch type (Go's comment).
+                let check_flags = self.type_(check_type).flags;
+                // PORT: Go evaluates the permissive instantiations lazily
+                // inside the `||`; the borrows force the same shape.
+                let definitely_false = check_flags.intersects(TypeFlags::ANY) || {
+                    let permissive_check = self.get_permissive_instantiation(check_type);
+                    let permissive_extends =
+                        self.get_permissive_instantiation(inferred_extends_type);
+                    !self.is_type_assignable_to(permissive_check, permissive_extends)
+                };
+                if !self
+                    .type_(inferred_extends_type)
+                    .flags
+                    .intersects(TypeFlags::ANY_OR_UNKNOWN)
+                    && definitely_false
+                {
+                    // Return union of trueType and falseType for 'any' since it
+                    // matches anything. Furthermore, for a distributive
+                    // conditional type applied to the constraint of a type
+                    // variable, include trueType if there are possible values
+                    // of the check type that are also possible values of the
+                    // extends type. We use a reverse assignability check as it
+                    // is less expensive than the comparable relationship and
+                    // avoids false positives of a non-empty intersection
+                    // check (Go's comment).
+                    let extends_never =
+                        !self.type_(inferred_extends_type).flags.intersects(TypeFlags::NEVER);
+                    let include_true = if check_flags.intersects(TypeFlags::ANY) {
+                        true
+                    } else if for_constraint && extends_never {
+                        let permissive_extends =
+                            self.get_permissive_instantiation(inferred_extends_type);
+                        let permissive_check = self.get_permissive_instantiation(check_type);
+                        some_type_extends_assignable_to_check(
+                            self,
+                            permissive_extends,
+                            permissive_check,
+                        )
+                    } else {
+                        false
+                    };
+                    if include_true {
+                        let true_branch = self.get_type_from_type_node(true_type_node);
+                        let true_mapper = combined_mapper.or(mapper);
+                        let instantiated =
+                            self.instantiate_type_with_alias(true_branch, true_mapper, None);
+                        extra_types.push(instantiated);
+                    }
+                    // If falseType is an immediately nested conditional type
+                    // that isn't distributive or has an identical checkType,
+                    // switch to that type and loop (Go's comment).
+                    let false_type = self.get_type_from_type_node(false_type_node);
+                    if self.type_(false_type).flags.intersects(TypeFlags::CONDITIONAL) {
+                        let new_root = self
+                            .type_(false_type)
+                            .as_conditional_type()
+                            .and_then(|d| d.root.clone())
+                            .expect("conditional root");
+                        let new_root_node = new_root.node.expect("root.node");
+                        let new_root_check = new_root.check_type;
+                        let new_root_is_distributive = new_root.is_distributive;
+                        if self.store().node(new_root_node).parent.get() == root_node
+                            && (!new_root_is_distributive || new_root_check == root.check_type)
+                        {
+                            root = new_root;
+                            continue;
+                        }
+                        if let Some((new_root, new_root_mapper)) =
+                            self.get_tail_recursion_root(false_type, mapper)
+                        {
+                            let has_alias = new_root.alias.is_some();
+                            root = new_root;
+                            mapper = new_root_mapper;
+                            alias = None;
+                            if has_alias {
+                                tail_count += 1;
+                            }
+                            continue;
+                        }
+                    }
+                    result = self.instantiate_type_with_alias(false_type, mapper, None);
+                    break;
+                }
+                // Return trueType for a definitely true extends check. We
+                // check instantiations of the two types with type parameters
+                // mapped to their restrictive form, i.e. a form of the type
+                // parameter that has no constraint. This ensures that, for
+                // example, the type
+                //   type Foo<T extends { x: any }> = T extends { x: string } ? string : number
+                // doesn't immediately resolve to 'string' instead of being
+                // deferred (Go's comment).
+                let definitely_true = self
+                    .type_(inferred_extends_type)
+                    .flags
+                    .intersects(TypeFlags::ANY_OR_UNKNOWN)
+                    || {
+                        let restrictive_check = self.get_restrictive_instantiation(check_type);
+                        let restrictive_extends =
+                            self.get_restrictive_instantiation(inferred_extends_type);
+                        self.is_type_assignable_to(restrictive_check, restrictive_extends)
+                    };
+                if definitely_true {
+                    let true_type = self.get_type_from_type_node(true_type_node);
+                    let true_mapper = combined_mapper.or(mapper);
+                    if let Some((new_root, new_root_mapper)) =
+                        self.get_tail_recursion_root(true_type, true_mapper)
+                    {
+                        let has_alias = new_root.alias.is_some();
+                        root = new_root;
+                        mapper = new_root_mapper;
+                        alias = None;
+                        if has_alias {
+                            tail_count += 1;
+                        }
+                        continue;
+                    }
+                    result = self.instantiate_type_with_alias(true_type, true_mapper, None);
+                    break;
+                }
+            }
+            // Return a deferred type for a check that is neither definitely
+            // true nor definitely false.
+            let deferred = self.new_conditional_type(&root, mapper, combined_mapper);
+            if let Some(alias) = alias {
+                self.type_mut(deferred).alias = Some(alias);
+            } else {
+                let instantiated_alias = match root.alias.as_deref() {
+                    None => None,
+                    Some(a) => {
+                        let type_arguments =
+                            self.instantiate_types(&a.type_arguments, mapper);
+                        Some(Box::new(TypeAlias {
+                            symbol: a.symbol,
+                            type_arguments,
+                        }))
+                    }
+                };
+                self.type_mut(deferred).alias = instantiated_alias;
+            }
+            // Move the CURRENT root into the deferred type (Go shares the
+            // pointer; see the method doc-comment).
+            let root = std::mem::take(&mut root);
+            if let Some(d) = self.type_mut(deferred).as_conditional_type_mut() {
+                d.root = Some(root);
+            }
+            result = deferred;
+            break;
+        }
+        if !extra_types.is_empty() {
+            let mut types = extra_types;
+            types.push(result);
+            return self.get_union_type(&types);
+        }
+        result
+    }
+
+    /// Go: `func (c *Checker) getTailRecursionRoot(newType *Type, newMapper *TypeMapper) (*ConditionalRoot, *TypeMapper)`
+    /// (checker.go:24977).
+    ///
+    /// We tail-recurse for generic conditional types that (a) have not
+    /// already been evaluated and cached, and (b) are non distributive, have
+    /// a check type that is unaffected by instantiation, or have a non-union
+    /// check type. Note that recursion is possible only through aliased
+    /// conditional types, so we only increment the tail recursion counter for
+    /// those (Go's comment).
+    fn get_tail_recursion_root(
+        &mut self,
+        new_type: TypeId,
+        new_mapper: Option<TypeMapperId>,
+    ) -> Option<(Box<types::ConditionalRoot>, Option<TypeMapperId>)> {
+        let new_mapper = new_mapper?;
+        if !self.type_(new_type).flags.intersects(TypeFlags::CONDITIONAL) {
+            return None;
+        }
+        let new_root = self
+            .type_(new_type)
+            .as_conditional_type()
+            .and_then(|d| d.root.clone())?;
+        if new_root.outer_type_parameters.is_empty() {
+            return None;
+        }
+        let type_param_mapper = self
+            .combine_type_mappers(
+                self.type_(new_type).as_conditional_type().expect("data").mapper,
+                Some(new_mapper),
+            )
+            .expect("combineTypeMappers with a non-nil mapper is non-nil");
+        let type_arguments: Vec<TypeId> = new_root
+            .outer_type_parameters
+            .iter()
+            .map(|&tp| self.mapper_map(type_param_mapper, tp))
+            .collect();
+        let new_root_mapper = self.new_type_mapper(&new_root.outer_type_parameters, &type_arguments);
+        let mut new_check_type: Option<TypeId> = None;
+        if new_root.is_distributive {
+            let mapped =
+                crate::mapper::get_mapped_type(self, new_root.check_type.expect("checkType"), new_root_mapper);
+            new_check_type = Some(mapped);
+        }
+        if new_check_type.is_none()
+            || new_check_type == new_root.check_type
+            || !self
+                .type_(new_check_type.expect("just checked"))
+                .flags
+                .intersects(TypeFlags::UNION | TypeFlags::NEVER)
+        {
+            return Some((new_root, Some(new_root_mapper)));
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) newConditionalType(root, mapper, combinedMapper) *Type`
+    /// (checker.go:25764).
+    pub(crate) fn new_conditional_type(
+        &mut self,
+        root: &types::ConditionalRoot,
+        mapper: Option<TypeMapperId>,
+        combined_mapper: Option<TypeMapperId>,
+    ) -> TypeId {
+        let check_type = self.instantiate_type_with_alias(
+            root.check_type.expect("root.checkType"),
+            mapper,
+            None,
+        );
+        let extends_type = self.instantiate_type_with_alias(
+            root.extends_type.expect("root.extendsType"),
+            mapper,
+            None,
+        );
+        let data = crate::types::ConditionalType {
+            base: Default::default(),
+            root: None, // the caller moves the current Box in (identity PORT)
+            check_type: Some(check_type),
+            extends_type: Some(extends_type),
+            resolved_true_type: None,
+            resolved_false_type: None,
+            resolved_inferred_true_type: None,
+            resolved_default_constraint: None,
+            resolved_constraint_of_distributive: None,
+            mapper,
+            combined_mapper,
+        };
+        self.new_type(
+            TypeFlags::CONDITIONAL,
+            crate::types::ObjectFlags::NONE,
+            crate::types::TypeData::Conditional(Box::new(data)),
+        )
+    }
+
+    /// Go: `func (c *Checker) isDeferredType(t, checkTuples) bool` (checker.go:24973).
+    pub(crate) fn is_deferred_type(&mut self, t: TypeId, check_tuples: bool) -> bool {
+        self.is_generic_type(t)
+            || (check_tuples
+                && is_tuple_type(self, t)
+                && self
+                    .get_element_types(t)
+                    .iter()
+                    .any(|&e| self.is_generic_type(e)))
     }
 
     /// Go: `func (c *Checker) getTypeFromInferTypeNode(node) *Type` (checker.go:25113).

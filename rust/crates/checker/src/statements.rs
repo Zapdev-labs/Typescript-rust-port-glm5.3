@@ -775,7 +775,7 @@ impl Checker {
         // to be tested, we de-scope to functions and Promises unreferenced in
         // the block as a heuristic to identify the most common bugs.
         let call_signatures = relater::get_signatures_of_type(self, t, SignatureKind::Call);
-        let is_promise = self.get_awaited_type_of_promise_stub(t).is_some();
+        let is_promise = self.get_awaited_type_of_promise(t).is_some();
         if call_signatures.is_empty() && !is_promise {
             return;
         }
@@ -1927,11 +1927,200 @@ impl Checker {
         None
     }
 
-    /// Go: `func (c *Checker) getAwaitedTypeOfPromise(t) *Type` (S9's
-    /// awaited family). Permissive None.
-    pub(crate) fn get_awaited_type_of_promise_stub(&mut self, t: TypeId) -> Option<TypeId> {
-        let _ = t;
+    /// Go: `func (c *Checker) getAwaitedTypeOfPromise(t) *Type` (checker.go:32007)
+    /// — REAL (M6 S9): getPromisedTypeOfPromiseEx then getAwaitedTypeEx.
+    pub(crate) fn get_awaited_type_of_promise(&mut self, t: TypeId) -> Option<TypeId> {
+        self.get_awaited_type_of_promise_ex(t, None, None)
+    }
+
+    /// Go: `func (c *Checker) getAwaitedTypeOfPromiseEx(t, errorNode, diagnosticMessage, args...) *Type`
+    /// (checker.go:32011) — REAL (M6 S9).
+    pub(crate) fn get_awaited_type_of_promise_ex(
+        &mut self,
+        t: TypeId,
+        error_node: Option<NodeId>,
+        diagnostic_message: Option<&'static Message>,
+    ) -> Option<TypeId> {
+        let mut this_type_for_error = None;
+        let promised_type =
+            self.get_promised_type_of_promise_ex(t, error_node, &mut this_type_for_error);
+        if let Some(promised_type) = promised_type {
+            return Some(self.get_awaited_type_ex(promised_type, error_node, diagnostic_message));
+        }
         None
+    }
+
+    /// Go: `func (c *Checker) getPromisedTypeOfPromiseEx(t, errorNode, thisTypeForErrorOut) *Type`
+    /// (checker.go:29455) — REAL (M6 S9): the then-signature walk.
+    ///
+    /// Gets the "promised type" of a promise — the type of the "value"
+    /// parameter of the "onfulfilled" callback (Go's doc comment).
+    pub(crate) fn get_promised_type_of_promise_ex(
+        &mut self,
+        t: TypeId,
+        error_node: Option<NodeId>,
+        this_type_for_error_out: &mut Option<TypeId>,
+    ) -> Option<TypeId> {
+        //  { // type
+        //      then( // thenFunction
+        //          onfulfilled: ( // onfulfilledParameterType
+        //              value: T // valueParameterType
+        //          ) => any
+        //      ): any;
+        //  }
+        // (Go's comment, verbatim.)
+        if u::is_type_any(Some(self.type_(t))) {
+            return None;
+        }
+        if let Some(cached) = self.cached_types_get(
+            crate::todo_shapes::CachedTypeKind::PromisedTypeOfPromise,
+            t,
+        ) {
+            return Some(cached);
+        }
+        let global_promise_type = self.get_global_type("Promise", 1, false /*reportErrors*/);
+        if self.is_reference_to_type(t, global_promise_type) {
+            let type_arguments = self.get_type_arguments(t);
+            let result = *type_arguments.first().expect("Promise reference arity 1");
+            self.cached_types_set(
+                crate::todo_shapes::CachedTypeKind::PromisedTypeOfPromise,
+                t,
+                Some(result),
+            );
+            return Some(result);
+        }
+        // primitives with a `{ then() }` won't be unwrapped/adopted.
+        let base = relater::get_base_constraint_or_type(self, t);
+        if self.all_types_assignable_to_kind(
+            base,
+            TypeFlags::PRIMITIVE | TypeFlags::NEVER,
+        ) {
+            return None;
+        }
+        let then_function = self.get_type_of_property_of_type(t, "then");
+        // TODO: GH#18217 (Go's comment).
+        if then_function.is_some_and(|f| u::is_type_any(Some(self.type_(f)))) {
+            return None;
+        }
+        let then_signatures = then_function
+            .map(|f| self.get_signatures_of_type_impl(f, SignatureKind::Call))
+            .unwrap_or_default();
+if then_signatures.is_empty() {
+            if let Some(node) = error_node {
+                self.error(node, &diag::A_PROMISE_MUST_HAVE_A_THEN_METHOD, &[]);
+            }
+            return None;
+        }
+        let mut this_type_for_error: Option<TypeId> = None;
+        let mut candidates: Vec<crate::types::SignatureId> = Vec::new();
+        for &then_signature in &then_signatures {
+            let this_type = self.get_this_type_of_signature(then_signature);
+            if let Some(this_type) = this_type {
+                let void_type = self.void_type();
+                if this_type != void_type
+                    && !self.is_type_related_to(t, this_type, crate::relater::RelationKind::Subtype)
+                {
+                    this_type_for_error = Some(this_type);
+                    continue;
+                }
+            }
+            candidates.push(then_signature);
+        }
+if candidates.is_empty() {
+            debug_assert!(this_type_for_error.is_some());
+            *this_type_for_error_out = this_type_for_error;
+            if let (Some(node), Some(this_type)) = (error_node, this_type_for_error) {
+                let t_str = self.type_to_string(t);
+                let this_str = self.type_to_string(this_type);
+                self.error(
+                    node,
+                    &diag::THE_THIS_CONTEXT_OF_TYPE_0_IS_NOT_ASSIGNABLE_TO_METHOD_S_THIS_OF_TYPE_1,
+                    &[t_str, this_str],
+                );
+            }
+            return None;
+        }
+        let first_params: Vec<TypeId> = candidates
+            .iter()
+            .map(|&sig| self.get_type_of_first_parameter_of_signature(sig))
+            .collect();
+        let union = self.get_union_type(&first_params);
+        let onfulfilled_parameter_type =
+            relater::get_type_with_facts(self, union, TypeFacts::NE_UNDEFINED_OR_NULL);
+        if u::is_type_any(Some(self.type_(onfulfilled_parameter_type))) {
+            return None;
+        }
+        let onfulfilled_parameter_signatures =
+            self.get_signatures_of_type_impl(onfulfilled_parameter_type, SignatureKind::Call);
+        if onfulfilled_parameter_signatures.is_empty() {
+            if let Some(node) = error_node {
+                self.error(
+                    node,
+                    &diag::THE_FIRST_PARAMETER_OF_THE_THEN_METHOD_OF_A_PROMISE_MUST_BE_A_CALLBACK,
+                    &[],
+                );
+            }
+            return None;
+        }
+        let second_params: Vec<TypeId> = onfulfilled_parameter_signatures
+            .iter()
+            .map(|&sig| self.get_type_of_first_parameter_of_signature(sig))
+            .collect();
+        let result = self.get_union_type_ex(
+            second_params,
+            crate::todo_shapes::UnionReduction::Subtype,
+            None,
+            None,
+        );
+        self.cached_types_set(
+            crate::todo_shapes::CachedTypeKind::PromisedTypeOfPromise,
+            t,
+            Some(result),
+        );
+        Some(result)
+    }
+
+    /// Go: `func (c *Checker) getTypeOfFirstParameterOfSignature(signature) *Type`
+    /// (checker.go:29533).
+    pub(crate) fn get_type_of_first_parameter_of_signature(
+        &mut self,
+        signature: crate::types::SignatureId,
+    ) -> TypeId {
+        let never = self.never_type();
+        self.get_type_of_first_parameter_of_signature_with_fallback(signature, never)
+    }
+
+    /// Go: `func (c *Checker) getTypeOfFirstParameterOfSignatureWithFallback(signature, fallbackType) *Type`
+    /// (checker.go:29537).
+    fn get_type_of_first_parameter_of_signature_with_fallback(
+        &mut self,
+        signature: crate::types::SignatureId,
+        fallback_type: TypeId,
+    ) -> TypeId {
+        let parameters = self.signatures[signature.0 as usize].parameters.clone();
+        if !parameters.is_empty() {
+            return self.get_type_at_position(signature, 0);
+        }
+        fallback_type
+    }
+
+    /// Go: `func (c *Checker) isThenableType(t *Type) bool` (checker.go:31997)
+    /// — REAL (M6 S9).
+    pub(crate) fn is_thenable_type(&mut self, t: TypeId) -> bool {
+        let base = relater::get_base_constraint_or_type(self, t);
+        // primitive types cannot be considered "thenable" since they are not
+        // objects (Go's comment).
+        if self.all_types_assignable_to_kind(base, TypeFlags::PRIMITIVE | TypeFlags::NEVER) {
+            return false;
+        }
+        let Some(then_function) = self.get_type_of_property_of_type(t, "then") else {
+            return false;
+        };
+        let facts_type =
+            relater::get_type_with_facts(self, then_function, TypeFacts::NE_UNDEFINED_OR_NULL);
+        !self
+            .get_signatures_of_type_impl(facts_type, SignatureKind::Call)
+            .is_empty()
     }
 
     /// Go: `func (c *Checker) isTypeAssignableToKind(source, kind) bool`
@@ -1962,8 +2151,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkAwaitedType(t, withAlias, errorNode, message)`
-    /// (checker.go:31781 — S9/S10's awaited family). Permissive pass-through
-    /// (the awaited unwrap on async returns is identity until S9).
+    /// (checker.go:31781) — REAL (M6 S9).
     pub(crate) fn check_awaited_type(
         &mut self,
         t: TypeId,
@@ -1971,8 +2159,15 @@ impl Checker {
         error_node: NodeId,
         message: &'static Message,
     ) -> TypeId {
-        let _ = (with_alias, error_node, message);
-        t
+        let awaited_type: Option<TypeId> = if with_alias {
+            Some(self.get_awaited_type_ex(t, Some(error_node), Some(message)))
+        } else {
+            self.get_awaited_type_no_alias_ex(t, Some(error_node), Some(message))
+        };
+        if let Some(awaited_type) = awaited_type {
+            return awaited_type;
+        }
+        self.error_type()
     }
 
     /// Go: `func (c *Checker) getEffectiveCheckNode(node) *ast.Node`
@@ -2003,28 +2198,275 @@ impl Checker {
         true
     }
 
-    /// Go: `func (c *Checker) getAwaitedTypeNoAlias(t) *Type` (S9). Permissive
-    /// Some(t) identity (Go's OrElse(callers) then keeps t).
+    /// Go: `func (c *Checker) getAwaitedType(t) *Type` (checker.go:31802) —
+    /// REAL (M6 S9): the awaited type of a type (identity for non-thenables).
+    /// (The `_impl` suffix keeps the pub GetAwaitedType twin in exports.rs
+    /// the sole `get_awaited_type` name.)
+    pub(crate) fn get_awaited_type_impl(&mut self, t: TypeId) -> TypeId {
+        self.get_awaited_type_ex(t, None, None)
+    }
+
+    /// Go: `func (c *Checker) getAwaitedTypeEx(t, errorNode, diagnosticMessage, args...) *Type`
+    /// (checker.go:31806) — REAL (M6 S9). PORT: the variadic args ride the
+    /// Option<&'static Message> + &[String] convention the checker's error
+    /// family uses; the current call sites pass no args.
+    pub(crate) fn get_awaited_type_ex(
+        &mut self,
+        t: TypeId,
+        error_node: Option<NodeId>,
+        diagnostic_message: Option<&'static Message>,
+    ) -> TypeId {
+        if let Some(awaited_type) =
+            self.get_awaited_type_no_alias_ex(t, error_node, diagnostic_message)
+        {
+            return self.create_awaited_type_if_needed(awaited_type);
+        }
+        self.error_type()
+    }
+
+    /// Go: `func (c *Checker) getAwaitedTypeNoAlias(t) *Type` (checker.go:31815)
+    /// — REAL (M6 S9): the awaited type without introducing an `Awaited<T>`
+    /// wrapper (Go's OrElse(errorType) answer; the port's Option keeps the
+    /// None = errorType convention at the call sites).
     pub(crate) fn get_awaited_type_no_alias(&mut self, t: TypeId) -> Option<TypeId> {
+        self.get_awaited_type_no_alias_ex(t, None, None)
+    }
+
+    /// Go: `func (c *Checker) getAwaitedTypeNoAliasEx(t, errorNode, diagnosticMessage, args...) *Type`
+    /// (checker.go:31819) — REAL (M6 S9).
+    ///
+    /// Gets the "awaited type" of a type without introducing an `Awaited<T>`
+    /// wrapper. The "awaited type" of an expression is its "promised type"
+    /// if the expression is a Promise-like type; otherwise, it is the type
+    /// of the expression. If the "promised type" is itself a Promise-like,
+    /// the "promised type" is recursively unwrapped until a non-promise type
+    /// is found. This is used to reflect the runtime behavior of the `await`
+    /// keyword (Go's doc comments, verbatim).
+    pub(crate) fn get_awaited_type_no_alias_ex(
+        &mut self,
+        t: TypeId,
+        error_node: Option<NodeId>,
+        diagnostic_message: Option<&'static Message>,
+    ) -> Option<TypeId> {
+        if u::is_type_any(Some(self.type_(t))) {
+            return Some(t);
+        }
+        // If this is already an `Awaited<T>`, just return it. This avoids
+        // `Awaited<Awaited<T>>` in higher-order (Go's comment).
+        if self.is_awaited_type_instantiation(t) {
+            return Some(t);
+        }
+        // If we've already cached an awaited type, return a possible
+        // `Awaited<T>` for it (Go's comment).
+        if let Some(cached) =
+            self.cached_types_get(crate::todo_shapes::CachedTypeKind::AwaitedType, t)
+        {
+            return Some(cached);
+        }
+        // For a union, get a union of the awaited types of each constituent.
+        if self.type_(t).flags.intersects(TypeFlags::UNION) {
+            if self.awaited_type_stack.contains(&t) {
+                if let Some(node) = error_node {
+                    self.error(
+                        node,
+                        &diag::TYPE_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_THE_FULFILLMENT_CALLBACK_OF_ITS_OWN_THEN_METHOD,
+                        &[],
+                    );
+                }
+                return None;
+            }
+            self.awaited_type_stack.push(t);
+            let mapped = self.map_type(t, &mut |c, s| {
+                c.get_awaited_type_no_alias_ex(s, error_node, diagnostic_message)
+            });
+            self.awaited_type_stack.pop();
+            // PORT: Go caches the (possibly nil) mapped type; a nil cache
+            // entry reads as a miss on Go's `cached != nil` lookup, so the
+            // port skips the store for the None case (read-equivalent).
+            if let Some(mapped) = mapped {
+                self.cached_types_set(crate::todo_shapes::CachedTypeKind::AwaitedType, t, Some(mapped));
+            }
+            return mapped;
+        }
+        // If `type` is generic and should be wrapped in `Awaited<T>`,
+        // return it (Go's comment).
+        if self.is_awaited_type_needed(t) {
+            self.cached_types_set(crate::todo_shapes::CachedTypeKind::AwaitedType, t, Some(t));
+            return Some(t);
+        }
+        let mut this_type_for_error: Option<TypeId> = None;
+        let promised_type =
+            self.get_promised_type_of_promise_ex(t, None /*errorNode*/, &mut this_type_for_error);
+        if let Some(promised_type) = promised_type {
+            if t == promised_type || self.awaited_type_stack.contains(&promised_type) {
+                // Verify that we don't have a bad actor in the form of a
+                // promise whose promised type is the same as the promise
+                // type, or a mutually recursive promise. If so, we return
+                // undefined as we cannot guess the shape. If this were the
+                // actual case in the JavaScript, this Promise would never
+                // resolve (Go's comment — the BadPromise examples are in
+                // checker.go:31852-31876).
+                if let Some(node) = error_node {
+                    self.error(
+                        node,
+                        &diag::TYPE_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_THE_FULFILLMENT_CALLBACK_OF_ITS_OWN_THEN_METHOD,
+                        &[],
+                    );
+                }
+                return None;
+            }
+            // Keep track of the type we're about to unwrap to avoid bad
+            // recursive promise types. See the comments above for more
+            // information (Go's comment).
+            self.awaited_type_stack.push(t);
+            let awaited_type =
+                self.get_awaited_type_no_alias_ex(promised_type, error_node, diagnostic_message);
+            self.awaited_type_stack.pop();
+            let awaited_type = awaited_type?;
+            self.cached_types_set(
+                crate::todo_shapes::CachedTypeKind::AwaitedType,
+                t,
+                Some(awaited_type),
+            );
+            return Some(awaited_type);
+        }
+        // The type was not a promise, so it could not be unwrapped any
+        // further. As long as the type does not have a callable "then"
+        // property, it is safe to return the type; otherwise, an error is
+        // reported and we return undefined (Go's comment — the `await
+        // { then(): void {} }` example is in checker.go:31885-31902).
+        if self.is_thenable_type(t) {
+            if let Some(node) = error_node {
+                // PORT: Go chains the this-context mismatch diagnostic onto
+                // the caller's diagnosticMessage via NewDiagnosticChainForNode;
+                // the port emits the primary (or the this-context diagnostic
+                // when no message is given) until the W4 diagnostic-chain
+                // machinery lands.
+                if let Some(this_type) = this_type_for_error {
+                    let t_str = self.type_to_string(t);
+                    let this_str = self.type_to_string(this_type);
+                    self.error(
+                        node,
+                        &diag::THE_THIS_CONTEXT_OF_TYPE_0_IS_NOT_ASSIGNABLE_TO_METHOD_S_THIS_OF_TYPE_1,
+                        &[t_str, this_str],
+                    );
+                } else if let Some(message) = diagnostic_message {
+                    self.error(node, message, &[]);
+                }
+            }
+            return None;
+        }
+        self.cached_types_set(crate::todo_shapes::CachedTypeKind::AwaitedType, t, Some(t));
         Some(t)
     }
 
-    /// Go: `func (c *Checker) unwrapAwaitedType(t) *Type` (S9). Identity.
-    pub(crate) fn unwrap_awaited_type(&mut self, t: TypeId) -> TypeId {
+    /// Go: `func (c *Checker) isAwaitedTypeInstantiation(t) bool` (checker.go:31933)
+    /// — REAL (M6 S9).
+    pub(crate) fn is_awaited_type_instantiation(&mut self, t: TypeId) -> bool {
+        if self.type_(t).flags.intersects(TypeFlags::CONDITIONAL) {
+            let awaited_symbol = self.get_global_awaited_symbol_or_nil();
+            return awaited_symbol.is_some_and(|s| {
+                self.type_(t)
+                    .alias
+                    .as_ref()
+                    .is_some_and(|a| a.symbol == Some(s) && a.type_arguments.len() == 1)
+            });
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) isAwaitedTypeNeeded(t) bool` (checker.go:31941)
+    /// — REAL (M6 S9).
+    pub(crate) fn is_awaited_type_needed(&mut self, t: TypeId) -> bool {
+        // If this is already an `Awaited<T>`, we shouldn't wrap it. This
+        // helps to avoid `Awaited<Awaited<T>>` in higher-order (Go's comment).
+        if u::is_type_any(Some(self.type_(t))) || self.is_awaited_type_instantiation(t) {
+            return false;
+        }
+        // We only need `Awaited<T>` if `T` contains possibly non-primitive
+        // types (Go's comment).
+        if relater::is_generic_object_type(self, t) {
+            let base_constraint = self.get_base_constraint_of_type_impl(t);
+            // We only need `Awaited<T>` if `T` is a type variable that has
+            // no base constraint, or the base constraint of `T` is `any`,
+            // `unknown`, `{}`, `object`, or is promise-like (Go's comment).
+            if let Some(base) = base_constraint {
+                if self.type_(base).flags.intersects(TypeFlags::ANY_OR_UNKNOWN)
+                    || relater::is_empty_object_type(self, base)
+                {
+                    return true;
+                }
+                // someType(base, c.isThenableType) — the constituents are
+                // collected before the mutable probe (the some_type borrow
+                // PORT pattern).
+                let constituents: Vec<TypeId> =
+                    if self.type_(base).flags.intersects(TypeFlags::UNION) {
+                        self.type_(base).types().to_vec()
+                    } else {
+                        vec![base]
+                    };
+                return constituents.iter().any(|&c| self.is_thenable_type(c));
+            }
+            return relater::maybe_type_of_kind(self, t, TypeFlags::TYPE_VARIABLE);
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) createAwaitedTypeIfNeeded(t) *Type` (checker.go:31965)
+    /// — REAL (M6 S9).
+    ///
+    /// We wrap type `T` in `Awaited<T>` based on the following conditions:
+    /// - `T` is not already an `Awaited<U>`, and
+    /// - `T` is generic, and
+    /// - One of the following applies:
+    ///   - `T` has no base constraint, or
+    ///   - The base constraint of `T` is `any`, `unknown`, `object`, or `{}`, or
+    ///   - The base constraint of `T` is an object type with a callable
+    ///     `then` method (Go's comment, verbatim).
+    pub(crate) fn create_awaited_type_if_needed(&mut self, t: TypeId) -> TypeId {
+        if self.is_awaited_type_needed(t) {
+            if let Some(awaited_type) = self.try_create_awaited_type(t) {
+                return awaited_type;
+            }
+        }
         t
     }
 
-    /// Go: `func (c *Checker) getContextualType(node, contextFlags) *Type`
-    /// (checker.go:29448 — S9). Permissive None.
-    #[allow(dead_code)] // wired with the S4 inference batch
-    pub(crate) fn get_contextual_type_stub(
-        &mut self,
-        node: NodeId,
-        context_flags: crate::types::ContextFlags,
-    ) -> Option<TypeId> {
-        let _ = (node, context_flags);
-        None
+    /// Go: `func (c *Checker) tryCreateAwaitedType(t) *Type` (checker.go:31978)
+    /// — REAL (M6 S9). PORT: getGlobalAwaitedSymbol resolves through spine's
+    /// resolve_global accessor family (permissive None without libs — Go's
+    /// nil answer).
+    pub(crate) fn try_create_awaited_type(&mut self, t: TypeId) -> Option<TypeId> {
+        let awaited_symbol = self.get_global_awaited_symbol()?;
+        // Unwrap unions that may contain `Awaited<T>`, otherwise its possible
+        // to manufacture an `Awaited<Awaited<T> | U>` where an
+        // `Awaited<T | U>` would suffice (Go's comment).
+        let unwrapped = self.unwrap_awaited_type(t);
+        Some(self.get_type_alias_instantiation(awaited_symbol, vec![unwrapped], None))
     }
+
+    /// Go: `func (c *Checker) unwrapAwaitedType(t) *Type` (checker.go:31985)
+    /// — REAL (M6 S9): for a generic `Awaited<T>`, gets `T`.
+    pub(crate) fn unwrap_awaited_type(&mut self, t: TypeId) -> TypeId {
+        if self.type_(t).flags.intersects(TypeFlags::UNION) {
+            // PORT: Go's mapType never returns nil for this callback (the
+            // fallback keeps t on the None path); the constituent count is
+            // preserved.
+            return self
+                .map_type(t, &mut |c, s| Some(c.unwrap_awaited_type(s)))
+                .unwrap_or(t);
+        }
+        if self.is_awaited_type_instantiation(t) {
+            let alias = self.type_(t).alias.clone().expect("Awaited alias");
+            return alias.type_arguments[0];
+        }
+        t
+    }
+
+    // Go: `func (c *Checker) getContextualType(node, contextFlags) *Type`
+    // (checker.go:29891 — S9): MOVED — the REAL dispatcher (the full
+    // parent-kind arm set) lives in contextual.rs as `get_contextual_type`
+    // (same signature).
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -2152,7 +2594,7 @@ impl Checker {
                 let (default_diagnostic, maybe_missing_await) =
                     self.get_iteration_diagnostic_details(use_, input_type, allows_strings);
                 let suggest = maybe_missing_await
-                    && self.get_awaited_type_of_promise_stub(array_type).is_some();
+                    && self.get_awaited_type_of_promise(array_type).is_some();
                 let array_text = self.type_to_string(array_type);
                 self.error_and_maybe_suggest_await(
                     error_node,
@@ -2945,7 +3387,7 @@ impl Checker {
         // for-of expression parent && globalAsyncIterable exists && t
         // assignable to AsyncIterable<any,any,any>) — the async-iterable
         // probe needs the S8/S9 member+awaited seams; permissive false.
-        let suggest_await = self.get_awaited_type_of_promise_stub(t).is_some();
+        let suggest_await = self.get_awaited_type_of_promise(t).is_some();
         let type_text = self.type_to_string(t);
         self.error_and_maybe_suggest_await(error_node, suggest_await, message, &[type_text])
     }
@@ -9430,7 +9872,7 @@ fn get_local_index_declaration(
 
 /// `symbol.Name` read helper (the SymbolTable value's name).
 #[allow(dead_code)] // lands with the import/export batch (Go 5420-5943)
-fn symbol_name(c: &Checker, symbol: SymbolId) -> String {
+pub(crate) fn symbol_name(c: &Checker, symbol: SymbolId) -> String {
     c.program_symbol(symbol).name.clone()
 }
 

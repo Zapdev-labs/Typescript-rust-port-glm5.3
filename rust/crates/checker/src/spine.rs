@@ -2298,29 +2298,30 @@ impl Checker {
     // ── The S4/S5/S6/S9 permissive stubs the expression spine routes to ──
 
     /// Go: `func (c *Checker) isLiteralOfContextualType(candidateType, contextualType) bool`
-    /// (checker.go:26056). TODO(port M6 S9): the contextual-literal match;
-    /// permissive false (the strip-freshness arm in
-    /// check_expression_with_contextual_type stays dormant).
+    /// (checker.go:26056) — REAL (M6 S9): the REAL body already lived in
+    /// expressions.rs (ported with the S4 contextual-literal batch); this
+    /// stub now delegates so the strip-freshness arm in
+    /// check_expression_with_contextual_type is live.
     fn is_literal_of_contextual_type_stub(
         &mut self,
         candidate_type: TypeId,
         contextual_type: Option<TypeId>,
     ) -> bool {
-        let _ = (candidate_type, contextual_type);
-        false
+        self.is_literal_of_contextual_type(candidate_type, contextual_type)
     }
 
     /// Go: `func (c *Checker) instantiateContextualType(contextualType, node, contextFlags) *Type`
-    /// (checker.go:31366). TODO(port M6 S9): identity for non-generic
-    /// contextual types; permissive pass-through.
+    /// (checker.go:31366) — REAL (M6 S9): MOVED — the body (the inference
+    /// context's nonFixingMapper/returnMapper incorporation + the boolean
+    /// strip) lives in contextual.rs as `instantiate_contextual_type`;
+    /// this twin keeps the stub name for the spine call sites.
     pub(crate) fn instantiate_contextual_type_stub(
         &mut self,
         contextual_type: Option<TypeId>,
         node: NodeId,
-        _context_flags: ContextFlags,
+        context_flags: ContextFlags,
     ) -> Option<TypeId> {
-        let _ = node;
-        contextual_type
+        self.instantiate_contextual_type(contextual_type, node, context_flags)
     }
 
     /// Go: `func (c *Checker) resolveName(location, name, meaning, message, isUse, excludeGlobals) *ast.Symbol`
@@ -2916,8 +2917,9 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getGlobalTypeAliasSymbol(name, arity, reportErrors) *ast.Symbol`
-    /// (checker.go:1288).
-    fn get_global_type_alias_symbol(
+    /// (checker.go:1288) — pub(crate) (M6 S9: the awaited family's
+    /// `getGlobalAwaitedSymbol` closures resolve through it).
+    pub(crate) fn get_global_type_alias_symbol(
         &mut self,
         name: &str,
         arity: usize,

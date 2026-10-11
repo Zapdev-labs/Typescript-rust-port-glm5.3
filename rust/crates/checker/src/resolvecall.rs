@@ -2320,7 +2320,7 @@ impl Checker {
     /// tagged-template TemplateStringsArray, decorator parameters) need the
     /// checker factory's synthetic nodes; they compose permissive empty
     // argument lists until the factory surface lands.
-    fn get_effective_call_arguments(&mut self, node: NodeId) -> Vec<NodeId> {
+    pub(crate) fn get_effective_call_arguments(&mut self, node: NodeId) -> Vec<NodeId> {
         match self.store().node(node).kind {
             Kind::JsxOpeningFragment => Vec::new(),
             Kind::TaggedTemplateExpression => {

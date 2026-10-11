@@ -544,6 +544,12 @@ pub struct Checker {
     pub(crate) no_constraint_type: Option<TypeId>,
     /// Go: `circularConstraintType` (checker.go:1043).
     pub(crate) circular_constraint_type: Option<TypeId>,
+    /// Go: `conditionalConstraintDepth uint32` (checker.go:599) — the
+    /// computeBaseConstraint conditional-arm limiter (M6 S9).
+    pub(crate) conditional_constraint_depth: u32,
+    /// Go: `awaitedTypeStack []*Type` (checker.go) — the awaited-type
+    /// recursion guard (M6 S9).
+    pub(crate) awaited_type_stack: Vec<TypeId>,
     /// Go: `contextualBindingPatterns []*ast.Node`.
     pub(crate) contextual_binding_patterns: Vec<NodeId>,
     /// Go: `patternForType map[*Type]*ast.Node`.
@@ -1617,6 +1623,8 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         cached_types: FxHashMap::default(),
         no_constraint_type: None,
         circular_constraint_type: None,
+        conditional_constraint_depth: 0,
+        awaited_type_stack: Vec::new(),
         contextual_binding_patterns: Vec::new(),
         pattern_for_type: FxHashMap::default(),
         this_expando_kinds: FxHashMap::default(),

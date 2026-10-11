@@ -1173,7 +1173,7 @@ impl Checker {
                 .iter()
                 .all(|&param| crate::ast_shims::type_of_node(self.store(), param).is_none())
             && self
-                .get_contextual_type_stub(declaration, crate::types::ContextFlags::SIGNATURE)
+                .get_contextual_type(declaration, crate::types::ContextFlags::SIGNATURE)
                 .is_none();
         if is_untyped_signature_in_js_file {
             flags |= SignatureFlags::IS_UNTYPED_SIGNATURE_IN_JS_FILE;
@@ -4525,7 +4525,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) createUnionSignature(sig, unionSignatures) *Signature`.
-    fn create_union_signature(
+    pub(crate) fn create_union_signature(
         &mut self,
         sig: SignatureId,
         union_signatures: Vec<SignatureId>,

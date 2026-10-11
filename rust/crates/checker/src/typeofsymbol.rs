@@ -72,6 +72,7 @@ use tsc_ast::{
     SymbolTable,
 };
 use tsc_diagnostics::Message;
+use tsc_diagnostics::TYPE_PARAMETER_0_HAS_A_CIRCULAR_CONSTRAINT;
 use tsc_diagnostics::{
     AN_ENUM_MEMBER_CANNOT_HAVE_A_NUMERIC_NAME, BINDING_ELEMENT_0_IMPLICITLY_HAS_AN_1_TYPE,
     COMPUTED_PROPERTY_NAMES_ARE_NOT_ALLOWED_IN_ENUMS,
@@ -1160,18 +1161,291 @@ impl Checker {
         None
     }
 
-    /// Go: `func (c *Checker) hasNonCircularBaseConstraint(t *Type) bool`.
+    /// Go: `func (c \*Checker) hasNonCircularBaseConstraint(t) bool` — REAL
+    /// (M6 S9): `getResolvedBaseConstraint(t, nil) != circularConstraintType`.
     fn has_non_circular_base_constraint(&mut self, t: TypeId) -> bool {
-        // TODO(port M6 S9): getResolvedBaseConstraint — the permissive stub
-        // resolves nothing, so every constraint reads as non-circular (the
-        // circular-constraint poison this guard exists for arrives with S9).
-        self.get_resolved_base_constraint_stub(t) != Some(self.circular_constraint_type())
+        self.get_resolved_base_constraint(t, Vec::new()) != Some(self.circular_constraint_type())
     }
 
-    /// TODO(port M6 S9): `getResolvedBaseConstraint(t, stack)` — the real
-    /// recursion with the RecursionId stack; permissive None until then.
-    fn get_resolved_base_constraint_stub(&mut self, t: TypeId) -> Option<TypeId> {
-        let _ = t;
+    /// Go: `func (c *Checker) getResolvedBaseConstraint(t *Type, stack []RecursionId) *Type`
+    /// (checker.go:27981) — REAL (M6 S9, replacing the permissive None stub):
+    /// the S2 pushTypeResolution/popTypeResolution circularity protocol over
+    /// the payload's `resolvedBaseConstraint` cache, with Go's 10/50-level
+    /// nesting limiter.
+    pub(crate) fn get_resolved_base_constraint(
+        &mut self,
+        t: TypeId,
+        stack: Vec<crate::relater::RecursionId>,
+    ) -> Option<TypeId> {
+        let cached = self
+            .type_(t)
+            .as_constrained_type()
+            .and_then(|d| d.resolved_base_constraint);
+        // Go: `constrained == nil → return t` — every payload but the
+        // Intrinsic/Literal/UniqueESSymbol trio embeds ConstrainedType, so
+        // the None read here means "not yet computed" for constrained types
+        // and the as_constrained_type() miss is the `return t` arm.
+        if let Some(cached) = cached {
+            return Some(cached);
+        }
+        if self.type_(t).as_constrained_type().is_none() {
+            return Some(t);
+        }
+        if !self.push_type_resolution(
+            crate::checker::TypeSystemEntity::Type(t),
+            crate::checker::TypeSystemPropertyName::ResolvedBaseConstraint,
+        ) {
+            return Some(self.circular_constraint_type());
+        }
+        let mut constraint: Option<TypeId> = None;
+        // We always explore at least 10 levels of nested constraints.
+        // Thereafter, we continue to explore up to 50 levels of nested
+        // constraints provided there are no "deeply nested" types on the
+        // stack (i.e. no types for which five instantiations have been
+        // recorded on the stack). If we reach 50 levels of nesting, we are
+        // presumably exploring a repeating pattern with a long cycle that
+        // hasn't yet triggered the deeply nested limiter. We have no test
+        // cases that actually get to 50 levels of nesting, so it is
+        // effectively just a safety stop (Go's comment, verbatim).
+        let identity = crate::relater::get_recursion_identity(self, t);
+        let explore = stack.len() < 10
+            || (stack.len() < 50 && !stack.contains(&identity));
+        if explore {
+            let mut extended = stack.clone();
+            extended.push(identity);
+            // PORT: Go calls c.getSimplifiedType(t /*writing*/, false) — the
+            // simplified-conditional family is S10's slice; the permissive
+            // identity stub (relater.rs) is exact for the non-simplifiable
+            // types the current surface constructs.
+            let simplified = crate::relater::get_simplified_type(self, t, false /*writing*/);
+            constraint = self.compute_base_constraint(simplified, extended);
+        }
+        if !self.pop_type_resolution() {
+            if self.type_(t).flags.intersects(TypeFlags::TYPE_PARAMETER) {
+                if let Some(error_node) = self.get_constraint_declaration(t) {
+                    // PORT: Go attaches the currentNode related-info chain
+                    // (Circularity_originates_in_type_at_this_location) when
+                    // the current node is not a descendant of the constraint
+                    // declaration (or vice versa); the port emits the primary
+                    // diagnostic only until the W4 nodebuilder-facing
+                    // AddRelatedInfo machinery lands.
+                    let name = self.type_to_string(t);
+                    let diagnostic =
+                        self.error(error_node, &TYPE_PARAMETER_0_HAS_A_CIRCULAR_CONSTRAINT, &[name]);
+                    let _ = diagnostic;
+                }
+            }
+            constraint = Some(self.circular_constraint_type());
+        }
+        let constraint = constraint.unwrap_or_else(|| self.no_constraint_type());
+        if self
+            .type_(t)
+            .as_constrained_type()
+            .is_some_and(|d| d.resolved_base_constraint.is_none())
+        {
+            self.type_mut(t)
+                .as_constrained_type_mut()
+                .expect("ConstrainedType data")
+                .resolved_base_constraint = Some(constraint);
+        }
+        Some(constraint)
+    }
+
+    /// Go: `func (c *Checker) computeBaseConstraint(t *Type, stack []RecursionId) *Type`
+    /// (checker.go:28019) — REAL (M6 S9). The index/conditional-substitution
+    /// deep arms carry their owning slices' banners (S10 owns the indexed-
+    /// access/substitution constructors).
+    fn compute_base_constraint(
+        &mut self,
+        t: TypeId,
+        stack: Vec<crate::relater::RecursionId>,
+    ) -> Option<TypeId> {
+        let flags = self.type_(t).flags;
+        if flags.intersects(TypeFlags::TYPE_PARAMETER) {
+            let constraint = self.get_constraint_from_type_parameter(t);
+            if self
+                .type_(t)
+                .as_type_parameter()
+                .expect("TypeParameter data")
+                .is_this_type
+            {
+                return constraint;
+            }
+            return self.get_next_base_constraint(constraint, stack);
+        }
+        if flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+            let types = self.type_(t).types().to_vec();
+            let type_count = types.len();
+            let mut constraints: Vec<TypeId> = Vec::with_capacity(type_count);
+            let mut different = false;
+            for s in types {
+                let constraint = self.get_next_base_constraint(Some(s), stack.clone());
+                if let Some(constraint) = constraint {
+                    if constraint != s {
+                        different = true;
+                    }
+                    constraints.push(constraint);
+                } else {
+                    different = true;
+                }
+            }
+            if !different {
+                return Some(t);
+            }
+            if flags.intersects(TypeFlags::UNION) && constraints.len() == type_count {
+                return Some(self.get_union_type(&constraints));
+            }
+            if flags.intersects(TypeFlags::INTERSECTION) && !constraints.is_empty() {
+                return Some(self.get_intersection_type(&constraints));
+            }
+            return None;
+        }
+        if flags.intersects(TypeFlags::INDEX) {
+            // TODO(port M6 S10): the generic-mapped-type arm
+            // (getIndexTypeForMappedType — checker.go:27405, the index-type
+            // family's wave); the stringNumberSymbolType answer is Go's
+            // fallback for every non-generic-mapped index type.
+            return Some(self.string_number_symbol_type());
+        }
+        if flags.intersects(TypeFlags::TEMPLATE_LITERAL) {
+            let texts: Vec<String> = self
+                .type_(t)
+                .as_template_literal_type()
+                .expect("TemplateLiteralType data")
+                .texts
+                .clone();
+            let types = self.type_(t).types().to_vec();
+            let type_count = types.len();
+            let mut constraints: Vec<TypeId> = Vec::with_capacity(type_count);
+            for s in types {
+                if let Some(constraint) = self.get_next_base_constraint(Some(s), stack.clone()) {
+                    constraints.push(constraint);
+                }
+            }
+            if constraints.len() == type_count {
+                return Some(crate::relater::get_template_literal_type(self, &texts, &constraints));
+            }
+            return Some(self.string_type());
+        }
+        if flags.intersects(TypeFlags::STRING_MAPPING) {
+            let target = self
+                .type_(t)
+                .as_string_mapping_type()
+                .expect("StringMappingType data")
+                .target();
+            let symbol = self.type_(t).symbol;
+            let constraint = self.get_next_base_constraint(target, stack);
+            if let Some(constraint) = constraint.filter(|c| Some(*c) != target) {
+                return Some(crate::relater::get_string_mapping_type(
+                    self,
+                    symbol,
+                    constraint,
+                ));
+            }
+            return Some(self.string_type());
+        }
+        if flags.intersects(TypeFlags::INDEXED_ACCESS) {
+            // TODO(port M6 S10): the indexed-access arm (substituteIndexedMappedType
+            // + getIndexedAccessTypeOrUndefined — checker.go:29839/27461, the
+            // index-access constructor family's wave); permissive identity
+            // keeps an indexed access as its own base constraint until then.
+            return Some(t);
+        }
+        if flags.intersects(TypeFlags::CONDITIONAL) {
+            if self.conditional_constraint_depth >= 100 {
+                return None;
+            }
+            self.conditional_constraint_depth += 1;
+            let constraint = self.get_constraint_from_conditional_type(t);
+            self.conditional_constraint_depth -= 1;
+            return self.get_next_base_constraint(constraint, stack);
+        }
+        if flags.intersects(TypeFlags::SUBSTITUTION) {
+            // TODO(port M6 S10): getSubstitutionIntersection (checker.go:27361,
+            // the substitution-type family's wave); permissive identity.
+            return Some(t);
+        }
+        if crate::typenodes::is_generic_tuple_type(self, t) {
+            // We substitute constraints for variadic elements only when the
+            // constraints are array types or non-variadic tuple types as we
+            // want to avoid further (possibly unbounded) recursion (Go's
+            // comment, checker.go:28090).
+            let element_types = self.get_element_types(t);
+            let (element_infos, readonly) = {
+                let target = self.type_(t).target_tuple_type();
+                let d = self.type_(target).as_tuple_type().expect("TupleType data");
+                (d.element_infos.clone(), d.readonly)
+            };
+            let mut new_elements: Vec<TypeId> = Vec::with_capacity(element_types.len());
+            for (i, &v) in element_types.iter().enumerate() {
+                let mut new_element = v;
+                if self.type_(v).flags.intersects(TypeFlags::TYPE_PARAMETER)
+                    && element_infos[i].flags.intersects(ElementFlags::VARIADIC)
+                {
+                    let constraint = self.get_next_base_constraint(Some(v), stack.clone());
+                    if let Some(constraint) = constraint
+                        && constraint != v
+                        && {
+                            let constituents: Vec<TypeId> =
+                                if self.type_(constraint).flags.intersects(TypeFlags::UNION) {
+                                    self.type_(constraint).types().to_vec()
+                                } else {
+                                    vec![constraint]
+                                };
+                            constituents.iter().all(|&n| {
+                                crate::relater::is_array_or_tuple_type(self, n)
+                                    && !crate::typenodes::is_generic_tuple_type(self, n)
+                            })
+                        }
+                    {
+                        new_element = constraint;
+                    }
+                }
+                new_elements.push(new_element);
+            }
+            return Some(self.create_tuple_type_ex(&new_elements, &element_infos, readonly));
+        }
+        Some(t)
+    }
+
+    /// Go: `func (c *Checker) getNextBaseConstraint(t *Type, stack []RecursionId) *Type`
+    /// (checker.go:28127) — REAL (M6 S9).
+    fn get_next_base_constraint(
+        &mut self,
+        t: Option<TypeId>,
+        stack: Vec<crate::relater::RecursionId>,
+    ) -> Option<TypeId> {
+        let t = t?;
+        let constraint = self.get_resolved_base_constraint(t, stack);
+        if constraint == Some(self.no_constraint_type())
+            || constraint == Some(self.circular_constraint_type())
+        {
+            return None;
+        }
+        constraint
+    }
+
+    /// Go: `func (c *Checker) getBaseConstraintOfType(t *Type) *Type`
+    /// (checker.go:27970) — REAL (M6 S9): the instantiability flag gate over
+    /// getResolvedBaseConstraint.
+    pub(crate) fn get_base_constraint_of_type_impl(&mut self, t: TypeId) -> Option<TypeId> {
+        let flags = self.type_(t).flags;
+        if flags.intersects(
+            TypeFlags::INSTANTIABLE_NON_PRIMITIVE
+                | TypeFlags::UNION_OR_INTERSECTION
+                | TypeFlags::TEMPLATE_LITERAL
+                | TypeFlags::STRING_MAPPING
+                | TypeFlags::INDEX,
+        ) || crate::typenodes::is_generic_tuple_type(self, t)
+        {
+            let constraint = self.get_resolved_base_constraint(t, Vec::new());
+            if constraint != Some(self.no_constraint_type())
+                && constraint != Some(self.circular_constraint_type())
+            {
+                return constraint;
+            }
+            return None;
+        }
         None
     }
 
@@ -1438,10 +1712,9 @@ impl Checker {
         // _usually_ unwanted - so instead here we elide an `any` branch from
         // the constraint type, in effect treating `any` like `never` rather
         // than `unknown` in this location.
-        // TODO(port M6 S5/S7): getInferredTrueTypeFromConditionalType's
-        // resolved branch reads + getUnionType — the permissive union stub
-        // builds the (unreduced) union of the two branch reads.
-        let true_constraint = self.get_inferred_true_type_from_conditional_type_stub(t);
+        // REAL (M6 S9): the inferred-true/false branch resolvers landed with
+        // this wave (getInferredTrueTypeFromConditionalType et al below).
+        let true_constraint = self.get_inferred_true_type_from_conditional_type(t);
         let false_constraint = self.get_false_type_from_conditional_type_impl(t);
         let result = if u::is_type_any(Some(self.type_(true_constraint))) {
             false_constraint
@@ -1457,24 +1730,115 @@ impl Checker {
         result
     }
 
-    /// TODO(port M6 S5): `getInferredTrueTypeFromConditionalType(t)` — the
-    /// combinedMapper-instantiated true branch; permissive: the resolved true
-    /// branch (the un-instantiated read S10 owns the real worker for).
-    fn get_inferred_true_type_from_conditional_type_stub(&mut self, t: TypeId) -> TypeId {
-        self.type_(t)
+    /// Go: `func (c *Checker) getTrueTypeFromConditionalType(t *Type) *Type`
+    /// (checker.go:25073) — REAL (M6 S9): the lazily-resolved true branch
+    /// (getTypeFromTypeNode(root.node.TrueType) instantiated with the
+    /// conditional's mapper).
+    pub(crate) fn get_true_type_from_conditional_type_impl(&mut self, t: TypeId) -> TypeId {
+        let resolved = self
+            .type_(t)
             .as_conditional_type()
-            .and_then(|d| d.resolved_true_type)
-            .unwrap_or_else(|| self.error_type())
+            .and_then(|d| d.resolved_true_type);
+        if let Some(resolved) = resolved {
+            return resolved;
+        }
+        let (node, mapper) = {
+            let d = self.type_(t).as_conditional_type().expect("ConditionalType data");
+            (
+                d.root.as_deref().and_then(|r| r.node).expect("root.node"),
+                d.mapper,
+            )
+        };
+        let true_type_node = {
+            let d = self
+                .store()
+                .node(node)
+                .as_conditional_type_node()
+                .expect("ConditionalTypeNode data");
+            d.true_type
+        };
+        let true_branch = self.get_type_from_type_node(true_type_node);
+        let result = self.instantiate_type_with_alias(true_branch, mapper, None);
+        self.type_mut(t)
+            .as_conditional_type_mut()
+            .expect("ConditionalType data")
+            .resolved_true_type = Some(result);
+        result
     }
 
-    /// Go: `func (c *Checker) getFalseTypeFromConditionalType(t)` (relater's
-    /// resolved-branch read — the `_impl` name keeps the pub twin in
-    /// exports.rs the sole public one).
-    fn get_false_type_from_conditional_type_impl(&mut self, t: TypeId) -> TypeId {
-        self.type_(t)
+    /// Go: `func (c *Checker) getInferredTrueTypeFromConditionalType(t) *Type`
+    /// (checker.go:25089) — REAL (M6 S9): the true branch instantiated with
+    /// the combinedMapper when present, else getTrueTypeFromConditionalType.
+    pub(crate) fn get_inferred_true_type_from_conditional_type(&mut self, t: TypeId) -> TypeId {
+        let resolved = self
+            .type_(t)
             .as_conditional_type()
-            .and_then(|d| d.resolved_false_type)
-            .unwrap_or_else(|| self.error_type())
+            .and_then(|d| d.resolved_inferred_true_type);
+        if let Some(resolved) = resolved {
+            return resolved;
+        }
+        let (node, combined_mapper) = {
+            let d = self.type_(t).as_conditional_type().expect("ConditionalType data");
+            (
+                d.root.as_deref().and_then(|r| r.node).expect("root.node"),
+                d.combined_mapper,
+            )
+        };
+        let result = if let Some(combined_mapper) = combined_mapper {
+            let true_type_node = {
+                let d = self
+                    .store()
+                    .node(node)
+                    .as_conditional_type_node()
+                    .expect("ConditionalTypeNode data");
+                d.true_type
+            };
+            let true_branch = self.get_type_from_type_node(true_type_node);
+            self.instantiate_type_with_alias(true_branch, Some(combined_mapper), None)
+        } else {
+            self.get_true_type_from_conditional_type_impl(t)
+        };
+        self.type_mut(t)
+            .as_conditional_type_mut()
+            .expect("ConditionalType data")
+            .resolved_inferred_true_type = Some(result);
+        result
+    }
+
+    /// Go: `func (c *Checker) getFalseTypeFromConditionalType(t) *Type`
+    /// (checker.go:25081) — REAL (M6 S9): the lazily-resolved false branch
+    /// (pub(crate) — relater.rs's free twin delegates here; the pub API twin
+    /// in exports.rs routes through the same body).
+    pub(crate) fn get_false_type_from_conditional_type_impl(&mut self, t: TypeId) -> TypeId {
+        let resolved = self
+            .type_(t)
+            .as_conditional_type()
+            .and_then(|d| d.resolved_false_type);
+        if let Some(resolved) = resolved {
+            return resolved;
+        }
+        let (node, mapper) = {
+            let d = self.type_(t).as_conditional_type().expect("ConditionalType data");
+            (
+                d.root.as_deref().and_then(|r| r.node).expect("root.node"),
+                d.mapper,
+            )
+        };
+        let false_type_node = {
+            let d = self
+                .store()
+                .node(node)
+                .as_conditional_type_node()
+                .expect("ConditionalTypeNode data");
+            d.false_type
+        };
+        let false_branch = self.get_type_from_type_node(false_type_node);
+        let result = self.instantiate_type_with_alias(false_branch, mapper, None);
+        self.type_mut(t)
+            .as_conditional_type_mut()
+            .expect("ConditionalType data")
+            .resolved_false_type = Some(result);
+        result
     }
 
     /// Go: `func (c *Checker) getConstraintOfDistributiveConditionalType(t *Type) *Type`.
@@ -1502,22 +1866,48 @@ impl Checker {
             // emulating what a negated type could to do filter a union -
             // once negated types exist and are applied to the conditional
             // false branch, this "constraint" likely doesn't need to exist.
-            let (is_distributive, check_type, mapper, restrictive_hit) = {
+            let (is_distributive, check_type, mapper, root_check_type, restrictive_hit) = {
                 let d = self.type_(t).as_conditional_type().expect("ConditionalType data");
                 let root = d.root.as_deref();
                 (
                     root.is_some_and(|r| r.is_distributive),
                     d.check_type,
                     d.mapper,
+                    root.and_then(|r| r.check_type),
                     self.cached_types_get(CachedTypeKind::RestrictiveInstantiation, t) == Some(t),
                 )
             };
             if is_distributive && !restrictive_hit {
-                // TODO(port M6 S7/S10): getSimplifiedType + the constraint
-                // instantiation (getConditionalTypeInstantiation with
-                // prependTypeMapping) — the instantiation engine's wave; the
-                // permissive arm falls to the noConstraintType answer below.
-                let _ = (check_type, mapper);
+                // REAL (M6 S9): the constraint instantiation — simplify the
+                // check type (S10's getSimplifiedType is the permissive
+                // identity), then constrain it, then instantiate the
+                // conditional with the constraint mapped onto the root's
+                // check type (Go, checker.go:17687-17698).
+                let simplified =
+                    crate::relater::get_simplified_type(self, check_type.expect("checkType"), false /*writing*/);
+                let constraint = if Some(simplified) == check_type {
+                    self.get_constraint_of_type(simplified)
+                } else {
+                    Some(simplified)
+                };
+                if let (Some(constraint), Some(root_check_type)) = (constraint, root_check_type)
+                    && Some(constraint) != check_type
+                {
+                    let mapping = self.prepend_type_mapping(root_check_type, constraint, mapper);
+                    let instantiated = self.get_conditional_type_instantiation(
+                        t,
+                        Some(mapping),
+                        true, /*forConstraint*/
+                        None,
+                    );
+                    if !self.type_(instantiated).flags.intersects(TypeFlags::NEVER) {
+                        self.type_mut(t)
+                            .as_conditional_type_mut()
+                            .expect("ConditionalType data")
+                            .resolved_constraint_of_distributive = Some(instantiated);
+                        return Some(instantiated);
+                    }
+                }
             }
             let no_constraint = self.no_constraint_type();
             self.type_mut(t)
@@ -1659,6 +2049,16 @@ pub(crate) fn payload_symbol(node: &Node) -> Option<SymbolId> {
         // the mapped-type family).
         NodeData::TypeLiteralNode(d) => d.symbol,
         NodeData::MappedTypeNode(d) => d.symbol,
+        // M6 S9: the function/constructor-type family — the binder's
+        // bindFunctionOrConstructorType sets the node's payload symbol to
+        // the TYPE_LITERAL wrapper whose sole member is the __call/__new
+        // SIGNATURE symbol (binder.go:674). Without these arms every
+        // function type literal collapses onto the SHARED emptyTypeLiteralType
+        // (the same class of bug as the S8 TypeLiteralNode/MappedTypeNode
+        // omission — payload_symbol must cover every kind
+        // getTypeFromTypeLiteralOrFunctionOrConstructorTypeNode reads).
+        NodeData::FunctionTypeNode(d) => d.symbol,
+        NodeData::ConstructorTypeNode(d) => d.symbol,
         NodeData::SourceFile(d) => d.symbol,
         _ => None,
     }
@@ -1848,12 +2248,10 @@ impl Checker {
     }
 
     /// TODO(port M6 S9): `getContextuallyTypedParameterType(parameter)` —
-    /// permissive None.
-    fn get_contextually_typed_parameter_type(&mut self, parameter: NodeId) -> Option<TypeId> {
-        let _ = parameter;
-        None
-    }
-
+    /// MOVED: the REAL body (the contextual-signature arm) lives in
+    /// contextual.rs as `get_contextually_typed_parameter_type` (same
+    /// signature); Go's JS IIFE arm is W2/W4-bannered there.
+    ///
     /// TODO(port M6 S9): `getContextualThisParameterType(fn)` — permissive None.
     pub(crate) fn get_contextual_this_parameter_type(&mut self, fn_: NodeId) -> Option<TypeId> {
         let _ = fn_;
@@ -2203,7 +2601,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) tryGetTypeFromTypeNode(node *ast.Node) *Type`.
-    fn try_get_type_from_type_node(&mut self, declaration: NodeId) -> Option<TypeId> {
+    pub(crate) fn try_get_type_from_type_node(&mut self, declaration: NodeId) -> Option<TypeId> {
         // TODO(port M6 S5): getTypeFromTypeNode — the type-node family; the
         // stub's errorType keeps the annotation-present distinction.
         ast_shims::type_of_node(self.store(), declaration)
@@ -2682,7 +3080,7 @@ impl Checker {
     /// type implied by the binding pattern becomes the type of the parameter.
     ///
     /// Go: `func (c *Checker) getTypeFromBindingPattern(pattern, includePatternInType, reportErrors) *Type`.
-    fn get_type_from_binding_pattern(
+    pub(crate) fn get_type_from_binding_pattern(
         &mut self,
         pattern: NodeId,
         include_pattern_in_type: bool,

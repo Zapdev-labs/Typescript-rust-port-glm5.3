@@ -249,9 +249,7 @@ impl Checker {
         t: TypeId,
         name: &str,
     ) -> Option<TypeId> {
-        // TODO(port M6 S9): the contextual property-type resolution.
-        let _ = (t, name);
-        None
+        self.get_type_of_property_of_contextual_type_impl(t, name)
     }
 
     /// Go: `func (c *Checker) WasCanceled() bool` (real body — the field).
@@ -284,22 +282,37 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) GetTrueTypeOfConditionalType(t *Type) *Type` →
-    /// `c.getTrueTypeFromConditionalType(t)` (checker.go — S5; nil when the
-    /// conditional has no true branch yet).
-    pub fn get_true_type_of_conditional_type(&self, t: TypeId) -> Option<TypeId> {
-        // TODO(port M6 S5): getTrueTypeFromConditionalType.
-        let _ = t;
-        None
+    /// `c.getTrueTypeFromConditionalType(t)` (checker.go — S9; nil when the
+    /// conditional has no true branch yet). PORT (M6 S9): flipped to the
+    /// REAL lazily-resolving body (typeofsymbol.rs, checker.go:25073). The
+    /// family is only ever called on conditional types by contract (Go
+    /// nil-derefs otherwise); the port's flags guard keeps the
+    /// non-conditional answer None.
+    pub fn get_true_type_of_conditional_type(&mut self, t: TypeId) -> Option<TypeId> {
+        if !self
+            .type_(t)
+            .flags
+            .intersects(crate::types::TypeFlags::CONDITIONAL)
+        {
+            return None;
+        }
+        Some(self.get_true_type_from_conditional_type_impl(t))
     }
 
     /// Go: `func (c *Checker) GetFalseTypeOfConditionalType(t *Type) *Type` →
-    /// `c.getFalseTypeFromConditionalType(t)` (checker.go — S5). PORT (M6 S2):
-    /// the payload read (Go returns the false branch or nil; S5 owns the
-    /// branch resolution that populates it).
-    pub fn get_false_type_of_conditional_type(&self, t: TypeId) -> Option<TypeId> {
-        self.type_(t)
-            .as_conditional_type()
-            .and_then(|d| d.resolved_false_type)
+    /// `c.getFalseTypeFromConditionalType(t)` (checker.go — S5). PORT (M6 S2 →
+    /// S9): the payload read flipped to the REAL lazily-resolving body
+    /// (typeofsymbol.rs, checker.go:25081); same flags guard as the true
+    /// branch twin.
+    pub fn get_false_type_of_conditional_type(&mut self, t: TypeId) -> Option<TypeId> {
+        if !self
+            .type_(t)
+            .flags
+            .intersects(crate::types::TypeFlags::CONDITIONAL)
+        {
+            return None;
+        }
+        Some(self.get_false_type_from_conditional_type_impl(t))
     }
 
     // (M6 S5): `GetDefaultFromTypeParameter` MOVED — the real body
@@ -321,11 +334,10 @@ impl Checker {
 
     /// Go: `func (c *Checker) GetBaseConstraintOfType(t *Type) *Type` →
     /// `c.getBaseConstraintOfType(t)` (checker.go — S9's constraint
-    /// resolution; nil for unconstrained types).
+    /// resolution; nil for unconstrained types). PORT (M6 S9): flipped to
+    /// the REAL resolved-base-constraint engine (typeofsymbol.rs).
     pub fn get_base_constraint_of_type(&mut self, t: TypeId) -> Option<TypeId> {
-        // TODO(port M6 S9): getResolvedBaseConstraint/getNextBaseConstraint.
-        let _ = t;
-        None
+        self.get_base_constraint_of_type_impl(t)
     }
 
     /// Go: `func (c *Checker) IsTupleTypeTarget(t *Type) bool` →
@@ -375,9 +387,7 @@ impl Checker {
         element: NodeId,
         context_flags: ContextFlags,
     ) -> Option<TypeId> {
-        // TODO(port M6 S9): the object-literal contextual chain.
-        let _ = (element, context_flags);
-        None
+        self.get_contextual_type_for_object_literal_element_impl(element, context_flags)
     }
 
     /// Go: `func (c *Checker) TypePredicateToString(t *TypePredicate) string`
@@ -425,17 +435,16 @@ impl Checker {
         node: NodeId,
         arg_index: usize,
     ) -> Option<TypeId> {
-        // TODO(port M6 S9): the call-argument contextual chain.
-        let _ = (node, arg_index);
-        None
+        self.get_contextual_type_for_argument_at_index_impl(node, arg_index)
     }
 
     /// Go: `func (c *Checker) GetAwaitedType(t *Type) *Type` →
     /// `c.getAwaitedType(t)` (checker.go — S9/S10's awaited-type caches).
-    /// Identity is the permissive value (Go returns `t` for non-thenables).
+    /// PORT (M6 S9): the identity stub flipped to the REAL awaited family
+    /// (statements.rs, checker.go 31802+ — identity is the answer for
+    /// non-thenables, which the lib-less scaffold always produces).
     pub fn get_awaited_type(&mut self, t: TypeId) -> TypeId {
-        // TODO(port M6 S9/S10): unwrapAwaitedType/thenable resolution.
-        t
+        self.get_awaited_type_impl(t)
     }
 
     /// Go: `func (c *Checker) GetIndexSignaturesAtLocation(node *ast.Node) []*ast.Node`
@@ -607,9 +616,7 @@ impl Checker {
     /// Go: `func (c *Checker) IsContextSensitive(node *ast.Node) bool` →
     /// `c.isContextSensitive(node)` (checker.go — S9).
     pub fn is_context_sensitive(&mut self, node: NodeId) -> bool {
-        // TODO(port M6 S9): the context-sensitivity scan.
-        let _ = node;
-        false
+        self.is_context_sensitive_impl(node)
     }
 
     // (M6 S5): `FillMissingTypeArguments`/`GetMinTypeArgumentCount` MOVED —

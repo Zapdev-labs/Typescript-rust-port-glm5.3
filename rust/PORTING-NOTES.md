@@ -2078,3 +2078,22 @@ S9/S10 consumers. Next: S9.
 Rig validation (S8, 2026-10-11): forced clean + rebuild — all three
 twin gates green (fixture 9/9, 300-slice 143/143 byte-identical,
 program twin 15/15). S8 CLOSED.
+
+## M6 S9 — conditionals + contextual signatures/inference landed (2026-10-11, resumed after model-usage cutoff)
+
+contextual.rs ~1,540 lines: get_contextual_type dispatcher real (20+
+arms: variable-like/arrow/return/yield/await/call-arg/assertion/binary/
+property/spread/array/conditional/template/satisfies; JSX W5 + decorator
+W4 + import-attribute bannered), contextual-signature family (union
+walk, compareSignaturesIdentical, createUnionSignature, intersected
+signatures, IIFE arm bannered), get_contextual_return_type (generator
+filter + Awaited|PromiseLike union), instantiate_contextual_type
+(nonFixingMapper + #48363 boolean strip), isContextSensitive family,
+createPromiseLikeType real. Plus the pre-cutoff typenodes conditional
+work (is_simple_tuple_type 24968, forConstraint probe 24893, awaited/
+promise pins, getConditionalType machinery; 8 conditionals tests).
+Orchestrator re-verified fresh: 182 tests (16 new s9), clippy 0,
+fixture 9/9, 300-slice twins identical 143/143, program twin 15/15.
+Honest remainders bannered to S10/W4/W5 (inferTypeArguments
+contextual-return links, discriminate/literal-widening sub-arms).
+Next: S10.
