@@ -2193,3 +2193,8 @@ fresh: 16 suites ok, clippy 0, fixture identical parse/bind/check,
 bind slice 143/143, program twin 15/15, check divergent 131 confirmed.
 Remaining families (next tranche; S6-S9 depth): go-extra TS2454 x47,
 async-2697 x37, TS2304 x33; rust-extra TS2339 x54, 2425/2417/2719 x56.
+
+Rig validation (W3 tranche 3, 2026-10-12): forced clean + rebuild —
+fixture twins identical at parse, bind, AND check; bind 300-slice
+143/143 byte-identical; program twin 15/15. W3 tranche 3 RIG-VALIDATED.
+Tranche 4 (the divergence-family chase) dispatched.
