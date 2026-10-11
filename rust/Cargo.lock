@@ -485,10 +485,13 @@ name = "tsc-testrunner"
 version = "0.0.0"
 dependencies = [
  "tsc-ast",
+ "tsc-binder",
  "tsc-bundled",
+ "tsc-checker",
  "tsc-compiler",
  "tsc-core",
  "tsc-diagnostics",
+ "tsc-parser",
  "tsc-repo",
  "tsc-scanner",
  "tsc-testutil",

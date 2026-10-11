@@ -8632,8 +8632,15 @@ pub(crate) fn is_readonly_symbol(c: &mut Checker, sym: SymbolId) -> bool {
 
 /// Go: `func (c *Checker) getDeclaringClass(prop) *Type`.
 pub(crate) fn get_declaring_class(c: &mut Checker, prop: SymbolId) -> Option<TypeId> {
-    // TODO(port M6 S8): the protected-property's declaring class.
-    let _ = (c, prop);
+    // Go: `prop.Parent != nil && prop.Parent.Flags&ast.SymbolFlagsClass != 0`
+    // — the raw parent link, then the declared type of the MERGED parent
+    // (getParentOfSymbol). REAL (M6 W3 t7): the 2513 super-access error's
+    // second arg ("Abstract method 'foo' in class 'B' ...").
+    let parent = c.program_symbol(prop).parent?;
+    if c.program_symbol(parent).flags.intersects(tsc_ast::SymbolFlags::CLASS) {
+        let merged_parent = c.get_parent_of_symbol(prop)?;
+        return Some(c.get_declared_type_of_symbol(merged_parent));
+    }
     None
 }
 

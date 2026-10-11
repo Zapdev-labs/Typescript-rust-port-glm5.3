@@ -69,6 +69,19 @@ use crate::types::{TypeFlags, TypeId};
 use crate::utilities as u;
 use crate::Checker;
 
+/// Go: the `primitiveTypeAliasSuggestions` sync.OnceValue table body
+/// (checker.go:1795) — (primitive, builtin) pairs; the transient
+/// type-alias suggestion symbols are materialized into the checker's
+/// `primitive_type_alias_suggestion_symbols` slots on first use.
+const PRIMITIVE_TYPE_ALIASES: [(&str, &str); 6] = [
+    ("string", "String"),
+    ("number", "Number"),
+    ("boolean", "Boolean"),
+    ("object", "Object"),
+    ("bigint", "BigInt"),
+    ("symbol", "Symbol"),
+];
+
 impl Checker {
     // ────────────────────────────────────────────────────────────────────────
     // Section A — resolveName (Go checker.go:976 + binder nameresolver.go:25)
@@ -78,6 +91,8 @@ impl Checker {
     /// `createNameResolver().Resolve`). Full body in resolution.rs per the
     /// module PORT note.
     #[allow(clippy::too_many_arguments)]
+    /// Go: `createNameResolver().Resolve` — the normal configuration of the
+    /// shared walk (exact `getSymbol` lookups, all hooks).
     pub(crate) fn resolve_name_worker(
         &mut self,
         location: Option<NodeId>,
@@ -86,6 +101,50 @@ impl Checker {
         name_not_found_message: Option<&'static Message>,
         is_use: bool,
         exclude_globals: bool,
+    ) -> Option<SymbolId> {
+        self.resolve_name_worker_impl(
+            location,
+            name,
+            meaning,
+            name_not_found_message,
+            is_use,
+            exclude_globals,
+            false, /*suggestion*/
+        )
+    }
+
+    /// Go: `c.resolveNameForSymbolSuggestion` (checker.go:660, set at 977 to
+    /// `c.createNameResolverForSuggestion().Resolve`) — the same scope walk
+    /// with `getSuggestionForSymbolNameLookup` as the Lookup hook and no
+    /// success/failure hooks (unreachable there: `nameNotFoundMessage` is
+    /// always nil). `isUse` is false, so no symbol-reference recording.
+    fn resolve_name_for_symbol_suggestion(
+        &mut self,
+        location: Option<NodeId>,
+        name: &str,
+        meaning: SymbolFlags,
+    ) -> Option<SymbolId> {
+        self.resolve_name_worker_impl(
+            location,
+            name,
+            meaning,
+            None, /*name_not_found_message*/
+            false, /*is_use*/
+            false, /*exclude_globals*/
+            true,  /*suggestion*/
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_name_worker_impl(
+        &mut self,
+        location: Option<NodeId>,
+        name: &str,
+        meaning: SymbolFlags,
+        name_not_found_message: Option<&'static Message>,
+        is_use: bool,
+        exclude_globals: bool,
+        suggestion: bool,
     ) -> Option<SymbolId> {
         let mut location = location;
         let mut result: Option<SymbolId> = None;
@@ -126,7 +185,7 @@ impl Checker {
                 .cloned()
                 .filter(|_| !binder_shims::is_global_source_file(self.store(), loc))
             {
-                result = self.get_symbol(&locals, name, meaning);
+                result = self.name_lookup(&locals, name, meaning, suggestion);
                 if result.is_some() {
                     let mut use_result = true;
                     let result_flags = self.program_symbol(result.unwrap()).flags;
@@ -202,14 +261,14 @@ impl Checker {
                     let file = self.store().file(loc.file_id());
                     if binder_shims::is_external_or_common_js_module(file) {
                         // Go: fallthrough into the ModuleDeclaration case.
-                        self.resolve_module_case(loc, name, meaning, is_module_attributes, &mut result);
+                        self.resolve_module_case(loc, name, meaning, is_module_attributes, &mut result, suggestion);
                         if result.is_some() {
                             break 'outer;
                         }
                     }
                 }
                 Kind::ModuleDeclaration => {
-                    self.resolve_module_case(loc, name, meaning, is_module_attributes, &mut result);
+                    self.resolve_module_case(loc, name, meaning, is_module_attributes, &mut result, suggestion);
                     if result.is_some() {
                         break 'outer;
                     }
@@ -219,7 +278,7 @@ impl Checker {
                     // means skip the arm, not the loop.
                     if let Some(enum_symbol) = self.get_symbol_of_declaration_merged(loc) {
                         let exports = self.program_symbol(enum_symbol).exports.clone();
-                        result = self.get_symbol(&exports, name, meaning & SymbolFlags::ENUM_MEMBER);
+                        result = self.name_lookup(&exports, name, meaning & SymbolFlags::ENUM_MEMBER, suggestion);
                         if result.is_some() {
                             if name_not_found_message.is_some()
                                 && self.compiler_options.get_isolated_modules()
@@ -257,7 +316,7 @@ impl Checker {
                             if let Some(ctor_locals) = binder_node_data::locals_of(self.store(), ctor) {
                                 let ctor_locals = ctor_locals.clone();
                                 let value_meaning = meaning & SymbolFlags::VALUE;
-                                if self.get_symbol(&ctor_locals, name, value_meaning).is_some() {
+                                if self.name_lookup(&ctor_locals, name, value_meaning, suggestion).is_some() {
                                     // Remember the property node, it will be used later to report appropriate error
                                     property_with_invalid_initializer = Some(loc);
                                 }
@@ -269,7 +328,7 @@ impl Checker {
                     let container_symbol =
                         self.get_symbol_of_declaration_merged(loc).expect("class-like symbol");
                     let members = self.program_symbol(container_symbol).members.clone();
-                    result = self.get_symbol(&members, name, meaning & SymbolFlags::TYPE);
+                    result = self.name_lookup(&members, name, meaning & SymbolFlags::TYPE, suggestion);
                     if result.is_some() {
                         if !self.is_type_parameter_symbol_declared_in_container(result.unwrap(), loc) {
                             // ignore type parameters not declared in this container
@@ -321,7 +380,7 @@ impl Checker {
                             let container_symbol =
                                 self.get_symbol_of_declaration_merged(container).expect("class-like symbol");
                             let members = self.program_symbol(container_symbol).members.clone();
-                            result = self.get_symbol(&members, name, meaning & SymbolFlags::TYPE);
+                            result = self.name_lookup(&members, name, meaning & SymbolFlags::TYPE, suggestion);
                             if result.is_some() {
                                 if name_not_found_message.is_some() {
                                     self.error(
@@ -353,7 +412,7 @@ impl Checker {
                         let grandparent_symbol =
                             self.get_symbol_of_declaration_merged(grandparent).expect("class-like symbol");
                         let members = self.program_symbol(grandparent_symbol).members.clone();
-                        result = self.get_symbol(&members, name, meaning & SymbolFlags::TYPE);
+                        result = self.name_lookup(&members, name, meaning & SymbolFlags::TYPE, suggestion);
                         if result.is_some() {
                             if name_not_found_message.is_some() {
                                 self.error(
@@ -524,7 +583,7 @@ impl Checker {
         }
         if result.is_none() && !exclude_globals {
             let globals = self.globals.clone();
-            result = self.get_symbol(&globals, name, meaning.union(SymbolFlags::GLOBAL_LOOKUP));
+            result = self.name_lookup(&globals, name, meaning.union(SymbolFlags::GLOBAL_LOOKUP), suggestion);
         }
         if result.is_none() {
             if let Some(original_location) = original_location {
@@ -583,6 +642,7 @@ impl Checker {
         meaning: SymbolFlags,
         is_module_attributes: bool,
         result: &mut Option<SymbolId>,
+        suggestion: bool,
     ) {
         if is_module_attributes {
             // Go: break out of the switch.
@@ -651,7 +711,7 @@ impl Checker {
         }
         if name != INTERNAL_SYMBOL_NAME_DEFAULT {
             let module_meaning = meaning & SymbolFlags::MODULE_MEMBER;
-            *result = self.get_symbol(&module_exports, name, module_meaning);
+            *result = self.name_lookup(&module_exports, name, module_meaning, suggestion);
             if let Some(result_symbol) = *result {
                 let flags = self.program_symbol(result_symbol).flags;
                 // Go: on a CommonJS source file, a non-type result falls
@@ -902,6 +962,7 @@ impl Checker {
                 .map(|p| self.store().node(p).kind);
             parent_kind == Some(Kind::JSDocLink)
                 || self.check_and_report_error_for_missing_prefix(loc, name)
+                || self.check_and_report_error_for_extending_interface(loc)
                 || self.check_and_report_error_for_using_type_as_namespace(loc, name, meaning)
                 || self.check_and_report_error_for_exporting_primitive_type(loc, name)
                 || self.check_and_report_error_for_using_namespace_as_type_or_value(loc, name, meaning)
@@ -929,7 +990,7 @@ impl Checker {
             return;
         }
         // Then spelling suggestions
-        let suggestion = self.get_suggested_symbol_for_nonexistent_symbol(error_location.unwrap_or(NodeId::NONE), name, meaning);
+        let suggestion = self.get_suggested_symbol_for_nonexistent_symbol(error_location, name, meaning);
         let ambient_global_augmentation = suggestion
             .and_then(|s| self.program_symbol(s).value_declaration)
             .is_some_and(|vd| {
@@ -1242,24 +1303,173 @@ impl Checker {
         false
     }
 
+    /// Go: `func (c *Checker) getEntityNameForExtendingInterface(node) *ast.Node`
+    /// (checker.go:11914) — climbs up parents to a heritage clause element
+    /// and returns its entity name.
+    pub(crate) fn get_entity_name_for_extending_interface(&self, node: NodeId) -> Option<NodeId> {
+        match self.store().node(node).kind {
+            Kind::Identifier | Kind::QualifiedName | Kind::PropertyAccessExpression => {
+                binder_shims::parent_of(self.store(), node)
+                    .and_then(|parent| self.get_entity_name_for_extending_interface(parent))
+            }
+            Kind::TypeReference => match &self.store().node(node).data {
+                tsc_ast::NodeData::TypeReferenceNode(d) => Some(d.type_name),
+                _ => None,
+            },
+            Kind::ExpressionWithTypeArguments => {
+                binder_node_data::expression_of(self.store(), node)
+                    .filter(|&expression| {
+                        tsc_ast::utilities::is_entity_name_expression(self.store(), expression)
+                    })
+            }
+            _ => None,
+        }
+    }
+
     /// Go: `func (c *Checker) getSuggestedSymbolForNonexistentSymbol(location, outerName, meaning) *ast.Symbol`
     /// (checker.go:1785) — `c.resolveNameForSymbolSuggestion(location, ...)`.
-    /// TODO(port M6 S10): the suggestion resolver (createNameResolverForSuggestion +
-    /// getSpellingSuggestionForName over core.GetSpellingSuggestion) rides the
-    /// spelling-suggestion engine (core port); permissive None keeps the
-    /// did-you-mean ladders dormant.
+    /// The location may be nil (the getGlobalType family resolves globals
+    /// with a nil error location; the walk then falls straight to the
+    /// globals lookup).
     fn get_suggested_symbol_for_nonexistent_symbol(
         &mut self,
-        location: NodeId,
+        location: Option<NodeId>,
         outer_name: &str,
         meaning: SymbolFlags,
     ) -> Option<SymbolId> {
-        // Go: resolveNameForSymbolSuggestion walks the same scope chain with
-        // getSuggestionForSymbolNameLookup as the lookup hook; the candidate
-        // set here is the direct-scope + globals table with the case/levenshtein
-        // suggestion applied. The spelling engine is not yet ported.
-        let _ = (location, outer_name, meaning);
-        None
+        self.resolve_name_for_symbol_suggestion(location, outer_name, meaning)
+    }
+
+    /// Go: the `Lookup` hook of `createNameResolverForSuggestion` — every
+    /// `r.lookup(...)` site of the walk routes here in suggestion mode:
+    /// `getSymbol` first (the exact match stops the walk), then the
+    /// spelling suggestion over the scope's symbols (plus the primitive
+    /// type-alias extras at the globals stage, gated on
+    /// `meaning&SymbolFlagsGlobalLookup`).
+    fn name_lookup(
+        &mut self,
+        symbols: &SymbolTable,
+        name: &str,
+        meaning: SymbolFlags,
+        suggestion: bool,
+    ) -> Option<SymbolId> {
+        if suggestion {
+            self.get_suggestion_for_symbol_name_lookup(symbols, name, meaning)
+        } else {
+            self.get_symbol(symbols, name, meaning)
+        }
+    }
+
+    /// Go: `func (c *Checker) getSuggestionForSymbolNameLookup(symbols, name, meaning) *ast.Symbol`
+    /// (checker.go:1827).
+    fn get_suggestion_for_symbol_name_lookup(
+        &mut self,
+        symbols: &SymbolTable,
+        name: &str,
+        meaning: SymbolFlags,
+    ) -> Option<SymbolId> {
+        if let Some(symbol) = self.get_symbol(symbols, name, meaning) {
+            return Some(symbol);
+        }
+        let mut candidates: Vec<SymbolId> = symbols.values().copied().collect();
+        if meaning.intersects(SymbolFlags::GLOBAL_LOOKUP) {
+            // Go: getPrimitiveTypeAliasSuggestions (checker.go:1816) — the
+            // builtin→primitive transient type-alias suggestions, gated on
+            // the builtin name being present in the table.
+            for (i, (builtin, primitive)) in PRIMITIVE_TYPE_ALIASES.iter().enumerate() {
+                if symbols.get(*builtin).is_some() {
+                    if self.primitive_type_alias_suggestion_symbols[i].is_none() {
+                        self.primitive_type_alias_suggestion_symbols[i] =
+                            Some(self.new_symbol(SymbolFlags::TYPE_ALIAS, primitive));
+                    }
+                    candidates.push(self.primitive_type_alias_suggestion_symbols[i].unwrap());
+                }
+            }
+        }
+        self.get_spelling_suggestion_for_name(name, &candidates, meaning)
+    }
+
+    /// Go: `func (c *Checker) getSpellingSuggestionForName(name, symbols, meaning) *ast.Symbol`
+    /// (checker.go:1844) — `core.GetSpellingSuggestion` with the symbol-aware
+    /// candidate filter (getCandidateName) and `c.compareSymbols` as the
+    /// tie-break. Names less than length 3 only check for case-insensitive
+    /// equality, not levenshtein distance.
+    fn get_spelling_suggestion_for_name(
+        &mut self,
+        name: &str,
+        candidates: &[SymbolId],
+        meaning: SymbolFlags,
+    ) -> Option<SymbolId> {
+        let rune_name: Vec<char> = name.chars().collect();
+        let maximum_length_difference = std::cmp::max(2, (rune_name.len() as f64 * 0.34) as usize);
+        // If the best result is worse than this, don't bother.
+        let mut best_distance = (rune_name.len() as f64 * 0.4).floor() + 0.9;
+        let mut best_candidate: Option<SymbolId> = None;
+        let mut has_best = false;
+        for &candidate in candidates {
+            let candidate_name = self.get_candidate_name(candidate, meaning);
+            if candidate_name.is_empty() {
+                continue;
+            }
+            // PORT: Go's `len()` on the candidate is bytes; `len(runeName)` runes.
+            let max_len = std::cmp::max(candidate_name.len(), rune_name.len());
+            let min_len = std::cmp::min(candidate_name.len(), rune_name.len());
+            if max_len - min_len > maximum_length_difference {
+                continue;
+            }
+            if candidate_name == name {
+                continue;
+            }
+            // Only consider candidates less than 3 characters long when they differ by case.
+            // Otherwise, don't bother, since a user would usually notice differences of a 2-character name.
+            if candidate_name.chars().count() < 3 && !candidate_name.eq_ignore_ascii_case(name) {
+                continue;
+            }
+            let candidate_runes: Vec<char> = candidate_name.chars().collect();
+            let distance =
+                crate::utilities::levenshtein_with_max(&rune_name, &candidate_runes, best_distance);
+            if distance < 0.0 {
+                continue;
+            }
+            tsc_debug::assert_!(distance <= best_distance); // Else `levenshteinWithMax` should return undefined
+            if distance < best_distance {
+                best_distance = distance;
+                best_candidate = Some(candidate);
+                has_best = true;
+            } else if !has_best
+                || self.compare_symbols(candidate, best_candidate.unwrap())
+                    == std::cmp::Ordering::Less
+            {
+                best_candidate = Some(candidate);
+                has_best = true;
+            }
+        }
+        best_candidate
+    }
+
+    /// Go: the `getCandidateName` closure of getSpellingSuggestionForName
+    /// (checker.go:1850) — empty for internal (`\xFE`-prefixed) and quoted
+    /// (late-bound) names; empty when the meaning does not match directly or
+    /// through a resolvable alias.
+    fn get_candidate_name(&mut self, candidate: SymbolId, meaning: SymbolFlags) -> String {
+        let symbol = self.program_symbol(candidate);
+        let candidate_name = symbol.name.clone();
+        let flags = symbol.flags;
+        if let Some(first) = candidate_name.as_bytes().first()
+            && (*first == b'"' || *first == 0xFE)
+        {
+            return String::new();
+        }
+        if flags.intersects(meaning) {
+            return candidate_name;
+        }
+        if flags.intersects(SymbolFlags::ALIAS)
+            && let Some(alias) = self.try_resolve_alias(candidate)
+            && self.program_symbol(alias).flags.intersects(meaning)
+        {
+            return candidate_name;
+        }
+        String::new()
     }
 
     /// Go: `func (c *Checker) onSuccessfullyResolvedSymbol(errorLocation, result, meaning, lastLocation, associatedDeclarationForContainingInitializerOrBindingName, withinDeferredContext)`
@@ -2109,7 +2319,7 @@ fn is_property_immediately_referenced_within_declaration(
 
 /// Go: `func ast.GetEnclosingBlockScopeContainer(node) *Node` (ast/utilities.go)
 /// — `FindAncestor(node.Parent, IsBlockScope)`.
-fn get_enclosing_block_scope_container(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+pub(crate) fn get_enclosing_block_scope_container(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
     let mut current = binder_shims::parent_of(store, node)?;
     loop {
         let parent = binder_shims::parent_of(store, current);

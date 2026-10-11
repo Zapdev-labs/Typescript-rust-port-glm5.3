@@ -3684,19 +3684,37 @@ pub(crate) fn signature_type_node(store: &dyn NodeStore, node: NodeId) -> Option
     }
 }
 
-/// Go: `node.TypeArguments()` for the type-node payloads that carry them.
+/// Go: `node.TypeArguments()` → `node.TypeArgumentList()` (ast.go:495) — the
+/// FULL kind set, not just the type-node payloads: CallExpression,
+/// NewExpression, TaggedTemplateExpression, TypeReference,
+/// ExpressionWithTypeArguments, ImportType, TypeQuery, JsxOpeningElement,
+/// JsxSelfClosingElement. W3T7: the expression kinds were missing (the port
+/// covered only the type-node four), so `new C<T>()`/`f<T>()` resolved with
+/// an EMPTY type-argument list — chooseOverload took the inference branch
+/// and inferred `unknown` for every explicit type argument (the S8
+/// generic-member instantiation root: `new E3<string>().m()` answered
+/// `() => T` with T→unknown instead of `() => string`).
 pub(crate) fn type_arguments_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> {
     let n = store.node(node);
     let list = match n.kind {
+        Kind::CallExpression => n.as_call_expression().expect("data").type_arguments.as_ref(),
+        Kind::NewExpression => n.as_new_expression().expect("data").type_arguments.as_ref(),
+        Kind::TaggedTemplateExpression => {
+            n.as_tagged_template_expression().expect("data").type_arguments.as_ref()
+        }
         Kind::TypeReference => n.as_type_reference_node().expect("data").type_arguments.as_ref(),
-        Kind::ImportType => n.as_import_type_node().expect("data").type_arguments.as_ref(),
         Kind::ExpressionWithTypeArguments => {
             n.as_expression_with_type_arguments()
                 .expect("data")
                 .type_arguments
                 .as_ref()
         }
+        Kind::ImportType => n.as_import_type_node().expect("data").type_arguments.as_ref(),
         Kind::TypeQuery => n.as_type_query_node().expect("data").type_arguments.as_ref(),
+        Kind::JsxOpeningElement => n.as_jsx_opening_element().expect("data").type_arguments.as_ref(),
+        Kind::JsxSelfClosingElement => {
+            n.as_jsx_self_closing_element().expect("data").type_arguments.as_ref()
+        }
         _ => None,
     };
     list.map(|l| l.nodes.to_vec()).unwrap_or_default()
@@ -3713,6 +3731,25 @@ pub(crate) fn members_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> {
         _ => None,
     };
     list.map(|l| l.nodes.to_vec()).unwrap_or_default()
+}
+
+/// Go: `func ast.GetDeclarationContainer(node) *Node` (ast.go) —
+/// `FindAncestor(GetRootDeclaration(node), pred).Parent`, where the predicate
+/// skips variable/import containers.
+pub(crate) fn get_declaration_container(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    let root = tsc_binder::ast_shims::get_root_declaration(store, node);
+    let ancestor = tsc_binder::ast_shims::find_ancestor(store, root, &mut |n| {
+        !matches!(
+            store.node(n).kind,
+            Kind::VariableDeclaration
+                | Kind::VariableDeclarationList
+                | Kind::ImportSpecifier
+                | Kind::NamedImports
+                | Kind::NamespaceImport
+                | Kind::ImportClause
+        )
+    })?;
+    tsc_binder::ast_shims::parent_of(store, ancestor)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -4077,7 +4114,7 @@ impl Checker {
             {
                 self.check_var_declared_names_not_shadowed(node);
             }
-            self.check_collisions_for_declaration_name_stub(node, self.store().node(node).name());
+            self.check_collisions_for_declaration_name(node, self.store().node(node).name());
         }
     }
 
@@ -4207,18 +4244,322 @@ impl Checker {
         let _ = node;
     }
 
-    /// Go: `func (c *Checker) checkAliasSymbol(node)` (checker.go:6940) — the
-    /// REAL body landed with batch 6 (the alias family); see the batch-6
-    /// section below.
-    ///
-    /// TODO(port M6 S4): `checkCollisionsForDeclarationName` — the
-    /// identifier-collision family; permissive no-op.
-    pub(crate) fn check_collisions_for_declaration_name_stub(
+    /// Go: `func (c *Checker) checkCollisionsForDeclarationName(node *ast.Node, name *ast.Node)`
+    /// (checker.go:10675) — REAL (M6 W3 t7): the identifier-collision family
+    /// (the require/exports/Object/Promise generated-code checks, the deferred
+    /// WeakMap/Set + Reflect recorders, the reserved type-keyword checks for
+    /// class-like and enum declarations).
+    pub(crate) fn check_collisions_for_declaration_name(
         &mut self,
         node: NodeId,
         name: Option<NodeId>,
     ) {
-        let _ = (node, name);
+        let Some(name) = name else { return };
+        self.check_collision_with_require_exports_in_generated_code(node, name);
+        self.check_collision_with_global_object_in_generated_code(node, name);
+        self.check_collision_with_global_promise_in_generated_code(node, name);
+        self.record_potential_collision_with_weak_map_set_in_generated_code(node, name);
+        self.record_potential_collision_with_reflect_in_generated_code(node, name);
+        if tsc_binder::ast_shims::is_class_like(self.store().node(node)) {
+            self.check_type_name_is_reserved(name, &diag::CLASS_NAME_CANNOT_BE_0);
+            if !self.store().node(node).flags.intersects(NF::AMBIENT) {
+                self.check_class_name_collision_with_object(name);
+            }
+        } else if tsc_ast::is_enum_declaration(self.store().node(node)) {
+            self.check_type_name_is_reserved(name, &diag::ENUM_NAME_CANNOT_BE_0);
+        }
+    }
+
+    /// Go: `func (c *Checker) checkCollisionWithRequireExportsInGeneratedCode(node, name)`
+    /// (checker.go:10692).
+    fn check_collision_with_require_exports_in_generated_code(&mut self, node: NodeId, name: NodeId) {
+        // No need to check for require or exports for ES6 modules and later
+        if self.get_emit_module_format_of_file_seam(node)
+            >= tsc_core::options_generated::ModuleKind::ES2015
+        {
+            return;
+        }
+        if !(self.need_collision_check_for_identifier(node, Some(name), "require")
+            && !self.need_collision_check_for_identifier(node, Some(name), "exports"))
+        {
+            return;
+        }
+        // Uninstantiated modules shouldnt do this check
+        if self.is_uninstantiated_module_declaration(node) {
+            return;
+        }
+        // In case of variable declaration, node.parent is variable statement so look at the variable statement's parent
+        if let Some(parent) = get_declaration_container(self.store(), node) {
+            if tsc_ast::is_source_file(self.store().node(parent))
+                && tsc_binder::ast_shims::is_external_or_common_js_module(
+                    self.store().file(parent.file_id()),
+                )
+            {
+                // If the declaration happens to be in external module, report error that require and exports are reserved keywords
+                let name_string =
+                    tsc_scanner::utilities::declaration_name_to_string(self.store(), Some(name));
+                self.error_skipped_on_no_emit(
+                    name,
+                    &diag::DUPLICATE_IDENTIFIER_0_COMPILER_RESERVES_NAME_1_IN_TOP_LEVEL_SCOPE_OF_A_MODULE,
+                    &[name_string.clone(), name_string],
+                );
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkCollisionWithGlobalObjectInGeneratedCode(node, name)`
+    /// (checker.go:10714).
+    fn check_collision_with_global_object_in_generated_code(&mut self, node: NodeId, name: NodeId) {
+        if tsc_binder::ast_shims::is_class_like(self.store().node(node))
+            || !self.need_collision_check_for_identifier(node, Some(name), "Object")
+        {
+            return;
+        }
+        // Uninstantiated modules shouldn't do this check
+        if self.is_uninstantiated_module_declaration(node) {
+            return;
+        }
+        // In case of variable declaration, node.parent is variable statement so look at the variable statement's parent
+        if let Some(parent) = get_declaration_container(self.store(), node) {
+            if tsc_ast::is_source_file(self.store().node(parent))
+                && tsc_binder::ast_shims::is_external_or_common_js_module(
+                    self.store().file(parent.file_id()),
+                )
+                && self.get_emit_module_format_of_file_seam(parent)
+                    == tsc_core::options_generated::ModuleKind::CommonJS
+            {
+                // If the declaration happens to be in external module, report error that Object is a reserved identifier.
+                let name_string =
+                    tsc_scanner::utilities::declaration_name_to_string(self.store(), Some(name));
+                self.error_skipped_on_no_emit(
+                    name,
+                    &diag::DUPLICATE_IDENTIFIER_0_COMPILER_RESERVES_NAME_1_IN_TOP_LEVEL_SCOPE_OF_A_MODULE,
+                    &[name_string.clone(), name_string],
+                );
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkCollisionWithGlobalPromiseInGeneratedCode(node, name)`
+    /// (checker.go:10759).
+    fn check_collision_with_global_promise_in_generated_code(&mut self, node: NodeId, name: NodeId) {
+        if self.language_version >= tsc_core::options_generated::ScriptTarget::ES2017
+            || !self.need_collision_check_for_identifier(node, Some(name), "Promise")
+        {
+            return;
+        }
+        // Uninstantiated modules shouldn't do this check
+        if self.is_uninstantiated_module_declaration(node) {
+            return;
+        }
+        // In case of variable declaration, node.parent is variable statement so look at the variable statement's parent
+        if let Some(parent) = get_declaration_container(self.store(), node) {
+            if tsc_ast::is_source_file(self.store().node(parent))
+                && tsc_binder::ast_shims::is_external_or_common_js_module(
+                    self.store().file(parent.file_id()),
+                )
+                && self.store().node(parent).flags.intersects(NF::HAS_ASYNC_FUNCTIONS)
+            {
+                // If the declaration happens to be in external module, report error that Promise is a reserved identifier.
+                let name_string =
+                    tsc_scanner::utilities::declaration_name_to_string(self.store(), Some(name));
+                self.error_skipped_on_no_emit(
+                    name,
+                    &diag::DUPLICATE_IDENTIFIER_0_COMPILER_RESERVES_NAME_1_IN_TOP_LEVEL_SCOPE_OF_A_MODULE_CONTAINING_ASYNC_FUNCTIONS,
+                    &[name_string.clone(), name_string],
+                );
+            }
+        }
+    }
+
+    /// Go: the shared `ast.IsModuleDeclaration(node) && ast.GetModuleInstanceState(node) != ast.ModuleInstanceStateInstantiated`
+    /// early-return of the generated-code collision checks.
+    fn is_uninstantiated_module_declaration(&self, node: NodeId) -> bool {
+        tsc_ast::is_module_declaration(self.store().node(node))
+            && tsc_binder::ast_shims::get_module_instance_state(self.store(), node)
+                != tsc_binder::ast_shims::ModuleInstanceState::Instantiated
+    }
+
+    /// Go: `func (c *Checker) needCollisionCheckForIdentifier(node, identifier, name) bool`
+    /// (checker.go:10739).
+    fn need_collision_check_for_identifier(
+        &self,
+        node: NodeId,
+        identifier: Option<NodeId>,
+        name: &str,
+    ) -> bool {
+        if identifier.is_some_and(|i| tsc_ast::node_text(self.store(), i) != name) {
+            return false;
+        }
+        match self.store().node(node).kind {
+            Kind::PropertyDeclaration
+            | Kind::PropertySignature
+            | Kind::MethodDeclaration
+            | Kind::MethodSignature
+            | Kind::GetAccessor
+            | Kind::SetAccessor
+            | Kind::PropertyAssignment => {
+                // it is ok to have member named '_super', '_this', `Promise`, etc. - member access is always qualified
+                return false;
+            }
+            _ => {}
+        }
+        if self.store().node(node).flags.intersects(NF::AMBIENT) {
+            // ambient context - no codegen impact
+            return false;
+        }
+        if tsc_ast::is_import_clause(self.store().node(node))
+            || tsc_ast::is_import_equals_declaration(self.store().node(node))
+            || tsc_ast::is_import_specifier(self.store().node(node))
+        {
+            // type-only imports do not require collision checks against runtime values.
+            if is_type_only_import_or_export_declaration(self.store(), node) {
+                return false;
+            }
+        }
+        let root = tsc_binder::ast_shims::get_root_declaration(self.store(), node);
+        if tsc_ast::is_parameter_declaration(self.store().node(root)) {
+            // just an overload - no codegen impact
+            if let Some(parent) = tsc_binder::ast_shims::parent_of(self.store(), root)
+                && let Some(body) = tsc_binder::node_data::body_of(self.store(), parent)
+                && tsc_ast::node_is_missing(self.store().node(body))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    // Go: checkTypeNameIsReserved (checker.go:10915) — the pre-existing REAL
+    // twin lives with the S3 type-node checks (below, checker.go:7099 note);
+    // the class-like and enum dispatch arms route to it.
+
+    /// Go: `func (c *Checker) checkClassNameCollisionWithObject(name)` (checker.go:10927).
+    fn check_class_name_collision_with_object(&mut self, name: NodeId) {
+        if tsc_ast::node_text(self.store(), name) == "Object"
+            && self.get_emit_module_format_of_file_seam(name)
+                < tsc_core::options_generated::ModuleKind::ES2015
+        {
+            let module_kind = module_kind_string(self.module_kind);
+            self.error(
+                name,
+                &diag::CLASS_NAME_CANNOT_BE_OBJECT_WHEN_TARGETING_ES5_AND_ABOVE_WITH_MODULE_0,
+                &[module_kind],
+            );
+        }
+    }
+
+    /// Go: `func (c *Checker) recordPotentialCollisionWithWeakMapSetInGeneratedCode(node, name)`
+    /// (checker.go:10775).
+    fn record_potential_collision_with_weak_map_set_in_generated_code(
+        &mut self,
+        node: NodeId,
+        name: NodeId,
+    ) {
+        if self.language_version <= tsc_core::options_generated::ScriptTarget::ES2021
+            && (self.need_collision_check_for_identifier(node, Some(name), "WeakMap")
+                || self.need_collision_check_for_identifier(node, Some(name), "WeakSet"))
+        {
+            self.add_deferred_diagnostic(crate::spine::DeferredDiagnosticCallback::CheckWeakMapSetCollision {
+                node,
+            });
+        }
+    }
+
+    /// Go: `func (c *Checker) checkWeakMapSetCollision(node)` (checker.go:10787).
+    pub(crate) fn check_weak_map_set_collision(&mut self, node: NodeId) {
+        let enclosing_block_scope =
+            crate::resolution::get_enclosing_block_scope_container(self.store(), node);
+        if let Some(scope) = enclosing_block_scope
+            && self
+                .node_links
+                .get(scope)
+                .flags
+                .intersects(crate::types::NodeCheckFlags::CONTAINS_CLASS_WITH_PRIVATE_IDENTIFIERS)
+            && let Some(name) = self.store().node(node).name()
+            && is_identifier(self.store().node(name))
+        {
+            let text = tsc_ast::node_text(self.store(), name).to_string();
+            self.error_skipped_on_no_emit(
+                node,
+                &diag::COMPILER_RESERVES_NAME_0_WHEN_EMITTING_PRIVATE_IDENTIFIER_DOWNLEVEL,
+                &[text],
+            );
+        }
+    }
+
+    /// Go: `func (c *Checker) recordPotentialCollisionWithReflectInGeneratedCode(node, name)`
+    /// (checker.go:10805).
+    fn record_potential_collision_with_reflect_in_generated_code(
+        &mut self,
+        node: NodeId,
+        name: NodeId,
+    ) {
+        if self.language_version <= tsc_core::options_generated::ScriptTarget::ES2021
+            && self.need_collision_check_for_identifier(node, Some(name), "Reflect")
+        {
+            self.add_deferred_diagnostic(crate::spine::DeferredDiagnosticCallback::CheckReflectCollision { node });
+        }
+    }
+
+    /// Go: `func (c *Checker) checkReflectCollision(node)` (checker.go:10811).
+    pub(crate) fn check_reflect_collision(&mut self, node: NodeId) {
+        let mut has_collision = false;
+        if tsc_ast::is_class_expression(self.store().node(node)) {
+            // ClassExpression names don't contribute to their containers, but do matter for any of their block-scoped members.
+            let members = members_of(self.store(), node);
+            for member in members {
+                if self
+                    .node_links
+                    .get(member)
+                    .flags
+                    .intersects(
+                        crate::types::NodeCheckFlags::CONTAINS_SUPER_PROPERTY_IN_STATIC_INITIALIZER,
+                    )
+                {
+                    has_collision = true;
+                    break;
+                }
+            }
+        } else if tsc_ast::is_function_expression(self.store().node(node)) {
+            // FunctionExpression names don't contribute to their containers, but do matter for their contents
+            if self
+                .node_links
+                .get(node)
+                .flags
+                .intersects(
+                    crate::types::NodeCheckFlags::CONTAINS_SUPER_PROPERTY_IN_STATIC_INITIALIZER,
+                )
+            {
+                has_collision = true;
+            }
+        } else {
+            let container =
+                crate::resolution::get_enclosing_block_scope_container(self.store(), node);
+            if let Some(container) = container
+                && self
+                    .node_links
+                    .get(container)
+                    .flags
+                    .intersects(
+                        crate::types::NodeCheckFlags::CONTAINS_SUPER_PROPERTY_IN_STATIC_INITIALIZER,
+                    )
+            {
+                has_collision = true;
+            }
+        }
+        if has_collision
+            && let Some(name) = self.store().node(node).name()
+            && is_identifier(self.store().node(name))
+        {
+            let name_string =
+                tsc_scanner::utilities::declaration_name_to_string(self.store(), Some(name));
+            self.error_skipped_on_no_emit(
+                node,
+                &diag::DUPLICATE_IDENTIFIER_0_COMPILER_RESERVES_NAME_1_WHEN_EMITTING_SUPER_REFERENCES_IN_STATIC_INITIALIZERS,
+                &[name_string, "Reflect".to_string()],
+            );
+        }
     }
 
     /// TODO(port M6 S6): `getExportsOfModule` — the module-exports resolution;
@@ -6606,7 +6947,7 @@ impl Checker {
     pub(crate) fn check_function_declaration(&mut self, node: NodeId) {
         self.check_function_or_method_declaration(node);
         // TODO(port M6 W3): checkGrammarForGenerator; permissive.
-        self.check_collisions_for_declaration_name_stub(node, self.store().node(node).name());
+        self.check_collisions_for_declaration_name(node, self.store().node(node).name());
     }
 
     /// Go: `func (c *Checker) checkFunctionOrMethodDeclaration(node)` (checker.go:3441).
@@ -7326,7 +7667,7 @@ impl Checker {
     pub(crate) fn check_class_like_declaration(&mut self, node: NodeId) {
         self.check_grammar_class_like_declaration(node);
         self.check_decorators(node);
-        self.check_collisions_for_declaration_name_stub(node, self.store().node(node).name());
+        self.check_collisions_for_declaration_name(node, self.store().node(node).name());
         let type_parameters = type_parameters_of(self.store(), node);
         self.check_type_parameters(&type_parameters);
         self.check_exports_on_merged_declarations(node);
@@ -7388,7 +7729,14 @@ impl Checker {
                     false,
                 );
                 let class_name = self.store().node(node).name();
-                if !self.check_type_assignable_to(type_with_this, base_with_this, class_name, None)
+                // Go: `if !c.checkTypeAssignableTo(typeWithThis, baseWithThis,
+                // nil, nil)` (checker.go:4378) — the nil errorNode means the
+                // pre-check REPORTS NOTHING (issueMemberSpecificError owns the
+                // reporting below). W3T7: the port passed the class name node,
+                // so every non-assignable heritage ALSO emitted a generic
+                // TS2322 at the class (classIsSubtypeOfBaseType's extra
+                // `Derived2 Base<{ bar: string; }>` leg).
+                if !self.check_type_assignable_to(type_with_this, base_with_this, None, None)
                 {
                     self.issue_member_specific_error(
                         node,
@@ -7780,17 +8128,42 @@ impl Checker {
                         Some(&mut diags),
                     );
                     if !ok && !diags.is_empty() {
-                        let mut chained = diags.remove(0);
+                        // Go: `c.addDiagnostic(ast.NewDiagnosticChain(diags[0],
+                        // diagnostics.Property_0_in_type_1_...2416,
+                        // symbolToString(declaredProp), TypeToString(typeWithThis),
+                        // TypeToString(baseWithThis)))` (checker.go:4575) — the
+                        // 2416 message is the HEAD (same file/loc as the
+                        // underlying 2322), which becomes the chain CONTINUATION
+                        // with its related info preserved
+                        // (ast/diagnostic.go NewDiagnosticChain:232). W3T7: the
+                        // port attached the 2416 as RELATED INFO on the raw
+                        // 2322 instead — the fold lines rendered the un-chained
+                        // generic 2322, not the 2416 head.
+                        let mut tail = diags.remove(0);
+                        let related = tail.related_information().to_vec();
+                        tail.set_related_info(Vec::new());
                         let prop_text = relater::symbol_to_string(self, declared_prop);
                         let type_text = self.type_to_string(type_with_this);
                         let base_text = self.type_to_string(base_with_this);
-                        chained.add_related_info(u::new_diagnostic_for_node(
-                            self.store(),
-                            member,
-                            &diag::PROPERTY_0_IN_TYPE_1_IS_NOT_ASSIGNABLE_TO_THE_SAME_PROPERTY_IN_BASE_TYPE_2,
-                            vec![prop_text, type_text, base_text],
-                        ));
-                        self.add_diagnostic(chained);
+                        let head = {
+                            let file = tail.file();
+                            let loc = tail.loc();
+                            let mut head = tsc_ast::Diagnostic::new(
+                                file,
+                                loc,
+                                diag::PROPERTY_0_IN_TYPE_1_IS_NOT_ASSIGNABLE_TO_THE_SAME_PROPERTY_IN_BASE_TYPE_2.code(),
+                                diag::PROPERTY_0_IN_TYPE_1_IS_NOT_ASSIGNABLE_TO_THE_SAME_PROPERTY_IN_BASE_TYPE_2.category(),
+                                "" /*source*/,
+                                Some(&diag::PROPERTY_0_IN_TYPE_1_IS_NOT_ASSIGNABLE_TO_THE_SAME_PROPERTY_IN_BASE_TYPE_2),
+                                "" /*messageText*/,
+                                diag::PROPERTY_0_IN_TYPE_1_IS_NOT_ASSIGNABLE_TO_THE_SAME_PROPERTY_IN_BASE_TYPE_2.key(),
+                                vec![prop_text, type_text, base_text],
+                            );
+                            head.add_message_chain(tail);
+                            head.set_related_info(related);
+                            head
+                        };
+                        self.add_diagnostic(head);
                         issued_member_error = true;
                     }
                 }
@@ -9014,7 +9387,7 @@ impl Checker {
     /// Go: `func (c *Checker) checkEnumDeclaration(node)` (checker.go:5188).
     pub(crate) fn check_enum_declaration(&mut self, node: NodeId) {
         self.check_grammar_modifiers(node);
-        self.check_collisions_for_declaration_name_stub(node, self.store().node(node).name());
+        self.check_collisions_for_declaration_name(node, self.store().node(node).name());
         self.check_exports_on_merged_declarations(node);
         let members = members_of(self.store(), node);
         self.check_source_elements(&members);
@@ -9172,7 +9545,7 @@ impl Checker {
             }
         }
         if d.name != NodeId::NONE && is_identifier(self.store().node(d.name)) {
-            self.check_collisions_for_declaration_name_stub(node, Some(d.name));
+            self.check_collisions_for_declaration_name(node, Some(d.name));
             if d.keyword == Kind::ModuleKeyword {
                 self.error(
                     d.name,
@@ -10034,7 +10407,7 @@ impl Checker {
     /// Go: `func (c *Checker) checkImportBinding(node)` (checker.go:5498).
     pub(crate) fn check_import_binding(&mut self, node: NodeId) {
         let name = self.store().node(node).name();
-        self.check_collisions_for_declaration_name_stub(node, name);
+        self.check_collisions_for_declaration_name(node, name);
         self.check_alias_symbol(node);
         if tsc_ast::is_import_specifier(self.store().node(node)) {
             let (property_name, property_name_or_name) = {

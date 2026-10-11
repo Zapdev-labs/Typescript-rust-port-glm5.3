@@ -996,9 +996,16 @@ impl Checker {
         }
         if !self.pop_type_resolution() {
             let symbol = self.type_(t).symbol.expect("class symbol");
-                let symbol_name1 = self.symbol_to_string(symbol);
+            let symbol_name1 = self.symbol_to_string(symbol);
+            // PORT (M6 W3 t7): Go's error location is
+            // `t.symbol.ValueDeclaration` — the CLASS declaration, not the
+            // heritage expression (the 2506 spans of classExtendsItself*).
+            let value_declaration = self
+                .program_symbol(symbol)
+                .value_declaration
+                .unwrap_or(expression);
             self.error(
-                expression,
+                value_declaration,
                 &X_0_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_ITS_OWN_BASE_EXPRESSION,
                 &[symbol_name1],
             );

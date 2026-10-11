@@ -258,6 +258,11 @@ pub struct Checker {
     pub(crate) require_symbol: Option<SymbolId>,
     pub(crate) unknown_symbol: Option<SymbolId>,
     pub(crate) global_this_symbol: Option<SymbolId>,
+    // Go: `primitiveTypeAliasSuggestions sync.OnceValue` (checker.go:1795) —
+    // the six builtin→primitive transient type-alias suggestion symbols;
+    // lazily materialized in the program's symbol arena (newSymbol ors in
+    // TRANSIENT exactly like Go's `&ast.Symbol{Flags: TypeAlias|Transient}`).
+    pub(crate) primitive_type_alias_suggestion_symbols: [Option<SymbolId>; 6],
     // Link stores (Go declaration order).
     pub(crate) node_links: LinkStore<NodeId, NodeLinks>,
     pub(crate) symbol_node_links: NodeLinkStore<SymbolNodeLinks>,
@@ -1559,6 +1564,7 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         require_symbol: None,
         unknown_symbol: None,
         global_this_symbol: None,
+        primitive_type_alias_suggestion_symbols: [None; 6],
         node_links: LinkStore::new(),
         symbol_node_links: NodeLinkStore::new(),
         non_existent_properties: Default::default(),

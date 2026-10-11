@@ -1448,13 +1448,15 @@ impl Checker {
                 DeferredDiagnosticCallback::ReportTypeNotIterable { error_node, t, allows_async_iterables, related } => {
                     let _ = (error_node, t, allows_async_iterables, related);
                 }
-                // TODO(port M6 S3): checkWeakMapSetCollision.
+                // Go: checkWeakMapSetCollision (checker.go:10787) — REAL (M6 W3 t7,
+                // statements.rs; the private-identifier downlevel reservation).
                 DeferredDiagnosticCallback::CheckWeakMapSetCollision { node } => {
-                    let _ = node;
+                    self.check_weak_map_set_collision(node);
                 }
-                // TODO(port M6 S3): checkReflectCollision.
+                // Go: checkReflectCollision (checker.go:10811) — REAL (M6 W3 t7,
+                // statements.rs; the super-in-static-initializer reservation).
                 DeferredDiagnosticCallback::CheckReflectCollision { node } => {
-                    let _ = node;
+                    self.check_reflect_collision(node);
                 }
                 // TODO(port M6 S4): reportNonexistentProperty.
                 DeferredDiagnosticCallback::ReportNonexistentProperty { right, left_type, is_unchecked_js } => {
@@ -4297,6 +4299,84 @@ mod tests {
             c.semantic_diagnostics().iter().map(|d| d.code()).collect::<Vec<_>>()
         );
     }
+
+    /// W3T7: the S8 generic-member instantiation chain — `new E3<string>().m()`
+    /// answers `() => string`, not `() => T` (two stacked roots, both fixed
+    /// this tranche: statements.rs type_arguments_of missed Go's expression
+    /// kinds — `Node.TypeArgumentList()` covers Call/New/TaggedTemplate/Jsx —
+    /// so the new-expression's type arguments were dropped and T inferred
+    /// `unknown`; and inference.rs could_contain_type_variables missed Go's
+    /// ANONYMOUS arm (checker.go:22672: function/method/class/type-literal/
+    /// object-literal symbols with declarations), so instantiateType of the
+    /// method's `() => T` short-circuited to identity).
+    #[test]
+    fn w3t7_generic_member_instantiation() {
+        let mut c = spine_checker(
+            "class E3<T> { m(): T { return null as any; } }\nconst s: string = new E3<string>().m();\n",
+        );
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        assert!(
+            !diags.iter().any(|d| d.code() == 2322),
+            "the instantiated m() returns string, assignable; got {:?}",
+            diags.iter().map(|d| (d.code(), d.message_args())).collect::<Vec<_>>()
+        );
+        // The property's type itself: `() => string` (the declared `() => T`
+        // instantiated through the E3<string> reference's mapper).
+        let init = {
+            let store = c.store();
+            let stmts = store
+                .node(file)
+                .as_source_file()
+                .expect("SourceFile data")
+                .statements
+                .as_ref()
+                .expect("statements")
+                .nodes
+                .to_vec();
+            let mut init = None;
+            for &s in &stmts {
+                if store.node(s).kind == tsc_ast::Kind::VariableStatement {
+                    let decls = store
+                        .node(s)
+                        .as_variable_statement()
+                        .expect("vs")
+                        .declaration_list;
+                    let d0 = store
+                        .node(decls)
+                        .as_variable_declaration_list()
+                        .expect("vdl")
+                        .declarations
+                        .as_ref()
+                        .expect("decls")
+                        .nodes[0];
+                    let vd = store.node(d0).as_variable_declaration().expect("vd");
+                    init = vd.initializer;
+                }
+            }
+            init
+        };
+        let init = init.expect("initializer");
+        let (obj,) = {
+            let store = c.store();
+            let call = store
+                .node(init)
+                .as_call_expression()
+                .expect("CallExpression data");
+            let callee = store.node(call.expression);
+            let paccess = callee
+                .as_property_access_expression()
+                .expect("PropertyAccessExpression data");
+            (paccess.expression,)
+        };
+        let objty = c.check_expression(obj);
+        let prop = c.get_property_of_type(objty, "m").expect("property m");
+        let mty = c.get_type_of_symbol(prop);
+        let rendered = crate::relater::type_to_string(&mut c, mty);
+        assert_eq!(rendered, "() => string", "the member signature instantiates");
+    }
+
     /// W3T6: checkGrammarBreakOrContinueStatement reads Label() (Go
     /// grammarchecks.go:1477), not the generic Name() — a labeled break
     /// resolves its label and stays Go-silent (no TS1107).
@@ -4488,5 +4568,34 @@ mod tests {
             rendered.starts_with("(a: string, ...b: ") && rendered.ends_with(") => void"),
             "the rest parameter carries its `...` dot; got {rendered}"
         );
+    }
+
+    /// W3T7 PROBE (2703 spans): the delete-operator property-reference
+    /// error's node positions for `delete await 42` inside an async function.
+    #[test]
+    fn w3t7_probe_delete_await_spans() {
+        let mut c = spine_checker("async function bar1() {\n    delete await 42;\n}\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        // Walk every node; find the DeleteExpression; print child spans.
+        let store = c.store();
+        let mut found = Vec::new();
+        collect_delete_nodes(store, file, &mut found);
+        for n in found {
+            let node = store.node(n);
+            let d = node.as_delete_expression().expect("DeleteExpression data");
+            let child = store.node(d.expression);
+            eprintln!(
+                "probe: delete@{}..{} child kind={:?} pos={}..{}",
+                node.pos(),
+                node.end(),
+                child.kind,
+                child.pos(),
+                child.end()
+            );
+            let skipped = tsc_binder::ast_shims::skip_parentheses(store, d.expression);
+            let sk = store.node(skipped);
+            eprintln!("probe: skipped kind={:?} pos={}..{}", sk.kind, sk.pos(), sk.end());
+        }
     }
 }

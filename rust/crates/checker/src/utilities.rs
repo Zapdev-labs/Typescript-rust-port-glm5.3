@@ -3464,6 +3464,71 @@ pub fn get_containing_function(store: &dyn NodeStore, node: NodeId) -> Option<No
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// core.go: levenshteinWithMax (checker-local copy)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `func levenshteinWithMax(buffers, s1, s2 []rune, maxValue float64) float64`
+/// (core.go:560) — the case-weighted Levenshtein distance of `getSpellingSuggestion`,
+/// or -1 when the distance exceeds `max_value`.
+///
+/// PORT: `tsc_scanner::go_shims` has a private twin for the scanner's own
+/// suggestion sites (regexp.rs); the scanner crate is outside this tranche's
+/// writable scope, so the checker keeps a copy for the symbol-level
+/// `getSpellingSuggestionForName` (resolution.rs). Go pools the two `[]float64`
+/// buffers; the port allocates them per call (spell-suggestion misses only).
+pub(crate) fn levenshtein_with_max(s1: &[char], s2: &[char], max_value: f64) -> f64 {
+    let buffer_size = s2.len() + 1;
+    let mut previous = vec![0.0; buffer_size];
+    let mut current = vec![0.0; buffer_size];
+
+    let big = max_value + 0.01;
+    for (i, slot) in previous.iter_mut().enumerate() {
+        *slot = i as f64;
+    }
+    for i in 1..=s1.len() {
+        let c1 = s1[i - 1];
+        let i_f = i as f64;
+        let min_j = std::cmp::max((i_f - max_value).ceil() as usize, 1);
+        let max_j = std::cmp::min((max_value + i_f).floor() as usize, s2.len());
+        let mut col_min = i_f;
+        current[0] = col_min;
+        for slot in current.iter_mut().take(min_j).skip(1) {
+            *slot = big;
+        }
+        for j in min_j..=max_j {
+            // Go: `unicode.ToLower` — simple 1:1 case folding (ASCII here:
+            // identifier spell-suggestions are ECMA-262 names).
+            let substitution_distance = if s1[i - 1].to_lowercase().eq(s2[j - 1].to_lowercase()) {
+                previous[j - 1] + 0.1
+            } else {
+                previous[j - 1] + 2.0
+            };
+            let dist = if c1 == s2[j - 1] {
+                previous[j - 1]
+            } else {
+                (previous[j] + 1.0).min((current[j - 1] + 1.0).min(substitution_distance))
+            };
+            current[j] = dist;
+            col_min = col_min.min(dist);
+        }
+        for slot in current.iter_mut().take(s2.len() + 1).skip(max_j + 1) {
+            *slot = big;
+        }
+        if col_min > max_value {
+            // Give up -- everything in this column is > max and it can't get better in future columns.
+            return -1.0;
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    let result = previous[s2.len()];
+    if result > max_value {
+        -1.0
+    } else {
+        result
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Unit tests (ported where Go has direct coverage; Go's utilities_test.go is
 // the printer/emitter harness, so the pins here are Go-comment-verified).
 // ────────────────────────────────────────────────────────────────────────────

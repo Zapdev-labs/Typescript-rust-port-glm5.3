@@ -2868,6 +2868,18 @@ fn merge_inferences(target: &mut [InferenceInfo], source: &[InferenceInfo]) {
 /// isNonGenericTopLevelType alias-declaration walk land with S4/S7; the
 /// structural test below is the worker's body with the memo elided.
 fn could_contain_type_variables_helper(c: &mut Checker, t: TypeId) -> bool {
+    // Go: couldContainTypeVariablesWorker (checker.go:22672) — the REAL
+    // three-arm body with the computed-flag memoization. W3T7: the port had
+    // only the Reference/typeArguments + Mapped disjuncts; the MISSING
+    // Anonymous-symbol arm (`objectFlags&ObjectFlagsAnonymous != 0 &&
+    // t.symbol.Flags&(Function|Method|Class|TypeLiteral|ObjectLiteral) != 0
+    // && t.symbol.Declarations != nil`) made every function/method type
+    // answer FALSE — so instantiateType of a generic method's `() => T`
+    // short-circuited to identity and resolveTypeReferenceMembers never
+    // substituted member signatures (`new E3<string>().m()` stayed
+    // `() => T` instead of `() => string` — the S8 root). The Reference arm
+    // also gains Go's `node != nil` disjunct (a reference created from a
+    // type NODE can always mention its enclosing scope's variables).
     if !c.type_(t).flags.intersects(TypeFlags::STRUCTURED_OR_INSTANTIABLE) {
         return false;
     }
@@ -2875,17 +2887,34 @@ fn could_contain_type_variables_helper(c: &mut Checker, t: TypeId) -> bool {
     if object_flags.intersects(ObjectFlags::COULD_CONTAIN_TYPE_VARIABLES_COMPUTED) {
         return object_flags.intersects(ObjectFlags::COULD_CONTAIN_TYPE_VARIABLES);
     }
-    let type_arguments = get_type_arguments(c, t);
     let mut result = c.type_(t).flags.intersects(TypeFlags::INSTANTIABLE);
-    if !result && c.type_(t).flags.intersects(TypeFlags::OBJECT) && !is_non_generic_top_level_type(c, t) {
-        result = object_flags.intersects(ObjectFlags::REFERENCE)
-            && type_arguments.iter().any(|&ta| could_contain_type_variables_helper(c, ta))
-            || object_flags.intersects(
-                ObjectFlags::MAPPED
-                    | ObjectFlags::REVERSE_MAPPED
-                    | ObjectFlags::OBJECT_REST_TYPE
-                    | ObjectFlags::INSTANTIATION_EXPRESSION_TYPE,
-            );
+    if !result
+        && c.type_(t).flags.intersects(TypeFlags::OBJECT)
+        && !is_non_generic_top_level_type(c, t)
+    {
+        let type_arguments = get_type_arguments(c, t);
+        let reference_arm = object_flags.intersects(ObjectFlags::REFERENCE)
+            && (c.type_(t).as_type_reference().is_some_and(|r| r.node.is_some())
+                || type_arguments
+                    .iter()
+                    .any(|&ta| could_contain_type_variables_helper(c, ta)));
+        let anonymous_arm = object_flags.intersects(ObjectFlags::ANONYMOUS)
+            && c.type_(t).symbol.is_some_and(|symbol| {
+                c.program_symbol(symbol).flags.intersects(
+                    SymbolFlags::FUNCTION
+                        .union(SymbolFlags::METHOD)
+                        .union(SymbolFlags::CLASS)
+                        .union(SymbolFlags::TYPE_LITERAL)
+                        .union(SymbolFlags::OBJECT_LITERAL),
+                ) && !c.program_symbol(symbol).declarations.is_empty()
+            });
+        let mapped_arm = object_flags.intersects(
+            ObjectFlags::MAPPED
+                | ObjectFlags::REVERSE_MAPPED
+                | ObjectFlags::OBJECT_REST_TYPE
+                | ObjectFlags::INSTANTIATION_EXPRESSION_TYPE,
+        );
+        result = reference_arm || anonymous_arm || mapped_arm;
     }
     if !result
         && c.type_(t).flags.intersects(TypeFlags::UNION_OR_INTERSECTION)
@@ -2893,22 +2922,53 @@ fn could_contain_type_variables_helper(c: &mut Checker, t: TypeId) -> bool {
         && !is_non_generic_top_level_type(c, t)
     {
         let constituents = c.type_(t).distributed();
-        result = constituents.iter().any(|&t| could_contain_type_variables_helper(c, t));
+        result = constituents
+            .iter()
+            .any(|&t| could_contain_type_variables_helper(c, t));
     }
+    // Go: `t.objectFlags |= CouldContainTypeVariablesComputed | IfElse(result,
+    // CouldContainTypeVariables, 0)`.
+    let mut computed = ObjectFlags::COULD_CONTAIN_TYPE_VARIABLES_COMPUTED;
+    if result {
+        computed |= ObjectFlags::COULD_CONTAIN_TYPE_VARIABLES;
+    }
+    c.type_mut(t).object_flags |= computed;
     result
 }
 
-/// Go: `func (c *Checker) isNonGenericTopLevelType(t) bool` — the alias
-/// declaration's ancestor walk (SourceFile → non-generic; Module → generic).
+/// Go: `func (c *Checker) isNonGenericTopLevelType(t) bool` (checker.go
+/// below the worker) — the alias declaration's ancestor walk (SourceFile →
+/// True, ModuleDeclaration → False (keep walking), anything else → Quit).
+/// W3T7: replaces the S-era permissive stub (`alias.typeArguments.is_empty()`)
+/// — Go gates on the declaration site (an alias declared at file top level
+/// can't mention type variables).
 fn is_non_generic_top_level_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S4): GetDeclarationOfKind + FindAncestorOrQuit — the
-    // declaration-ancestor walk; permissive false (treated as potentially
-    // generic, so inference stays conservative/active).
-    let _ = c;
-    if let Some(alias) = &c.type_(t).alias {
-        return alias.type_arguments.is_empty();
+    let Some(alias) = c.type_(t).alias.clone() else {
+        return false;
+    };
+    if !alias.type_arguments.is_empty() {
+        return false;
     }
-    false
+    let Some(symbol) = alias.symbol else {
+        return false;
+    };
+    let declaration = c
+        .get_declaration_of_kind_of_symbol(symbol, Kind::TypeAliasDeclaration)
+        .or_else(|| c.get_declaration_of_kind_of_symbol(symbol, Kind::JSTypeAliasDeclaration));
+    let Some(declaration) = declaration else {
+        return false;
+    };
+    let store = c.store();
+    let parent = store.node(declaration).parent.get();
+    if parent.is_none() {
+        return false;
+    }
+    crate::ast_shims::find_ancestor_or_quit(store, parent, &mut |n| match n.kind {
+        Kind::SourceFile => crate::ast_shims::FindAncestorResult::True,
+        Kind::ModuleDeclaration => crate::ast_shims::FindAncestorResult::False,
+        _ => crate::ast_shims::FindAncestorResult::Quit,
+    })
+    .is_some()
 }
 
 /// Go: `func (c *Checker) isNoInferType(t) bool`.

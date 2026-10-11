@@ -3610,11 +3610,29 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkAndReportErrorForExtendingInterface(errorLocation) bool`
-    /// (checker.go:11897). The resolveEntityName core is the S5 resolver
-    /// seam, so the interface-extension error stays dormant (permissive false).
+    /// (checker.go:11903) — REAL (M6 W3 t7): the entity-name climb +
+    /// ignore-errors resolveEntityName that powers the onFailedToResolveSymbol
+    /// ladder's `extends SomeInterface` rung.
     pub(crate) fn check_and_report_error_for_extending_interface(&mut self, error_location: NodeId) -> bool {
-        // TODO(port M6 S5): resolveEntityName(SymbolFlagsInterface, ignoreErrors).
-        let _ = error_location;
+        if let Some(expression) = self.get_entity_name_for_extending_interface(error_location)
+            && self
+                .resolve_entity_name(
+                    expression,
+                    SymbolFlags::INTERFACE,
+                    true, /*ignore_errors*/
+                    false, /*dont_resolve_alias*/
+                    NodeId::NONE,
+                )
+                .is_some()
+        {
+            let expression_text = tsc_ast::node_text(self.store(), expression).to_string();
+            self.error(
+                error_location,
+                &tsc_diagnostics::CANNOT_EXTEND_AN_INTERFACE_0_DID_YOU_MEAN_IMPLEMENTS,
+                &[expression_text],
+            );
+            return true;
+        }
         false
     }
 
@@ -3704,7 +3722,17 @@ impl Checker {
             }
             // A class field cannot be accessed via super.* from a derived class.
             // This is true for both [[Set]] (old) and [[Define]] (ES spec) semantics.
-            if !flags.intersects(ModifierFlags::STATIC) && self.symbol_has_non_method_declaration(prop) {
+            // PORT (M6 W3 t7): Go's gate is `core.Some(prop.Declarations,
+            // isClassInstanceProperty)` — accessors (get/set) are NOT class
+            // instance properties, so `super.getter` in async methods stays
+            // clean; the port's old symbol_has_non_method_declaration gate
+            // wrongly flagged accessors (2855 x2 in asyncMethodWithSuper_es6).
+            let declarations = self.program_symbol(prop).declarations.clone();
+            if !flags.intersects(ModifierFlags::STATIC)
+                && declarations
+                    .iter()
+                    .any(|&d| u::is_class_instance_property(self.store(), d))
+            {
                 if let Some(error_node) = error_node {
                     let prop_name = relater::symbol_to_string(self, prop);
                     self.error(error_node, &CLASS_FIELD_0_DEFINED_BY_THE_PARENT_CLASS_IS_NOT_ACCESSIBLE_IN_THE_CHILD_CLASS_VIA_SUPER, &[prop_name]);
