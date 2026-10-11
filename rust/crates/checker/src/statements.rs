@@ -11397,6 +11397,9 @@ impl Checker {
     /// Go: `func (c *Checker) checkAliasSymbol(node)` (checker.go:6937) — the
     /// REAL body, replacing the S6 permissive no-op.
     pub(crate) fn check_alias_symbol(&mut self, node: NodeId) {
+        if std::env::var_os("W3T7PROBE").is_some() {
+            eprintln!("w3t7probe alias: kind={:?}", self.store().node(node).kind);
+        }
         let Some(initial_symbol) = self.get_symbol_of_declaration(node) else {
             return;
         };

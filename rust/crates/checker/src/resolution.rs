@@ -2933,6 +2933,12 @@ impl Checker {
 
     /// Go: `func (c *Checker) getTargetOfImportClause(node) *ast.Symbol` (checker.go:14850).
     pub(crate) fn get_target_of_import_clause(&mut self, node: NodeId) -> Option<SymbolId> {
+        if std::env::var_os("W3T7PROBE").is_some() {
+            eprintln!(
+                "w3t7probe import-clause reached: kind={:?}",
+                self.store().node(node).kind
+            );
+        }
         let phase_modifier = match &self.store().node(node).data {
             tsc_ast::NodeData::ImportClause(d) => d.phase_modifier,
             _ => return None,
@@ -4789,11 +4795,14 @@ impl Checker {
         ignore_errors: bool,
         import_attributes_type: Option<TypeId>,
     ) -> Option<SymbolId> {
-        // TODO(port M6 S6 remainder): getCannotResolveModuleNameErrorForSpecificModule's
-        // node-core-module probe (core.NodeCoreModules) is program data; the
-        // generic message covers the TS2307 form.
+        // W3T7: getCannotResolveModuleNameErrorForSpecificModule's
+        // node-core-module probe (Go checker.go:15404 — core.NodeCoreModules
+        // 'fs' → the TS2591 @types/node hint; UsesWildcardTypes picks the
+        // no-tsconfig variant, the only one the harness reaches).
         let error_message: Option<&'static Message> =
-            Some(&diag::CANNOT_FIND_MODULE_0_OR_ITS_CORRESPONDING_TYPE_DECLARATIONS);
+            Some(self.get_cannot_resolve_module_name_error_for_specific_module(
+                module_reference_expression,
+            ));
         let ignore_errors = ignore_errors || self.compiler_options.no_check == Tristate::TSTrue;
         let not_found = if ignore_errors { None } else { error_message };
         self.resolve_external_module_name_worker(
@@ -4804,6 +4813,25 @@ impl Checker {
             false,
             import_attributes_type,
         )
+    }
+
+    /// Go: `func (c *Checker) getCannotResolveModuleNameErrorForSpecificModule(moduleName) *diagnostics.Message`
+    /// (checker.go:15404).
+    fn get_cannot_resolve_module_name_error_for_specific_module(
+        &self,
+        module_name: Option<NodeId>,
+    ) -> &'static Message {
+        if let Some(module_name) = module_name
+            && tsc_ast::is_string_literal(self.store().node(module_name))
+            && tsc_core::nodemodules::node_core_modules()
+                .has(tsc_ast::node_text(self.store(), module_name))
+        {
+            if self.compiler_options.uses_wildcard_types() {
+                return &diag::CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_NODE_TRY_NPM_I_SAVE_DEV_TYPES_SLASHNODE;
+            }
+            return &diag::CANNOT_FIND_NAME_0_DO_YOU_NEED_TO_INSTALL_TYPE_DEFINITIONS_FOR_NODE_TRY_NPM_I_SAVE_DEV_TYPES_SLASHNODE_AND_THEN_ADD_NODE_TO_THE_TYPES_FIELD_IN_YOUR_TSCONFIG;
+        }
+        &diag::CANNOT_FIND_MODULE_0_OR_ITS_CORRESPONDING_TYPE_DECLARATIONS
     }
 
     /// Go: `func (c *Checker) resolveExternalModuleNameWorker(location, moduleReferenceExpression, moduleNotFoundError, ignoreErrors, isForAugmentation, importAttributesType) *ast.Symbol`
@@ -4896,6 +4924,15 @@ impl Checker {
         }
         error_node?;
         if let (Some(error_node), Some(message)) = (error_node, module_not_found_error) {
+            if std::env::var_os("W3T7PROBE").is_some() {
+                eprintln!(
+                    "w3t7probe resolve_external_module ERROR: module={:?} msg_code={} ser_level={} current_kind={:?}",
+                    module_reference,
+                    message.code(),
+                    self.serialization_level,
+                    self.current_node.map(|n| self.store().node(n).kind)
+                );
+            }
             self.error(error_node, message, &[module_reference.to_string()]);
         }
         None

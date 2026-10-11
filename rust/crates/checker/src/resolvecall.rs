@@ -1909,10 +1909,29 @@ impl Checker {
                 vec![parameter_range, args.len().to_string()],
             );
         }
-        u::new_diagnostic_for_node(
-            self.store(),
-            error_node,
-            message,
+        // Go's too-many case: the span is the FIRST EXCESS argument through
+        // the last argument, SkipTrivia'd (ES5SymbolProperty5's 2554 lands
+        // on the `(0)` argument, not the call node).
+        let file = self.store().file(node.file_id());
+        let text = file.text();
+        let start = args[max_count as usize];
+        let pos = self.store().node(start).pos() as usize;
+        let mut end = self.store().node(args[args.len() - 1]).end() as usize;
+        if end == pos {
+            end += 1;
+        }
+        let pos = tsc_scanner::skip_trivia(text, pos as i32) as usize;
+        if end < pos {
+            end = pos;
+        }
+        tsc_ast::Diagnostic::new(
+            Some(file.as_node_id()),
+            tsc_ast::TextRange::new(pos as i32, end as i32),            message.code(),
+            message.category(),
+            "",
+            Some(message),
+            "",
+            message.key(),
             vec![parameter_range, args.len().to_string()],
         )
     }
