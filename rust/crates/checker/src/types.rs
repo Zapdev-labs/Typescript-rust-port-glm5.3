@@ -1246,6 +1246,25 @@ impl Type {
             _ => None,
         }
     }
+    /// The shared InterfaceType layer (Go's TupleType EMBEDS InterfaceType —
+    /// types.go:1081 — so tuple targets answer both AsTupleType and
+    /// AsInterfaceType; the §5.1 TypeData split keeps Tuple its own variant
+    /// and exposes the embedded layer through this accessor).
+    pub fn as_interface_layer(&self) -> Option<&InterfaceType> {
+        match &self.data {
+            TypeData::Interface(d) => Some(d),
+            TypeData::Tuple(d) => Some(&d.base),
+            _ => None,
+        }
+    }
+    /// Mutable form of [`Type::as_interface_layer`].
+    pub fn as_interface_layer_mut(&mut self) -> Option<&mut InterfaceType> {
+        match &mut self.data {
+            TypeData::Interface(d) => Some(d),
+            TypeData::Tuple(d) => Some(&mut d.base),
+            _ => None,
+        }
+    }
 
     /// Go: `func (t *Type) AsReverseMappedType() *ReverseMappedType`.
     pub fn as_reverse_mapped_type(&self) -> Option<&ReverseMappedType> {

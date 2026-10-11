@@ -810,7 +810,7 @@ impl Checker {
         let already_type_checked = self.source_file_links.get(source_file).type_checked;
         if !already_type_checked {
             // Grammar checking.
-            self.check_grammar_source_file(source_file); // TODO(port M6 W3): grammarchecks.go's file pass (diagnostic-only).
+            self.check_grammar_source_file(source_file);
             self.renamed_binding_elements_in_types = Vec::new();
             let statements: Vec<NodeId> = self
                 .source_file_of(source_file)
@@ -1266,11 +1266,8 @@ impl Checker {
 
     // ── S3/S6 dispatch-arm stubs (the module-head banner map) ──
 
-    /// TODO(port M6 W3): `checkGrammarSourceFile` (grammarchecks.go:2025) —
-    /// the file-level grammar pass; diagnostic-only, permissive no-op.
-    fn check_grammar_source_file(&mut self, source_file: NodeId) {
-        let _ = source_file;
-    }
+    // checkGrammarSourceFile (grammarchecks.go:2025) — the REAL body lives
+    // in grammarchecks.rs (the W3 wave).
 
     // Go: `checkExternalModuleExports` — the real body lives in
     // statements.rs (batch 5, checker.go:5906); the S6 stub was removed.
@@ -2138,13 +2135,13 @@ impl Checker {
                 self.get_fresh_type_of_literal_type(t)
             }
             Kind::NumericLiteral => {
-                // TODO(port M6 W3): checkGrammarNumericLiteral (diagnostic-only).
+                self.check_grammar_numeric_literal(node);
                 let text = tsc_ast::node_text(self.store(), node).to_string();
                 let t = self.get_number_literal_type(tsc_jsnum::from_string(&text));
                 self.get_fresh_type_of_literal_type(t)
             }
             Kind::BigIntLiteral => {
-                // TODO(port M6 W3): checkGrammarBigIntLiteral (diagnostic-only).
+                self.check_grammar_big_int_literal(node);
                 let text = tsc_ast::node_text(self.store(), node).to_string();
                 let t = self.get_big_int_literal_type(tsc_jsnum::new_pseudo_big_int(
                     &tsc_jsnum::parse_pseudo_big_int(&text),

@@ -83,7 +83,7 @@ use crate::test_case_parser::{
 use tsc_ast::{NodeStore, SourceFile, Symbol, SymbolId};
 use tsc_binder::{BindResult, bind_source_file};
 use tsc_checker::{Program, new_checker};
-use tsc_core::options_generated::CompilerOptions;
+use tsc_core::options_generated::{CompilerOptions, ModuleKind};
 use tsc_core::scriptkind::ScriptKind;
 use tsc_parser::parse_source_file;
 
@@ -100,6 +100,9 @@ pub fn src_folder() -> RootedDirectoryPath {
 /// marshaled CompilerOptions.
 struct CheckerUnitProgram {
     options: CompilerOptions,
+    /// The unit's rooted name — the §5.1 parse kept the SourceFile anonymous
+    /// (no file name), so the W3 module-format seams read it from here.
+    name: RootedFilePath,
     source_file: SourceFile,
     bind: BindResult,
     binder_symbol_count: u32,
@@ -144,6 +147,30 @@ impl Program for CheckerUnitProgram {
         self.checker_symbols.push(symbol);
         SymbolId(self.binder_symbol_count + self.checker_symbols.len() as u32 - 1)
     }
+    // ── The W3 grammar seams (Go program.go GetEmitModuleFormatOfFile /
+    // GetSourceFileMetaData).ImpliedNodeFormat) ──
+    //
+    // The unit program carries no module-resolution data (the single-file
+    // checker never resolves), so Go's fileLoader metadata arm is the
+    // SkipModuleResolution shape: implied format from the file name alone,
+    // no package.json "type" (the driver twin's FS map holds only the unit —
+    // the same read fails there too).
+    fn get_emit_module_format_of_file(&self, _file: tsc_ast::NodeId) -> ModuleKind {
+        let implied_node_format =
+            tsc_compiler::ast_shims::get_implied_node_format_for_file(&self.name, "");
+        tsc_compiler::ast_shims::get_emit_module_format_of_file_worker(
+            &self.name,
+            &self.options,
+            &tsc_ast::SourceFileMetaData {
+                package_json_type: String::new(),
+                package_json_directory: Default::default(),
+                implied_node_format,
+            },
+        )
+    }
+    fn source_file_implied_node_format(&self, _file: tsc_ast::NodeId) -> ModuleKind {
+        tsc_compiler::ast_shims::get_implied_node_format_for_file(&self.name, "")
+    }
 }
 
 /// The unit's semantic diagnostics — Go program.go `GetSemanticDiagnostics`'s
@@ -171,6 +198,7 @@ fn semantic_diagnostics_of_unit(
     let file = source_file.as_node_id();
     let mut checker = new_checker(Box::new(CheckerUnitProgram {
         options: options.clone(),
+        name: RootedFilePath::from(name),
         source_file,
         bind,
         binder_symbol_count,

@@ -377,6 +377,11 @@ impl Checker {
     // ────────────────────────────────────────────────────────────────────────
 
     /// Go: `func (c *Checker) getBaseTypes(t) []*Type` (checker.go:19513).
+    ///
+    /// PORT (§5.1 data shape): Go reads `t.AsInterfaceType()` — and Go's
+    /// TupleType embeds InterfaceType (types.go:1081), so the synthesized
+    /// tuple targets answer both accessors. The port routes through the
+    /// shared `as_interface_layer` (Interface + Tuple).
     pub(crate) fn get_base_types_impl(&mut self, t: TypeId) -> Vec<TypeId> {
         if !self
             .type_(t)
@@ -387,8 +392,8 @@ impl Checker {
         }
         let already_resolved = self
             .type_(t)
-            .as_interface_type()
-            .expect("InterfaceType data")
+            .as_interface_layer()
+            .expect("InterfaceType layer")
             .base_types_resolved;
         if !already_resolved {
             if !self.push_type_resolution(
@@ -397,8 +402,8 @@ impl Checker {
             ) {
                 return self
                     .type_(t)
-                    .as_interface_type()
-                    .expect("InterfaceType data")
+                    .as_interface_layer()
+                    .expect("InterfaceType layer")
                     .resolved_base_types
                     .clone();
             }
@@ -407,8 +412,8 @@ impl Checker {
             if self.type_(t).object_flags.intersects(ObjectFlags::TUPLE) {
                 let tuple_base = self.get_tuple_base_type(t);
                 self.type_mut(t)
-                    .as_interface_type_mut()
-                    .expect("InterfaceType data")
+                    .as_interface_layer_mut()
+                    .expect("InterfaceType layer")
                     .resolved_base_types = vec![tuple_base];
             } else if symbol_flags.intersects(SymbolFlags::CLASS.union(SymbolFlags::INTERFACE)) {
                 if symbol_flags.intersects(SymbolFlags::CLASS) {
@@ -440,13 +445,13 @@ impl Checker {
             // partial resolution is reset (Go's comment, GH#16861).
             self.type_mut(t).object_flags &= !ObjectFlags::MEMBERS_RESOLVED;
             self.type_mut(t)
-                .as_interface_type_mut()
-                .expect("InterfaceType data")
+                .as_interface_layer_mut()
+                .expect("InterfaceType layer")
                 .base_types_resolved = true;
         }
         self.type_(t)
-            .as_interface_type()
-            .expect("InterfaceType data")
+            .as_interface_layer()
+            .expect("InterfaceType layer")
             .resolved_base_types
             .clone()
     }
@@ -454,7 +459,7 @@ impl Checker {
     /// Go: `func (c *Checker) getTupleBaseType(t) *Type` (checker.go:19557).
     fn get_tuple_base_type(&mut self, t: TypeId) -> TypeId {
         let (type_parameters, element_infos, readonly) = {
-            let d = self.type_(t).as_interface_type().expect("InterfaceType data");
+            let d = self.type_(t).as_interface_layer().expect("InterfaceType layer");
             let tuple = self.type_(t).as_tuple_type().expect("TupleType data");
             (
                 d.all_type_parameters.clone(),
@@ -1063,7 +1068,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) isValidIndexKeyType(t) bool` (checker.go:20233).
-    fn is_valid_index_key_type(&mut self, t: TypeId) -> bool {
+    pub(crate) fn is_valid_index_key_type(&mut self, t: TypeId) -> bool {
         let flags = self.type_(t).flags;
         if flags.intersects(TypeFlags::STRING.union(TypeFlags::NUMBER).union(TypeFlags::ESSYMBOL)) {
             return true;

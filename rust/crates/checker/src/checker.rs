@@ -162,6 +162,23 @@ pub trait Program {
     fn symbol_mut(&mut self, id: SymbolId) -> &mut Symbol;
     /// Appends a checker-created symbol to the program store.
     fn alloc_symbol(&mut self, symbol: Symbol) -> SymbolId;
+    /// Go: `Program.GetEmitModuleFormatOfFile(sourceFile) core.ModuleKind` —
+    /// the grammar checks' module-format read (the VMS export arm, the
+    /// __esModule marker arm).
+    ///
+    /// PORT (W3 grammar seam): the permissive default mirrors "no program
+    /// metadata" — the testrunner's CheckerUnitProgram overrides it with the
+    /// compiler crate's worker; the real compiler Program overrides with the
+    /// program-level answer.
+    fn get_emit_module_format_of_file(&self, _file: NodeId) -> ModuleKind {
+        ModuleKind::None
+    }
+    /// Go: `Program.GetSourceFileMetaData(path).ImpliedNodeFormat` — the
+    /// Node16-Nodenext await arms' implied-node-format read (the CommonJS
+    /// top-level await/for-await errors).
+    fn source_file_implied_node_format(&self, _file: NodeId) -> ModuleKind {
+        ModuleKind::None
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

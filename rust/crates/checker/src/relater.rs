@@ -3466,7 +3466,7 @@ impl TypeFacts {
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Go: `func visibilityToString(flags ast.ModifierFlags) string`.
-fn visibility_to_string(flags: ModifierFlags) -> &'static str {
+pub(crate) fn visibility_to_string(flags: ModifierFlags) -> &'static str {
     if flags == ModifierFlags::PRIVATE {
         "private"
     } else if flags == ModifierFlags::PROTECTED {
@@ -4621,20 +4621,29 @@ impl Relater {
             // A source type { [P in Q]: X } is related to a target type T if
             // keyof T is related to Q and X is related to T[Q] (Go comment,
             // verbatim).
+            // PORT: Go's short-circuit order — the `source is mapped` and
+            // `nameType is nil` gates come BEFORE the constraint read (the
+            // hoisted read panicked on non-mapped sources; Go evaluates
+            // `source.objectFlags&ObjectFlagsMapped != 0 && ...` first).
             let target_index_type = get_index_type(c, target);
-            let source_mapped_constraint = get_constraint_type_from_mapped_type(c, source);
             if c.type_(source).object_flags.intersects(ObjectFlags::MAPPED)
                 && mapped_type_name_type_is_none(c, source)
-                && ternary_not_false(self.is_related_to(c, target_index_type, source_mapped_constraint, RecursionFlags::BOTH, false))
-                && !get_mapped_type_modifiers(c, source).intersects(MappedTypeModifiers::INCLUDE_OPTIONAL) {
-                    let template_type = get_template_type_from_mapped_type(c, source);
-                    let __lift9 = get_type_parameter_from_mapped_type(c, source);
-                    let indexed_access_type = get_indexed_access_type(c, target, __lift9);
-                    result = self.is_related_to(c, template_type, indexed_access_type, RecursionFlags::BOTH, report_errors);
-                    if result != Ternary::False {
-                        return result;
+            {
+                // PORT: Go evaluates getConstraintTypeFromMappedType only
+                // behind the two gates (the short-circuit order; a hoisted
+                // read panicked on non-mapped sources).
+                let source_mapped_constraint = get_constraint_type_from_mapped_type(c, source);
+                if ternary_not_false(self.is_related_to(c, target_index_type, source_mapped_constraint, RecursionFlags::BOTH, false))
+                    && !get_mapped_type_modifiers(c, source).intersects(MappedTypeModifiers::INCLUDE_OPTIONAL) {
+                        let template_type = get_template_type_from_mapped_type(c, source);
+                        let __lift9 = get_type_parameter_from_mapped_type(c, source);
+                        let indexed_access_type = get_indexed_access_type(c, target, __lift9);
+                        result = self.is_related_to(c, template_type, indexed_access_type, RecursionFlags::BOTH, report_errors);
+                        if result != Ternary::False {
+                            return result;
+                        }
                     }
-                }
+            }
             if self.relation == RelationKind::Comparable && s_flags.intersects(TypeFlags::TYPE_PARAMETER) {
                 // This is a carve-out in comparability (Go comment, verbatim).
                 if let Some(constraint) = get_constraint_of_type_parameter(c, source) {

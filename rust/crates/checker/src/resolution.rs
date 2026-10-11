@@ -3664,7 +3664,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) isLateBindableName(node) bool` (checker.go:20362).
-    fn is_late_bindable_name(&mut self, node: NodeId) -> bool {
+    pub(crate) fn is_late_bindable_name(&mut self, node: NodeId) -> bool {
         if !is_late_bindable_ast(self.store(), node) {
             return false;
         }
@@ -4894,7 +4894,7 @@ fn is_late_bindable_ast(store: &dyn NodeStore, node: NodeId) -> bool {
 }
 
 /// Go: `func getModuleSpecifierFromNode(node) *ast.Node` (checker.go:15346).
-fn get_module_specifier_from_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+pub(crate) fn get_module_specifier_from_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
     match store.node(node).kind {
         Kind::ImportDeclaration | Kind::JSImportDeclaration | Kind::ExportDeclaration => {
             binder_node_data::module_specifier_of(store, node)

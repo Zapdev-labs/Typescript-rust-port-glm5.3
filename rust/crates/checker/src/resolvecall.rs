@@ -2179,9 +2179,9 @@ impl Checker {
     /// Go: `func (c *Checker) checkCallExpression(node, checkMode) *Type`
     /// (checker.go:8580).
     pub(crate) fn check_call_expression(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
-        // TODO(port M6 grammar wave): Go passes node.TypeArguments() (the
-        // list node); the permissive grammar checker ignores it either way.
-        self.check_grammar_type_arguments(node, None);
+        // Go: node.TypeArguments() — the list node for the grammar checker.
+        let type_arguments = crate::grammarchecks::type_argument_list_of(self.store(), node).cloned();
+        self.check_grammar_type_arguments(node, type_arguments.as_ref());
         let signature = self.get_resolved_signature_ex(node, None, check_mode);
         if signature == self.resolving_signature {
             // CheckMode.SkipGenericFunctions is enabled and this is a call to
@@ -2245,8 +2245,7 @@ impl Checker {
     /// (checker.go:8476).
     pub(crate) fn check_import_call_expression(&mut self, node: NodeId) -> TypeId {
         // Check grammar of dynamic import
-        // TODO(port M6 S3): checkGrammarImportCallExpression rides the
-        // grammar-check surface.
+        self.check_grammar_import_call_expression(node);
         let args = binder_node_data::arguments_of(self.store(), node).to_vec();
         if args.is_empty() {
             // No call arguments exist, so there are no child expressions to

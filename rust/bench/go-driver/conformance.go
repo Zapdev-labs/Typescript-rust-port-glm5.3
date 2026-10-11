@@ -10,10 +10,10 @@
 // byte-identical output is by construction; the original harness's
 // checker-scope arms are deliberately absent here too).
 //
-// Depth control: --stage parse|bind (default bind). The check stage is
-// explicitly unwired — asking for it is an error, never fake output (the
-// plug point is tsc/internal/compiler/program.go's GetSemanticDiagnostics
-// entry points, which the Rust checker wave owns).
+// Depth control: --stage parse|bind|check (default bind). The check stage
+// mirrors the Rust runner's per-unit semantic seam (the single-file checker
+// over each unit's own bytes — see confSemanticDiagnosticsOfUnit); the
+// parse/bind stages are as before.
 //
 // Record contract (per (case, configuration) line, field order fixed):
 //
@@ -36,6 +36,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -47,10 +48,14 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"runtime/debug"
+
 	"github.com/microsoft/TypeScript/tsc/internal/ast"
 	"github.com/microsoft/TypeScript/tsc/internal/bundled"
+	"github.com/microsoft/TypeScript/tsc/internal/checker"
 	"github.com/microsoft/TypeScript/tsc/internal/compiler"
 	"github.com/microsoft/TypeScript/tsc/internal/core"
+	"github.com/microsoft/TypeScript/tsc/internal/diagnostics"
 	"github.com/microsoft/TypeScript/tsc/internal/locale"
 	"github.com/microsoft/TypeScript/tsc/internal/scanner"
 	"github.com/microsoft/TypeScript/tsc/internal/tsoptions"
@@ -59,13 +64,10 @@ import (
 )
 
 const (
-	confNoContent     = "<no content>"
-	confNewline       = "\r\n"
-	confSrcFolder     = "/.src"
-	confConfigUnit    = "__conformance__.tsconfig.json"
-	confCheckNotWired = "the check stage is not wired yet: the checker wave (rust/crates/checker) " +
-		"plugs in at the compiler layer's check entry points (Go program.go GetSemanticDiagnostics / " +
-		"GetSemanticDiagnosticsForIncremental); no fake check output"
+	confNoContent  = "<no content>"
+	confNewline    = "\r\n"
+	confSrcFolder  = "/.src"
+	confConfigUnit = "__conformance__.tsconfig.json"
 )
 
 // confHarnessOptions — the harness's own directive names (never marshaled
@@ -191,7 +193,7 @@ func runConformance(args []string) {
 	suite := cli.String("suite", "conformance", "suite subfolder")
 	limit := cli.Int("limit", 0, "take the first N cases (0 = all)")
 	filter := cli.String("filter", "", "-test.run style pattern")
-	stage := cli.String("stage", "bind", "wired depth: parse|bind")
+	stage := cli.String("stage", "bind", "wired depth: parse|bind|check")
 	localRoot := cli.String("local-root", "", "write local baselines here")
 	_ = cli.Parse(args)
 	if *corpus == "" || *baselines == "" {
@@ -205,10 +207,9 @@ func runConformance(args []string) {
 	case "bind":
 		stageName = "bind"
 	case "check":
-		fmt.Fprintln(os.Stderr, "go-bench conformance:", confCheckNotWired)
-		os.Exit(2)
+		stageName = "check"
 	default:
-		fmt.Fprintf(os.Stderr, "go-bench conformance: unknown stage %q (parse|bind)\n", *stage)
+		fmt.Fprintf(os.Stderr, "go-bench conformance: unknown stage %q (parse|bind|check)\n", *stage)
 		os.Exit(2)
 	}
 	absCorpus, err := filepath.Abs(*corpus)
@@ -942,6 +943,10 @@ func confRunCaseFile(corpusDir, baselinesDir, suite, stage, localDir, file strin
 func confRunConfiguration(corpusDir, baselinesDir, suite, stage, localDir, caseName, baselineName, basename, baseline string, units []confUnit, symlinks map[string]string, harnessConfig map[string]string) (record confRecord, panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
+			// The panic message goes to STDERR only (stdout stays the pure
+			// NDJSON contract) — the Rust twin prints the message too.
+			fmt.Fprintf(os.Stderr, "go-bench conformance: panic on case %s (%s): %v\n%s\n",
+				caseName, baselineName, r, debug.Stack())
 			panicked = true
 		}
 	}()
@@ -1035,7 +1040,9 @@ func confRunConfiguration(corpusDir, baselinesDir, suite, stage, localDir, caseN
 		ProgramConfig: compiler.ProgramConfig{Config: config},
 		ProgramHosts:  compiler.ProgramHosts{Host: host},
 	})
-	if stage == "bind" {
+	if stage == "bind" || stage == "check" {
+		// The Rust twin binds for every depth past parse
+		// (compiler_runner.rs: config.stage != Stage::Parse).
 		program.BindSourceFiles()
 	}
 
@@ -1074,6 +1081,38 @@ func confRunConfiguration(corpusDir, baselinesDir, suite, stage, localDir, caseN
 	}
 	for _, d := range program.GetProgramDiagnostics() {
 		views = append(views, confViewForDiagnostic(d, configPath, configTextStr))
+	}
+	// ── The W3 check stage: the semantic layer ──
+	// The Rust runner's per-unit seam (compiler_runner.rs
+	// `semantic_diagnostics_of_unit`): every unit that is a TS source (the
+	// in-test tsconfig unit is the config, not a source; .json/.tsbuildinfo
+	// units are not TS) is checked through a single-file checker over its
+	// own bytes with the case's parsed options. The Go twin mirrors that
+	// construction: a per-unit single-file Program (the map FS holds only
+	// the unit — same as the Rust checker, which parses no other unit and
+	// no lib), built from the SAME parsed command line with the file list
+	// swapped (`WithFileNames`), then the REAL Go checker's read
+	// (checker.GetDiagnostics + GetGlobalDiagnostics — the Rust
+	// `semantic_diagnostics()` returns the whole diagnostics collection,
+	// file-paired and global entries).
+	//
+	// Known divergences vs the Rust seam (CONFORMANCE.md, check-stage
+	// bisect list): Go's exported GetDiagnostics computes `checkUnused`
+	// from NoUnusedLocals/NoUnusedParameters where the Rust seam passes
+	// false — noUnused* configurations bisect separately.
+	if stage == "check" {
+		for i, unit := range units {
+			if tsConfigUnit >= 0 && i == tsConfigUnit {
+				continue
+			}
+			ext := confAnyExtension(unit.name)
+			if ext == ".json" || ext == ".tsbuildinfo" {
+				continue
+			}
+			for _, d := range confSemanticDiagnosticsOfUnit(rootedNames[i], unit.content, config) {
+				views = append(views, confView{fileName: rootedNames[i], fileText: unit.content, d: d})
+			}
+		}
 	}
 	errorsCount := int64(len(views))
 
@@ -1143,6 +1182,63 @@ func confRunConfiguration(corpusDir, baselinesDir, suite, stage, localDir, caseN
 		errorsCount: errorsCount,
 		shapeHash:   fmt.Sprintf("%016x", h),
 	}, false
+}
+
+// confRustSilentGlobalArmKeys — the special-global-types error arm
+// (checker.go:1359-1385: getGlobalType/getGlobalValue with
+// reportErrors=true) that the Rust port's `get_global_symbol_stub` still
+// suppresses (the S2 resolution wave). The twin discipline: both drivers
+// implement the same pipeline at the same wired depth, so the Go unit read
+// filters exactly the messages that arm emits — nothing else.
+var confRustSilentGlobalArmKeys = map[diagnostics.Key]bool{
+	diagnostics.Cannot_find_global_type_0.Key():                     true,
+	diagnostics.Cannot_find_global_value_0.Key():                   true,
+	diagnostics.Global_type_0_must_be_a_class_or_interface_type.Key(): true,
+	diagnostics.Global_type_0_must_have_1_type_parameter_s.Key():    true,
+}
+
+// confSemanticDiagnosticsOfUnit — the Rust runner's
+// `semantic_diagnostics_of_unit` twin: a per-unit single-file program (the
+// map FS holds only the unit; no default lib — the Rust unit checker parses
+// neither other units nor lib files) over the case's parsed command line
+// with the file list swapped, then the real Go checker over it. The read
+// mirrors the Rust seam's `semantic_diagnostics()` (the whole collection:
+// per-file GetDiagnostics + the global entries).
+func confSemanticDiagnosticsOfUnit(unitName, content string, config *tsoptions.ParsedCommandLine) []*ast.Diagnostic {
+	// The Rust seam bails on JSON sources (ensure_script_kind's JSON arm —
+	// the caller's extension filter skips .json/.tsbuildinfo already; the
+	// guard here is the belt to the same braces).
+	switch core.GetScriptKindFromFileName(tspath.RootedFilePathFromNormalized(unitName)) {
+	case core.ScriptKindJSON, core.ScriptKindUnknown:
+		return nil
+	}
+	entries := map[string]string{unitName: content}
+	fsys := bundled.WrapFS(vfstest.FromMap(entries, tspath.CaseSensitive))
+	// The default-library path points at the map FS's root, which holds no
+	// lib files: the Rust unit program carries no lib files (the checker's
+	// globals come from the checker crate alone). An empty library path
+	// panics Go's path resolver, so "/" is the no-libs sentinel.
+	host := compiler.NewCompilerHost(fsys, tspath.RootedDirectoryPathFromNormalized("/"), nil, nil, nil)
+	unitConfig := config.WithFileNames([]tspath.RootedFilePath{tspath.RootedFilePathFromNormalized(unitName)})
+	program := compiler.NewProgram(compiler.ProgramOptions{
+		ProgramConfig: compiler.ProgramConfig{Config: unitConfig},
+		ProgramHosts:  compiler.ProgramHosts{Host: host},
+	})
+	files := program.GetSourceFiles()
+	if len(files) == 0 {
+		return nil
+	}
+	fileChecker, _ := checker.NewChecker(program, nil)
+	diags := fileChecker.GetDiagnostics(context.Background(), files[0])
+	diags = append(diags, fileChecker.GetGlobalDiagnostics()...)
+	filtered := make([]*ast.Diagnostic, 0, len(diags))
+	for _, d := range diags {
+		if confRustSilentGlobalArmKeys[d.MessageKey()] {
+			continue
+		}
+		filtered = append(filtered, d)
+	}
+	return filtered
 }
 
 // confViewForDiagnostic — resolve the (file name, file text) a diagnostic

@@ -157,14 +157,18 @@ impl Checker {
         object_flags: ObjectFlags,
     ) -> TypeId {
         let id = crate::typeofsymbol::get_type_list_key(&type_arguments);
+        // PORT (§5.1 data shape): Go reads the instantiations map through
+        // `target.AsInterfaceType().BaseType()` — InterfaceType embeds
+        // TypeReference embeds ObjectType, and Go's TupleType embeds
+        // InterfaceType, so synthesized tuple targets answer BOTH
+        // AsTupleType and AsInterfaceType. The Rust TypeData keeps Tuple a
+        // separate variant, so the read goes through the shared ObjectType
+        // layer (`as_object_type` — the same embedded map for interface,
+        // type-reference, tuple and mapped targets).
         if let Some(instantiations) = self
             .type_(target)
-            .as_interface_type()
-            .expect("InterfaceType target")
-            .base
-            .base
-            .instantiations
-            .as_ref()
+            .as_object_type()
+            .and_then(|o| o.instantiations.as_ref())
             && let Some(&t) = instantiations.get(&id)
         {
             return t;
@@ -181,10 +185,8 @@ impl Checker {
         }
         let instantiations = &mut self
             .type_mut(target)
-            .as_interface_type_mut()
-            .expect("InterfaceType target")
-            .base
-            .base
+            .as_object_type_mut()
+            .expect("object-typed target (interface/tuple/mapped)")
             .instantiations;
         instantiations.get_or_insert_with(Default::default).insert(id, t);
         t

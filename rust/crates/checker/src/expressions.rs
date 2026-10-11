@@ -1858,8 +1858,15 @@ impl Checker {
             }
             let symbol = self.type_(object_literal_type).symbol;
             let t = self.get_rest_type(object_literal_type, &non_rest_names, symbol);
+            // Go: checkGrammarForDisallowedTrailingComma(allProperties, …) —
+            // allProperties is the object literal's own properties NodeList.
+            let properties_list = self
+                .store()
+                .node(node)
+                .as_object_literal_expression()
+                .and_then(|d| d.properties.clone());
             self.check_grammar_for_disallowed_trailing_comma(
-                all_properties,
+                properties_list.as_ref(),
                 &A_REST_PARAMETER_OR_BINDING_PATTERN_MAY_NOT_HAVE_A_TRAILING_COMMA,
             );
             let expression = crate::ast_shims::expression_of(self.store(), property)
@@ -2003,8 +2010,15 @@ impl Checker {
                 if is_binary_equals {
                     self.error(operator_token, &A_REST_ELEMENT_CANNOT_HAVE_AN_INITIALIZER, &[]);
                 } else {
+                    // Go: checkGrammarForDisallowedTrailingComma(elements, …) —
+                    // the array literal's own elements NodeList.
+                    let elements_list = self
+                        .store()
+                        .node(node)
+                        .as_array_literal_expression()
+                        .and_then(|d| d.elements.clone());
                     self.check_grammar_for_disallowed_trailing_comma(
-                        Some(elements.as_slice()),
+                        elements_list.as_ref(),
                         &A_REST_PARAMETER_OR_BINDING_PATTERN_MAY_NOT_HAVE_A_TRAILING_COMMA,
                     );
                     let all_tuples = self
@@ -2244,13 +2258,6 @@ impl Checker {
         expr_type
     }
 
-    /// Go: `func (c *Checker) checkGrammarExpressionWithTypeArguments(node) bool`
-    /// (grammarchecks.go). TODO(port M6 W3): permissive false (no error).
-    pub(crate) fn check_grammar_expression_with_type_arguments(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
     /// Go: `func (c *Checker) checkSatisfiesExpression(node) *Type` (checker.go:10975).
     pub(crate) fn check_satisfies_expression(&mut self, node: NodeId) -> TypeId {
         let type_node = crate::ast_shims::type_of_node(self.store(), node)
@@ -2276,6 +2283,8 @@ impl Checker {
 
     /// Go: `func (c *Checker) checkMetaProperty(node) *Type` (checker.go:10987).
     pub(crate) fn check_meta_property(&mut self, node: NodeId) -> TypeId {
+        // Go: checkGrammarMetaProperty(node) runs before the dispatch.
+        self.check_grammar_meta_property(node);
         let keyword_token = self
             .store()
             .node(node)
@@ -2444,11 +2453,9 @@ impl Checker {
         awaited_type
     }
 
-    /// Go: `func (c *Checker) checkGrammarAwaitOrAwaitUsing(node)` (grammarchecks.go).
-    /// TODO(port M6 W3): permissive no-op.
-    pub(crate) fn check_grammar_await_or_await_using(&mut self, node: NodeId) {
-        let _ = node;
-    }
+    // checkGrammarAwaitOrAwaitUsing (grammarchecks.go:1658) — the REAL body
+    // lives in grammarchecks.rs; the checkAwaitExpression leaf discards the
+    // bool like Go.
 
     /// Go: `func (c *Checker) checkPrefixUnaryExpression(node) *Type` (checker.go:11091).
     pub(crate) fn check_prefix_unary_expression(&mut self, node: NodeId) -> TypeId {
@@ -2948,18 +2955,6 @@ impl Checker {
             }
             _ => false,
         }
-    }
-
-    /// Go: `func (c *Checker) checkGrammarDisallowedTrailingComma(node, diagnostic) bool`
-    /// (grammarchecks.go). TODO(port M6 W3): permissive no-op (the
-    /// trailing-comma grammar family).
-    pub(crate) fn check_grammar_for_disallowed_trailing_comma(
-        &mut self,
-        list: Option<&[NodeId]>,
-        diagnostic: &'static Message,
-    ) -> bool {
-        let _ = (list, diagnostic);
-        false
     }
 
     /// Go: `func (c *Checker) getIndexedAccessTypeOrUndefined(t, key, keyNode, accessNode) *Type`
@@ -4319,7 +4314,7 @@ impl Checker {
     /// (checker.go:8039).
     pub(crate) fn check_private_identifier_expression(&mut self, node: NodeId) -> TypeId {
         // Grammar checking
-        // TODO(port M6 W3): checkGrammarPrivateIdentifierExpression.
+        self.check_grammar_private_identifier_expression(node);
         let symbol = self.get_symbol_for_private_identifier_expression(node);
         if let Some(symbol) = symbol {
             self.mark_property_as_referenced(symbol, None /*nodeForCheckWriteOnly*/, false /*isSelfTypeAccess*/);
@@ -4658,26 +4653,20 @@ impl Checker {
             .intersects(crate::types::NodeCheckFlags::TYPE_CHECKED)
         {
             self.node_links.get(node).flags |= crate::types::NodeCheckFlags::TYPE_CHECKED;
-            // TODO(port M6 W3): checkGrammarRegularExpressionLiteral — the
-            // scanner-level regex diagnostics (grammarchecks.go).
-            let _ = self
-                .store()
-                .node(node)
-                .as_regular_expression_literal()
-                .expect("RegularExpressionLiteral data");
+            self.check_grammar_regular_expression_literal(node);
         }
         self.global_regexp_type.expect("globalRegExpType")
     }
 
     /// Go: `func (c *Checker) checkTaggedTemplateExpression(node) *Type` (checker.go:10259).
     pub(crate) fn check_tagged_template_expression(&mut self, node: NodeId) -> TypeId {
-        // Go: checkGrammarTaggedTemplateChain / checkGrammarTypeArguments —
-        // TODO(port M6 W3): the optional-chain grammar family; permissive.
-        let _ = self
-            .store()
-            .node(node)
-            .as_tagged_template_expression()
-            .expect("TaggedTemplateExpression data");
+        // Go: if !checkGrammarTaggedTemplateChain(node) {
+        //         c.checkGrammarTypeArguments(node, node.TypeArgumentList()) }
+        if !self.check_grammar_tagged_template_chain(node) {
+            let type_arguments =
+                crate::grammarchecks::type_argument_list_of(self.store(), node).cloned();
+            self.check_grammar_type_arguments(node, type_arguments.as_ref());
+        }
         // TODO(port M6 S6): getResolvedSignature(node, nil, CheckModeNormal)
         // — resolveTaggedTemplate shares S6's overload-resolution engine;
         // the seam composes Go's errorSignature shape (silent-never return).
@@ -6235,8 +6224,7 @@ impl Checker {
         let in_destructuring_pattern =
             tsc_binder::ast_shims::is_assignment_target(self.store(), node);
         // Grammar checking
-        // TODO(port M6 W3): checkGrammarObjectLiteralExpression.
-        let _ = in_destructuring_pattern;
+        self.check_grammar_object_literal_expression(node, in_destructuring_pattern);
         let strict_null_checks = self.strict_null_checks;
         let mut all_properties_table: Option<tsc_ast::SymbolTable> =
             strict_null_checks.then(tsc_ast::SymbolTable::new);

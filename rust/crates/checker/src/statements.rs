@@ -348,252 +348,6 @@ impl Checker {
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// The W3 grammar-check stub family (grammarchecks.go — wave 13).
-//
-// PORT: every stub returns Go's "no error reported" (`false` for the bool
-// producers, `true` for the `checkGrammarXxxInAmbientContext`-style gates
-// where Go returns true when it REPORTED). The names map 1:1; the W3 wave
-// replaces the bodies and keeps the call sites.
-// ────────────────────────────────────────────────────────────────────────────
-
-#[allow(dead_code)] // the W3 grammar stub family: callers land across the remaining M6 batches
-impl Checker {
-    /// Go: `func (c *Checker) checkGrammarModifiers(node) bool` — TODO(port M6 W3).
-    pub(crate) fn check_grammar_modifiers(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `checkGrammarStatementInAmbientContext` — TODO(port M6 W3).
-    /// Go returns true when it reported (callers use `!`).
-    pub(crate) fn check_grammar_statement_in_ambient_context(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) grammarErrorOnNode(node, message, args...) bool`.
-    /// TODO(port M6 W3): the grammar-diagnostic helpers. Permissive: emits
-    /// nothing, returns false (no error reported).
-    pub(crate) fn grammar_error_on_node(
-        &mut self,
-        node: NodeId,
-        message: &'static Message,
-        args: &[String],
-    ) -> bool {
-        let _ = (node, message, args);
-        false
-    }
-
-    /// Go: `func (c *Checker) grammarErrorOnFirstToken(node, message, args...) bool`.
-    pub(crate) fn grammar_error_on_first_token(
-        &mut self,
-        node: NodeId,
-        message: &'static Message,
-        args: &[String],
-    ) -> bool {
-        let _ = (node, message, args);
-        false
-    }
-
-    /// Go: `func (c *Checker) grammarErrorAtPos(file, pos, length, message, args...)`.
-    pub(crate) fn grammar_error_at_pos(
-        &mut self,
-        file: NodeId,
-        pos: TextPos,
-        length: i32,
-        message: &'static Message,
-        args: &[String],
-    ) {
-        let _ = (file, pos, length, message, args);
-    }
-
-    /// Go: `func (c *Checker) checkGrammarProperty(node) bool` — TODO(port M6 W3).
-    pub(crate) fn check_grammar_property(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarComputedPropertyName(node) *Type` —
-    /// checker.go:27336 (S10's computed-name family). Permissive: the
-    /// errorType answer (Go returns the checked expression type; the
-    /// callers that compare two of these for identity still match).
-    pub(crate) fn check_grammar_computed_property_name_stub(&mut self, node: NodeId) -> TypeId {
-        let _ = node;
-        self.error_type()
-    }
-
-    /// Go: `func (c *Checker) checkGrammarFunctionLikeDeclaration(node) bool`.
-    pub(crate) fn check_grammar_function_like_declaration(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarIndexSignature(node) bool`.
-    pub(crate) fn check_grammar_index_signature(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarConstructorTypeParameters(ctor) bool`.
-    pub(crate) fn check_grammar_constructor_type_parameters(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarConstructorTypeAnnotation(ctor) bool`.
-    pub(crate) fn check_grammar_constructor_type_annotation(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarAccessor(node) bool`.
-    pub(crate) fn check_grammar_accessor(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarMethod(node) bool`.
-    pub(crate) fn check_grammar_method(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarTypeArguments(node, typeArgumentList) bool`.
-    pub(crate) fn check_grammar_type_arguments(
-        &mut self,
-        node: NodeId,
-        type_argument_list: Option<NodeId>,
-    ) -> bool {
-        let _ = (node, type_argument_list);
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarVariableDeclarationList(list) bool`.
-    pub(crate) fn check_grammar_variable_declaration_list(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarForDisallowedBlockScopedVariableStatement(stmt) bool`.
-    pub(crate) fn check_grammar_for_disallowed_block_scoped_variable_statement(
-        &mut self,
-        node: NodeId,
-    ) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarVariableDeclaration(decl) bool`.
-    pub(crate) fn check_grammar_variable_declaration(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarBindingElement(decl) bool`.
-    pub(crate) fn check_grammar_binding_element(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarForInOrForOfStatement(stmt) bool`.
-    pub(crate) fn check_grammar_for_in_or_for_of_statement(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarBreakOrContinueStatement(node) bool`.
-    pub(crate) fn check_grammar_break_or_continue_statement(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarModuleElementContext(node, contextErrorMessage) bool`.
-    #[allow(dead_code)] // wired with the S3 class/module batch (checkModuleDeclaration)
-    pub(crate) fn check_grammar_module_element_context(
-        &mut self,
-        node: NodeId,
-        context_error_message: &'static Message,
-    ) -> bool {
-        let _ = (node, context_error_message);
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarClassLikeDeclaration(node) bool`.
-    #[allow(dead_code)] // wired with the S3 class batch (checkClassLikeDeclaration)
-    pub(crate) fn check_grammar_class_like_declaration(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarInterfaceDeclaration(decl) bool`.
-    #[allow(dead_code)] // wired with the S3 interface batch (checkInterfaceDeclaration)
-    pub(crate) fn check_grammar_interface_declaration(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarMappedType(node) bool`.
-    pub(crate) fn check_grammar_mapped_type(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarTypeOperatorNode(node) bool`.
-    pub(crate) fn check_grammar_type_operator_node(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarForGenerator(node) bool`.
-    pub(crate) fn check_grammar_for_generator(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarYieldExpression(node) bool`.
-    pub(crate) fn check_grammar_yield_expression(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarImportClause(clause) bool`.
-    pub(crate) fn check_grammar_import_clause(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarImportAttributeValues(attrs) bool`.
-    pub(crate) fn check_grammar_import_attribute_values(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarImportAttributesType(node) bool`.
-    pub(crate) fn check_grammar_import_attributes_type(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarExportDeclaration(decl) bool`.
-    pub(crate) fn check_grammar_export_declaration(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) checkGrammarDecorator(node) bool`.
-    pub(crate) fn check_grammar_decorator(&mut self, node: NodeId) -> bool {
-        let _ = node;
-        false
-    }
-
-    /// Go: `func (c *Checker) hasParseDiagnostics(sourceFile) bool` — the
-    /// parser diagnostics read (permissive false).
-    pub(crate) fn has_parse_diagnostics(&self, source_file: NodeId) -> bool {
-        let _ = source_file;
-        false
-    }
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Statement checks (Go checker.go:3759-4304)
@@ -4023,7 +3777,7 @@ impl Checker {
         }
         // For a computed property, just check the initializer and exit.
         if self.store().node(name).kind == Kind::ComputedPropertyName {
-            self.check_grammar_computed_property_name_stub(name);
+            self.check_grammar_computed_property_name(name);
             if let Some(initializer) = initializer {
                 self.check_expression_cached(initializer);
             }
@@ -4070,7 +3824,7 @@ impl Checker {
             if prop_name
                 .is_some_and(|p| self.store().node(p).kind == Kind::ComputedPropertyName)
             {
-                self.check_grammar_computed_property_name_stub(prop_name.expect("checked"));
+                self.check_grammar_computed_property_name(prop_name.expect("checked"));
             }
             // check private/protected variable access
             let grandparent = self.store().node(parent).parent.get();
@@ -5714,7 +5468,7 @@ impl Checker {
         let name = self.store().node(node).name();
         if !self.check_grammar_modifiers(node) && !self.check_grammar_property(node) {
             if let Some(name) = name {
-                self.check_grammar_computed_property_name_stub(name);
+                self.check_grammar_computed_property_name(name);
             }
         }
         self.check_variable_like_declaration(node);
@@ -5878,8 +5632,7 @@ impl Checker {
         let name = self.store().node(node).name();
         if !self.check_grammar_method(node) {
             if let Some(name) = name {
-                let t = self.check_grammar_computed_property_name_stub(name);
-                let _ = t;
+                self.check_grammar_computed_property_name(name);
             }
             if self.store().node(node).kind == Kind::MethodDeclaration {
                 let d = self
@@ -6049,8 +5802,7 @@ impl Checker {
         let name = self.store().node(node).name();
         if !self.check_grammar_function_like_declaration(node) && !self.check_grammar_accessor(node) {
             if let Some(name) = name {
-                let t = self.check_grammar_computed_property_name_stub(name);
-                let _ = t;
+                self.check_grammar_computed_property_name(name);
             }
         }
         if name.is_some_and(|n| is_identifier(self.store().node(n)))
@@ -6080,8 +5832,7 @@ impl Checker {
         // well known symbols. We want to perform checkComputedPropertyName
         // for all computed properties, including well known symbols.
         if name.is_some_and(|n| self.store().node(n).kind == Kind::ComputedPropertyName) {
-            let t = self.check_grammar_computed_property_name_stub(name.expect("checked"));
-            let _ = t;
+            self.check_grammar_computed_property_name(name.expect("checked"));
         }
         if self.has_bindable_name(node) {
             // TypeScript 1.0 spec (April 2014): 8.4.3
@@ -6132,9 +5883,9 @@ impl Checker {
     /// Go: `func (c *Checker) checkTypeReferenceNode(node)` (checker.go:3028).
     pub(crate) fn check_type_reference_node(&mut self, node: NodeId) {
         // Go: node.TypeArgumentList() — the Rust payload keeps the list
-        // inline; the W3 grammar stub takes the list node, which the
-        // permissive stub ignores.
-        self.check_grammar_type_arguments(node, None);
+        // inline; the W3 grammar checker takes the list node.
+        let type_arguments = crate::grammarchecks::type_argument_list_of(self.store(), node).cloned();
+        self.check_grammar_type_arguments(node, type_arguments.as_ref());
         // Go: the JSDoc DotToken scan between TypeName and TypeArguments is
         // a W3 scanner-seam fact; TODO(port M6 W3): ScanTokenAtPosition.
         let type_arguments = type_arguments_of(self.store(), node);
@@ -6623,7 +6374,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) checkTypeOperator(node)` (checker.go:3315).
     pub(crate) fn check_type_operator(&mut self, node: NodeId) {
-        // TODO(port M6 W3): checkGrammarTypeOperatorNode; permissive.
+        self.check_grammar_type_operator_node(node);
         let type_node = self
             .store()
             .node(node)
@@ -6786,7 +6537,7 @@ impl Checker {
             .as_mapped_type_node()
             .expect("MappedTypeNode data")
             .clone();
-        // TODO(port M6 W3): checkGrammarMappedType; permissive.
+        self.check_grammar_mapped_type(node);
         self.check_source_element(Some(d.type_parameter));
         self.check_source_element(d.name_type);
         self.check_source_element(d.type_);
@@ -6841,8 +6592,7 @@ impl Checker {
         // well known symbols.
         if let Some(name) = self.store().node(node).name() {
             if self.store().node(name).kind == Kind::ComputedPropertyName {
-                let t = self.check_grammar_computed_property_name_stub(name);
-                let _ = t;
+                self.check_grammar_computed_property_name(name);
             }
         }
         if self.has_bindable_name(node) {
@@ -7548,7 +7298,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) checkClassLikeDeclaration(node)` (checker.go:4340).
     pub(crate) fn check_class_like_declaration(&mut self, node: NodeId) {
-        // TODO(port M6 W3): checkGrammarClassLikeDeclaration; permissive.
+        self.check_grammar_class_like_declaration(node);
         self.check_decorators(node);
         self.check_collisions_for_declaration_name_stub(node, self.store().node(node).name());
         let type_parameters = type_parameters_of(self.store(), node);
@@ -9455,7 +9205,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) checkImportAttributesType(attributes)` (checker.go:5370).
     pub(crate) fn check_import_attributes_type(&mut self, attributes: NodeId) {
-        // TODO(port M6 W3): checkGrammarImportAttributesType; permissive.
+        self.check_grammar_import_attributes_type(attributes);
         self.check_source_element(Some(attributes));
         // TODO(port M6 S5): getGlobalImportAttributesTypeChecked — the
         // global ImportAttributes type seam; permissive emptyObjectType
@@ -11097,7 +10847,7 @@ fn is_contained_by_namespace(store: &dyn NodeStore, node: NodeId) -> bool {
 }
 
 /// Go: `getVerbatimModuleSyntaxErrorMessage(node)` (checker.go:5889).
-fn get_verbatim_module_syntax_error_message(
+pub(crate) fn get_verbatim_module_syntax_error_message(
     store: &dyn NodeStore,
     node: NodeId,
 ) -> &'static Message {
