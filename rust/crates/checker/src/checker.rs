@@ -305,6 +305,26 @@ pub struct Checker {
     pub(crate) false_type: Option<TypeId>,
     pub(crate) regular_true_type: Option<TypeId>,
     pub(crate) true_type: Option<TypeId>,
+    // ── M6 S7 (uniontypes.rs): the union-constructed intrinsic types Go
+    // builds eagerly in NewChecker (checker.go:1013-1022) ──
+    /// Go: `booleanType *Type` — getUnionType([regularFalse, regularTrue]).
+    pub(crate) boolean_type: Option<TypeId>,
+    /// Go: `stringOrNumberType *Type`.
+    pub(crate) string_or_number_type: Option<TypeId>,
+    /// Go: `stringNumberSymbolType *Type`.
+    pub(crate) string_number_symbol_type: Option<TypeId>,
+    /// Go: `numberOrBigIntType *Type`.
+    pub(crate) number_or_bigint_type: Option<TypeId>,
+    /// Go: `numericStringType *Type` — the `${number}` template literal type.
+    pub(crate) numeric_string_type: Option<TypeId>,
+    /// Go: `templateConstraintType *Type`.
+    pub(crate) template_constraint_type: Option<TypeId>,
+    /// Go: `unknownEmptyObjectType *Type` (NewChecker's anonymous seed).
+    pub(crate) unknown_empty_object_type: Option<TypeId>,
+    /// Go: `unknownUnionType *Type` — createUnknownUnionType (checker.go:1037;
+    /// REAL since M6 S7: the undefined | null | unknownEmptyObjectType union
+    /// under strictNullChecks, else unknownType).
+    pub(crate) unknown_union_type: Option<TypeId>,
     pub(crate) es_symbol_type: Option<TypeId>,
     pub(crate) void_type: Option<TypeId>,
     pub(crate) never_type: Option<TypeId>,
@@ -314,6 +334,9 @@ pub struct Checker {
     pub(crate) non_primitive_type: Option<TypeId>,
     pub(crate) unique_literal_type: Option<TypeId>,
     pub(crate) empty_string_type: Option<TypeId>,
+    /// Go: `typeofType *Type` — the "bigint|boolean|function|number|object|string|symbol|undefined"
+    /// literal-word union (checker.go:1063; REAL since M6 S7).
+    pub(crate) typeof_type: Option<TypeId>,
     pub(crate) zero_type: Option<TypeId>,
     pub(crate) zero_bigint_type: Option<TypeId>,
     // TODO(port M6): booleanType, stringOrNumberType, stringNumberSymbolType,
@@ -394,10 +417,9 @@ pub struct Checker {
     /// Go: the `*Relater` free list (`c.freeRelater`). PORT: the pool is a
     /// stack of idle relaters; `get_relater`/`put_relater` in relater.rs.
     pub(crate) free_relater: Vec<crate::relater::Relater>,
-    /// Go: `anyArrayType *Type` — NewChecker's `createArrayType(anyType)`.
-    /// TODO(port M6 S7): createArrayType constructs a type reference; until
-    /// that lands the field holds anyType (the array-ness consumers gate on
-    /// `isArrayType`, itself a permissive S7 stub, so no behavior diverges).
+    /// Go: `anyArrayType *Type` — NewChecker's `createArrayType(anyType)`
+    /// (REAL since M6 S7: the interned type reference via globalArrayType,
+    /// seeded by initialize_checker before this field's assignment).
     pub(crate) any_array_type: TypeId,
     /// Go: `globalArrayType`/`globalReadonlyArrayType`/`globalObjectType`/
     /// `globalFunctionType` — the globals' declared types (S2 getGlobal*).
@@ -557,6 +579,38 @@ pub struct Checker {
     /// Go: `mergedSymbols map[*ast.Symbol]*ast.Symbol` (checker.go:14861's
     /// getMergedSymbol record table).
     pub(crate) merged_symbols: FxHashMap<SymbolId, SymbolId>,
+    // ── M6 S7 (uniontypes.rs): the type-construction engine's state ──
+    /// Go: `unionTypes map[CacheHashKey]*Type` — the interned-union table
+    /// (checker.go's getUnionTypeFromSortedList cache).
+    pub(crate) union_types: FxHashMap<crate::todo_shapes::CacheHashKey, TypeId>,
+    /// Go: `intersectionTypes map[CacheHashKey]*Type`.
+    pub(crate) intersection_types: FxHashMap<crate::todo_shapes::CacheHashKey, TypeId>,
+    /// Go: `subtypeReductionCache map[CacheHashKey][]*Type` — removeSubtypes'
+    /// memo (the key is getTypeListKey of the input).
+    pub(crate) subtype_reduction_cache: FxHashMap<crate::todo_shapes::CacheHashKey, Vec<TypeId>>,
+    /// Go: `unionOfUnionTypes map[UnionOfUnionKey]*Type` — getUnionTypeEx's
+    /// 2-constituent-with-union fast path.
+    pub(crate) union_of_union_types: FxHashMap<crate::uniontypes::UnionOfUnionKey, TypeId>,
+    /// Go: `templateLiteralTypes map[CacheHashKey]*Type`.
+    pub(crate) template_literal_types: FxHashMap<crate::todo_shapes::CacheHashKey, TypeId>,
+    /// Go: `stringMappingTypes map[StringMappingKey]*Type` (PORT: the
+    /// symbol+target pair keys directly; TypeId is Copy/Eq/Hash).
+    pub(crate) string_mapping_types: FxHashMap<(SymbolId, TypeId), TypeId>,
+    /// Go: `instantiationStack []*Type` — instantiateType's depth-guard stack.
+    pub(crate) instantiation_stack: Vec<TypeId>,
+    /// Go: `substitutionTypes map[SubstitutionTypeKey]*Type` (checker.go —
+    /// getOrCreateSubstitutionType's intern table; PORT: the base/constraint
+    /// id pair keys directly).
+    pub(crate) substitution_types: FxHashMap<(u32, u32), TypeId>,
+    /// Go: `uniqueLiteralMapper *TypeMapper` — REAL (M6 S7: seeded in
+    /// new_checker with newFunctionTypeMapper).
+    pub(crate) permissive_mapper: Option<TypeMapperId>,
+    /// Go: `restrictiveMapper *TypeMapper`.
+    pub(crate) restrictive_mapper: Option<TypeMapperId>,
+    /// Go: `reportUnreliableMapper *TypeMapper`.
+    pub(crate) report_unreliable_mapper: Option<TypeMapperId>,
+    /// Go: `reportUnmeasurableMapper *TypeMapper`.
+    pub(crate) report_unmeasurable_mapper: Option<TypeMapperId>,
 }
 
 /// Go: `func createFileIndexMap(files []*ast.SourceFile) map[*ast.SourceFile]int`.
@@ -638,6 +692,16 @@ impl Checker {
         false_type => false_type,
         regular_true_type => regular_true_type,
         true_type => true_type,
+        // M6 S7: the union-constructed intrinsic types (uniontypes.rs owns
+        // the constructors; the fields are non-nil after new_checker).
+        boolean_type => boolean_type,
+        string_or_number_type => string_or_number_type,
+        string_number_symbol_type => string_number_symbol_type,
+        number_or_bigint_type => number_or_bigint_type,
+        numeric_string_type => numeric_string_type,
+        template_constraint_type => template_constraint_type,
+        unknown_empty_object_type => unknown_empty_object_type,
+        unknown_union_type => unknown_union_type,
         es_symbol_type => es_symbol_type,
         void_type => void_type,
         never_type => never_type,
@@ -647,6 +711,7 @@ impl Checker {
         non_primitive_type => non_primitive_type,
         unique_literal_type => unique_literal_type,
         empty_string_type => empty_string_type,
+        typeof_type => typeof_type,
         zero_type => zero_type,
         zero_bigint_type => zero_bigint_type,
         // M6 S2: the constraint sentinels (seeded in new_checker per Go
@@ -657,19 +722,10 @@ impl Checker {
     }
 
     /// Go: the `booleanType` field — `getUnionType([regularFalseType,
-    /// regularTrueType])` (checker.go's initializeChecker). The M6 S4
-    /// expression leaves (checkBinaryExpression's comparison arms,
-    /// checkPrefixUnaryExpression's `!`, checkDeleteExpression) call it on
-    /// live test paths, so the field is constructed lazily through the S7
-    /// relater union seam instead of panicking: multi-constituent unions
-    /// answer errorType under the seam (relater.rs's pinned S7 TODO) — the
-    /// documented trajectory until S7's real union constructor lands.
-    pub fn boolean_type(&mut self) -> TypeId {
-        let false_t = self.regular_false_type.expect("regular_false_type");
-        let true_t = self.regular_true_type.expect("regular_true_type");
-        crate::relater::get_union_type(self, vec![false_t, true_t])
-    }
-
+    /// regularTrueType])` (checker.go:1013). REAL (M6 S7): the field is now
+    /// constructed eagerly in new_checker through the interned union
+    /// constructor (uniontypes.rs).
+    //
     /// The `missingType` id as an `Option`-free helper for utilities.rs.
     pub(crate) fn missing_type_id(&self) -> TypeId {
         self.missing_type.expect("missing_type")
@@ -767,23 +823,11 @@ impl Checker {
         t
     }
 
-    /// Go: `func (c *Checker) getRegularTypeOfLiteralType(t *Type) *Type`.
-    #[allow(dead_code)] // exercised by the spike tests; in-lib callers land in M6
-    pub(crate) fn get_regular_type_of_literal_type(&mut self, t: TypeId) -> TypeId {
-        if self.type_(t).flags.intersects(TypeFlags::FRESHABLE) {
-            return self
-                .type_(t)
-                .as_literal_type()
-                .expect("LiteralType data")
-                .regular_type
-                .expect("regularType");
-        }
-        if self.type_(t).flags.intersects(TypeFlags::UNION) {
-            // Go: u.regularType = c.mapType(...) — TODO(port M6): mapType.
-            panic!("TODO(port M6): getRegularTypeOfLiteralType union arm needs mapType");
-        }
-        t
-    }
+    // Go: `func (c *Checker) getRegularTypeOfLiteralType(t *Type) *Type` —
+    // REMOVED (M6 S7): superseded by uniontypes.rs's real body (same
+    // signature; the union arm now maps the freshable constituents instead
+    // of panicking).
+
 
     /// Go: `func (c *Checker) getFreshTypeOfLiteralType(t *Type) *Type`.
     pub(crate) fn get_fresh_type_of_literal_type(&mut self, t: TypeId) -> TypeId {
@@ -1184,17 +1228,11 @@ impl Checker {
         t
     }
 
-    /// Go: `func (c *Checker) instantiateType(t *Type, mapper *TypeMapper) *Type`
-    /// (checker.go — the M6 S7 instantiation engine). Permissive W1 stub:
-    /// identity — Go's `instantiateType` returns `t` unchanged for an
-    /// identity mapping, so composite-mapper flows stay exact for
-    /// identity mappers until S7 lands.
-    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
-    pub(crate) fn instantiate_type(&mut self, t: TypeId, mapper: TypeMapperId) -> TypeId {
-        let _ = mapper;
-        // TODO(port M6 S7): instantiateTypeWorker + the activeMappers caches.
-        t
-    }
+    // Go: `func (c *Checker) instantiateType(t *Type, mapper *TypeMapper) *Type`
+    // (checker.go — the M6 S7 instantiation engine) — REAL body landed in
+    // uniontypes.rs (`instantiateType` → `instantiateTypeWorker` with the
+    // activeMappers caches); this W1 identity stub is retired.
+    // (no body follows — the comment block records the retirement.)
 
     // (inferFromIntraExpressionSites/getInferredType moved to inference.rs —
     // M6 W2's real bodies; mapper.rs's InferenceTypeMapper calls them through
@@ -1475,6 +1513,7 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         non_primitive_type: None,
         unique_literal_type: None,
         empty_string_type: None,
+        typeof_type: None,
         zero_type: None,
         zero_bigint_type: None,
         type_resolutions: Vec::new(),
@@ -1580,6 +1619,27 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         unresolved_symbols: FxHashMap::default(),
         resolving_default_type: None,
         merged_symbols: FxHashMap::default(),
+        // M6 S7 (uniontypes.rs) state.
+        union_types: FxHashMap::default(),
+        intersection_types: FxHashMap::default(),
+        subtype_reduction_cache: FxHashMap::default(),
+        union_of_union_types: FxHashMap::default(),
+        template_literal_types: FxHashMap::default(),
+        string_mapping_types: FxHashMap::default(),
+        instantiation_stack: Vec::new(),
+        substitution_types: FxHashMap::default(),
+        permissive_mapper: None,
+        restrictive_mapper: None,
+        report_unreliable_mapper: None,
+        report_unmeasurable_mapper: None,
+        boolean_type: None,
+        string_or_number_type: None,
+        string_number_symbol_type: None,
+        number_or_bigint_type: None,
+        numeric_string_type: None,
+        template_constraint_type: None,
+        unknown_empty_object_type: None,
+        unknown_union_type: None,
     };
 
     // Go: countGlobalSymbols sizes the globals table — a capacity hint; the
@@ -1684,7 +1744,13 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
             .expect("LiteralType data")
             .fresh_type = Some(true_type);
     }
-    // TODO(port M6): c.booleanType = c.getUnionType([]*Type{c.regularFalseType, c.regularTrueType})
+    // Go: c.booleanType = c.getUnionType([]*Type{c.regularFalseType, c.regularTrueType})
+    // — REAL (M6 S7: the interned union constructor landed in uniontypes.rs).
+    {
+        let regular_false = c.regular_false_type.expect("just created");
+        let regular_true = c.regular_true_type.expect("just created");
+        c.boolean_type = Some(c.get_union_type(&[regular_false, regular_true]));
+    }
     c.es_symbol_type = Some(c.new_intrinsic_type(TypeFlags::ESSYMBOL, "symbol"));
     c.void_type = Some(c.new_intrinsic_type(TypeFlags::VOID, "void"));
     c.never_type = Some(c.new_intrinsic_type(TypeFlags::NEVER, "never"));
@@ -1694,12 +1760,80 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     c.implicit_never_type = Some(c.new_intrinsic_type(TypeFlags::NEVER, "never"));
     c.unreachable_never_type = Some(c.new_intrinsic_type(TypeFlags::NEVER, "never"));
     c.non_primitive_type = Some(c.new_intrinsic_type(TypeFlags::NON_PRIMITIVE, "object"));
-    // TODO(port M6): stringOrNumberType / stringNumberSymbolType /
-    // numberOrBigIntType / numericStringType / templateConstraintType —
-    // union + template-literal construction.
+    // Go: stringOrNumberType / stringNumberSymbolType / numberOrBigIntType /
+    // numericStringType / templateConstraintType (checker.go:1018-1022) —
+    // REAL (M6 S7).
+    {
+        let number_type = c.number_type.expect("just created");
+        let string_type = c.string_type.expect("just created");
+        let es_symbol_type = c.es_symbol_type.expect("just created");
+        let bigint_type = c.bigint_type.expect("just created");
+        let boolean_type = c.boolean_type.expect("just created");
+        let null_type = c.null_type.expect("just created");
+        let undefined_type = c.undefined_type.expect("just created");
+        c.string_or_number_type = Some(c.get_union_type(&[string_type, number_type]));
+        c.string_number_symbol_type = Some(c.get_union_type(&[string_type, number_type, es_symbol_type]));
+        c.number_or_bigint_type = Some(c.get_union_type(&[number_type, bigint_type]));
+        c.numeric_string_type = Some(c.get_template_literal_type(
+            &[String::new(), String::new()],
+            &[number_type],
+        )); // The `${number}` type
+        c.template_constraint_type = Some(c.get_union_type(&[
+            string_type,
+            number_type,
+            boolean_type,
+            bigint_type,
+            null_type,
+            undefined_type,
+        ]));
+    }
     c.unique_literal_type = Some(c.new_intrinsic_type(TypeFlags::NEVER, "never")); // Special `never` flagged by union reduction to behave as a literal
-    // TODO(port M6): uniqueLiteralMapper and the four report/restrict/
-    // permissive function type mappers (mapper.go).
+    // Go: uniqueLiteralMapper + the four report/restrict/permissive function
+    // type mappers (checker.go:1023-1027) — REAL (M6 S7: the mapper arena +
+    // the instantiate engine).
+    {
+        c.unique_literal_mapper = Some(c.new_function_type_mapper(Box::new(
+            |c: &mut Checker, t: TypeId| c.get_unique_literal_type_for_type_parameter(t),
+        )));
+        c.permissive_mapper = Some(c.new_function_type_mapper(Box::new(
+            |c: &mut Checker, t: TypeId| {
+                if c.type_(t).flags.intersects(TypeFlags::TYPE_PARAMETER) {
+                    c.wildcard_type()
+                } else {
+                    t
+                }
+            },
+        )));
+        c.restrictive_mapper = Some(c.new_function_type_mapper(Box::new(
+            |c: &mut Checker, t: TypeId| {
+                if c.type_(t).flags.intersects(TypeFlags::TYPE_PARAMETER) {
+                    c.get_restrictive_type_parameter(t)
+                } else {
+                    t
+                }
+            },
+        )));
+        c.report_unreliable_mapper = Some(c.new_function_type_mapper(Box::new(
+            |c: &mut Checker, t: TypeId| {
+                let markers = [c.marker_super_type, c.marker_sub_type, c.marker_other_type];
+                if markers.contains(&Some(t)) {
+                    c.reliability_flags |=
+                        crate::relater::RelationComparisonResult::REPORTS_UNRELIABLE;
+                }
+                t
+            },
+        )));
+        c.report_unmeasurable_mapper = Some(c.new_function_type_mapper(Box::new(
+            |c: &mut Checker, t: TypeId| {
+                let markers = [c.marker_super_type, c.marker_sub_type, c.marker_other_type];
+                if markers.contains(&Some(t)) {
+                    c.reliability_flags |=
+                        crate::relater::RelationComparisonResult::REPORTS_UNMEASURABLE;
+                }
+                t
+            },
+        )));
+    }
     // TODO(port M6): emptyObjectType family (newAnonymousType), marker
     // type parameters (newTypeParameter), noTypePredicate, anySignature
     // family (newSignature).
@@ -1728,6 +1862,16 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     c.empty_string_type = Some(c.get_string_literal_type(""));
     c.zero_type = Some(c.get_number_literal_type(Number(0.0)));
     c.zero_bigint_type = Some(c.get_big_int_literal_type(PseudoBigInt::default()));
+    // Go (checker.go:1063): typeofType = getUnionType(sorted(typeofNEFacts keys)
+    // mapped through getStringLiteralType) — REAL (M6 S7: the union
+    // constructor landed with uniontypes.rs).
+    let typeof_words = [
+        "bigint", "boolean", "function", "number", "object", "string", "symbol", "undefined",
+    ]
+    .iter()
+    .map(|&word| c.get_string_literal_type(word))
+    .collect::<Vec<_>>();
+    c.typeof_type = Some(c.get_union_type(&typeof_words));
     // Go (checker.go 1045): the marker type parameters — newTypeParameter(nil)
     // twice for the super/sub pair (sub's constraint = super), once for other.
     let marker_super_type = c.new_type(
@@ -1793,6 +1937,13 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     // note lives there).
     c.empty_object_type = Some(c.new_anonymous_type(None, &[]));
     c.empty_generic_type = Some(c.new_anonymous_type(None, &[]));
+    // Go: `c.unknownEmptyObjectType = c.newAnonymousType(nil, nil, nil, nil, nil)`
+    // (checker.go:1033) — REAL (M6 S7; removeSubtypes/createUnknownUnionType
+    // compare against it).
+    c.unknown_empty_object_type = Some(c.new_anonymous_type(None, &[]));
+    // Go (checker.go:1037): unknownUnionType = createUnknownUnionType() —
+    // REAL (M6 S7; spine.rs's ctor over the seeded fields above).
+    c.unknown_union_type = Some(c.create_unknown_union_type());
     c.any_function_type = Some(c.new_anonymous_type_ex(
         None,
         &[],
@@ -1828,13 +1979,10 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     c.marker_super_type_for_check = Some(marker_super_for_check);
     c.marker_sub_type_for_check = Some(marker_sub_for_check);
 
-    // Go (checker.go 1372): `c.anyArrayType = c.createArrayType(c.anyType)`.
-    // TODO(port M6 S7): createArrayType constructs the type reference; until
-    // that wave the field holds anyType (see the field PORT note).
-    c.any_array_type = c.any_type.expect("just created");
     // Go: initializeChecker (checker.go:1309) — the spine.rs port over the
     // program's files (globals merge + the deferred seeding + the special
-    // global types).
+    // global types). Go's initializeChecker seeds globalArrayType (1363)
+    // BEFORE anyArrayType (1372), so the port runs the same order.
     c.files = c
         .program
         .source_files()
@@ -1842,8 +1990,13 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         .map(|f| f.as_node_id())
         .collect();
     c.initialize_checker();
-    // TODO(port M6): typeofType = getUnionType(...typeofNEFacts), the flow
-    // caches, the Relations, initializeClosures/initializeIterationResolvers.
+    // Go (checker.go 1372): `c.anyArrayType = c.createArrayType(c.anyType)` —
+    // REAL (M6 S7): the interned type-reference constructor landed with
+    // uniontypes.rs, and initializeChecker has seeded globalArrayType above.
+    c.any_array_type = c.create_array_type(c.any_type.expect("just created"));
+    // TODO(port M6): the flow caches, the Relations,
+    // initializeClosures/initializeIterationResolvers. (typeofType landed
+    // with M6 S7 — see the seeding above.)
     c
 }
 

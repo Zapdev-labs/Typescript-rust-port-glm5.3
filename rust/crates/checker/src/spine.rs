@@ -2714,7 +2714,10 @@ impl Checker {
         let any_type = self.any_type();
         self.any_array_type = self.create_array_type(any_type);
         let auto_type = self.auto_type();
-        self.auto_array_type = Some(self.create_array_type_stub(auto_type));
+        // REAL (M6 S7): the interned type-reference constructor; Go's marker
+        // comparison against emptyObjectType rides the ctor's no-lib fallback
+        // (createTypeFromGenericGlobalType's emptyGenericType arm) exactly.
+        self.auto_array_type = Some(self.create_array_type(auto_type));
         if self.auto_array_type == Some(self.empty_object_type()) {
             // autoArrayType is used as a marker, so even if global Array
             // type is not defined, it needs to be a unique type.
@@ -3227,32 +3230,23 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) createUnknownUnionType() *Type` (checker.go:25570).
-    #[allow(dead_code)] // unknownUnionType's consumer (getUnionType) is S7
-    fn create_unknown_union_type(&mut self) -> TypeId {
+    pub(crate) fn create_unknown_union_type(&mut self) -> TypeId {
         if self.strict_null_checks {
             // Go: getUnionType([undefinedType, nullType, unknownEmptyObjectType])
-            // — TODO(port M6 S7): the union constructor; the permissive
-            // empty-anonymous stand-in keeps the field non-nil without
-            // fabricating union identity (S7 replaces).
-            self.new_anonymous_type(None, &[])
+            // — REAL (M6 S7: uniontypes.rs's constructor; the
+            // unknownEmptyObjectType seed is Go's removeSubtypes anchor).
+            let undefined_t = self.undefined_type();
+            let null_t = self.null_type();
+            let empty_object = self.unknown_empty_object_type();
+            self.get_union_type(&[undefined_t, null_t, empty_object])
         } else {
             self.unknown_type()
         }
     }
 
-    /// Go: `func (c *Checker) createArrayType(elementType *Type) *Type`
-    /// (checker.go:25235) → createArrayTypeEx → createTypeFromGenericGlobalType.
-    /// TODO(port M6 S7): the type-reference construction. PORT: the relater's
-    /// W2 `create_array_type` keeps its permissive identity for the rest-type
-    /// ladder; this spine-local variant carries the no-lib fallback answer
-    /// Go's NewChecker comparison reads (`autoArrayType == emptyObjectType`).
-    fn create_array_type_stub(&mut self, element_type: TypeId) -> TypeId {
-        let _ = element_type;
-        // Go's createTypeFromGenericGlobalType falls back to emptyObjectType
-        // when the generic global is the empty placeholder — the stub value
-        // at this depth (no libs ⇒ globalArrayType IS emptyGenericType/emptyObjectType).
-        self.empty_object_type()
-    }
+    // Go: `func (c *Checker) createArrayType(elementType *Type) *Type`
+    // (checker.go:25235) → createArrayTypeEx → createTypeFromGenericGlobalType
+    // — REAL since M6 S7 (uniontypes.rs's interned ctor; the stub is gone).
 
     /// Go: `func (c *Checker) createTypeFromGenericGlobalType(genericGlobalType, typeArguments) *Type`
     /// (checker.go:25202) — the empty-placeholder fallback arm.

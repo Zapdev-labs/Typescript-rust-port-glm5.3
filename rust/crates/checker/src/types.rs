@@ -1222,9 +1222,26 @@ impl Type {
         }
     }
 
+    /// Mutable form of [`Type::as_instantiation_expression_type`] (M6 S7).
+    pub fn as_instantiation_expression_type_mut(&mut self) -> Option<&mut InstantiationExpressionType> {
+        match &mut self.data {
+            TypeData::InstantiationExpression(d) => Some(d),
+            _ => None,
+        }
+    }
+
     /// Go: `func (t *Type) AsMappedType() *MappedType`.
     pub fn as_mapped_type(&self) -> Option<&MappedType> {
         match &self.data {
+            TypeData::Mapped(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// Mutable form of [`Type::as_mapped_type`] (M6 S7: the mapped-type
+    /// instantiation's constraint/typeParameter writes).
+    pub fn as_mapped_type_mut(&mut self) -> Option<&mut MappedType> {
+        match &mut self.data {
             TypeData::Mapped(d) => Some(d),
             _ => None,
         }
@@ -1257,6 +1274,14 @@ impl Type {
     /// Go: `func (t *Type) AsUnionType() *UnionType`.
     pub fn as_union_type(&self) -> Option<&UnionType> {
         match &self.data {
+            TypeData::Union(d) => Some(d),
+            _ => None,
+        }
+    }
+    /// Mutable form of [`Type::as_union_type`] (M6 S7: the union origin and
+    /// regularType writes in the union-construction engine).
+    pub fn as_union_type_mut(&mut self) -> Option<&mut UnionType> {
+        match &mut self.data {
             TypeData::Union(d) => Some(d),
             _ => None,
         }
@@ -1410,6 +1435,15 @@ impl Type {
         match &self.data {
             TypeData::Union(d) => Some(&d.base),
             TypeData::Intersection(d) => Some(&d.base),
+            _ => None,
+        }
+    }
+
+    /// Mutable form of [`Type::as_union_or_intersection_type`] (M6 S7).
+    pub fn as_union_or_intersection_type_mut(&mut self) -> Option<&mut UnionOrIntersectionType> {
+        match &mut self.data {
+            TypeData::Union(d) => Some(&mut d.base),
+            TypeData::Intersection(d) => Some(&mut d.base),
             _ => None,
         }
     }

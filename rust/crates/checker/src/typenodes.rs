@@ -461,9 +461,9 @@ pub(crate) fn is_reducible_intersection(c: &mut Checker, t: TypeId) -> bool {
         match existing {
             Some(i) => i,
             None => {
-                // TODO(port M6 S7): instantiateType with the uniqueLiteralMapper
-                // (the field seeds with S7's unique-literal mapper); the
-                // identity instantiation keeps the reducibility answer false.
+                // REAL (M6 S7): instantiateType over the seeded
+                // uniqueLiteralMapper (uniontypes.rs's engine); the memo
+                // field preserves Go's fill-once answer.
                 let mapper = match c.unique_literal_mapper {
                     Some(m) => m,
                     None => return false,
@@ -1271,7 +1271,7 @@ impl Checker {
     /// — REAL ctor (the new* block, but every dependency — newType + the
     /// UniqueESSymbolType payload — landed with S1/S2; landing it keeps the
     /// relater's unique-symbol arms exact instead of esSymbolType-permissive).
-    fn new_unique_es_symbol_type(&mut self, symbol: SymbolId, name: String) -> TypeId {
+    pub(crate) fn new_unique_es_symbol_type(&mut self, symbol: SymbolId, name: String) -> TypeId {
         let data = TypeData::UniqueESSymbol(Box::new(types::UniqueESSymbolType { name }));
         let t = self.new_type(TypeFlags::UNIQUE_ESSYMBOL, ObjectFlags::NONE, data);
         self.type_mut(t).symbol = Some(symbol);
@@ -1471,7 +1471,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getSymbolFromTypeReference(node) *ast.Symbol` (checker.go:23609).
-    fn get_symbol_from_type_reference(&mut self, node: NodeId) -> SymbolId {
+    pub(crate) fn get_symbol_from_type_reference(&mut self, node: NodeId) -> SymbolId {
         if self
             .symbol_node_links
             .get(node)
@@ -1656,11 +1656,9 @@ impl Checker {
             );
             let mut type_arguments = outer_type_parameters;
             type_arguments.extend(local_type_arguments);
-            // TODO(port M6 S7): createTypeReferenceEx(t, typeArguments,
-            // ObjectFlagsFromTypeNode) — the reference ctor seam (identity);
-            // the FROM_TYPE_NODE object flag rides with the real ctor.
-            let _ = ObjectFlags::FROM_TYPE_NODE;
-            self.create_type_reference(t, type_arguments)
+            // REAL (M6 S7): createTypeReferenceEx carries the FROM_TYPE_NODE
+            // object flag to the interned reference ctor.
+            self.create_type_reference_ex(t, type_arguments, ObjectFlags::FROM_TYPE_NODE)
         } else if self.check_no_type_arguments(node, Some(symbol)) {
             t
         } else {
@@ -1847,7 +1845,7 @@ impl Checker {
     /// Go: `func (c *Checker) createDeferredTypeReference(target, node, mapper, alias) *Type` (checker.go:25655)
     /// — REAL ctor (newObjectType + the TypeReference payload fields all
     /// landed; the deferred type-argument resolution is S7's instantiateType).
-    fn create_deferred_type_reference(
+    pub(crate) fn create_deferred_type_reference(
         &mut self,
         target: TypeId,
         node: NodeId,
@@ -1857,7 +1855,8 @@ impl Checker {
         let mut alias = alias;
         if alias.is_none() {
             alias = self.get_alias_for_type_node(node);
-            // TODO(port M6 S7): instantiateTypes(alias.typeArguments, mapper).
+            // TODO(port M6 S8): instantiateTypes(alias.typeArguments, mapper)
+            // — rides S8's alias-mapper instantiation paths.
         }
         let symbol = self.type_(target).symbol;
         let t = self.new_object_type(ObjectFlags::REFERENCE, symbol);
@@ -1876,8 +1875,7 @@ impl Checker {
     // ── normalized tuple references ──
 
     /// Go: `func (c *Checker) createNormalizedTypeReference(target, typeArguments) *Type` (checker.go:23816).
-    #[allow(dead_code)] // the S7 instantiate* engine consumes it
-    fn create_normalized_type_reference(&mut self, target: TypeId, type_arguments: Vec<TypeId>) -> TypeId {
+    pub(crate) fn create_normalized_type_reference(&mut self, target: TypeId, type_arguments: Vec<TypeId>) -> TypeId {
         if self.type_(target).object_flags.intersects(ObjectFlags::TUPLE) {
             return self.create_normalized_tuple_type(target, type_arguments);
         }
@@ -1979,25 +1977,15 @@ impl Checker {
 
     /// Go: `func (c *Checker) createNormalizedTupleType(target, elementTypes) *Type` (checker.go:23870).
     #[allow(dead_code)] // the S7 instantiate* engine consumes it
-    fn create_normalized_tuple_type(&mut self, target: TypeId, element_types: Vec<TypeId>) -> TypeId {
+    pub(crate) fn create_normalized_tuple_type(&mut self, target: TypeId, element_types: Vec<TypeId>) -> TypeId {
         self.create_normalized_tuple_type_ex(target, element_types, ObjectFlags::NONE)
     }
 
-    /// Go: `func (c *Checker) createTypeReferenceEx(target, typeArguments, objectFlags) *Type`
-    /// (checker.go — S7's ctor). PINNED SEAM: relater.rs's identity stub; S5
-    /// calls through it (the FROM_TYPE_NODE flag and the resolved arguments
-    /// ride with the real S7 ctor).
-    fn create_type_reference_ex(
-        &mut self,
-        target: TypeId,
-        type_arguments: Vec<TypeId>,
-        object_flags: ObjectFlags,
-    ) -> TypeId {
-        let _ = object_flags;
-        // TODO(port M6 S7): the real type-reference constructor (newTypeReference
-        // + resolvedTypeArguments + getPropagatingFlagsOfTypes).
-        self.create_type_reference(target, type_arguments)
-    }
+    // Go: `func (c *Checker) createTypeReferenceEx(target, typeArguments, objectFlags) *Type`
+    // (checker.go — S7's ctor) — M6 S7: uniontypes.rs owns the REAL interned
+    // constructor; this pinned seam is retired (S5 callers now resolve to
+    // the real body, which carries the FROM_TYPE_NODE propagating flags and
+    // resolvedTypeArguments).
 
     /// Go: `func (c *Checker) getElementTypes(t) []*Type` (checker.go:23990) —
     /// REAL body (replaces the W2 permissive reader in inference.rs).
@@ -2166,7 +2154,7 @@ impl Checker {
         let filled =
             self.fill_missing_type_arguments(&type_arguments, &type_parameters, min_type_argument_count, is_js);
         let mapper = self.new_type_mapper(&type_parameters, &filled);
-        let instantiation = self.instantiate_type_with_alias(t, mapper, alias);
+        let instantiation = self.instantiate_type_with_alias(t, Some(mapper), alias);
         let links = self.type_alias_links.get(symbol);
         if links.instantiations.is_none() {
             links.instantiations = Some(rustc_hash::FxHashMap::default());
@@ -2179,21 +2167,11 @@ impl Checker {
         instantiation
     }
 
-    /// Go: `func (c *Checker) instantiateTypeWithAlias(t, m, alias) *Type` (checker.go:22563).
-    ///
-    /// PORT (S7 seam): the identity instantiateType stub carries no alias
-    /// onto created types; the alias annotation on instantiated types is the
-    /// only loss (the instantiation cache keys carry it either way).
-    pub(crate) fn instantiate_type_with_alias(
-        &mut self,
-        t: TypeId,
-        m: TypeMapperId,
-        alias: Option<Box<TypeAlias>>,
-    ) -> TypeId {
-        // TODO(port M6 S7): the real engine sets t.alias for created types.
-        let _ = alias;
-        self.instantiate_type(t, m)
-    }
+    // Go: `func (c *Checker) instantiateTypeWithAlias(t, m, alias) *Type`
+    // (checker.go:22563) — M6 S7: uniontypes.rs owns the REAL engine (alias
+    // is carried onto created types and the instantiation cache keys include
+    // it); this S5 identity stub is retired. Callers pass `Some(m)`.
+
 
     /// Go: `func (c *Checker) getAliasForTypeNode(node) *TypeAlias` (checker.go:24318).
     fn get_alias_for_type_node(&mut self, node: NodeId) -> Option<Box<TypeAlias>> {
@@ -2464,7 +2442,7 @@ impl Checker {
                 .iter()
                 .map(|&n| self.get_type_from_type_node(n))
                 .collect();
-            // TODO(port M6 S7): getUnionTypeEx (the union constructor).
+            // REAL (M6 S7): getUnionTypeEx via the relater delegate.
             let t = crate::relater::get_union_type_ex(
                 self,
                 types,
@@ -2513,7 +2491,7 @@ impl Checker {
                             && is_pattern_literal_type(self, t));
                 }
             }
-            // TODO(port M6 S7): getIntersectionTypeEx (the intersection ctor).
+            // REAL (M6 S7): getIntersectionTypeEx via the relater delegate.
             let flags = if no_supertype_reduction {
                 crate::relater::IntersectionFlags::NO_SUPERTYPE_REDUCTION
             } else {
@@ -2567,7 +2545,7 @@ impl Checker {
                 texts.push(literal_text);
                 types.push(self.get_type_from_type_node(span_type));
             }
-            // TODO(port M6 S7): getTemplateLiteralType (the constructor).
+            // REAL (M6 S7): getTemplateLiteralType via the relater delegate.
             let t = crate::relater::get_template_literal_type(self, &texts, &types);
             self.type_node_links.get(node).resolved_type = Some(t);
         }
@@ -2974,7 +2952,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getTupleTargetType(elementInfos, readonly) *Type` (checker.go:25312).
-    fn get_tuple_target_type(&mut self, element_infos: Vec<TupleElementInfo>, readonly: bool) -> TypeId {
+    pub(crate) fn get_tuple_target_type(&mut self, element_infos: Vec<TupleElementInfo>, readonly: bool) -> TypeId {
         if element_infos.len() == 1 && element_infos[0].flags.intersects(ElementFlags::REST) {
             // [...X[]] is equivalent to just X[]
             if readonly {
@@ -2998,7 +2976,7 @@ impl Checker {
     /// 0: T0, 1: T1, ... }`. Note that the generic type created by this
     /// function has no symbol associated with it. The same is true for each
     /// of the synthesized type parameters.
-    fn create_tuple_target_type(&mut self, element_infos: Vec<TupleElementInfo>, readonly: bool) -> TypeId {
+    pub(crate) fn create_tuple_target_type(&mut self, element_infos: Vec<TupleElementInfo>, readonly: bool) -> TypeId {
         let arity = element_infos.len();
         let min_length = element_infos
             .iter()

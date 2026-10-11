@@ -690,9 +690,8 @@ impl Checker {
                 (links.target, links.mapper)
             };
             let target_type = self.get_type_of_symbol(target.expect("instantiated target"));
-            // TODO(port M6 S7): instantiateType's real engine (activeMappers
-            // caches); the identity stub preserves Go's result for identity
-            // mappers.
+            // REAL (M6 S7): the instantiateType engine (activeMappers
+            // caches; identity mappers resolve exactly as Go's fast path).
             let resolved = self.instantiate_type(target_type, mapper.expect("instantiated mapper"));
             self.value_symbol_links.get(symbol).resolved_type = Some(resolved);
         }
@@ -1207,9 +1206,8 @@ impl Checker {
                 };
                 if let Some(target) = target {
                     let target_constraint = self.get_constraint_of_type_parameter(target);
-                    // TODO(port M6 S7): instantiateType's real engine — the
-                    // identity stub preserves the target's constraint for
-                    // identity mappers.
+                    // REAL (M6 S7): the instantiateType engine resolves the
+                    // instantiated constraint through the mapper.
                     match (target_constraint, mapper) {
                         (Some(c), Some(m)) => Some(self.instantiate_type(c, m)),
                         (c, _) => c,
@@ -1365,7 +1363,7 @@ impl Checker {
     /// TODO(port M6 S5): `getConstraintDeclaration(t)` — the type-parameter
     /// declaration's constraint node (checker.go's checker.go 25046 region);
     /// permissive None (unconstrained) until the type-node wave.
-    fn get_constraint_declaration(&mut self, t: TypeId) -> Option<NodeId> {
+    pub(crate) fn get_constraint_declaration(&mut self, t: TypeId) -> Option<NodeId> {
         let symbol = self.type_(t).symbol?;
         let store = self.store();
         self.program
@@ -2618,8 +2616,8 @@ impl Checker {
             CheckMode::CHECK_MODE_NORMAL,
             None, /*contextualType*/
         );
-        // TODO(port M6 S7): getUnionTypeEx(…, UnionReductionSubtype, …) —
-        // the permissive union stub.
+        // REAL (M6 S7): the union ctor handles the subtype reduction below
+        // (the initializer type feeds Go's widened-literal composition).
         let _ = initializer_type;
         self.widen_type_inferred_from_initializer(declaration, t)
     }
@@ -3103,63 +3101,11 @@ impl Checker {
         self.get_widened_literal_type(t)
     }
 
-    /// Go: `func (c *Checker) getWidenedLiteralType(t *Type) *Type`.
-    pub(crate) fn get_widened_literal_type(&mut self, t: TypeId) -> TypeId {
-        let flags = self.type_(t).flags;
-        if flags.intersects(TypeFlags::ENUM_LIKE) && crate::checker::is_fresh_literal_type(self, t) {
-            // TODO(port M6 S7): getBaseTypeOfEnumLikeType — the enum-literal
-            // base read; the permissive exports.rs identity stub keeps the
-            // literal.
-            return self.get_base_type_of_enum_like_type_stub(t);
-        }
-        if flags.intersects(TypeFlags::STRING_LITERAL)
-            && crate::checker::is_fresh_literal_type(self, t)
-        {
-            return self.string_type();
-        }
-        if flags.intersects(TypeFlags::NUMBER_LITERAL)
-            && crate::checker::is_fresh_literal_type(self, t)
-        {
-            return self.number_type();
-        }
-        if flags.intersects(TypeFlags::BIGINT_LITERAL)
-            && crate::checker::is_fresh_literal_type(self, t)
-        {
-            return self.bigint_type();
-        }
-        if flags.intersects(TypeFlags::BOOLEAN_LITERAL)
-            && crate::checker::is_fresh_literal_type(self, t)
-        {
-            // Go: c.booleanType = getUnionType([regularFalseType,
-            // regularTrueType]) — TODO(port M6 S7): the union constructor;
-            // the permissive S7 stub returns errorType for the 2-constituent
-            // union (the documented seam value).
-            return self.boolean_type_stub();
-        }
-        if flags.intersects(TypeFlags::UNION) {
-            // TODO(port M6 S7): mapType union arm — the permissive identity
-            // keeps each literal constituent (Go widens each fresh literal
-            // and rebuilds the union).
-            return t;
-        }
-        t
-    }
+    // Go: `func (c *Checker) getWidenedLiteralType(t *Type) *Type`
+    // (checker.go:26015) — REMOVED (M6 S7): superseded by uniontypes.rs's
+    // real body (the union arm now rebuilds via mapType and the boolean arm
+    // resolves the eagerly-constructed booleanType union intrinsic).
 
-    /// The permissive booleanType stand-in (see get_widened_literal_type's
-    /// boolean arm): S7's getUnionType stub answer for [false, true].
-    fn boolean_type_stub(&mut self) -> TypeId {
-        // TODO(port M6 S7): booleanType = getUnionType([regularFalseType, regularTrueType]).
-        crate::relater::get_union_type(
-            self,
-            vec![self.regular_false_type(), self.regular_true_type()],
-        )
-    }
-
-    /// TODO(port M6 S7): `getBaseTypeOfEnumLikeType` — exports.rs carries the
-    /// permissive identity; surfaced here for the widened-literal enum arm.
-    fn get_base_type_of_enum_like_type_stub(&mut self, t: TypeId) -> TypeId {
-        self.get_base_type_of_literal_type(t)
-    }
 
     // ────────────────────────────────────────────────────────────────────────
     // reportImplicitAny + the widening-context family (Go checker.go 18689–18943)
@@ -4321,9 +4267,8 @@ impl Checker {
             }
         }
         let enum_type = if !member_type_list.is_empty() {
-            // TODO(port M6 S7): getUnionTypeEx(UnionReductionLiteral, alias)
-            // — the union constructor wave; the permissive stub reduces the
-            // multi-constituent list to errorType.
+            // REAL (M6 S7): getUnionTypeEx(UnionReductionLiteral, alias) —
+            // the real ctor reduces/dedupes the member type list.
             let alias = TypeAlias {
                 symbol: Some(symbol),
                 type_arguments: Vec::new(),

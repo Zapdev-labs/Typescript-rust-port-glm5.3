@@ -33,7 +33,7 @@
 use tsc_ast::{ModifierFlags, NodeId, SymbolFlags, SymbolId};
 use tsc_diagnostics::Message;
 
-use crate::todo_shapes::UnionReduction;
+
 use crate::types::{
     ContextFlags, IndexInfoId, SignatureId, SignatureKind, TypeId,
 };
@@ -43,15 +43,9 @@ use crate::Checker;
 impl Checker {
     /// Go: `func (c *Checker) GetBaseTypeOfLiteralType(t *Type) *Type` →
     /// `c.getBaseTypeOfLiteralType(t)` (checker.go:25968 — S7's
-    /// enum/template/union arms).
-    pub fn get_base_type_of_literal_type(&self, t: TypeId) -> TypeId {
-        // TODO(port M6 S7): the string/number/bigint/boolean arms + the
-        // enum-like and union arms (getBaseTypeOfEnumLikeType /
-        // getBaseTypeOfLiteralTypeUnion). Identity is the permissive value
-        // (Go's own default arm returns t).
-        t
-    }
-
+    /// enum/template/union arms) — M6 S7: the REAL body landed in
+    /// uniontypes.rs (`&mut self` — the union arm keys the literal-union
+    /// base-type cache); this identity stub is retired.
     /// Go: `func (c *Checker) GetUnknownSymbol() *ast.Symbol` — non-nil after
     /// NewChecker; the `expect` mirrors Go's nil-deref contract.
     pub fn get_unknown_symbol(&self) -> SymbolId {
@@ -72,20 +66,16 @@ impl Checker {
     /// `unknownSignature` is constructed in initializeChecker (M6 S7's
     /// newSignature family). Permissive W1 stub: None.
     pub fn get_unknown_signature(&self) -> Option<SignatureId> {
-        // TODO(port M6 S7): the anySignature family seeds unknownSignature.
-        None
+        // REAL (M6 S7): unknownSignature is seeded by new_checker (Go
+        // checker.go:1040-1050's newSignature family).
+        self.unknown_signature
     }
 
-    /// Go: `func (c *Checker) GetUnionType(types []*Type) *Type` →
-    /// `c.getUnionType(types)` (checker.go — S7's union construction).
-    ///
-    /// TODO(port M6 S7): the real getUnionType (interned union construction)
-    /// replaces this stub body — the exported/internal pair collapses onto
-    /// this name.
-    pub fn get_union_type(&mut self, types: &[TypeId]) -> TypeId {
-        let _ = types;
-        self.error_type()
-    }
+    // Go: `func (c *Checker) GetUnionType(types []*Type) *Type` →
+    // `c.getUnionType(types)` (checker.go — S7's union construction).
+    // M6 S7: the REAL interned union constructor landed in uniontypes.rs;
+    // this stub is retired (in-slice callers resolve to the real method).
+
 
     /// Go: `func (c *Checker) GetNameTypeOfSymbol(symbol *ast.Symbol) *Type` —
     /// `if links := c.valueSymbolLinks.TryGet(symbol); links != nil { return
@@ -555,13 +545,10 @@ impl Checker {
         t
     }
 
-    /// Go: `func (c *Checker) GetReducedType(t *Type) *Type` →
-    /// `c.getReducedType(t)` (checker.go — S9). Identity is the permissive
-    /// value (reduction only rewrites discriminant-conditioned unions).
-    pub fn get_reduced_type(&mut self, t: TypeId) -> TypeId {
-        // TODO(port M6 S9): the literal-reduction engine.
-        t
-    }
+    // Go: `func (c *Checker) GetReducedType(t *Type) *Type` →
+    // `c.getReducedType(t)` — M6 S7: the REAL body landed in uniontypes.rs
+    // (the reducible-intersection reduction; the S9 conditional arm is
+    // bannered there); this identity stub is retired.
 
     // GetFullyQualifiedName returns the fully qualified name of a symbol, walking up
     // its parent chain (e.g. `"/path/to/module".Namespace.Name`).
@@ -647,28 +634,24 @@ impl Checker {
     // (typenodes.rs `get_default_from_type_parameter` — the
     // resolvingDefaultType/circularConstraintType sentinel machinery).
 
-    /// Go: `func (c *Checker) GetWidenedLiteralType(t *Type) *Type` →
-    /// `c.getWidenedLiteralType(t)` (checker.go — S9). COLLAPSED PAIR: the
-    /// spike already ported the literal-widening slice as checker.rs's
-    /// `get_widened_literal_type` — that is this wrapper's target; the S9
-    /// wave completes it.
-    ///
-    /// Go: `func (c *Checker) GetWidenedType(t *Type) *Type` →
-    /// `c.getWidenedType(t)` (checker.go — S9) is likewise collapsed onto
-    /// checker.rs's `get_widened_type`.
-    ///
-    /// Go: `func (c *Checker) IsTypeAssignableTo(source *Type, target *Type) bool`
-    /// → `c.isTypeAssignableTo(source, target)` (relater.go — M6 wave 2) —
-    /// W2: the real body landed with relater.rs.
-    /// Go: `func (c *Checker) GetUnionTypeEx(types []*Type, unionReduction UnionReduction) *Type`
-    /// → `c.getUnionTypeEx(types, unionReduction, nil, nil)` (checker.go — S7).
-    ///
-    /// TODO(port M6 S7): the real getUnionTypeEx replaces this stub body
-    /// (the exported/internal pair collapses onto this name).
-    pub fn get_union_type_ex(&mut self, types: &[TypeId], union_reduction: UnionReduction) -> TypeId {
-        let _ = (types, union_reduction);
-        self.error_type()
-    }
+    // Go: `func (c *Checker) GetWidenedLiteralType(t *Type) *Type` →
+    // `c.getWidenedLiteralType(t)` (checker.go — S9). COLLAPSED PAIR: the
+    // spike already ported the literal-widening slice as checker.rs's
+    // `get_widened_literal_type` — that is this wrapper's target; the S9
+    // wave completes it.
+    //
+    // Go: `func (c *Checker) GetWidenedType(t *Type) *Type` →
+    // `c.getWidenedType(t)` (checker.go — S9) is likewise collapsed onto
+    // checker.rs's `get_widened_type`.
+    //
+    // Go: `func (c *Checker) IsTypeAssignableTo(source *Type, target *Type) bool`
+    // → `c.isTypeAssignableTo(source, target)` (relater.go — M6 wave 2) —
+    // W2: the real body landed with relater.rs.
+    // Go: `func (c *Checker) GetUnionTypeEx(types []*Type, unionReduction UnionReduction) *Type`
+    // → `c.getUnionTypeEx(types, unionReduction, nil, nil)` (checker.go — S7).
+    // M6 S7: the REAL constructor landed in uniontypes.rs; this stub is
+    // retired (callers use the 4-arg `get_union_type_ex` form).
+
 
     /// Go: `func (c *Checker) RequiresAddingImplicitUndefined(node *ast.Node) bool` —
     /// `enclosingDeclaration := ast.FindAncestor(node, ast.IsDeclaration);
@@ -760,8 +743,9 @@ mod tests {
         assert_eq!(c.get_arguments_symbol(), c.arguments_symbol.expect("seeded"));
         // WasCanceled reads the field (Go: set by the cancellation context).
         assert!(!c.was_canceled());
-        // unknownSignature is M6-constructed: the stub's None contract.
-        assert!(c.get_unknown_signature().is_none());
+        // unknownSignature is REAL (M6 S7): seeded by new_checker's
+        // newSignature family; the accessor reads the field.
+        assert_eq!(c.get_unknown_signature(), c.unknown_signature);
     }
 
     #[test]
@@ -786,9 +770,16 @@ mod tests {
         assert_eq!(c.get_widened_literal_type(t), t);
         assert_eq!(c.get_widened_type(t), t);
         assert_eq!(c.remove_missing_or_undefined_type(t), t);
-        // Error-type stubs.
-        assert_eq!(c.get_union_type(&[t]), c.error_type());
-        assert_eq!(c.get_union_type_ex(&[t], UnionReduction::Literal), c.error_type());
+        // M6 S7 flipped the union pair to the REAL constructors
+        // (uniontypes.rs): a single-constituent list returns the constituent
+        // (Go's `len(types) == 1` arm), and a two-constituent list returns
+        // an interned union with the UNION flag set (no longer errorType).
+        assert_eq!(c.get_union_type(&[t]), t);
+        let string_t = c.string_type();
+        let number_t = c.number_type();
+        let union = c.get_union_type(&[string_t, number_t]);
+        assert!(c.type_(union).flags.intersects(crate::types::TypeFlags::UNION));
+        assert_eq!(c.get_union_type_ex(vec![t], crate::todo_shapes::UnionReduction::Literal, None, None), t);
         // M6 S2 flipped the declared-type twin to the real family
         // (typeofsymbol.rs): the unknown symbol has no declared-type meaning,
         // so GetDeclaredTypeOfSymbol still resolves to errorType (Go's nil

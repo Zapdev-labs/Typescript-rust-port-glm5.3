@@ -2799,7 +2799,7 @@ fn is_non_generic_top_level_type(c: &mut Checker, t: TypeId) -> bool {
 }
 
 /// Go: `func (c *Checker) isNoInferType(t) bool`.
-fn is_no_infer_type(c: &Checker, t: TypeId) -> bool {
+pub(crate) fn is_no_infer_type(c: &Checker, t: TypeId) -> bool {
     // A NoInfer<T> type is represented as a substitution type with a
     // TypeFlags.Unknown constraint. (Go comment, verbatim.)
     c.type_(t).flags.intersects(TypeFlags::SUBSTITUTION)
@@ -3045,7 +3045,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) isNoInferType(t) bool`.
-    fn is_no_infer_type(&self, t: TypeId) -> bool {
+    pub(crate) fn is_no_infer_type(&self, t: TypeId) -> bool {
         is_no_infer_type(self, t)
     }
 

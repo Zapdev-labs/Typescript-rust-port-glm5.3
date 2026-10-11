@@ -232,12 +232,10 @@ fn gate_demo_boolean_literals_widen_at_the_union_boundary() {
         Some(LiteralValue::Boolean(false))
     ));
     // `let t = true`: the initializer checks as the fresh literal `true`;
-    // widening it to `boolean` requires the union constructor — M6 S2
-    // landed the real widen* chain, so the boolean arm now routes through
-    // the S7 permissive getUnionType stub (two constituents → errorType)
-    // instead of panicking at the M5 spike's union boundary. The gate moves
-    // with it: the type is the stub's errorType (S7's union constructor
-    // replaces it with `boolean` when that wave lands).
+    // widening it to `boolean` rides the REAL union constructor (M6 S7,
+    // uniontypes.rs): the widened type is booleanType, the eagerly-seeded
+    // interned union of [regularFalseType, regularTrueType] whose flags
+    // carry TypeFlagsBoolean (Go's getWidenedLiteralType boolean arm).
     let t_initializer = c
         .program_initializer_of(declaration_named(&declarations, "t"))
         .expect("t initializer");
@@ -246,16 +244,11 @@ fn gate_demo_boolean_literals_widen_at_the_union_boundary() {
     assert!(is_fresh_literal_type(&c, initializer_type));
     let t = symbol_named(&symbols, "t");
     let t_type = c.get_type_of_symbol(t);
-    assert_eq!(
-        t_type, t_type,
-        "get_type_of_symbol resolves without panicking at the S2 boundary"
-    );
-    assert_eq!(
-        t_type,
-        c.error_type(),
-        "the boolean-widening arm carries the S7 permissive union stub's \
-         errorType until the real getUnionType lands"
-    );
+    assert_eq!(t_type, c.boolean_type());
+    assert!(flags(&c, t_type).intersects(TypeFlags::BOOLEAN));
+    assert!(flags(&c, t_type).intersects(TypeFlags::UNION));
+    // The interned union construction: booleanType is a singleton union.
+    assert_eq!(c.boolean_type(), c.boolean_type());
 }
 
 #[test]
@@ -412,13 +405,9 @@ fn gate_demo_thisless_interface_has_no_this_type() {
 fn gate_demo_enum_member_declared_types_route_through_the_s7_union_seam() {
     // The Go port's getDeclaredTypeOfEnumMember (checker.go:24461) resolves
     // each member's declared type to the PARENT ENUM's declared type, and
-    // getDeclaredTypeOfEnum is the union of the member types — which rides
-    // the S7 permissive getUnionTypeEx stub (multi-constituent → errorType)
-    // until the real union constructor lands. The pin asserts exactly that
-    // seam: every member's declared type IS the enum's declared type, and
-    // the enum's own type is the S7 stub value (direction documented; the
-    // interned enum-literal member types surface via the expression checker
-    // in later waves).
+    // getDeclaredTypeOfEnum is the REAL interned union of the member types
+    // (M6 S7, uniontypes.rs — the union carries the ENUM_LITERAL flags of
+    // its constituents and stays a singleton for the same member list).
     let (mut c, symbols, _) = check("enum E { A, B = 2, S = \"x\" }\n");
     let e = symbol_named(&symbols, "E");
     assert!(c.program_symbol(e).flags.intersects(SymbolFlags::ENUM));
@@ -435,7 +424,10 @@ fn gate_demo_enum_member_declared_types_route_through_the_s7_union_seam() {
         assert!(c.program_symbol(member).flags.intersects(SymbolFlags::ENUM_MEMBER));
     }
     let e_type = c.get_declared_type_of_symbol(e);
-    assert_eq!(e_type, c.error_type());
+    assert!(flags(&c, e_type).intersects(TypeFlags::UNION));
+    assert!(flags(&c, e_type).intersects(TypeFlags::ENUM_LITERAL));
+    // The interned enum union is stable across repeated resolution.
+    assert_eq!(e_type, c.get_declared_type_of_symbol(e));
     // Go: getDeclaredTypeOfEnum seeds each member's declared type with the
     // FRESH form of its interned enum-literal type (computeEnumMemberValues
     // ran: A auto-increments to 0, B is the literal 2, S is the string "x");

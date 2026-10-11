@@ -2392,11 +2392,39 @@ impl Checker {
         erase_type_parameters: bool,
         inferred_type_parameters: &[TypeId],
     ) -> SignatureId {
-        // TODO(port M6 S7): the signature instantiator (instantiateSignature
-        // with the type-argument mapper); the identity stub passes the
-        // candidate through — the arity/inference ladder still runs.
-        let _ = (type_arguments, erase_type_parameters, inferred_type_parameters);
-        signature
+        // M6 S7: REAL — instantiateSignatureEx over the type-argument mapper
+        // (the cached instantiated-signature construction; the Go
+        // inferredTypeParameters arm rides the S8 return-signature family).
+        let _ = erase_type_parameters;
+        let type_parameters = self.signatures[signature.0 as usize].type_parameters.clone();
+        let min_count = self.get_min_type_argument_count(&type_parameters);
+        let is_js = self
+            .signatures[signature.0 as usize]
+            .declaration
+            .is_some_and(|d| tsc_ast::utilities::is_in_js_file(self.store().node(d)));
+        let filled = self.fill_missing_type_arguments(type_arguments, &type_parameters, min_count, is_js);
+        let instantiated = self.get_signature_instantiation_without_filling_in_type_arguments(signature, &filled);
+        // TODO(port M6 S8): the inferredTypeParameters return-signature
+        // replacement (cloneSignature/getOrCreateTypeFromSignature over the
+        // instantiated return type).
+        let _ = inferred_type_parameters;
+        instantiated
+    }
+
+    /// Go: `func (c *Checker) getSignatureInstantiationWithoutFillingInTypeArguments(sig, typeArguments) *Signature`
+    /// (checker.go — the cachedSignatures interning) — REAL (M6 S7).
+    fn get_signature_instantiation_without_filling_in_type_arguments(
+        &mut self,
+        signature: SignatureId,
+        type_arguments: &[TypeId],
+    ) -> SignatureId {
+        let key = crate::typeofsymbol::get_type_list_key(type_arguments);
+        if let Some(&cached) = self.cached_signatures.get(&(signature, key.0 as u8)) {
+            return cached;
+        }
+        let result = self.create_signature_instantiation(signature, type_arguments);
+        self.cached_signatures.insert((signature, key.0 as u8), result);
+        result
     }
 
     /// Go: `func (c *Checker) createSignatureInstantiation(signature, typeArguments) *Signature`
@@ -2406,9 +2434,33 @@ impl Checker {
         signature: SignatureId,
         type_arguments: &[TypeId],
     ) -> SignatureId {
-        // TODO(port M6 S7): see get_signature_instantiation.
-        let _ = type_arguments;
-        signature
+        // M6 S7: REAL — instantiateSignatureEx over createSignatureTypeMapper.
+        let mapper = self.create_signature_type_mapper(signature, type_arguments);
+        self.instantiate_signature_ex(signature, Some(mapper), true /*eraseTypeParameters*/)
+    }
+
+    /// Go: `func (c *Checker) createSignatureTypeMapper(sig, typeArguments) *TypeMapper`
+    /// → newTypeMapper(getTypeParametersForMapper(sig), typeArguments) — REAL
+    /// (M6 S7; the type parameters instantiate under their own mappers).
+    fn create_signature_type_mapper(&mut self, signature: SignatureId, type_arguments: &[TypeId]) -> crate::todo_shapes::TypeMapperId {
+        let type_parameters = self.get_type_parameters_for_mapper(signature);
+        self.new_type_mapper(&type_parameters, type_arguments)
+    }
+
+    /// Go: `func (c *Checker) getTypeParametersForMapper(sig) []*Type` — REAL
+    /// (M6 S7).
+    fn get_type_parameters_for_mapper(&mut self, signature: SignatureId) -> Vec<TypeId> {
+        let type_parameters = self.signatures[signature.0 as usize].type_parameters.clone();
+        type_parameters
+            .iter()
+            .map(|&tp| {
+                let mapper = self.type_(tp).as_type_parameter().and_then(|d| d.mapper);
+                match mapper {
+                    Some(mapper) => self.instantiate_type(tp, mapper),
+                    None => tp,
+                }
+            })
+            .collect()
     }
 
     /// Go: the hasTrailingComma probe resolveCall's signature-help path needs

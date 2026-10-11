@@ -2109,7 +2109,7 @@ impl Checker {
                     .filter(|&t| !self.type_(t).flags.intersects(TypeFlags::STRING_LIKE))
                     .collect();
                 if filtered_types.len() != array_types.len() {
-                    array_type = self.get_union_type_ex(&filtered_types, crate::todo_shapes::UnionReduction::Subtype);
+                    array_type = self.get_union_type_ex(filtered_types, crate::todo_shapes::UnionReduction::Subtype, None, None);
                 }
             } else if self.type_(array_type).flags.intersects(TypeFlags::STRING_LIKE) {
                 array_type = self.never_type();
@@ -2167,13 +2167,17 @@ impl Checker {
             }
             if possible_out_of_bounds {
                 return Some(self.get_union_type_ex(
-                    &[array_element_type, self.string_type(), self.undefined_type()],
+                    vec![array_element_type, self.string_type(), self.undefined_type()],
                     crate::todo_shapes::UnionReduction::Subtype,
+                    None,
+                    None,
                 ));
             }
             return Some(self.get_union_type_ex(
-                &[array_element_type, self.string_type()],
+                vec![array_element_type, self.string_type()],
                 crate::todo_shapes::UnionReduction::Subtype,
+                None,
+                None,
             ));
         }
         if use_.intersects(IterationUse::POSSIBLY_OUT_OF_BOUNDS) {

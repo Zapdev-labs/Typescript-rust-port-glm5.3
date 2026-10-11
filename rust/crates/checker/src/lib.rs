@@ -134,6 +134,7 @@ pub mod symboltracker;
 pub mod todo_shapes;
 pub mod typenodes;
 pub mod typeofsymbol;
+pub mod uniontypes;
 pub mod tracer;
 pub mod tracing;
 pub mod types;

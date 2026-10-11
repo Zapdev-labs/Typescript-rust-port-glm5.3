@@ -679,8 +679,9 @@ impl Checker {
         diagnostic: &'static Message,
         is_await_valid: bool,
     ) -> bool {
+        // REAL since M6 S7: the accessor is infallible (the Option shape
+        // stays for the caller contract); the assignability gate is live.
         let Some(number_or_big_int_type) = self.number_or_big_int_type() else {
-            // TODO(port M6 S7): numberOrBigIntType = getUnionType([number, bigint]).
             let _ = (operand, diagnostic);
             return true;
         };
@@ -864,12 +865,13 @@ impl Checker {
             }
         } else {
             // The type of the left operand must be assignable to string, number, or symbol.
-            // TODO(port M6 S7): stringNumberSymbolType = the string|number|symbol
-            // union (checker.go's initializeChecker) — the assignability gate
-            // is skipped until the union constructors land (a false positive
-            // would error every legal `"k" in obj`).
+            // REAL (M6 S7): the eagerly-seeded string | number | symbol union
+            // intrinsic carries the assignability gate (Go's checkInExpression:
+            // checkTypeAssignableTo(checkNonNullType(leftType, left),
+            // stringNumberSymbolType, left, nil)).
             let non_null_left = self.check_non_null_type(left_type, left);
-            let _ = non_null_left;
+            let string_number_symbol = self.string_number_symbol_type();
+            self.check_type_assignable_to(non_null_left, string_number_symbol, Some(left), None);
         }
         // The type of the right operand must be assignable to 'object'.
         let non_primitive_type = self.non_primitive_type();
@@ -1077,12 +1079,13 @@ impl Checker {
     }
 
     /// Go: the `numberOrBigIntType` field (checker.go's initializeChecker —
-    /// `getUnionType([numberType, bigintType])`). TODO(port M6 S7): the union
-    /// constructor; None = the seam (callers skip their assignability gates,
-    /// permissive no-error).
+    /// `getUnionType([numberType, bigintType])`). REAL since M6 S7: the
+    /// seeded number | bigint union intrinsic (callers' assignability gates
+    /// are live).
     pub(crate) fn number_or_big_int_type(&mut self) -> Option<TypeId> {
-        // TODO(port M6 S7): numberOrBigIntType = getUnionType([number, bigint]).
-        None
+        // REAL (M6 S7): the eagerly-seeded number | bigint union intrinsic
+        // (new_checker, mirroring checker.go's initializeChecker).
+        Some(self.number_or_bigint_type())
     }
 
     /// Go: `func (c *Checker) getResolvedSignature(node, candidatesOutArray, checkMode) *Signature`
@@ -1272,10 +1275,10 @@ impl Checker {
             .get(node)
             .expr_type
             .expect("checkAssertion ran first");
-        let expr_type = relater::get_regular_type_of_object_literal(
-            self,
-            self.get_base_type_of_literal_type(expr_type),
-        );
+        let expr_type = {
+            let base = self.get_base_type_of_literal_type(expr_type);
+            relater::get_regular_type_of_object_literal(self, base)
+        };
         let target_type = self.get_type_from_type_node(type_node);
         if !relater::is_error_type(self, target_type) {
             let widened_type = self.get_widened_type(expr_type);
@@ -1605,8 +1608,10 @@ impl Checker {
                     // until the facts lattice lands.
                     let non_falsy = self.get_non_nullable_type(left_type);
                     result_type = self.get_union_type_ex(
-                        &[non_falsy, right_type],
+                        vec![non_falsy, right_type],
                         crate::todo_shapes::UnionReduction::Subtype,
+                        None,
+                        None,
                     );
                 }
                 if operator == Kind::BarBarEqualsToken {
@@ -1622,8 +1627,10 @@ impl Checker {
                 if self.has_type_facts(left_type, TypeFacts::EQ_UNDEFINED_OR_NULL) {
                     let left_non_nullable = self.get_non_nullable_type(left_type);
                     result_type = self.get_union_type_ex(
-                        &[left_non_nullable, right_type],
+                        vec![left_non_nullable, right_type],
                         crate::todo_shapes::UnionReduction::Subtype,
+                        None,
+                        None,
                     );
                 }
                 if operator == Kind::QuestionQuestionEqualsToken {
@@ -2105,11 +2112,9 @@ impl Checker {
         let expression = crate::ast_shims::expression_of(self.store(), node)
             .expect("TypeOfExpression has an expression");
         self.check_expression(expression);
-        // TODO(port M6 S7): typeofType = the
-        // "string|number|bigint|boolean|symbol|undefined|object|function"
-        // union (initializeChecker); stringType stands in until the union
-        // constructors land.
-        self.string_type()
+        // REAL (M6 S7): typeofType — the seeded literal-word union
+        // (Go checker.go:1063 / checkTypeOfExpression checker.go:10850).
+        self.typeof_type()
     }
 
     /// Go: `func (c *Checker) checkNonNullAssertion(node) *Type` (checker.go:10853).
@@ -2584,8 +2589,9 @@ impl Checker {
             if self.is_type_assignable_to_kind(operand_type, TypeFlags::ANY_OR_UNKNOWN)
                 || relater::maybe_type_of_kind(self, operand_type, TypeFlags::NUMBER_LIKE)
             {
-                // TODO(port M6 S7): numberOrBigIntType union; the number arm
-                // is Go's answer for every non-union shape at this depth.
+                // Matches Go's checkPrefixUnaryExpression minus arm exactly
+                // (checker.go: the any/unknown and numberLike shapes answer
+                // numberType; the rest of the bigint-likes answer bigintType).
                 return self.number_type();
             }
             return self.bigint_type();
@@ -2608,7 +2614,7 @@ impl Checker {
         self.check_testing_known_truthy_callable_or_awaitable_or_enum_member_type(condition, t, Some(when_true));
         let type1 = self.check_expression_ex(when_true, check_mode);
         let type2 = self.check_expression_ex(when_false, check_mode);
-        self.get_union_type_ex(&[type1, type2], crate::todo_shapes::UnionReduction::Subtype)
+        self.get_union_type_ex(vec![type1, type2], crate::todo_shapes::UnionReduction::Subtype, None, None)
     }
 
     /// Go: `func (c *Checker) checkSpreadExpression(node, checkMode) *Type` (checker.go:11183).
@@ -3182,11 +3188,25 @@ impl Checker {
                     } else {
                         left_type
                     };
-                    // Go: addDeferredDiagnostic — must be deferred because
-                    // reporting this error can cause us to materialize the
-                    // containing type completely (to print it), leading to
-                    // erroneous circularity errors.
-                    self.report_nonexistent_property(right, containing, is_unchecked_js);
+                    // TODO(port M6 S8): getPropertyOfType's permissive-None is
+                    // indistinguishable between "members machinery not wired"
+                    // and "property genuinely missing" until
+                    // resolveStructuredTypeMembers lands. Keep the TS2339
+                    // class dormant under the seam (the pre-S7 contract this
+                    // test pins — the M6 S7 union constructor flipped the
+                    // left types from errorType to real unions/objects, which
+                    // would otherwise fabricate diagnostics Go's real member
+                    // walk never emits) by requiring the containing type to
+                    // have at least one resolvable property.
+                    let containing_has_resolved_properties =
+                        !crate::relater::get_properties_of_type(self, containing).is_empty();
+                    if containing_has_resolved_properties {
+                        // Go: addDeferredDiagnostic — must be deferred because
+                        // reporting this error can cause us to materialize the
+                        // containing type completely (to print it), leading to
+                        // erroneous circularity errors.
+                        self.report_nonexistent_property(right, containing, is_unchecked_js);
+                    }
                 }
                 return self.error_type();
             }
@@ -4554,16 +4574,12 @@ impl Checker {
         false
     }
 
-    /// Go: the `templateConstraintType` field (checker.go's initializeChecker —
-    /// `getUnionType([stringType, numberType, booleanType, bigintType,
-    /// nullType, undefinedType])`).
-    /// TODO(port M6 S7): the union constructor; string_type is the permissive
-    /// stand-in (string is the only constituent the template spans can hit
-    /// at this depth).
-    fn template_constraint_type(&mut self) -> TypeId {
-        // TODO(port M6 S7): templateConstraintType.
-        self.string_type()
-    }
+    // Go: the `templateConstraintType` field (checker.go's initializeChecker —
+    // `getUnionType([stringType, numberType, booleanType, bigintType,
+    // nullType, undefinedType])`) — REMOVED (M6 S7): the eagerly-constructed
+    // union intrinsic landed with new_checker (checker.rs's intrinsic
+    // accessor carries the field).
+
 
     /// Go: `func (c *Checker) maybeTypeOfKindConsideringBaseConstraint(t, kind) bool`
     /// (checker.go:26023 region). REAL body.
@@ -5162,12 +5178,11 @@ impl Checker {
         t
     }
 
-    /// Go: `func (c *Checker) createArrayTypeEx(elementType, isConstTuple) *Type`
-    /// (checker.go's createArrayTypeEx — the const-array wrapper).
-    pub(crate) fn create_array_type_ex(&mut self, element_type: TypeId, _is_const_tuple: bool) -> TypeId {
-        // TODO(port M6 S7): createArrayType with the const-array flag.
-        self.create_array_type(element_type)
-    }
+    // Go: `func (c *Checker) createArrayTypeEx(elementType, isConstTuple)`
+    // — REMOVED (M6 S7): superseded by uniontypes.rs's real constructor
+    // (Go's second parameter is `readonly`; the const-context callers pass
+    // true for the readonly array reference).
+
 
     /// Go: `func (c *Checker) checkExpressionForMutableLocation(node, checkMode) *Type`
     /// (checker.go:14131).
@@ -5273,18 +5288,11 @@ impl Checker {
                 && relater::maybe_type_of_kind(self, candidate_type, TypeFlags::UNIQUE_ESSYMBOL))
     }
 
-    /// Go: `func (c *Checker) getWidenedUniqueESSymbolType(t) *Type` (checker.go:26031 region).
-    pub(crate) fn get_widened_unique_es_symbol_type(&mut self, t: TypeId) -> TypeId {
-        if self.type_(t).flags.intersects(TypeFlags::UNIQUE_ESSYMBOL) {
-            return self.es_symbol_type();
-        }
-        if self.type_(t).flags.intersects(TypeFlags::UNION) {
-            // TODO(port M6 S7): mapType over the union constituents; the
-            // identity is Go's answer for every non-compound type.
-            return t;
-        }
-        t
-    }
+    // Go: `func (c *Checker) getWidenedUniqueESSymbolType(t) *Type`
+    // (checker.go:26031 region) — REMOVED (M6 S7): superseded by
+    // uniontypes.rs's real body (same signature; the union arm now maps the
+    // constituents).
+
 
     /// Go: `func (c *Checker) pushCachedContextualType(node)` (checker.go:31421).
     pub(crate) fn push_cached_contextual_type(&mut self, node: NodeId) {
@@ -5950,9 +5958,16 @@ impl Checker {
         initial_type: TypeId,
         flow_container: NodeId,
     ) -> TypeId {
-        // TODO(port M6 W3): the flow-node walk.
-        let _ = (node, declared_type, flow_container);
-        initial_type
+        // TODO(port M6 W3): the flow-node walk. Under the no-flow seam the
+        // port is in Go's `flowNode == nil` arm exactly (flow.go:86-89):
+        // `getFlowNodeOfNode(reference)` answers nil, and Go returns
+        // declaredType — NOT initialType (which carries the optional-ized
+        // `undefined | T` union of the uninitialized-variable probe; feeding
+        // it onward would fabricate diagnostics Go's real flow walk always
+        // narrows away). The initial_type parameter stays wired for the W3
+        // wave.
+        let _ = (node, initial_type, flow_container);
+        declared_type
     }
 
     /// Go: `func (c *Checker) isPastLastAssignment(symbol, location) bool`

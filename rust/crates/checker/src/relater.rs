@@ -3031,7 +3031,7 @@ impl Checker {
                 }
             }
             // The source types were normalized; ensure the result is too.
-            let intersection = self.get_intersection_type_ex(&constraints, IntersectionFlags::NO_CONSTRAINT_REDUCTION, None);
+            let intersection = self.get_intersection_type_ex(constraints.clone(), IntersectionFlags::NO_CONSTRAINT_REDUCTION, None);
             return Some(self.get_normalized_type(intersection, false /*writing*/));
         }
         None
@@ -6695,7 +6695,7 @@ fn template_literal_types_definitely_unrelated(_c: &Checker, source_texts: &[Str
 }
 
 /// Go: `func (c *Checker) isTypeMatchedByTemplateLiteralType(source, target, compareTypes) bool`.
-fn is_type_matched_by_template_literal_type(
+pub(crate) fn is_type_matched_by_template_literal_type(
     c: &mut Checker,
     source: TypeId,
     target: TypeId,
@@ -6920,7 +6920,7 @@ fn is_valid_type_for_template_literal_placeholder(
 }
 
 /// Go: `func (c *Checker) isMemberOfStringMapping(source, target) bool`.
-fn is_member_of_string_mapping(c: &mut Checker, source: TypeId, target: TypeId) -> bool {
+pub(crate) fn is_member_of_string_mapping(c: &mut Checker, source: TypeId, target: TypeId) -> bool {
     if c.type_(target).flags.intersects(TypeFlags::ANY) {
         return true;
     }
@@ -7353,19 +7353,17 @@ pub(crate) fn is_literal_type(c: &Checker, t: TypeId) -> bool {
     )
 }
 
-/// Go: `func (c *Checker) isEmptyObjectType(t) bool`.
+/// Go: `func (c *Checker) isEmptyObjectType(t) bool` — delegates to the REAL
+/// body (M6 S7, uniontypes.rs).
 pub(crate) fn is_empty_object_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7): t == emptyObjectType — the empty anonymous object
-    // type is created by the newAnonymousType wave.
-    let _ = (c, t);
-    false
+    c.is_empty_object_type(t)
 }
 
-/// Go: `func (c *Checker) IsEmptyAnonymousObjectType(t) bool`.
+/// Go: `func (c *Checker) IsEmptyAnonymousObjectType(t) bool` — delegates to
+/// the REAL body (M6 S7, uniontypes.rs).
+#[allow(dead_code)] // TODO(port M6 S8): Go-mirrored free-fn bridge; the member wave's callers land next
 pub(crate) fn is_empty_anonymous_object_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7): as above.
-    let _ = (c, t);
-    false
+    c.is_empty_anonymous_object_type(t)
 }
 
 /// Go: `func (c *Checker) isEmptyArrayLiteralType(t) bool` (checker.go:24054)
@@ -7620,10 +7618,10 @@ pub(crate) fn get_type_with_this_argument(_c: &mut Checker, t: TypeId, this_arg:
     t
 }
 
-/// Go: `func (c *Checker) removeMissingType(t, isOptional) *Type`.
-pub(crate) fn remove_missing_type(_c: &mut Checker, t: TypeId, _is_optional: bool) -> TypeId {
-    // TODO(port M6 S7): the `missing`-strip union construction.
-    t
+/// Go: `func (c *Checker) removeMissingType(t, isOptional) *Type` — delegates
+/// to the REAL body (M6 S7, uniontypes.rs).
+pub(crate) fn remove_missing_type(c: &mut Checker, t: TypeId, is_optional: bool) -> TypeId {
+    c.remove_missing_type(t, is_optional)
 }
 
 /// Go: `func (c *Checker) addOptionalityEx(t, isProperty, isOptional) *Type`.
@@ -7645,16 +7643,10 @@ pub(crate) fn get_regular_type_of_object_literal(c: &mut Checker, t: TypeId) -> 
     t
 }
 
-/// Go: `func (c *Checker) getUnionType(types) *Type` — S7 permissive stub.
+/// Go: `func (c *Checker) getUnionType(types) *Type` — delegates to the REAL
+/// constructor (M6 S7, uniontypes.rs).
 pub(crate) fn get_union_type(c: &mut Checker, types: Vec<TypeId>) -> TypeId {
-    // TODO(port M6 S7): getUnionType (subtype reduction, origin tracking).
-    if types.len() == 1 {
-        return types[0];
-    }
-    if types.is_empty() {
-        return c.never_type();
-    }
-    c.error_type()
+    c.get_union_type(&types)
 }
 
 /// Go: `func (c *Checker) getUnionTypeEx(types, unionReduction, alias, origin) *Type`.
@@ -7662,42 +7654,33 @@ pub(crate) fn get_union_type(c: &mut Checker, types: Vec<TypeId>) -> TypeId {
 pub(crate) fn get_union_type_ex(
     c: &mut Checker,
     types: Vec<TypeId>,
-    _union_reduction: crate::todo_shapes::UnionReduction,
-    _alias: Option<Box<crate::types::TypeAlias>>,
-    _origin: Option<TypeId>,
+    union_reduction: crate::todo_shapes::UnionReduction,
+    alias: Option<Box<crate::types::TypeAlias>>,
+    origin: Option<TypeId>,
 ) -> TypeId {
-    // TODO(port M6 S7): the real union constructor.
-    get_union_type(c, types)
+    c.get_union_type_ex(types, union_reduction, alias, origin)
 }
 
-/// Go: `func (c *Checker) getIntersectionType(types) *Type` — S7 permissive
-/// stub.
+/// Go: `func (c *Checker) getIntersectionType(types) *Type` — delegates to
+/// the REAL constructor (M6 S7, uniontypes.rs).
 pub(crate) fn get_intersection_type(c: &mut Checker, types: Vec<TypeId>) -> TypeId {
-    // TODO(port M6 S7): getIntersectionType.
-    if types.len() == 1 {
-        return types[0];
-    }
-    if types.is_empty() {
-        return c.unknown_type();
-    }
-    c.error_type()
+    c.get_intersection_type(&types)
 }
 
 /// Go: `func (c *Checker) getIntersectionTypeEx(types, intersectionFlags, alias) *Type`.
 pub(crate) fn get_intersection_type_ex(
     c: &mut Checker,
     types: Vec<TypeId>,
-    _flags: IntersectionFlags,
-    _alias: Option<Box<crate::types::TypeAlias>>,
+    flags: IntersectionFlags,
+    alias: Option<Box<crate::types::TypeAlias>>,
 ) -> TypeId {
-    // TODO(port M6 S7): the real intersection constructor.
-    get_intersection_type(c, types)
+    c.get_intersection_type_ex(types, flags, alias)
 }
 
-/// Go: `func (c *Checker) intersectTypes(t, u) *Type`.
+/// Go: `func (c *Checker) intersectTypes(t, u) *Type` — REAL via the
+/// intersection engine's nullable/primitive reduction (M6 S7).
 pub(crate) fn intersect_types(c: &mut Checker, t: TypeId, u: TypeId) -> Option<TypeId> {
-    // TODO(port M6 S7): the intersection-with-primitive reduction.
-    Some(get_intersection_type(c, vec![t, u]))
+    c.intersect_types(Some(t), Some(u))
 }
 
 /// Go: `func (c *Checker) extractTypesOfKind(t, kind) *Type` — returns the
@@ -7705,30 +7688,20 @@ pub(crate) fn intersect_types(c: &mut Checker, t: TypeId, u: TypeId) -> Option<T
 /// flags immediately, and never carries the same "no constituents"
 /// semantics).
 pub(crate) fn extract_types_of_kind(c: &mut Checker, t: TypeId, kind: TypeFlags) -> TypeId {
-    // TODO(port M6 S7): the filter construction.
-    if c.type_(t).flags.intersects(kind) {
-        t
-    } else {
-        c.never_type()
-    }
+    c.filter_type(t, |c, u| c.type_(u).flags.intersects(kind))
 }
 
 /// Go: `func (c *Checker) extractTypesOfKind(target, ^TypeFlagsUndefined)` —
 /// the complement form.
 pub(crate) fn extract_types_of_kind_not(c: &mut Checker, t: TypeId, kind: TypeFlags) -> TypeId {
-    // TODO(port M6 S7): the filter construction (complement).
-    if !c.type_(t).flags.intersects(!kind) {
-        t
-    } else {
-        c.never_type()
-    }
+    extract_types_of_kind(c, t, !kind)
 }
 
 /// Go: `func (c *Checker) filterType(t, f) *Type`.
 #[allow(dead_code)] // TODO(port M6 W2): Go-mirrored; callers land with inference.rs
-pub(crate) fn filter_type(c: &mut Checker, t: TypeId, mut f: impl FnMut(TypeId) -> bool) -> TypeId {
-    // TODO(port M6 S7): the real filter (sameType reduction).
-    if f(t) { t } else { c.never_type() }
+pub(crate) fn filter_type(c: &mut Checker, t: TypeId, f: impl FnMut(TypeId) -> bool) -> TypeId {
+    let f = std::cell::RefCell::new(f);
+    c.filter_type(t, move |_c, u| (f.borrow_mut())(u))
 }
 
 /// Go: `func (c *Checker) maybeTypeOfKind(t, kind) bool`.
@@ -7747,10 +7720,10 @@ pub(crate) fn count_types(c: &mut Checker, t: TypeId) -> usize {
     1
 }
 
-/// Go: `func (c *Checker) getReducedType(t) *Type`.
-pub(crate) fn get_reduced_type(_c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S7): subtype-reduced union forms.
-    t
+/// Go: `func (c *Checker) getReducedType(t) *Type` — delegates to the REAL
+/// reducer (M6 S7, uniontypes.rs).
+pub(crate) fn get_reduced_type(c: &mut Checker, t: TypeId) -> TypeId {
+    c.get_reduced_type(t)
 }
 
 /// Go: the `Distributed()` accessor — a union distributes to its
@@ -8128,16 +8101,16 @@ pub(crate) fn get_erased_signature(c: &mut Checker, s: crate::types::SignatureId
     s
 }
 
-/// Go: `c.stringNumberSymbolType` — the keyof domain union.
+/// Go: `c.stringNumberSymbolType` — the keyof domain union (M6 S7: the REAL
+/// eagerly-constructed union intrinsic, seeded by newChecker).
 pub(crate) fn get_string_number_symbol_type(c: &mut Checker) -> TypeId {
-    // TODO(port M6 S7): the string | number | symbol union.
-    c.string_type()
+    c.string_number_symbol_type()
 }
 
 /// Go: `c.anyFunctionType` (None until the signature-construction wave).
-pub(crate) fn any_function_type(c: &mut Checker) -> Option<TypeId> {
-    // TODO(port M6 S7): the anyFunctionType wildcard signature type.
-    let _ = c;
+pub(crate) fn any_function_type(_c: &mut Checker) -> Option<TypeId> {
+    // TODO(port M6 S8): the anyFunctionType wildcard signature type (the
+    // empty-signature anonymous object rides the member/signature wave).
     None
 }
 
@@ -8162,13 +8135,10 @@ pub(crate) fn get_single_base_for_non_augmenting_subtype(c: &mut Checker, t: Typ
     None
 }
 
-/// Go: `func (c *Checker) cloneTypeParameter(t) *Type`.
+/// Go: `func (c *Checker) cloneTypeParameter(t) *Type` — delegates to the
+/// REAL body (M6 S7, uniontypes.rs).
 pub(crate) fn clone_type_parameter(c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S7): the clone-and-clear for the synthetic
-    // this-type-parameter-might-need constraint elaboration; identity (the
-    // constraint write below is harmless on the original until then).
-    let _ = c;
-    t
+    c.clone_type_parameter(t)
 }
 
 /// Go: the synthetic type-parameter constraint write.
@@ -8276,11 +8246,9 @@ pub(crate) fn get_base_type_of_literal_type(c: &mut Checker, t: TypeId) -> TypeI
         return c.bigint_type.expect("bigintType");
     }
     if flags.intersects(TypeFlags::BOOLEAN_LITERAL) {
-        // Go: booleanType — the true | false union (S7). The regular boolean
-        // literals route through their base; the union isn't constructible
-        // yet, so the strict-subtype surface stays permissive.
-        // TODO(port M6 S7): booleanType union.
-        return c.error_type();
+        // Go: booleanType — the true | false union (REAL since M6 S7:
+        // uniontypes.rs's eagerly-seeded boolean intrinsic).
+        return c.boolean_type();
     }
     c.error_type()
 }
@@ -8316,19 +8284,16 @@ pub(crate) fn get_string_literal_value(c: &Checker, t: TypeId) -> String {
     }
 }
 
-/// Go: `func (c *Checker) getTemplateLiteralType(texts, types) *Type` — S7
-/// stub.
+/// Go: `func (c *Checker) getTemplateLiteralType(texts, types) *Type` —
+/// delegates to the REAL constructor (M6 S7, uniontypes.rs).
 pub(crate) fn get_template_literal_type(c: &mut Checker, texts: &[String], types: &[TypeId]) -> TypeId {
-    // TODO(port M6 S7): the template-literal constructor.
-    let _ = (texts, types);
-    c.never_type()
+    c.get_template_literal_type(texts, types)
 }
 
-/// Go: `func (c *Checker) getStringMappingType(symbol, t) *Type` — S7 stub.
-pub(crate) fn get_string_mapping_type(c: &mut Checker, _symbol: Option<SymbolId>, t: TypeId) -> TypeId {
-    // TODO(port M6 S7): the string-mapping constructor.
-    let _ = t;
-    c.never_type()
+/// Go: `func (c *Checker) getStringMappingType(symbol, t) *Type` — delegates
+/// to the REAL constructor (M6 S7, uniontypes.rs).
+pub(crate) fn get_string_mapping_type(c: &mut Checker, symbol: Option<SymbolId>, t: TypeId) -> TypeId {
+    c.get_string_mapping_type(symbol, t)
 }
 
 /// Go: stringutil.CombineSurrogatePairs.
@@ -8398,13 +8363,9 @@ pub(crate) fn get_single_call_signature_of_type(_c: &mut Checker, t: TypeId) -> 
 // services waves that follow.
 #[allow(dead_code)]
 impl Checker {
-    /// Go: `func (c *Checker) createTypeReference(target, typeArguments, aliasSymbol, aliasTypeArguments) *Type`.
-    pub(crate) fn create_type_reference(&mut self, target: TypeId, type_arguments: Vec<TypeId>) -> TypeId {
-        // TODO(port M6 S7): the type-reference constructor; the identity
-        // keeps the marker-type recursion keys stable for the relater.
-        let _ = type_arguments;
-        target
-    }
+    // Go: `func (c *Checker) createTypeReference(target, typeArguments) *Type`
+    // — REMOVED (M6 S7): superseded by uniontypes.rs's real interned
+    // constructor (same signature; this module's call sites resolve there).
 
     /// Go: `func (c *Checker) TypeToString(t) string` (checker.go) — the
     /// W4-stub free fn, surfaced as the Go method form.
@@ -8418,10 +8379,8 @@ impl Checker {
         type_to_string(self, t)
     }
 
-    /// Go: `func (c *Checker) isEmptyAnonymousObjectType(t) bool`.
-    pub(crate) fn is_empty_anonymous_object_type(&mut self, t: TypeId) -> bool {
-        is_empty_anonymous_object_type(self, t)
-    }
+    // Go: `func (c *Checker) isEmptyAnonymousObjectType(t) bool` — REMOVED
+    // (M6 S7): superseded by uniontypes.rs's real body (same signature).
 
     /// Go: `func (c *Checker) getNonNullableType(t) *Type` (utilities.go).
     pub(crate) fn get_non_nullable_type(&mut self, t: TypeId) -> TypeId {
@@ -8456,31 +8415,18 @@ impl Checker {
         None
     }
 
-    /// Go: `func (c *Checker) createArrayType(elementType) *Type`.
-    pub(crate) fn create_array_type(&mut self, element_type: TypeId) -> TypeId {
-        // TODO(port M6 S7): the globalArrayType reference construction; the
-        // identity preserves element type for the rest-type ladder.
-        element_type
-    }
+    // Go: `func (c *Checker) createArrayType(elementType) *Type` — REMOVED
+    // (M6 S7): superseded by uniontypes.rs's real constructor (same
+    // signature; the rest-type ladder now gets real array references).
 
-    /// Go: `func (c *Checker) createTupleTypeEx(elementTypes, elementInfos, readonly) *Type`.
-    pub(crate) fn create_tuple_type_ex(
-        &mut self,
-        element_types: &[TypeId],
-        _element_infos: &[crate::types::TupleElementInfo],
-        _readonly: bool,
-    ) -> TypeId {
-        // TODO(port M6 S7): the tuple constructor.
-        if let Some(&first) = element_types.first() {
-            first
-        } else {
-            self.never_type()
-        }
-    }
+    // Go: `func (c *Checker) createTupleTypeEx(...)` — REMOVED (M6 S7):
+    // superseded by uniontypes.rs's real constructor (same signature).
 
     /// Go: `func (c *Checker) sliceTupleType(t, index, endSkipCount) *Type`.
     pub(crate) fn slice_tuple_type(&mut self, t: TypeId, _index: usize, _end_skip_count: usize) -> TypeId {
-        // TODO(port M6 S7): the tuple-slice construction.
+        // PORT: no direct Go home — Go slices tuples inline at the spread
+        // call sites (tuple-types.go's element-info slicing); permissive
+        // identity until that spread/destructuring wave.
         t
     }
 
@@ -8491,24 +8437,17 @@ impl Checker {
     }
 
     /// Go: the predicate combiner's union/intersection construction.
-    pub(crate) fn get_union_or_intersection_type(&mut self, types: &[TypeId], _is_union: bool) -> TypeId {
-        // TODO(port M6 S7): the union/intersection constructors.
-        if let Some(&first) = types.first() {
-            first
+    pub(crate) fn get_union_or_intersection_type(&mut self, types: &[TypeId], is_union: bool) -> TypeId {
+        if is_union {
+            self.get_union_type(types)
         } else {
-            self.never_type()
+            self.get_intersection_type(types)
         }
     }
 
-    /// Go: `func (c *Checker) getIntersectionTypeEx(types, intersectionFlags, alias) *Type`.
-    pub(crate) fn get_intersection_type_ex(
-        &mut self,
-        types: &[TypeId],
-        flags: IntersectionFlags,
-        alias: Option<Box<crate::types::TypeAlias>>,
-    ) -> TypeId {
-        get_intersection_type_ex(self, types.to_vec(), flags, alias)
-    }
+    // Go: `func (c *Checker) getIntersectionTypeEx(types, flags, alias) *Type`
+    // — REMOVED (M6 S7): superseded by uniontypes.rs's real constructor
+    // (Vec form; the free-fn bridge below delegates to it).
 
     /// Go: `func (c *Checker) getNormalizedType(t, writing) *Type`.
     pub(crate) fn get_normalized_type(&mut self, t: TypeId, writing: bool) -> TypeId {
@@ -8548,16 +8487,9 @@ impl Checker {
             .unwrap_or_else(|| self.unknown_type())
     }
 
-    /// Go: `func (c *Checker) instantiateSignatureEx(s, mapper, eraseTypeParameters) *Signature`.
-    pub(crate) fn instantiate_signature_ex(
-        &mut self,
-        s: crate::types::SignatureId,
-        _mapper: Option<crate::todo_shapes::TypeMapperId>,
-        _erase_type_parameters: bool,
-    ) -> crate::types::SignatureId {
-        // TODO(port M6 S7): the signature instantiator.
-        s
-    }
+    // Go: `func (c *Checker) instantiateSignatureEx(...)` — REMOVED (M6 S7):
+    // superseded by uniontypes.rs's real signature instantiator (same
+    // signature).
 
     /// Go: `func (c *Checker) getCanonicalSignature(s) *Signature`.
     pub(crate) fn get_canonical_signature(&mut self, s: crate::types::SignatureId) -> crate::types::SignatureId {
@@ -8718,25 +8650,21 @@ pub(crate) fn get_constraint_from_type_parameter(c: &mut Checker, t: TypeId) -> 
 
 /// Go: `c.filterType(reducedTarget, isExcessPropertyCheckTarget)`.
 pub(crate) fn filter_type_is_excess_property_check_target(c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S7): the filter construction; the first match or the
-    // reduced type stands in.
-    if is_excess_property_check_target(c, t) {
-        t
-    } else {
-        c.never_type()
-    }
+    // REAL (M6 S7): the origin-aware union filter over isExcessPropertyCheckTarget.
+    c.filter_type(t, is_excess_property_check_target)
 }
 
-/// Go: `func (c *Checker) getPermissiveInstantiation(t) *Type` — S7 stub.
-pub(crate) fn get_permissive_instantiation(_c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S7): the permissive mapper.
-    t
+/// Go: `func (c *Checker) getPermissiveInstantiation(t) *Type` — delegates to
+/// the REAL body (M6 S7, uniontypes.rs; the cachedTypes-keyed permissive
+/// mapper instantiated in newChecker).
+pub(crate) fn get_permissive_instantiation(c: &mut Checker, t: TypeId) -> TypeId {
+    c.get_permissive_instantiation(t)
 }
 
-/// Go: `func (c *Checker) getRestrictiveInstantiation(t) *Type` — S7 stub.
-pub(crate) fn get_restrictive_instantiation(_c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S7): the restrictive mapper.
-    t
+/// Go: `func (c *Checker) getRestrictiveInstantiation(t) *Type` — delegates to
+/// the REAL body (M6 S7, uniontypes.rs).
+pub(crate) fn get_restrictive_instantiation(c: &mut Checker, t: TypeId) -> TypeId {
+    c.get_restrictive_instantiation(t)
 }
 
 /// Go: the tuple payload readers (the tuple-comparison ladder; TupleType

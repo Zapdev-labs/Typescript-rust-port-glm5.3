@@ -2038,3 +2038,18 @@ Next: S7 BEFORE S8.
 Rig validation (S6, 2026-10-11): forced clean + rebuild — all three
 twin gates green (fixture 9/9, 300-slice 143/143 byte-identical,
 program twin 15/15). S6 CLOSED.
+
+## M6 S7 — the union/type-construction engine landed (2026-10-11)
+
+uniontypes.rs ~3,900 lines: getUnionType + unionReduction (subtype
+reduction, exact cache-key discipline), getIntersectionType +
+isReducibleIntersection, the full instantiate* family with the
+mapper-driven substitution engine, template/string-mapping ctors,
+get_reduced_type. Banner sweep: every S7-owned constructor seam removed
+(~120 -> 101 banners; survivors are adjacent-wave deps or verified
+cross-wave lazy-readers); anyArrayType/typeofType/unknownUnion seeded
+per Go's NewChecker order, autoArrayType through the interned ctor,
+create_type_reference_ex real in the FROM_TYPE_NODE arm. Orchestrator
+re-verified fresh: 153 tests (15 new s7), clippy 0, fixture 9/9,
+300-slice twins identical 143/143, program twin 15/15. Next: S8
+(removes S6's TS2507 guard; owns resolveStructuredTypeMembers).
