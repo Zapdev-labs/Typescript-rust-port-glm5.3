@@ -3196,13 +3196,17 @@ impl Checker {
 
 }
 
-/// Go: `func (c *Checker) getNonNullableType(t)` (utilities.go — the signature
-/// ladder's callback-parameter pre-step).
-pub(crate) fn get_non_nullable_type(_c: &mut Checker, t: TypeId) -> TypeId {
-    // TODO(port M6 S7): removeMissingType/u = undefined — the non-nullable
-    // form needs union construction; identity for the current surface
-    // (the call sites guard on undefined-containing types).
-    t
+/// Go: `func (c *Checker) GetNonNullableType(t)` (checker.go:19070) — REAL
+/// as of W3T6 (was an S7 identity stub): strictNullChecks → the S10
+/// facts-lattice adjustment (remove undefined/null), else Go's identity.
+/// This is what narrows `C | undefined` to `C` at every optional-chain /
+/// non-null access under strictNullChecks.
+pub(crate) fn get_non_nullable_type(c: &mut Checker, t: TypeId) -> TypeId {
+    if c.strict_null_checks {
+        c.get_adjusted_type_with_facts_impl(t, TypeFacts::NE_UNDEFINED_OR_NULL)
+    } else {
+        t
+    }
 }
 
 /// Go: `func isTypeAny(t) bool` — `u::is_type_any` takes Option<&Type>.

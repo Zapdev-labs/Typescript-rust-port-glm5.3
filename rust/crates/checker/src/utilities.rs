@@ -44,10 +44,11 @@ use crate::types::{
 ///
 /// PORT: the checker's diagnostic creation flows through `ast.NewDiagnostic`;
 /// the localized-message path is the parser/binder-shaped constructor. The
-/// `scanner.GetErrorRangeForNode` span table (a ~40-case kind switch with
-/// token-range machinery) lands with the scanner/utilities wholesale port
-/// (M7); the spike uses the node's skip-trivia'd range, which matches Go for
-/// the common single-token cases (identifier declarations).
+/// `scanner.GetErrorRangeForNode` span table is REAL as of W3T6 — the
+/// verbatim port lives in `tsc_binder::scanner_shims::get_error_range_for_node`
+/// (the binder wave's copy; dedup candidate when the scanner crate takes
+/// it back) and `get_file_and_range` below routes through it, exactly like
+/// Go's NewDiagnosticForNode.
 pub fn new_diagnostic_for_node(
     store: &dyn NodeStore,
     node: NodeId,
@@ -85,11 +86,16 @@ fn get_file_and_range(
     if node.is_none() {
         return None;
     }
-    let n = store.node(node);
     let file = tsc_ast::utilities::get_source_file_of_node(store, node)?;
-    let text = file.text();
-    let pos = tsc_scanner::skip_trivia(text, n.pos());
-    Some((file.as_node_id(), pos, n.end()))
+    // Go: `loc = scanner.GetErrorRangeForNode(file, node)` (utilities.go's
+    // NewDiagnosticForNode) — REAL as of W3T6 (was the M7-deferred
+    // skip-trivia'd node range; the verbatim port landed with the binder
+    // wave in tsc_binder::scanner_shims). This is Go's error-node choice
+    // discipline — the span clamp for ClassDeclaration/FunctionDeclaration/
+    // VariableDeclaration/... names, the arrow first-line rule, the
+    // constructor/return/yield token rules.
+    let loc = tsc_binder::scanner_shims::get_error_range_for_node(file, node);
+    Some((file.as_node_id(), loc.pos(), loc.end()))
 }
 
 /// Go: `func NewDiagnosticChainForNode(chain, node, message, args...) *ast.Diagnostic`.
@@ -3258,8 +3264,8 @@ pub fn is_unchecked_js_suggestion(c: &Checker, _node: NodeId, _suggestion: Optio
     false
 }
 
-/// Go: `func (c *Checker) isJSLiteralType(t *Type) bool`.
-pub fn is_js_literal_type(c: &Checker, t: TypeId) -> bool {
+/// Go: `func (c *Checker) isJSLiteralType(t *Type) bool` (utilities.go:1807).
+pub fn is_js_literal_type(c: &mut Checker, t: TypeId) -> bool {
     if c.no_implicit_any {
         return false;
         // Flag is meaningless under `noImplicitAny` mode
@@ -3269,17 +3275,23 @@ pub fn is_js_literal_type(c: &Checker, t: TypeId) -> bool {
         return true;
     }
     if tr.flags.intersects(TypeFlags::UNION) {
-        return tr
-            .types()
-            .iter()
-            .all(|u| is_js_literal_type(c, *u));
+        let constituents = tr.types().to_vec();
+        return constituents.iter().all(|&u| is_js_literal_type(c, u));
     }
     if tr.flags.intersects(TypeFlags::INTERSECTION) {
-        return tr.types().iter().any(|u| is_js_literal_type(c, *u));
+        let constituents = tr.types().to_vec();
+        return constituents.iter().any(|&u| is_js_literal_type(c, u));
     }
     if tr.flags.intersects(TypeFlags::INSTANTIABLE) {
-        // TODO(port M6): getResolvedBaseConstraint
-        panic!("TODO(port M6): isJSLiteralType instantiable arm needs getResolvedBaseConstraint");
+        // Go: `constraint := c.getResolvedBaseConstraint(t, nil); return
+        // constraint != t && c.isJSLiteralType(constraint)` — REAL as of
+        // W3T6 (was a panic TODO; the class-thisType now flows here via
+        // tryGetThisTypeAtEx's class-like-parent arm).
+        let constraint = c.get_resolved_base_constraint(t, Vec::new());
+        return match constraint {
+            Some(constraint) => constraint != t && is_js_literal_type(c, constraint),
+            None => false,
+        };
     }
     false
 }

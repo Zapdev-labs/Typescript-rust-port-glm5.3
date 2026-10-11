@@ -3388,7 +3388,20 @@ impl Checker {
                 // so the return type of the body should be unwrapped to its
                 // awaited type, which should be wrapped in the native
                 // Promise<T> type by the caller.
-                t = c.unwrap_awaited_type(t);
+                // Go (checker.go:20718): `c.unwrapAwaitedType(c.checkAwaitedType(
+                // t, false, fn, The_return_type_of_an_async_function...))` —
+                // the checkAwaitedType call (with fn as the error node, which
+                // the span clamp reduces to the function name) is REAL as of
+                // W3T6 (was missing: unannotated async returns of thenables
+                // never reported TS1058).
+                let awaited =
+                    c.check_awaited_type(
+                        t,
+                        false,
+                        fn_node,
+                        &THE_RETURN_TYPE_OF_AN_ASYNC_FUNCTION_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER,
+                    );
+                t = c.unwrap_awaited_type(awaited);
             }
             if c.type_(t).flags.intersects(TypeFlags::NEVER) {
                 has_return_of_type_never = true;
@@ -3418,9 +3431,16 @@ impl Checker {
     /// Go: `func (c *Checker) functionHasImplicitReturn(fn) bool`
     /// (checker.go:20711). TODO(port M6 W3): the end-flow-node reachability
     /// read; permissive false (no implicit-return aggregation until flow).
+    /// Go: `func (c *Checker) functionHasImplicitReturn(fn *ast.Node) bool`
+    /// (checker.go:20711) — REAL as of W3T6: the flow-graph reachability
+    /// read (`fn.BodyData().EndFlowNode != nil && isReachableFlowNode(...)`);
+    /// was a false stub that suppressed the whole 2355/2366/7030 family
+    /// (checkFunctionOrMethodDeclaration's return-check region).
     pub(crate) fn function_has_implicit_return(&mut self, fn_node: NodeId) -> bool {
-        let _ = fn_node;
-        false
+        match tsc_binder::node_data::end_flow_node_of(self.store(), fn_node) {
+            Some(end) => self.is_reachable_flow_node(end),
+            None => false,
+        }
     }
 
     /// Go: `func (c *Checker) unwrapReturnType(returnType, functionFlags) *Type`

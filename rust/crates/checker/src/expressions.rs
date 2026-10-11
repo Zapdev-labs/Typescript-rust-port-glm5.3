@@ -89,7 +89,7 @@ use tsc_diagnostics::{
     THE_OPERAND_OF_A_DELETE_OPERATOR_MUST_BE_OPTIONAL,
     THE_OPERAND_OF_AN_INCREMENT_OR_DECREMENT_OPERATOR_MAY_NOT_BE_AN_OPTIONAL_PROPERTY_ACCESS,
     THE_OPERAND_OF_AN_INCREMENT_OR_DECREMENT_OPERATOR_MUST_BE_A_VARIABLE_OR_A_PROPERTY_ACCESS,
-    THE_RETURN_TYPE_OF_AN_ASYNC_FUNCTION_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER,
+    TYPE_OF_AWAIT_OPERAND_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER,
     THE_RIGHT_HAND_SIDE_OF_AN_ARITHMETIC_OPERATION_MUST_BE_OF_TYPE_ANY_NUMBER_BIGINT_OR_AN_ENUM_TYPE,
     THE_RIGHT_HAND_SIDE_OF_AN_INSTANCEOF_EXPRESSION_MUST_NOT_BE_AN_INSTANTIATION_EXPRESSION,
     A_REST_PARAMETER_OR_BINDING_PATTERN_MAY_NOT_HAVE_A_TRAILING_COMMA,
@@ -2166,10 +2166,17 @@ impl Checker {
     /// (checker.go:29593 — S9). Permissive identity (the optional-marker
     /// propagation reads apparent types; identity keeps chains exact for
     /// non-optional operands).
+    /// Go: `func (c *Checker) getOptionalExpressionType(exprType, expression) *Type`
+    /// (checker.go:29593) — REAL as of W3T6 (was the S9 passthrough stub;
+    /// rides the now-real GetNonNullableType).
     pub(crate) fn get_optional_expression_type(&mut self, expr_type: TypeId, expression: NodeId) -> TypeId {
-        // TODO(port M6 S9): getOptionalExpressionTypeWorker.
-        let _ = expression;
-        expr_type
+        if tsc_binder::ast_shims::is_expression_of_optional_chain_root(self.store(), expression) {
+            self.get_non_nullable_type(expr_type)
+        } else if tsc_ast::utilities::is_optional_chain(self.store().node(expression)) {
+            self.remove_optional_type_marker(expr_type)
+        } else {
+            expr_type
+        }
     }
 
     /// Go: `func (c *Checker) propagateOptionalTypeMarker(t, node, wasOptional) *Type`
@@ -2443,7 +2450,9 @@ impl Checker {
             operand_type,
             true, /*withAlias*/
             node,
-            &THE_RETURN_TYPE_OF_AN_ASYNC_FUNCTION_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER,
+            // Go checker.go:11084: the AWAIT message (TS1320), not the
+            // async-return message (1058) — fixed in W3T6.
+            &TYPE_OF_AWAIT_OPERAND_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER,
         );
         if awaited_type == operand_type
             && !relater::is_error_type(self, awaited_type)
@@ -3235,31 +3244,74 @@ impl Checker {
         let prop_type: TypeId;
         match prop {
             None => {
-                // Go: the index-info arm — getApplicableIndexInfoForName is the
-                // S8 seam (permissive None), so the union of index branches
-                // resolves through reportNonexistentProperty, exactly Go's
-                // no-indexInfo path.
-                let is_unchecked_js =
-                    u::is_unchecked_js_suggestion(self, node, left_type_symbol(self, left_type), true /*excludeClasses*/);
-                if !is_unchecked_js && u::is_js_literal_type(self, left_type) {
-                    return self.any_type();
-                }
-                // Go: the globalThis-exports arm — the S6 module seam keeps it
-                // dormant (the exports lookup answers None).
+                // Go: the index-info arm (checker.go:11556) — REAL as of
+                // W3T6 (was the "S8 permissive None" seam; getApplicable
+                // IndexInfoForName landed with resolveStructuredTypeMembers).
                 let right_text = tsc_ast::node_text(self.store(), right).to_string();
-                if !right_text.is_empty() && !self.check_and_report_error_for_extending_interface(node) {
-                    let containing = if u::is_this_type_parameter(self.type_(left_type)) {
-                        apparent_type
+                let index_info = if !tsc_ast::is_private_identifier(self.store().node(right))
+                    && (assignment_kind == u::AssignmentKind::None
+                        || !relater::is_generic_object_type(self, left_type)
+                        || u::is_this_type_parameter(self.type_(left_type)))
+                {
+                    relater::get_applicable_index_info_for_name(self, apparent_type, &right_text)
+                } else {
+                    None
+                };
+                if let Some(index_info) = index_info {
+                    if self.index_info_is_readonly(index_info)
+                        && (tsc_binder::ast_shims::is_assignment_target(self.store(), node)
+                            || u::is_delete_target(self.store(), node))
+                    {
+                        let t_str = self.type_to_string(apparent_type);
+                        self.error(
+                            node,
+                            &INDEX_SIGNATURE_IN_TYPE_0_ONLY_PERMITS_READING,
+                            &[t_str],
+                        );
+                    }
+                    let value_type = self.index_info_value_type(index_info);
+                    prop_type = if self.compiler_options.no_unchecked_indexed_access == Tristate::TSTrue
+                        && u::get_assignment_target_kind(self.store(), node) != u::AssignmentKind::Definite
+                    {
+                        relater::get_union_type(self, vec![value_type, self.missing_type_id()])
                     } else {
-                        left_type
+                        value_type
                     };
-                    // M6 S8 landed resolveStructuredTypeMembers, so
-                    // getPropertyOfType's None is now Go-faithful "genuinely
-                    // missing" — the pre-S8 containing-has-resolved-properties
-                    // gate is retired.
-                    self.report_nonexistent_property(right, containing, is_unchecked_js);
+                    // Go: `NoPropertyAccessFromIndexSignature` — the TS4111
+                    // report (checker.go:11599).
+                    if self.compiler_options.no_property_access_from_index_signature == Tristate::TSTrue
+                        && self.store().node(node).kind == Kind::PropertyAccessExpression
+                    {
+                        self.error(
+                            right,
+                            &tsc_diagnostics::PROPERTY_0_COMES_FROM_AN_INDEX_SIGNATURE_SO_IT_MUST_BE_ACCESSED_WITH_0,
+                            &[right_text],
+                        );
+                    }
+                    // Go: the deprecated-suggestion arm (checker.go:11602)
+                    // rides the deprecation stub (resolution.rs).
+                } else {
+                    let is_unchecked_js =
+                        u::is_unchecked_js_suggestion(self, node, left_type_symbol(self, left_type), true /*excludeClasses*/);
+                    if !is_unchecked_js && u::is_js_literal_type(self, left_type) {
+                        return self.any_type();
+                    }
+                    // Go: the globalThis-exports arm — the S6 module seam keeps it
+                    // dormant (the exports lookup answers None).
+                    if !right_text.is_empty() && !self.check_and_report_error_for_extending_interface(node) {
+                        let containing = if u::is_this_type_parameter(self.type_(left_type)) {
+                            apparent_type
+                        } else {
+                            left_type
+                        };
+                        // M6 S8 landed resolveStructuredTypeMembers, so
+                        // getPropertyOfType's None is now Go-faithful "genuinely
+                        // missing" — the pre-S8 containing-has-resolved-properties
+                        // gate is retired.
+                        self.report_nonexistent_property(right, containing, is_unchecked_js);
+                    }
+                    return self.error_type();
                 }
-                return self.error_type();
             }
             Some(prop) => {
                 self.check_property_not_used_before_declaration(prop, node, right);
@@ -4174,13 +4226,15 @@ impl Checker {
             if tsc_binder::ast_shims::is_static(self.store().node(container)) {
                 return Some(self.get_type_of_symbol(symbol));
             }
-            // Go: getDeclaredTypeOfSymbol(symbol).AsInterfaceType().thisType —
-            // the thisType construction is the S7 anonymous-type seam;
-            // permissive None (the noImplicitThis diagnostic fires, Go's
-            // answer when the interface thisType is absent).
-            // TODO(port M6 S7): the thisType construction.
-            let _ = self.get_declared_type_of_symbol(symbol);
-            return None;
+            // Go: `t = c.getDeclaredTypeOfSymbol(symbol).AsInterfaceType().thisType`
+            // (checker.go:12405) — REAL as of W3T6: the declared class/interface
+            // type's thisType is constructed by getDeclaredTypeOfClassOrInterface
+            // (every class always gets one). Go wraps with
+            // getFlowTypeOfReference(node, t); the flow walk is the port's
+            // permissive-declared-type seam (same PORT note as the
+            // function-like arm above).
+            let declared = self.get_declared_type_of_symbol(symbol);
+            return self.type_(declared).as_interface_type().expect("InterfaceType data").this_type;
         }
         if self.store().node(container).kind == Kind::SourceFile {
             // look up in the source file's locals or exports

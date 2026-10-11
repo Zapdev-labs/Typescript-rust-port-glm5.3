@@ -4008,10 +4008,16 @@ impl Checker {
                         .as_get_accessor_declaration()
                         .map(|d| d.body);
                     if body.is_some() {
-                        // TODO(port M6 S8/S9): getReturnTypeFromBody — the
-                        // flow-aware body return inference; permissive nil
-                        // (falls to the implicit-any report below, Go's
-                        // answer for a bodyless getter).
+                        // Go: `t = c.getReturnTypeFromBody(getter, CheckModeNormal)`
+                        // (checker.go:18941) — REAL as of W3T6: the body
+                        // return inference (async getters answer the
+                        // Promise-wrapped type, so the implicit-any 7033
+                        // below stays Go-silent); was the S8/S9 permissive
+                        // nil that mis-fired TS7033 on every async getter.
+                        t = Some(self.get_return_type_from_body(
+                            g,
+                            CheckMode::CHECK_MODE_NORMAL,
+                        ));
                     }
                 }
             }

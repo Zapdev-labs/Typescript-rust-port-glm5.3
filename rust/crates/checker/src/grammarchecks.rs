@@ -1386,7 +1386,12 @@ impl Checker {
 
     /// Go: `func (c *Checker) checkGrammarBreakOrContinueStatement(node) bool`.
     pub(crate) fn check_grammar_break_or_continue_statement(&mut self, node: NodeId) -> bool {
-        let target_label = self.store().node(node).name();
+        // Go: `targetLabel := node.Label()` — Label() is the Break/Continue
+        // (and Labeled) statement accessor; the generic Name() read returns
+        // nil for break/continue, which made every labeled break/continue
+        // climb past its label to the enclosing function and mis-fire
+        // TS1107 (fixed in W3T6).
+        let target_label = tsc_binder::node_data::label_of(self.store(), node);
         let mut current: Option<NodeId> = Some(node);
         while let Some(cur) = current {
             if tsc_binder::ast_shims::is_function_like_or_class_static_block_declaration(

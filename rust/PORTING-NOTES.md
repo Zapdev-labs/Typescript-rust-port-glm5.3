@@ -2270,3 +2270,24 @@ Rig validation (W3 tranche 5, 2026-10-13): forced clean + rebuild — all
 rails green (fixture x3 identical, bind 143/143, program 15/15). W3
 tranche 5 RIG-VALIDATED. Tranche 6 (2537 marker + the four probed gaps
 + 2683/2697/2322 spans) dispatched.
+
+## M6 W3 tranche 6 landed (2026-10-13) — divergence 83 -> 27; eleven families
+
+Falsified ANOTHER hypothesis honestly (2537's W3T5 "resolvingSignature
+marker" was wrong; Go-probe showed ctxSig=false — the real cause was
+Go's IIFE arm in getContextuallyTypedParameterType 30025). The span-
+clamp splice (get_file_and_range never called the ported
+get_error_range_for_node — Go's NewDiagnosticForNode clamp table) fixed
+17 records at once (2697 spans/2322/2515/2654/2703). try_get_this_type
+discarded the declared type it computed; function_has_implicit_return
+real (EndFlowNode reachability); getTypeOfAccessors skipped
+getReturnTypeFromBody(getter); Label() accessor; merge_module_
+augmentation never resolved with isForAugmentation; the index-info
+property-access arm (2542/4111); get_non_nullable_type real (not
+identity); check_non_null_type via the facts WORKER; await TS1320
+message; checkAwaitedType wrapper. Orchestrator re-verified fresh: 123
+lib tests, clippy 0 real warnings, fixture x3 identical, bind 143/143,
+program 15/15, check divergent 27 confirmed, tsc/packages/tools CLEAN.
+Remaining census: the S8 generic-member instantiation root (T->string
+mapping in E3<T>.m() — explains 2322/2719 residuals), 2307 x4 ambient
+program-shape, 2414 x4 checkCollisionsForDeclarationName unwired.

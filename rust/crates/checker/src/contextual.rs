@@ -562,10 +562,45 @@ impl Checker {
         if !self.is_context_sensitive_function_or_object_literal_method(fn_node) {
             return None;
         }
-        // TODO(port M6 S9): Go's IIFE arm (getEffectiveCallArguments +
-        // getSpreadArgumentType over the immediately-invoked expression,
-        // checker.go:30010-30034) is dormant until getSpreadArgumentType
-        // lands; the contextual-signature arm below is the common path.
+        // Go: `iife := ast.GetImmediatelyInvokedFunctionExpression(fn)`
+        // (checker.go:30025) — REAL (W3T6; was the S9 TODO that fell through
+        // to the contextual-signature arm, so an IIFE's binding-pattern
+        // parameter resolved from the pattern-implied type instead of the
+        // IIFE argument shape and fired spurious TS2537s on
+        // computed-name elements).
+        if let Some(iife) = binder_shims::get_immediately_invoked_function_expression(
+            self.store(),
+            fn_node,
+        ) {
+            let args = self.get_effective_call_arguments(iife);
+            let index_of_parameter =
+                parameters_of_node(self, fn_node).iter().position(|&p| p == parameter)?;
+            if crate::utilities::has_dot_dot_dot_token(self.store(), parameter) {
+                return Some(self.get_spread_argument_type(
+                    &args,
+                    index_of_parameter,
+                    args.len(),
+                    self.any_type(),
+                    None, /*context*/
+                    crate::checker::CheckMode::CHECK_MODE_NORMAL,
+                ));
+            }
+            let cached = self.signature_node_links.get(iife).resolved_signature;
+            self.signature_node_links.get(iife).resolved_signature = self.any_signature;
+            let t = if index_of_parameter < args.len() {
+                let arg_type = self.check_expression(args[index_of_parameter]);
+                Some(self.get_widened_literal_type(arg_type))
+            } else if initializer_of_node(self, parameter).is_some() {
+                // Go: `case parameter.Initializer() != nil: t = nil` — the
+                // widening default (anyType, plus reportImplicitAny under
+                // noImplicitAny) answers.
+                None
+            } else {
+                Some(self.undefined_widening_type())
+            };
+            self.signature_node_links.get(iife).resolved_signature = cached;
+            return t;
+        }
         let contextual_signature = self.get_contextual_signature(fn_node)?;
         let parameters = parameters_of_node(self, fn_node);
         let mut index = parameters.iter().position(|&p| p == parameter)? as i32;
@@ -587,6 +622,196 @@ impl Checker {
             );
         }
         self.try_get_type_at_position(contextual_signature, index as usize)
+    }
+
+    /// Go: `func isSpreadArgument(arg *ast.Node) bool` (checker.go:30063).
+    ///
+    /// PORT: Go's second disjunct (`IsSyntheticExpression(arg) && arg.IsSpread`)
+    /// rides the synthetic-expression factory (checker.go's
+    /// createSyntheticExpression, the M6-factory TODO); the port's node store
+    /// has no SyntheticExpression nodes yet, so only the SpreadElement arm
+    /// is live (getEffectiveCallArguments never fabricates spread synthetics
+    /// until that wave lands).
+    fn is_spread_argument(&self, arg: NodeId) -> bool {
+        tsc_ast::is_spread_element(self.store().node(arg))
+    }
+
+    /// Go: `func (c *Checker) getSpreadArgumentType(args, index, argCount, restType, context, checkMode) *Type`
+    /// (checker.go:30065) — REAL (W3T6; the IIFE rest-parameter arm of
+    /// getContextuallyTypedParameterType needs it).
+    pub(crate) fn get_spread_argument_type(
+        &mut self,
+        args: &[NodeId],
+        index: usize,
+        arg_count: usize,
+        rest_type: TypeId,
+        context: Option<crate::todo_shapes::InferenceContextId>,
+        check_mode: crate::checker::CheckMode,
+    ) -> TypeId {
+        let in_const_context = crate::inference::is_const_type_variable(self, rest_type, 0);
+        if arg_count > 0 && index >= arg_count - 1 {
+            let arg = args[arg_count - 1];
+            if self.is_spread_argument(arg) {
+                // We are inferring from a spread expression in the last
+                // argument position, i.e. both the parameter and the
+                // argument are ...x forms. (Go's comment.)
+                let spread_type = self.check_expression_with_contextual_type(
+                    expression_of_node(self, arg).expect("spread element expression"),
+                    Some(rest_type),
+                    context,
+                    check_mode,
+                );
+                if crate::relater::is_array_like_type(self, spread_type) {
+                    return self.get_mutable_array_or_tuple_type(spread_type);
+                }
+                let arg = if tsc_ast::is_spread_element(self.store().node(arg)) {
+                    expression_of_node(self, arg).expect("spread element expression")
+                } else {
+                    arg
+                };
+                let element_type = self.check_iterated_type_or_element_type(
+                    crate::statements::IterationUse::SPREAD,
+                    spread_type,
+                    self.undefined_type(),
+                    Some(arg),
+                );
+                return self.create_array_type_ex(element_type, in_const_context);
+            }
+        }
+        let mut types: Vec<TypeId> = Vec::new();
+        let mut infos: Vec<crate::types::TupleElementInfo> = Vec::new();
+        for (i, &arg) in args.iter().enumerate().take(arg_count).skip(index) {
+            let t;
+            let mut info = crate::types::TupleElementInfo {
+                flags: crate::types::ElementFlags::NONE,
+                labeled_declaration: None,
+            };
+            if self.is_spread_argument(arg) {
+                let spread_type = self.check_expression(
+                    expression_of_node(self, arg).expect("spread element expression"),
+                );
+                if crate::relater::is_array_like_type(self, spread_type) {
+                    t = spread_type;
+                    info.flags = crate::types::ElementFlags::VARIADIC;
+                } else {
+                    if tsc_ast::is_spread_element(self.store().node(arg)) {
+                        t = self.check_iterated_type_or_element_type(
+                            crate::statements::IterationUse::SPREAD,
+                            spread_type,
+                            self.undefined_type(),
+                            expression_of_node(self, arg),
+                        );
+                    } else {
+                        t = self.check_iterated_type_or_element_type(
+                            crate::statements::IterationUse::SPREAD,
+                            spread_type,
+                            self.undefined_type(),
+                            Some(arg),
+                        );
+                    }
+                    info.flags = crate::types::ElementFlags::REST;
+                }
+            } else {
+                // PORT: Go's tuple-name-source synthetic arm
+                // (`IsSyntheticExpression(arg) && TupleNameSource != nil`)
+                // rides the synthetic-expression factory (the M6-factory
+                // TODO); unreachable until that wave lands.
+                let contextual_type = if crate::relater::is_tuple_type(self, rest_type) {
+                    self.get_contextual_type_for_element_expression(
+                        Some(rest_type),
+                        i - index,
+                        arg_count as i32 - index as i32,
+                        -1,
+                        -1,
+                    )
+                    .unwrap_or_else(|| self.unknown_type())
+                } else {
+                    let number_literal = self.get_number_literal_type(Number::from(i as f64));
+                    self.get_indexed_access_type_ex(
+                        rest_type,
+                        number_literal,
+                        crate::types::AccessFlags::CONTEXTUAL,
+                        None,
+                        None,
+                    )
+                };
+                let arg_type = self.check_expression_with_contextual_type(
+                    arg,
+                    Some(contextual_type),
+                    context,
+                    check_mode,
+                );
+                let has_primitive_contextual_type = in_const_context
+                    || crate::relater::maybe_type_of_kind(
+                        self,
+                        contextual_type,
+                        TypeFlags::PRIMITIVE
+                            | TypeFlags::INDEX
+                            | TypeFlags::TEMPLATE_LITERAL
+                            | TypeFlags::STRING_MAPPING,
+                    );
+                t = if has_primitive_contextual_type {
+                    self.get_regular_type_of_literal_type(arg_type)
+                } else {
+                    self.get_widened_literal_type(arg_type)
+                };
+                info.flags = crate::types::ElementFlags::REQUIRED;
+            }
+            types.push(t);
+            infos.push(info);
+        }
+        // Go: `inConstContext && !someType(restType, c.isMutableArrayLikeType)`
+        // — the someType fold inlined over the union constituents (the
+        // closure would need `self` twice).
+        let mut any_mutable = false;
+        if self.type_(rest_type).flags.intersects(TypeFlags::UNION) {
+            let constituents = self.type_(rest_type).types().to_vec();
+            for constituent in constituents {
+                if crate::inference::is_mutable_array_like_type(self, constituent) {
+                    any_mutable = true;
+                    break;
+                }
+            }
+        } else {
+            any_mutable = crate::inference::is_mutable_array_like_type(self, rest_type);
+        }
+        let readonly = in_const_context && !any_mutable;
+        self.create_tuple_type_ex(&types, &infos, readonly)
+    }
+
+    /// Go: `func (c *Checker) getMutableArrayOrTupleType(t *Type) *Type`
+    /// (checker.go:30134).
+    pub(crate) fn get_mutable_array_or_tuple_type(&mut self, t: TypeId) -> TypeId {
+        if self.type_(t).flags.intersects(TypeFlags::UNION) {
+            return crate::typenodes::map_type(self, t, |c, t| {
+                c.get_mutable_array_or_tuple_type(t)
+            });
+        }
+        if self.type_(t).flags.intersects(TypeFlags::ANY) {
+            return t;
+        }
+        let base_constraint = crate::relater::get_base_constraint_or_type(self, t);
+        if crate::relater::is_mutable_array_or_tuple(self, base_constraint) {
+            return t;
+        }
+        if crate::relater::is_tuple_type(self, t) {
+            let element_types = self.get_element_types(t);
+            let element_infos = self
+                .type_(self.type_(t).target_tuple_type())
+                .as_tuple_type()
+                .expect("tuple target data")
+                .element_infos
+                .clone();
+            return self.create_tuple_type_ex(&element_types, &element_infos, false /*readonly*/);
+        }
+        self.create_tuple_type_ex(
+            &[t],
+            &[crate::types::TupleElementInfo {
+                flags: crate::types::ElementFlags::VARIADIC,
+                labeled_declaration: None,
+            }],
+            false, /*readonly*/
+        )
     }
 
     // ────────────────────────────────────────────────────────────────────────

@@ -2996,7 +2996,9 @@ fn some_type_mutable_array_like(c: &mut Checker, t: TypeId) -> bool {
 /// mutable-array-like if it is a reference to the global Array type, or if
 /// it is not the any, undefined, null or never type and if it is assignable
 /// to Array<any>.
-fn is_mutable_array_like_type(c: &mut Checker, t: TypeId) -> bool {
+/// Go: `func (c *Checker) isMutableArrayLikeType(t) bool` (checker.go:24060)
+/// — pub(crate) since contextual.rs's getSpreadArgumentType port consumes it.
+pub(crate) fn is_mutable_array_like_type(c: &mut Checker, t: TypeId) -> bool {
     is_mutable_array_or_tuple(c, t)
         || !c.type_(t).flags.intersects(TypeFlags::ANY | TypeFlags::NULLABLE | TypeFlags::NEVER)
             && c.is_type_assignable_to(t, c.any_array_type)

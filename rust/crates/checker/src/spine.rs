@@ -1658,18 +1658,13 @@ impl Checker {
             self.error(node, &OBJECT_IS_OF_TYPE_UNKNOWN, &[]);
             return self.error_type();
         }
-        // PORT (S10 seam): Go routes through getTypeFacts' flow-aware
-        // lattice worker (`c.getTypeFacts(t, TypeFactsIsUndefinedOrNull)`).
-        // The worker's flow half is W3/S10; the pure-flags value below is
-        // Go's answer for every non-flow type (a type carries the
-        // undefined-or-null facts exactly when its flags include undefined
-        // or null) — the S10 wave swaps this for the real worker.
-        let flags = self.type_(t).flags;
-        let facts = if flags.intersects(TypeFlags::NULLABLE) {
-            crate::relater::TypeFacts::IS_UNDEFINED_OR_NULL
-        } else {
-            crate::relater::TypeFacts::NONE
-        };
+        // REAL as of W3T6 (was the S10 pure-flags seam): Go routes through
+        // the getTypeFacts lattice worker, which walks UNION constituents
+        // (`C | undefined` carries the undefined-or-null facts even though a
+        // union type's own flags are just TypeFlagsUnion — the pure-flags
+        // shortcut missed that, so optional-chain accesses on
+        // union-with-undefined never narrowed and mis-fired TS2339).
+        let facts = self.get_type_facts_impl(t, crate::relater::TypeFacts::IS_UNDEFINED_OR_NULL);
         if facts.intersects(crate::relater::TypeFacts::IS_UNDEFINED_OR_NULL) {
             report_error(self, node, facts);
             let non_nullable = self.get_non_nullable_type(t);
@@ -1727,13 +1722,13 @@ impl Checker {
             self.error(node, &THE_VALUE_0_CANNOT_BE_USED_HERE, &["null".to_string()]);
             return;
         }
-        // The undefined/null split bits (Go TypeFactsIsUndefined = 1<<24,
-        // TypeFactsIsNull = 1<<25 — the S10 facts wave re-bases the relater's
-        // carried scheme onto Go's exact bits). The facts argument is
-        // computed from the type's pure flags at the call site; the reporter
-        // re-derives the split from the flags the caller passes in.
-        let is_undefined = facts.intersects(crate::relater::TypeFacts::IS_UNDEFINED_OR_NULL);
-        let is_null_fact = facts.intersects(crate::relater::TypeFacts::IS_UNDEFINED_OR_NULL);
+        // Go: `isUndefined := facts&TypeFactsIsUndefined != 0; isNull :=
+        // facts&TypeFactsIsNull != 0` — the split bits (Go TypeFactsIsUndefined
+        // = 1<<24, TypeFactsIsNull = 1<<25). REAL as of W3T6 (both sides
+        // used to read IS_UNDEFINED_OR_NULL, collapsing every split report
+        // into TS18049).
+        let is_undefined = facts.intersects(crate::relater::TypeFacts::IS_UNDEFINED);
+        let is_null_fact = facts.intersects(crate::relater::TypeFacts::IS_NULL);
         if !node_text.is_empty() && node_text.len() < 100 {
             if is_identifier(self.store().node(node)) && node_text == "undefined" {
                 self.error(node, &THE_VALUE_0_CANNOT_BE_USED_HERE, &["undefined".to_string()]);
@@ -2862,9 +2857,26 @@ impl Checker {
         } else {
             // find a module that about to be augmented; do not validate names
             // of augmentations that are defined in ambient context.
-            // TODO(port M6 S6): resolveExternalModuleNameWorker → the
-            // augmented module; permissive None (no merge) until S6.
-            let _ = module_name;
+            // Go: `moduleNotFoundError` = Invalid_module_name_in_augmentation
+            // (checker.go:1455) unless the grandparent is ambient. The
+            // resolveExternalModuleNameWorker call is REAL as of W3T6 (it
+            // fires the TS2664 augmentation-target error); the subsequent
+            // mergeSymbol tables remain the S6 TODO.
+            let grandparent = self.store().node(module_node).parent.get();
+            let module_not_found_error =
+                if self.store().node(grandparent).flags.intersects(NF::AMBIENT) {
+                    None
+                } else {
+                    Some(&tsc_diagnostics::INVALID_MODULE_NAME_IN_AUGMENTATION_MODULE_0_CANNOT_BE_FOUND)
+                };
+            let _ = self.resolve_external_module_name_worker(
+                module_name,
+                Some(module_name),
+                module_not_found_error,
+                false, /*ignoreErrors*/
+                true,  /*isForAugmentation*/
+                None,  /*importAttributesType*/
+            );
         }
     }
 
@@ -4151,15 +4163,199 @@ mod tests {
         );
     }
 
-    /// W3T5 NOTE: the 2537-avoidance for defaulted computed-name elements
-    /// was investigated down to the any-parent path (Go's resolvingSignature
-    /// marker makes getContextualSignature answer the any-signature, so
-    /// assignContextualParameterTypes caches any and the object arm's
-    /// IsTypeAny early-return skips the access) — see the continuation
-    /// file. The widened pattern-implied param type is flagless in BOTH
-    /// twins (Go's getWidenedTypeOfObjectLiteral keeps only
-    /// JSLiteral|NonInferrableType), so no OBJECT_LITERAL pin is possible
-    /// here yet.
+    /// W3T6 NOTE: the 2537-avoidance root cause was found and fixed — it is
+    /// Go's getContextuallyTypedParameterType IIFE arm (checker.go:30025),
+    /// which answers undefinedWideningType for a binding-pattern parameter
+    /// of a context-sensitive immediately-invoked function expression; the
+    /// widening turns that into anyType, and getBindingElementTypeFromParent
+    /// Type's IsTypeAny early-return skips the number-index access on the
+    /// pattern-implied `{}` (so no TS2537). The W3T5 hypothesis (the
+    /// resolvingSignature marker / contextual any-signature arm) was wrong —
+    /// Go's probe shows ctxSig=false on this path (see the continuation
+    /// file). The widened pattern-implied param type stays flagless in BOTH
+    /// twins, so no OBJECT_LITERAL pin is possible; the behavioral pin is
+    /// w3t6_iife_binding_pattern_param_no_2537 below.
+    #[test]
+    fn w3t6_iife_binding_pattern_param_go_exact_2537() {
+        // The corpus shape of classWithStaticFieldInParameterBindingPattern.
+        // Under the spine's default (strict) config BOTH twins emit exactly
+        // one TS2537 with the UNDEFINED parent (the IIFE arm's raw
+        // undefinedWideningType flows through assignBindingElementTypes'
+        // getBindingElementTypeFromParentType) — go-verified via the probe
+        // corpus ($HOME/.w3t6-scratch/probe, default-config runs identical).
+        // The W3T5 bug the IIFE-arm fix collapses: the parent was the
+        // pattern-implied `{}` (`{} number`). Under the corpus's
+        // strict:false configs both twins emit NO 2537 at all (the any
+        // widening IsTypeAny early-return) — verified on the real
+        // classWithStaticFieldInParameterBindingPattern{,.2,.3} slice.
+        let mut c = spine_checker("(({ [class { static x = 1 }.x]: b = \"\" }) => {})();\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        let d2537: Vec<_> = diags.iter().filter(|d| d.code() == 2537).collect();
+        assert_eq!(
+            d2537.len(),
+            1,
+            "exactly one TS2537 (Go-exact, strict config); got {:?}",
+            diags.iter().map(|d| (d.code(), d.message_text())).collect::<Vec<_>>()
+        );
+        assert!(
+            d2537.iter().all(|d| {
+                let args = d.message_args();
+                args.len() == 2 && args[0] == "undefined" && args[1] == "number"
+            }),
+            "the 2537 parent must be `undefined` (Go-exact), not the pattern-implied `{{}}`; got {:?}",
+            d2537.iter().map(|d| d.message_args()).collect::<Vec<_>>()
+        );
+    }
+    /// W3T6: Go's IIFE arm answers undefinedWideningType for a
+    /// no-initializer parameter of a context-sensitive IIFE with no
+    /// arguments (checker.go:30032); the widening folds that to anyType —
+    /// the port's getWidenedType mirrors Go, so `b` must be any (assignable
+    /// to number, no TS2322) rather than the pattern-implied member type.
+    #[test]
+    fn w3t6_iife_no_arg_param_widens_undefined_to_any() {
+        let mut c = spine_checker("(({ [k]: b }) => { const n: number = b; })();\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        assert_eq!(
+            diags.iter().filter(|d| d.code() == 2322).count(),
+            0,
+            "no TS2322: the IIFE param widens to any; got {:?}",
+            diags.iter().map(|d| (d.code(), d.message_text())).collect::<Vec<_>>()
+        );
+    }
+    /// W3T6: tryGetThisTypeAtEx's class-like-parent arm is REAL (Go
+    /// checker.go:12405 — the declared class/interface type's thisType,
+    /// constructed by getDeclaredTypeOfClassOrInterface; was the S7
+    /// TODO-None that made every unannotated `this` in a class method
+    /// report TS2683). Go-verified via the probe corpus (t1: both twins
+    /// emit exactly this 2322, source arg rendered as the thisType).
+    #[test]
+    fn w3t6_class_this_type_resolves() {
+        let mut c = spine_checker("class C { m() { const n: number = this; } }\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        let d2322: Vec<_> = diags.iter().filter(|d| d.code() == 2322).collect();
+        assert_eq!(
+            d2322.len(),
+            1,
+            "this in a class method resolves to the class thisType; got {:?}",
+            diags.iter().map(|d| (d.code(), d.message_args())).collect::<Vec<_>>()
+        );
+        assert!(
+            d2322.iter().all(|d| {
+                let args = d.message_args();
+                args.len() == 2 && args[0] == "this" && args[1] == "number"
+            }),
+            "the 2322 renders the thisType as `this`; got {:?}",
+            d2322.iter().map(|d| d.message_args()).collect::<Vec<_>>()
+        );
+    }
+    /// W3T6: isJSLiteralType's instantiable arm is REAL (Go utilities.go
+    /// 1807: getResolvedBaseConstraint) — the classAbstractCrashedOnce
+    /// corpus shape (`this.` member access on the class thisType, a type
+    /// parameter) PANICKED on the pre-W3T6 TODO; the port now walks the
+    /// constraint like Go (slice-verified: the case's diags are
+    /// twin-identical).
+    #[test]
+    fn w3t6_js_literal_type_instantiable_no_panic() {
+        let mut c = spine_checker(
+            "abstract class foo { protected abstract test(); }\nclass bar extends foo { test() { this. } }\nvar x = new bar();\n",
+        );
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        // Reaching here without panicking IS the pin (the corpus twin's
+        // error set is asserted by the 300-slice runs).
+    }
+    /// W3T6: functionHasImplicitReturn is REAL (Go checker.go:20711 — the
+    /// flow-graph reachability read; was a false stub that suppressed the
+    /// whole 2355/2366/7030 family). Go-verified: a bodyless-return function
+    /// with a non-void declared type gets exactly one TS2355.
+    #[test]
+    fn w3t6_function_has_implicit_return_2355() {
+        let mut c = spine_checker("function f(): number { }\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        let d2355: Vec<_> = diags.iter().filter(|d| d.code() == 2355).collect();
+        assert_eq!(d2355.len(), 1, "got {:?}", diags.iter().map(|d| d.code()).collect::<Vec<_>>());
+    }
+    /// W3T6: getTypeOfAccessors calls the real getReturnTypeFromBody (Go
+    /// checker.go:18941); an async getter answers the Promise-wrapped type,
+    /// so the TS7033 implicit-any report stays Go-silent.
+    #[test]
+    fn w3t6_async_getter_no_7033() {
+        let mut c = spine_checker("class C { async get foo() { } }\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        assert!(
+            !c.semantic_diagnostics().iter().any(|d| d.code() == 7033),
+            "async getter inferred via body; got {:?}",
+            c.semantic_diagnostics().iter().map(|d| d.code()).collect::<Vec<_>>()
+        );
+    }
+    /// W3T6: checkGrammarBreakOrContinueStatement reads Label() (Go
+    /// grammarchecks.go:1477), not the generic Name() — a labeled break
+    /// resolves its label and stays Go-silent (no TS1107).
+    #[test]
+    fn w3t6_labeled_break_no_1107() {
+        let mut c = spine_checker("function g() { block: { break block; } }\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        assert!(
+            !c.semantic_diagnostics().iter().any(|d| d.code() == 1107),
+            "labeled break resolves via Label(); got {:?}",
+            c.semantic_diagnostics().iter().map(|d| d.code()).collect::<Vec<_>>()
+        );
+    }
+    /// W3T6: getNonNullableType is REAL (Go checker.go:19070 — strict:
+    /// the S10 facts adjustment; was the S7 identity stub) and
+    /// checkNonNullType reads the REAL getTypeFacts worker (Go walks union
+    /// constituents; the pure-flags seam missed `C | undefined`). Go-
+    /// verified probe: `C | undefined` property access narrows to C and
+    /// reports exactly one TS18048 at `d`.
+    #[test]
+    fn w3t6_union_with_undefined_narrows_18048() {
+        let mut c = spine_checker(
+            "interface C { foo: string; [k: string]: string }\ndeclare const d: C | undefined;\nd.foo;\n",
+        );
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        let d18048: Vec<_> = diags.iter().filter(|d| d.code() == 18048).collect();
+        assert_eq!(
+            d18048.len(),
+            1,
+            "got {:?}",
+            diags.iter().map(|d| d.code()).collect::<Vec<_>>()
+        );
+        assert!(
+            !diags.iter().any(|d| d.code() == 2339),
+            "the union narrows before the property lookup; got {:?}",
+            diags.iter().map(|d| d.code()).collect::<Vec<_>>()
+        );
+    }
+    /// W3T6: the async-return thenable family — the aggregator's
+    /// checkAwaitedType (Go checker.go:20718, TS1058 at the function
+    /// node → name-clamped span) and checkAwaitExpression's TS1320
+    /// message (Go checker.go:11084; Rust used to pass the 1058 message
+    /// at the await site).
+    #[test]
+    fn w3t6_async_thenable_1058_and_await_1320() {
+        let mut c = spine_checker(
+            "declare class Thenable { then(): void; }\ndeclare let thenable: Thenable;\nasync function fn13() { return thenable; }\nasync function fn19() { await thenable; }\n",
+        );
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        let d1058: Vec<_> = diags.iter().filter(|d| d.code() == 1058).collect();
+        let d1320: Vec<_> = diags.iter().filter(|d| d.code() == 1320).collect();
+        assert_eq!(d1058.len(), 1, "the async return reports 1058; got {:?}", diags.iter().map(|d| d.code()).collect::<Vec<_>>());
+        assert_eq!(d1320.len(), 1, "await reports 1320; got {:?}", diags.iter().map(|d| d.code()).collect::<Vec<_>>());
+    }
     //
     // ────────────────────────────────────────────────────────────────────────
     // M6 W4 pins — the nodebuilder printer (nodebuilder.rs). Every expected
