@@ -2265,3 +2265,8 @@ fresh: 16 suites ok, fixture x3 identical, bind 143/143, program
 count-equal with 23 span-only diffs in createPromiseReturnType error-
 node choice). Remaining census: 2683 x17, 2322 spans, 2355 x9, 7033 x7,
 2697 spans, 2537 (fix direction documented), + the four W4-probed gaps.
+
+Rig validation (W3 tranche 5, 2026-10-13): forced clean + rebuild — all
+rails green (fixture x3 identical, bind 143/143, program 15/15). W3
+tranche 5 RIG-VALIDATED. Tranche 6 (2537 marker + the four probed gaps
++ 2683/2697/2322 spans) dispatched.
