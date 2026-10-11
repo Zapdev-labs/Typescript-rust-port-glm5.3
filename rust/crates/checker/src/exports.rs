@@ -365,11 +365,10 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) IsReadonlySymbol(symbol *ast.Symbol) bool` →
-    /// `c.isReadonlySymbol(symbol)` (checker.go — S8).
+    /// `c.isReadonlySymbol(symbol)` (checker.go — M6 S4 tranche 2: the real
+    /// body lives in relater.rs as the crate carrier).
     pub fn is_readonly_symbol(&mut self, symbol: SymbolId) -> bool {
-        // TODO(port M6 S8): the readonly-modifier walk.
-        let _ = symbol;
-        false
+        crate::relater::is_readonly_symbol(self, symbol)
     }
 
     /// Go: `func (c *Checker) GetReturnTypeOfSignature(sig *Signature) *Type`

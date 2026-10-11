@@ -9775,7 +9775,7 @@ impl Checker {
             self.value_symbol_links.get(member).resolved_type = Some(regular);
             members.set(name_text.clone(), member);
         }
-        let t = self.new_anonymous_type_with_members(Some(symbol), members);
+        let t = self.new_anonymous_type_with_members(Some(symbol), members, crate::types::ObjectFlags::NONE);
         // Go: t.objectFlags |= ObjectFlagsObjectLiteral | ObjectFlagsNonInferrableType.
         // TODO(port M6 S?): the objectFlags OR on the arena row — the
         // anonymous-literal object-flags seam; permissive unset until then.

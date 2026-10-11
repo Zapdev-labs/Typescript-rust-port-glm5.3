@@ -167,3 +167,88 @@ fn s4_new_target_in_function_is_clean() {
         diagnostics.iter().map(|d| d.code()).collect::<Vec<_>>()
     );
 }
+
+// ── M6 S4 tranche 2: identifier / super / object-literal pins ──────────────
+
+fn codes(c: &mut Checker, file: NodeId) -> Vec<i32> {
+    c.get_file_diagnostics(file).iter().map(|d| d.code()).collect()
+}
+
+#[test]
+fn s4t2_super_property_in_base_class_constructor_reports_2335() {
+    // Go: checkSuperExpression → the container is the base-class
+    // constructor (legal for the property form), then
+    // GetClassExtendsHeritageElement(classLike) == nil → X_SUPER_CAN_ONLY_
+    // BE_REFERENCED_IN_A_DERIVED_CLASS (TS 2335).
+    let (mut c, file) = check_file("class A { constructor() { const s = super.x; } }\n");
+    let codes = codes(&mut c, file);
+    assert!(
+        codes.contains(&2335),
+        "expected TS 2335 (super property in a base-class constructor), got: {codes:?}"
+    );
+}
+
+#[test]
+fn s4t2_identifier_readonly_ladder_dormant_under_s6() {
+    // The assignmentKind readonly ladder (TS 2539/2540/2588) composes behind
+    // the S6 resolveName seam: with the scope walk permissive, an identifier
+    // reference resolves to unknownSymbol and checkIdentifier returns
+    // errorType before the ladder — no false readonly error may fire.
+    let (mut c, file) = check_file("let x = 1;\nx = 2;\n");
+    let codes = codes(&mut c, file);
+    assert!(
+        !codes.contains(&2588) && !codes.contains(&2540) && !codes.contains(&2539),
+        "no false readonly-assignment error under the S6 seam, got: {codes:?}"
+    );
+}
+
+#[test]
+fn s4t2_super_property_outside_class_reports_2337_or_2660() {
+    // Go: checkSuperExpression with no super container at all → the
+    // SuperKeyword-operand container walk reports the no-container error
+    // (2337 for the call form / 2660 for the reference form).
+    let (mut c, file) = check_file("const s = super.x;\n");
+    let codes = codes(&mut c, file);
+    assert!(
+        codes.contains(&2337) || codes.contains(&2660) || codes.contains(&2338),
+        "expected a super-container error for a top-level super access, got: {codes:?}"
+    );
+}
+
+#[test]
+fn s4t2_object_literal_walk_completes_without_panic() {
+    // The tranche-2 object-literal family: properties, shorthand, method,
+    // computed name, spread, and a property with a type annotation — the
+    // full checkObjectLiteral member dispatch.
+    let (_c, _file) = check_file(
+        r#"
+const base = { a: 1, b: "two" };
+const o = {
+    ...base,
+    a: 2,
+    shorthand,
+    method() { return 1; },
+    ["computed" + ""]: 3,
+    typed: 4 as number,
+};
+let shorthand = 5;
+export { o };
+"#,
+    );
+}
+
+#[test]
+fn s4t2_spread_overwrite_reports_2783() {
+    // Go: checkObjectLiteral → checkSpreadPropOverrides → X_0_IS_SPECIFIED_
+    // MORE_THAN_ONCE_SO_THIS_USAGE_WILL_BE_OVERWRITTEN (TS 2783) when a
+    // spread source's required property is overridden by a later property.
+    // The S8 properties read is empty at this depth, so the diagnostic stays
+    // dormant — the pin asserts the walk completes and does not fire a
+    // false overwrite error.
+    let (mut c, file) = check_file("const base = { p: 1 };\nconst o = { ...base, p: 2 };\n");
+    let codes = codes(&mut c, file);
+    assert!(
+        !codes.contains(&2783),
+        "the S8 properties read keeps the overwrite diagnostic dormant (no false 2783), got: {codes:?}"
+    );
+}

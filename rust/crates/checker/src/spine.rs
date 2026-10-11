@@ -1372,7 +1372,8 @@ impl Checker {
                 self.check_accessor_declaration(node);
             }
             Kind::ClassExpression => {
-                // TODO(port M6 S4): checkClassExpressionDeferred.
+                // M6 S4: checkClassExpressionDeferred (expressions.rs).
+                self.check_class_expression_deferred(node);
             }
             Kind::TypeParameter => {
                 self.check_type_parameter_deferred(node);
@@ -1384,7 +1385,8 @@ impl Checker {
                 // TODO(port M6 W5): checkJsxElementDeferred (jsx.go).
             }
             Kind::TypeAssertionExpression | Kind::AsExpression => {
-                // TODO(port M6 S4): checkAssertionDeferred.
+                // M6 S4: checkAssertionDeferred (expressions.rs).
+                self.check_assertion_deferred(node);
             }
             Kind::VoidExpression => {
                 let expression = crate::ast_shims::expression_of(self.store(), node)
@@ -1398,7 +1400,8 @@ impl Checker {
                 }
             }
             Kind::ObjectLiteralExpression | Kind::JsxAttributes => {
-                // TODO(port M6 S3): checkContextualDeprecations (the deprecation registry).
+                // M6 S4: checkContextualDeprecations (expressions.rs).
+                self.check_contextual_deprecations(node);
             }
             _ => {}
         }
@@ -1954,7 +1957,7 @@ impl Checker {
     /// inference tail needs S8 (getSingleSignature) and S9 (the contextual
     /// signature + inference merge) — with the S8 stub returning None the
     /// function returns `t` at the same gate Go would.
-    fn instantiate_type_with_single_generic_call_signature(
+    pub(crate) fn instantiate_type_with_single_generic_call_signature(
         &mut self,
         node: NodeId,
         t: TypeId,
@@ -2140,9 +2143,8 @@ impl Checker {
                 self.check_array_literal(node, check_mode)
             }
             Kind::ObjectLiteralExpression => {
-                // TODO(port M6 S4): checkObjectLiteral(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkObjectLiteral (expressions.rs, tranche 2).
+                self.check_object_literal(node, check_mode)
             }
             Kind::PropertyAccessExpression => {
                 // M6 S4: checkPropertyAccessExpression (expressions.rs).
@@ -2177,13 +2179,13 @@ impl Checker {
                 self.check_parenthesized_expression(node, check_mode)
             }
             Kind::ClassExpression => {
-                // TODO(port M6 S4): checkClassExpression.
-                self.error_type()
+                // M6 S4: checkClassExpression (expressions.rs, tranche 2).
+                self.check_class_expression(node)
             }
             Kind::FunctionExpression | Kind::ArrowFunction => {
-                // TODO(port M6 S4): checkFunctionExpressionOrObjectLiteralMethod(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S4: checkFunctionExpressionOrObjectLiteralMethod
+                // (expressions.rs, tranche 2).
+                self.check_function_expression_or_object_literal_method(node, check_mode)
             }
             Kind::TypeAssertionExpression | Kind::AsExpression => {
                 // M6 S4: checkAssertion (expressions.rs).

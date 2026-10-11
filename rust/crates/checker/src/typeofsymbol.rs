@@ -1795,9 +1795,10 @@ impl Checker {
         &mut self,
         symbol: Option<SymbolId>,
         members: SymbolTable,
+        extra_object_flags: crate::types::ObjectFlags,
     ) -> TypeId {
         let properties: Vec<SymbolId> = members.entries().map(|(_, &s)| s).collect();
-        let t = self.new_object_type(ObjectFlags::ANONYMOUS, symbol);
+        let t = self.new_object_type(ObjectFlags::ANONYMOUS | extra_object_flags, symbol);
         {
             let data = self
                 .type_mut(t)
@@ -1921,19 +1922,11 @@ impl Checker {
         crate::relater::get_indexed_access_type(self, object_type, index_type)
     }
 
-    /// Go: `func (c *Checker) getTypeOfInitializer(declaration *ast.Node) *Type`
-    /// (checker.go:25235 region) — the initializer's expression type.
-    fn get_type_of_initializer(&mut self, node: NodeId) -> TypeId {
-        let initializer = ast_shims::initializer_of(self.store(), node)
-            .or_else(|| {
-                // Go: `node.Initializer()` on a BindingElement/PropertyAssignment payload.
-                match &self.store().node(node).data {
-                    NodeData::BindingElement(d) => d.initializer,
-                    NodeData::PropertyAssignment(d) => Some(d.initializer),
-                    _ => None,
-                }
-            })
-            .expect("initializer");
+    /// Go: `func (c *Checker) getTypeOfInitializer(initializer *ast.Node) *Type`
+    /// — `getTypeOfExpression(initializer)` (Go passes the initializer
+    /// expression node directly; M6 S4 tranche 2 fixed the misport that
+    /// re-read an initializer off the expression node).
+    fn get_type_of_initializer(&mut self, initializer: NodeId) -> TypeId {
         self.get_type_of_expression(initializer)
     }
 
@@ -2301,7 +2294,7 @@ impl Checker {
             members.set(self.program.symbol(symbol).name.clone(), symbol);
         }
         let symbol = self.type_(t).symbol;
-        let result = self.new_anonymous_type_with_members(symbol, members);
+        let result = self.new_anonymous_type_with_members(symbol, members, crate::types::ObjectFlags::NONE);
         let object_flags = self.type_(t).object_flags;
         self.type_mut(result).object_flags = object_flags;
         result
@@ -2489,11 +2482,20 @@ impl Checker {
         {
             let pattern_parent = self.store().node(pattern).parent.get();
             let initializer = ast_shims::initializer_of(self.store(), pattern_parent).expect("checked");
+            // Go: parentType = c.getTypeWithFacts(parentType, TypeFactsNEUndefined)
+            // when the initializer's type doesn't include undefined. The
+            // facts stub (S10) keeps parentType unchanged either way.
             let initializer_type = self.get_type_of_initializer(initializer);
-            let _ = self.has_type_facts(
+            if !self.has_type_facts(
                 initializer_type,
                 crate::relater::TypeFacts::EQ_UNDEFINED,
-            );
+            ) {
+                parent_type = crate::relater::get_type_with_facts(
+                    self,
+                    parent_type,
+                    crate::relater::TypeFacts::NE_UNDEFINED,
+                );
+            }
         }
         let access_flags = AccessFlags::EXPRESSION_POSITION
             | if no_tuple_bounds_check || self.has_default_value(declaration) {
@@ -2636,10 +2638,27 @@ impl Checker {
         crate::relater::get_non_nullable_type(self, source)
     }
 
-    /// TODO(port M6 S4): `isValidSpreadType` — permissive true.
-    fn is_valid_spread_type(&mut self, t: TypeId) -> bool {
-        let _ = t;
-        true
+    /// Go: `func (c *Checker) isValidSpreadType(t) bool` (checker.go:13748).
+    ///
+    /// Go: `removeDefinitelyFalsyTypes(mapType(t, getBaseConstraintOrType))`
+    /// then the flags probe. TODO(port M6 S7/S10): the falsy-removal +
+    /// constraint map; the flags probe below is the post-removal shape for
+    /// the compound-free types.
+    pub(crate) fn is_valid_spread_type(&mut self, t: TypeId) -> bool {
+        let flags = self.type_(t).flags;
+        if flags.intersects(
+            crate::types::TypeFlags::ANY
+                .union(crate::types::TypeFlags::NON_PRIMITIVE)
+                .union(crate::types::TypeFlags::OBJECT)
+                .union(crate::types::TypeFlags::INSTANTIABLE_NON_PRIMITIVE),
+        ) {
+            return true;
+        }
+        if flags.intersects(crate::types::TypeFlags::UNION_OR_INTERSECTION) {
+            let constituents = self.type_(t).types().to_vec();
+            return constituents.iter().all(|&c| self.is_valid_spread_type(c));
+        }
+        false
     }
 
     /// Determine the control flow type associated with a destructuring
@@ -2742,7 +2761,7 @@ impl Checker {
         // infos slot below (the S8 members-resolution seam). The info clone
         // happens before the `type_mut` borrow (§5.4 idiom).
         let string_index_info_data = string_index_info.map(|index| self.index_infos[index].clone());
-        let result = self.new_anonymous_type_with_members(None, members);
+        let result = self.new_anonymous_type_with_members(None, members, ObjectFlags::NONE);
         {
             let data = self
                 .type_mut(result)
@@ -3370,7 +3389,7 @@ impl Checker {
         let symbol = self.type_(t).symbol;
         // TODO(port M6 S7/S8): getIndexInfosOfType widened remap — the
         // index-info construction; empty at this depth.
-        let result = self.new_anonymous_type_with_members(symbol, members);
+        let result = self.new_anonymous_type_with_members(symbol, members, crate::types::ObjectFlags::NONE);
         // Retain js literal flag through widening
         let retained = self.type_(t).object_flags
             & (ObjectFlags::JS_LITERAL.union(ObjectFlags::NON_INFERRABLE_TYPE));

@@ -4492,19 +4492,13 @@ impl Checker {
         let parent = self.store().node(node).parent.get();
         if self.store().node(parent).kind == Kind::ParenthesizedExpression {
             self.is_template_literal_context(parent)
-        } else if self.store().node(parent).kind == Kind::ElementAccessExpression
-            && self
+        } else { self.store().node(parent).kind == Kind::ElementAccessExpression && self
                 .store()
                 .node(parent)
                 .as_element_access_expression()
                 .expect("ElementAccessExpression data")
                 .argument_expression
-                == node
-        {
-            true
-        } else {
-            false
-        }
+                == node }
     }
 
     /// Go: `func (c *Checker) isTemplateLiteralContextualType(t) bool` (checker.go:8173).
@@ -4962,7 +4956,7 @@ impl Checker {
                 .node(node)
                 .as_array_literal_expression()
                 .expect("ArrayLiteralExpression data");
-            d.elements.as_ref().map(|l| l.nodes.iter().copied().collect()).unwrap_or_default()
+            d.elements.as_ref().map(|l| l.nodes.to_vec()).unwrap_or_default()
         };
         let length = elements.len();
         let mut element_types: Vec<TypeId> = vec![self.never_type(); length];
@@ -5340,7 +5334,7 @@ impl Checker {
                     .expect("CallExpression data")
                     .arguments
                     .as_ref()
-                    .map(|l| l.nodes.iter().copied().collect())
+                    .map(|l| l.nodes.to_vec())
                     .unwrap_or_default();
                 arguments.len() > 1
                     && tsc_ast::utilities::skip_parentheses(self.store(), arguments[1]) == options
@@ -5631,18 +5625,38 @@ impl Checker {
         // used-before-assigned probe cannot distinguish assigned references
         // (it stays dormant, Go's answer when the reference carries no flow
         // node); the autoType evolving-array arm composes identically.
-        if !type_is_automatic || t != self.auto_type() && Some(t) != self.auto_array_type {
-            if assignment_kind != u::AssignmentKind::None {
-                // Identifier is target of a compound assignment
-                return self.get_base_type_of_literal_type(flow_type);
+        // TODO(port M6 W3): isEvolvingArrayOperationTarget — permissive
+        // false (no evolving-array flow bookkeeping yet).
+        let is_evolving_array_operation_target = false;
+        if !is_evolving_array_operation_target
+            && (t == self.auto_type() || Some(t) == self.auto_array_type)
+        {
+            if flow_type == self.auto_type() || Some(flow_type) == self.auto_array_type {
+                // The automatic types are only reachable with evolving-array
+                // flow bookkeeping (W3); the two TS7022/TS7005 errors below
+                // fire from this dormant arm once that lands.
+                let _ = (
+                    &VARIABLE_0_IMPLICITLY_HAS_AN_1_TYPE,
+                    &VARIABLE_0_IMPLICITLY_HAS_TYPE_1_IN_SOME_LOCATIONS_WHERE_ITS_TYPE_CANNOT_BE_DETERMINED,
+                );
+                return self.convert_auto_to_any(flow_type);
             }
-            return flow_type;
+        } else if !assume_initialized
+            && !self.type_(t).flags.intersects(TypeFlags::UNDEFINED)
+            && self.type_(flow_type).flags.intersects(TypeFlags::UNDEFINED)
+        {
+            // TODO(port M6 W3): the definite-assignment flow facts — the
+            // TS2454 (TS2456 for destructuring) arm stays dormant under the
+            // no-flow seam (the probe can't distinguish assigned
+            // references); the diagnostic constants are referenced here so
+            // the mirror is live for the W3 wave.
+            let _ = VARIABLE_0_IS_USED_BEFORE_BEING_ASSIGNED;
         }
-        let _ = flow_type;
         if assignment_kind != u::AssignmentKind::None {
-            return self.get_base_type_of_literal_type(t);
+            // Identifier is target of a compound assignment
+            return self.get_base_type_of_literal_type(flow_type);
         }
-        t
+        flow_type
     }
 
     /// Go: `func (c *Checker) isSameScopedBindingElement(node, declaration) bool`
@@ -5831,8 +5845,8 @@ impl Checker {
                             .intersects(NF::CONSTANT);
                     let root_is_parameter =
                         self.store().node(root_declaration).kind == Kind::Parameter;
-                    if root_is_const_variable || root_is_parameter {
-                        if !self
+                    if (root_is_const_variable || root_is_parameter)
+                        && !self
                             .node_links
                             .get(parent)
                             .flags
@@ -5879,7 +5893,6 @@ impl Checker {
                                 }
                             }
                         }
-                    }
                 }
             }
         }
@@ -5902,7 +5915,9 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) isPastLastAssignment(symbol, location) bool`
-    /// (flow.go — W3). Permissive false.
+    /// (flow.go — W3). Permissive false. Dormant until the W3 caller loop in
+    /// checkIdentifier composes (the container-hop seam).
+    #[allow(dead_code)]
     pub(crate) fn is_past_last_assignment(&mut self, symbol: SymbolId, location: NodeId) -> bool {
         // TODO(port M6 W3): the assignment flow-epoch probe.
         let _ = (symbol, location);
@@ -5912,6 +5927,8 @@ impl Checker {
     /// Go: `func (c *Checker) isSymbolAssignedDefinitely(symbol) bool` — the
     /// flow-engine helper (W3). Permissive true (every variable counts as
     /// assigned; keeps the never-initialized probe dormant under the seam).
+    /// Dormant until the W3 caller probe composes.
+    #[allow(dead_code)]
     pub(crate) fn is_symbol_assigned_definitely(&mut self, symbol: SymbolId) -> bool {
         // TODO(port M6 W3): the definite-assignment flow walk.
         let _ = symbol;
@@ -6024,7 +6041,9 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getReferencedValueOrAliasSymbol(reference) *ast.Symbol`
-    /// (checker.go:14177).
+    /// (checker.go:14177). Dormant until the emitresolver wave (its only Go
+    /// caller is emitresolver.go's reference walk).
+    #[allow(dead_code)]
     pub(crate) fn get_referenced_value_or_alias_symbol(&mut self, reference: NodeId) -> Option<SymbolId> {
         let resolved_symbol = self.symbol_node_links.get(reference).resolved_symbol;
         if resolved_symbol.is_some() && resolved_symbol != Some(self.unknown_symbol()) {
@@ -6091,3 +6110,1041 @@ fn is_this_in_type_query(store: &dyn NodeStore, node: NodeId) -> bool {
         return store.node(parent).kind == Kind::TypeQuery;
     }
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// M6 S4 tranche 2 — the object-literal family (checker.go:13388-13737)
+// + the spread/expando machinery (checker.go:13529-13903) + the class/
+// function-expression leaves (checker.go:10271-10586).
+// ────────────────────────────────────────────────────────────────────────────
+
+impl Checker {
+    /// Go: `func (c *Checker) checkObjectLiteral(node, checkMode) *Type` (checker.go:13388).
+    pub(crate) fn check_object_literal(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
+        let (properties, node_symbol) = {
+            let d = self
+                .store()
+                .node(node)
+                .as_object_literal_expression()
+                .expect("ObjectLiteralExpression data");
+            (d.properties.clone(), d.symbol)
+        };
+        let in_js = tsc_ast::utilities::is_in_js_file(self.store().node(node));
+        // Expando object literals have empty properties but filled exports
+        let properties_empty = properties
+            .as_ref()
+            .map(|l| l.nodes.is_empty())
+            .unwrap_or(true);
+        if properties_empty
+            && let Some(symbol) = node_symbol
+            && !self.program_symbol(symbol).exports.is_empty()
+        {
+            let exports: Vec<(String, SymbolId)> = self
+                .program_symbol(symbol)
+                .exports
+                .entries()
+                .map(|(k, &v)| (k.clone(), v))
+                .collect();
+            let mut members = tsc_ast::SymbolTable::new();
+            for (k, v) in exports {
+                members.set(k, v);
+            }
+            let mut extra = ObjectFlags::NONE;
+            if in_js {
+                extra |= ObjectFlags::JS_LITERAL;
+            }
+            // An expando object literal has no property children (len == 0), so there
+            // is nothing to check here.
+            return self.new_anonymous_type_with_members(Some(symbol), members, extra);
+        }
+        self.check_node_deferred(node);
+        let in_destructuring_pattern =
+            tsc_binder::ast_shims::is_assignment_target(self.store(), node);
+        // Grammar checking
+        // TODO(port M6 W3): checkGrammarObjectLiteralExpression.
+        let _ = in_destructuring_pattern;
+        let strict_null_checks = self.strict_null_checks;
+        let mut all_properties_table: Option<tsc_ast::SymbolTable> =
+            strict_null_checks.then(tsc_ast::SymbolTable::new);
+        let mut properties_table = tsc_ast::SymbolTable::new();
+        let mut properties_array: Vec<SymbolId> = Vec::new();
+        let empty_object_type = self.empty_object_type();
+        let mut spread = empty_object_type;
+        self.push_cached_contextual_type(node);
+        let contextual_type = self.get_apparent_type_of_contextual_type(node);
+        let mut contextual_type_has_pattern = false;
+        if let Some(contextual_type) = contextual_type
+            && let Some(pattern) = self.pattern_for_type.get(&contextual_type).copied()
+            && matches!(
+                self.store().node(pattern).kind,
+                Kind::ObjectBindingPattern | Kind::ObjectLiteralExpression
+            )
+        {
+            contextual_type_has_pattern = true;
+        }
+        let in_const_context = self.is_const_context(node);
+        let mut check_flags = tsc_ast::CheckFlags::NONE;
+        if in_const_context {
+            check_flags |= tsc_ast::CheckFlags::READONLY;
+        }
+        let mut object_flags = ObjectFlags::FRESH_LITERAL;
+        let mut pattern_with_computed_properties = false;
+        let mut has_computed_string_property = false;
+        let mut has_computed_number_property = false;
+        let mut has_computed_symbol_property = false;
+        // Spreads may cause an early bail; ensure computed names are always checked (this is cached)
+        // As otherwise they may not be checked until exports for the type at this position are retrieved,
+        // which may never occur.
+        let property_nodes: Vec<NodeId> = properties
+            .iter()
+            .flat_map(|l| l.nodes.iter().copied())
+            .collect();
+        for elem in property_nodes.iter().copied() {
+            if let Some(name) = self.store().node(elem).name()
+                && self.store().node(name).kind == Kind::ComputedPropertyName
+            {
+                let _ = self.check_computed_property_name(name);
+            }
+        }
+        let mut offset = 0usize;
+        // Go's createObjectLiteralType closure — the per-spread-segment type.
+        let node_symbol_clone = node_symbol;
+        macro_rules! create_object_literal_type {
+            ($c:expr) => {{
+                let _ = offset;
+                // TODO(port M6 S7/S10): getObjectLiteralIndexInfo — the
+                // computed-property index infos; the S7/S10 read seams are
+                // empty at this depth, so the literal carries none.
+                let _ = (
+                    has_computed_string_property,
+                    has_computed_number_property,
+                    has_computed_symbol_property,
+                );
+                let mut members = tsc_ast::SymbolTable::new();
+                for (k, &v) in properties_table.entries() {
+                    members.set(k.clone(), v);
+                }
+                let result = $c.new_anonymous_type_with_members(
+                    node_symbol_clone,
+                    members,
+                    object_flags | ObjectFlags::OBJECT_LITERAL | ObjectFlags::CONTAINS_OBJECT_OR_ARRAY_LITERAL,
+                );
+                if contextual_type.is_none() && in_js {
+                    $c.type_mut(result).object_flags |= ObjectFlags::JS_LITERAL;
+                }
+                if pattern_with_computed_properties {
+                    $c.type_mut(result).object_flags |=
+                        ObjectFlags::OBJECT_LITERAL_PATTERN_WITH_COMPUTED_PROPERTIES;
+                }
+                if in_destructuring_pattern {
+                    $c.pattern_for_type.insert(result, node);
+                }
+                result
+            }};
+        }
+        for member_decl in property_nodes.iter().copied() {
+            let mut member = self.get_symbol_of_declaration(member_decl);
+            let mut computed_name_type: Option<TypeId> = None;
+            let member_name_node = self.store().node(member_decl).name();
+            if let Some(name) = member_name_node
+                && self.store().node(name).kind == Kind::ComputedPropertyName
+            {
+                computed_name_type = Some(self.check_computed_property_name(name));
+            }
+            let member_decl_kind = self.store().node(member_decl).kind;
+            let is_object_literal_element = matches!(
+                member_decl_kind,
+                Kind::PropertyAssignment | Kind::ShorthandPropertyAssignment
+            ) || member_decl_kind == Kind::MethodDeclaration && {
+                let parent = self.store().node(member_decl).parent.get();
+                self.store().node(parent).kind == Kind::ObjectLiteralExpression
+            };
+            if is_object_literal_element
+            {
+                let t = match self.store().node(member_decl).kind {
+                    Kind::PropertyAssignment => self.check_property_assignment(member_decl, check_mode),
+                    Kind::ShorthandPropertyAssignment => {
+                        self.check_shorthand_property_assignment(member_decl, in_destructuring_pattern, check_mode)
+                    }
+                    _ => self.check_object_literal_method(member_decl, check_mode),
+                };
+                object_flags |= self.type_(t).object_flags & ObjectFlags::PROPAGATING_FLAGS;
+                let mut name_type: Option<TypeId> = None;
+                if let Some(c) = computed_name_type
+                    && u::is_type_usable_as_property_name(self.type_(c))
+                {
+                    name_type = Some(c);
+                }
+                let member_flags = member
+                    .map(|m| self.program_symbol(m).flags)
+                    .unwrap_or(SymbolFlags::NONE);
+                // Go: a computed member's name folds from its name type
+                // (never `Text()` on the ComputedPropertyName node); the
+                // literal names read through node_text.
+                let member_name = match name_type {
+                    Some(nt) => u::get_property_name_from_type(self.type_(nt)),
+                    None => member_name_node
+                        .filter(|n| self.store().node(*n).kind != Kind::ComputedPropertyName)
+                        .map(|n| tsc_ast::node_text(self.store(), n).to_string())
+                        .unwrap_or_default(),
+                };
+                let prop = match name_type {
+                    Some(nt) => {
+                        let name = u::get_property_name_from_type(self.type_(nt));
+                        self.new_symbol_ex(
+                            SymbolFlags::PROPERTY.union(member_flags),
+                            &name,
+                            check_flags | tsc_ast::CheckFlags::LATE,
+                        )
+                    }
+                    None => self.new_symbol_ex(
+                        SymbolFlags::PROPERTY.union(member_flags),
+                        &member_name,
+                        check_flags,
+                    ),
+                };
+                if let Some(nt) = name_type {
+                    self.value_symbol_links.get(prop).name_type = Some(nt);
+                }
+                if in_destructuring_pattern && self.has_default_value(member_decl) {
+                    // If object literal is an assignment pattern and if the assignment pattern specifies a default value
+                    // for the property, make the property optional.
+                    self.program_symbol_mut(prop).flags |= SymbolFlags::OPTIONAL;
+                } else if contextual_type_has_pattern
+                    && !self
+                        .type_(contextual_type.unwrap())
+                        .object_flags
+                        .intersects(ObjectFlags::OBJECT_LITERAL_PATTERN_WITH_COMPUTED_PROPERTIES)
+                {
+                    // If object literal is contextually typed by the implied type of a binding pattern, and if the
+                    // binding pattern specifies a default value for the property, make the property optional.
+                    let implied_prop = contextual_type
+                        .and_then(|ct| relater::get_property_of_type(self, ct, &member_name));
+                    if let Some(implied_prop) = implied_prop {
+                        let implied_flags = self.program_symbol(implied_prop).flags;
+                        self.program_symbol_mut(prop).flags |=
+                            implied_flags & SymbolFlags::OPTIONAL;
+                    } else if contextual_type.is_some()
+                        && self
+                            .get_index_info_of_type(contextual_type.unwrap(), self.string_type())
+                            .is_none()
+                    {
+                        let name_string = member
+                            .map(|m| relater::symbol_to_string(self, m))
+                            .unwrap_or_default();
+                        let contextual_string = contextual_type
+                            .map(|ct| self.type_to_string(ct))
+                            .unwrap_or_default();
+                        if let Some(name_node) = member_name_node {
+                            self.error(
+                                name_node,
+                                &OBJECT_LITERAL_MAY_ONLY_SPECIFY_KNOWN_PROPERTIES_AND_0_DOES_NOT_EXIST_IN_TYPE_1,
+                                &[name_string, contextual_string],
+                            );
+                        }
+                    }
+                }
+                let (member_declarations, member_parent, member_value_declaration) = member
+                    .map(|m| {
+                        let s = self.program_symbol(m);
+                        (s.declarations.clone(), s.parent, s.value_declaration)
+                    })
+                    .unwrap_or_default();
+                {
+                    let s = self.program_symbol_mut(prop);
+                    s.declarations = member_declarations;
+                    s.parent = member_parent;
+                    s.value_declaration = member_value_declaration;
+                }
+                self.value_symbol_links.get(prop).resolved_type = Some(t);
+                self.value_symbol_links.get(prop).target = member;
+                member = Some(prop);
+                if let Some(table) = all_properties_table.as_mut() {
+                    let name = self.program_symbol(prop).name.clone();
+                    table.set(name, prop);
+                }
+                // TODO(port M6 S6/S9): addIntraExpressionInferenceSite for
+                // context-sensitive property/method initializers — the
+                // inference-context readers are permissive at this depth.
+            } else if self.store().node(member_decl).kind == Kind::SpreadAssignment {
+                if !properties_array.is_empty() {
+                    let segment = create_object_literal_type!(self);
+                    spread = self.get_spread_type(
+                        spread,
+                        segment,
+                        node_symbol,
+                        object_flags,
+                        in_const_context,
+                    );
+                    properties_array.clear();
+                    properties_table = tsc_ast::SymbolTable::new();
+                    has_computed_string_property = false;
+                    has_computed_number_property = false;
+                    has_computed_symbol_property = false;
+                }
+                let spread_expr = {
+                    let d = self
+                        .store()
+                        .node(member_decl)
+                        .as_spread_assignment()
+                        .expect("SpreadAssignment data");
+                    d.expression
+                };
+                let t = self.check_expression_ex(
+                    spread_expr,
+                    check_mode | CheckMode::INFERENTIAL,
+                );
+                let t = self.get_reduced_type(t);
+                if self.is_valid_spread_type(t) {
+                    let merged_type =
+                        self.try_merge_union_of_object_type_and_empty_object(t, in_const_context);
+                    if let Some(table) = all_properties_table.clone() {
+                        self.check_spread_prop_overrides(merged_type, &table, member_decl);
+                    }
+                    offset = properties_array.len();
+                    if relater::is_error_type(self, spread) {
+                        continue;
+                    }
+                    spread = self.get_spread_type(
+                        spread,
+                        merged_type,
+                        node_symbol,
+                        object_flags,
+                        in_const_context,
+                    );
+                } else {
+                    self.error(member_decl, &SPREAD_TYPES_MAY_ONLY_BE_CREATED_FROM_OBJECT_TYPES, &[]);
+                    spread = self.error_type();
+                }
+                continue;
+            } else {
+                // A get/set accessor pair — processed like an ordinary
+                // function declaration (checker.go's TS 1.0 spec comment);
+                // the accessor checks run deferred (S3's carriers).
+                debug_assert!(matches!(
+                    self.store().node(member_decl).kind,
+                    Kind::GetAccessor | Kind::SetAccessor
+                ));
+                self.check_node_deferred(member_decl);
+            }
+            if let Some(c) = computed_name_type
+                && !self.type_(c).flags.intersects(TypeFlags::STRING_OR_NUMBER_LITERAL_OR_UNIQUE)
+            {
+                let string_number_symbol =
+                    relater::get_string_number_symbol_type(self);
+                if self.is_type_assignable_to(c, string_number_symbol) {
+                    let number_type = self.number_type();
+                    if self.is_type_assignable_to(c, number_type) {
+                        has_computed_number_property = true;
+                    } else if self.is_type_assignable_to(c, self.es_symbol_type()) {
+                        has_computed_symbol_property = true;
+                    } else {
+                        has_computed_string_property = true;
+                    }
+                    if in_destructuring_pattern {
+                        pattern_with_computed_properties = true;
+                    }
+                }
+            } else if let Some(member) = member {
+                let name = self.program_symbol(member).name.clone();
+                properties_table.set(name, member);
+            }
+            if let Some(member) = member {
+                properties_array.push(member);
+            }
+        }
+        self.pop_contextual_type();
+        if relater::is_error_type(self, spread) {
+            return self.error_type();
+        }
+        if spread != empty_object_type {
+            if !properties_array.is_empty() {
+                let segment = create_object_literal_type!(self);
+                spread = self.get_spread_type(
+                    spread,
+                    segment,
+                    node_symbol,
+                    object_flags,
+                    in_const_context,
+                );
+                // Go resets propsArray/propsTable/hasComputed* here for the
+                // (unreached) continued-accumulation tail; the port returns
+                // immediately after the merge so the resets are dead code.
+            }
+            // remap the raw emptyObjectType fed in at the top into a fresh empty object literal type, unique to this use site
+            // TODO(port M6 S7): mapType's empty-object re-mapping; the
+            // identity is Go's answer when the spread carries no
+            // empty-object constituent.
+            return spread;
+        }
+        create_object_literal_type!(self)
+    }
+
+    /// Go: `func (c *Checker) checkComputedPropertyName(node) *Type`
+    /// (checker.go:27336 — S10). Permissive anyType (the S10 fold's answer
+    /// for an unresolvable computed name at this depth).
+    pub(crate) fn check_computed_property_name(&mut self, node: NodeId) -> TypeId {
+        // TODO(port M6 S10): the computed-name expression check + name fold.
+        let _ = self
+            .store()
+            .node(node)
+            .as_computed_property_name()
+            .expect("ComputedPropertyName data");
+        self.any_type()
+    }
+
+    /// Go: `func (c *Checker) checkContextualDeprecations(node)` (checker.go:13605).
+    pub(crate) fn check_contextual_deprecations(&mut self, node: NodeId) {
+        let contextual_type = self.get_apparent_type_of_contextual_type(node);
+        let property_nodes: Vec<NodeId> = {
+            let d = self
+                .store()
+                .node(node)
+                .as_object_literal_expression()
+                .expect("ObjectLiteralExpression data");
+            d.properties
+                .as_ref()
+                .map(|l| l.nodes.to_vec())
+                .unwrap_or_default()
+        };
+        for property in property_nodes {
+            if self.is_canceled() {
+                return;
+            }
+            if let Some(name) = self.store().node(property).name()
+                && self.store().node(name).kind != Kind::ComputedPropertyName
+            {
+                self.check_deprecated_property(name, contextual_type);
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) checkDeprecatedProperty(name, contextualType)` (checker.go:13616).
+    pub(crate) fn check_deprecated_property(&mut self, name: NodeId, contextual_type: Option<TypeId>) {
+        let Some(contextual_type) = contextual_type else { return };
+        let text = tsc_ast::node_text(self.store(), name).to_string();
+        let prop = relater::get_property_of_type(self, contextual_type, &text);
+        let Some(prop) = prop else { return };
+        if self.program_symbol(prop).declarations.is_empty() {
+        }
+        // TODO(port M6 S6): isDeprecatedSymbol + addDeprecatedSuggestion —
+        // the @deprecated JSDoc family; permissive.
+    }
+
+    /// Go: `func (c *Checker) checkSpreadPropOverrides(t, props, spread)` (checker.go:13628).
+    pub(crate) fn check_spread_prop_overrides(
+        &mut self,
+        t: TypeId,
+        props: &tsc_ast::SymbolTable,
+        spread: NodeId,
+    ) {
+        // (Go: `spread` backs the related-info attachment — S10 seam below.)
+        let _ = spread;
+        let right_props = relater::get_properties_of_type(self, t);
+        for right in right_props {
+            let right_flags = self.program_symbol(right).flags;
+            let right_check_flags = self.program_symbol(right).check_flags;
+            if !right_flags.intersects(SymbolFlags::OPTIONAL)
+                && !right_check_flags.intersects(tsc_ast::CheckFlags::PARTIAL)
+            {
+                let name = self.program_symbol(right).name.clone();
+                if let Some(&left) = props.get(&name) {
+                    let left_value_declaration = self.program_symbol(left).value_declaration;
+                    let left_name = self.program_symbol(left).name.clone();
+                    if let Some(vd) = left_value_declaration {
+                        self.error(
+                            vd,
+                            &X_0_IS_SPECIFIED_MORE_THAN_ONCE_SO_THIS_USAGE_WILL_BE_OVERWRITTEN,
+                            &[left_name],
+                        );
+                        // Go: diagnostic.AddRelatedInfo(NewDiagnosticForNode(
+                        //     spread, ThisSpreadAlwaysOverwritesThisProperty))
+                        // TODO(port M6 S10): the related-info attachment; the
+                        // main diagnostic carries the overwrite error (the
+                        // related-info constant is referenced for the wave).
+                        let _ = THIS_SPREAD_ALWAYS_OVERWRITES_THIS_PROPERTY;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) getSpreadType(left, right, symbol, objectFlags, readonly) *Type`
+    /// (checker.go:13641).
+    pub(crate) fn get_spread_type(
+        &mut self,
+        left: TypeId,
+        right: TypeId,
+        symbol: Option<SymbolId>,
+        object_flags: ObjectFlags,
+        readonly: bool,
+    ) -> TypeId {
+        let left_flags = self.type_(left).flags;
+        let right_flags = self.type_(right).flags;
+        if left_flags.intersects(TypeFlags::ANY) || right_flags.intersects(TypeFlags::ANY) {
+            return self.any_type();
+        }
+        if left_flags.intersects(TypeFlags::UNKNOWN) || right_flags.intersects(TypeFlags::UNKNOWN) {
+            return self.unknown_type();
+        }
+        if left_flags.intersects(TypeFlags::NEVER) {
+            return right;
+        }
+        if right_flags.intersects(TypeFlags::NEVER) {
+            return left;
+        }
+        let left = self.try_merge_union_of_object_type_and_empty_object(left, readonly);
+        if self.type_(left).flags.intersects(TypeFlags::UNION) {
+            // TODO(port M6 S7): checkCrossProductUnion + mapType over the
+            // union constituents; permissive errorType (Go's non-cross-
+            // product answer).
+            return self.error_type();
+        }
+        let right = self.try_merge_union_of_object_type_and_empty_object(right, readonly);
+        if self.type_(right).flags.intersects(TypeFlags::UNION) {
+            // TODO(port M6 S7): as above.
+            return self.error_type();
+        }
+        if right_flags.intersects(
+            TypeFlags::BOOLEAN_LIKE
+                .union(TypeFlags::NUMBER_LIKE)
+                .union(TypeFlags::BIGINT_LIKE)
+                .union(TypeFlags::STRING_LIKE)
+                .union(TypeFlags::ENUM_LIKE)
+                .union(TypeFlags::NON_PRIMITIVE)
+                .union(TypeFlags::INDEX),
+        ) {
+            return left;
+        }
+        if relater::is_generic_object_type(self, left) || relater::is_generic_object_type(self, right) {
+            if relater::is_empty_object_type(self, left) {
+                return right;
+            }
+            // When the left type is an intersection, we may need to merge the last constituent of the
+            // intersection with the right type.
+            if self.type_(left).flags.intersects(TypeFlags::INTERSECTION) {
+                let types = self.type_(left).types().to_vec();
+                let last_left = *types.last().expect("intersection has constituents");
+                if self.is_non_generic_object_type(last_left)
+                    && self.is_non_generic_object_type(right)
+                {
+                    let mut new_types = types;
+                    let last = new_types.len() - 1;
+                    new_types[last] =
+                        self.get_spread_type(last_left, right, symbol, object_flags, readonly);
+                    return relater::get_intersection_type(self, new_types);
+                }
+            }
+            return relater::get_intersection_type(self, vec![left, right]);
+        }
+        let mut members = tsc_ast::SymbolTable::new();
+        let mut skipped_private_members: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        // Go: indexInfos — the left==emptyObjectType shortcut over the right's
+        // infos, else getUnionIndexInfos; the S8 read seam is empty either way.
+        // TODO(port M6 S8): getUnionIndexInfos.
+        let _ = self.get_union_index_infos(&[left, right]);
+        let right_props = relater::get_properties_of_type(self, right);
+        for right_prop in right_props {
+            let declaration_modifiers =
+                relater::get_declaration_modifier_flags_from_symbol(self, right_prop);
+            let name = self.program_symbol(right_prop).name.clone();
+            if declaration_modifiers
+                .intersects(ModifierFlags::PRIVATE.union(ModifierFlags::PROTECTED))
+            {
+                skipped_private_members.insert(name);
+            } else if self.is_spreadable_property(right_prop) {
+                let spread_symbol = self.get_spread_symbol(right_prop, readonly);
+                members.set(name, spread_symbol);
+            }
+        }
+        let left_props = relater::get_properties_of_type(self, left);
+        for left_prop in left_props {
+            let name = self.program_symbol(left_prop).name.clone();
+            if skipped_private_members.contains(&name) || !self.is_spreadable_property(left_prop) {
+                continue;
+            }
+            if let Some(&right_prop) = members.get(&name) {
+                let right_type = self.get_type_of_symbol(right_prop);
+                if self.program_symbol(right_prop).flags.intersects(SymbolFlags::OPTIONAL) {
+                    let left_declarations = self.program_symbol(left_prop).declarations.clone();
+                    let right_declarations = self.program_symbol(right_prop).declarations.clone();
+                    let mut declarations = left_declarations;
+                    declarations.extend(right_declarations);
+                    let left_flags = self.program_symbol(left_prop).flags;
+                    let flags =
+                        SymbolFlags::PROPERTY.union(left_flags & SymbolFlags::OPTIONAL);
+                    let result = self.new_symbol(flags, &name);
+                    // Optimization: avoid calculating the union type if spreading into the exact same type.
+                    let left_type = self.get_type_of_symbol(left_prop);
+                    let left_without_undefined = self.remove_missing_or_undefined_type(left_type);
+                    let right_without_undefined = self.remove_missing_or_undefined_type(right_type);
+                    if left_without_undefined == right_without_undefined {
+                        self.value_symbol_links.get(result).resolved_type = Some(left_type);
+                    } else {
+                        self.value_symbol_links.get(result).resolved_type = Some(
+                            relater::get_union_type_ex(
+                                self,
+                                vec![left_type, right_without_undefined],
+                                crate::todo_shapes::UnionReduction::Subtype,
+                                None,
+                                None,
+                            ),
+                        );
+                    }
+                    self.spread_links.get(result).left_spread = Some(left_prop);
+                    self.spread_links.get(result).right_spread = Some(right_prop);
+                    let s = self.program_symbol_mut(result);
+                    s.declarations = declarations;
+                    let name_type = self.value_symbol_links.get(left_prop).name_type;
+                    self.value_symbol_links.get(result).name_type = name_type;
+                    members.set(name, result);
+                }
+            } else {
+                let spread_symbol = self.get_spread_symbol(left_prop, readonly);
+                members.set(name, spread_symbol);
+            }
+        }
+        // Go: spreadIndexInfos := core.SameMap(indexInfos, func(info) {
+        //     return c.getIndexInfoWithReadonly(info, readonly) }).
+        // TODO(port M6 S8): the anonymous-type index-info slot — the mapped
+        // list composes once the ctor carries it (the read seam is empty at
+        // this depth, so the map is the identity here).
+        let _spread_index_infos: Vec<crate::types::IndexInfoId> = self
+            .get_index_infos_of_type(left)
+            .into_iter()
+            .map(|info| self.get_index_info_with_readonly(info, readonly))
+            .collect();
+        let spread = self.new_anonymous_type_with_members(
+            symbol,
+            members,
+            object_flags | ObjectFlags::CONTAINS_SPREAD,
+        );
+        self.type_mut(spread).object_flags |=
+            ObjectFlags::OBJECT_LITERAL | ObjectFlags::CONTAINS_OBJECT_OR_ARRAY_LITERAL;
+        spread
+    }
+
+    /// Go: `func (c *Checker) getIndexInfoWithReadonly(info, readonly) *IndexInfo`
+    /// (checker.go:13745).
+    pub(crate) fn get_index_info_with_readonly(
+        &mut self,
+        info: crate::types::IndexInfoId,
+        readonly: bool,
+    ) -> crate::types::IndexInfoId {
+        // TODO(port M6 S8): the IndexInfo arena's readonly-clone; identity
+        // (the read seam is empty at this depth).
+        let _ = readonly;
+        info
+    }
+
+    /// Go: `func (c *Checker) getUnionIndexInfos(types) []*IndexInfo` (checker.go:13758).
+    pub(crate) fn get_union_index_infos(&mut self, types: &[TypeId]) -> Vec<usize> {
+        // TODO(port M6 S8): the per-key union value type; the read seam is
+        // empty (no source index infos).
+        let _ = types;
+        Vec::new()
+    }
+
+    /// Go: `func (c *Checker) tryMergeUnionOfObjectTypeAndEmptyObject(t, readonly) *Type`
+    /// (checker.go:13772).
+    pub(crate) fn try_merge_union_of_object_type_and_empty_object(
+        &mut self,
+        t: TypeId,
+        readonly: bool,
+    ) -> TypeId {
+        if !self.type_(t).flags.intersects(TypeFlags::UNION) {
+            return t;
+        }
+        let constituents = self.type_(t).types().to_vec();
+        // Go: Every(t.Types(), isEmptyObjectTypeOrSpreadsIntoEmptyObject) →
+        // the empty / Find pair; then the spread-into-optional member table.
+        let all_empty_like = constituents
+            .iter()
+            .all(|&c| self.is_empty_object_type_or_spreads_into_empty_object(c));
+        if all_empty_like {
+            if let Some(_empty) = constituents
+                .iter()
+                .copied()
+                .find(|&c| relater::is_empty_object_type(self, c))
+            {
+                return _empty;
+            }
+            return self.empty_object_type();
+        }
+        let first_type = constituents
+            .iter()
+            .copied()
+            .find(|&c| !self.is_empty_object_type_or_spreads_into_empty_object(c));
+        let Some(first_type) = first_type else {
+            return t;
+        };
+        let second_type = constituents
+            .iter()
+            .copied()
+            .find(|&c| c != first_type && !self.is_empty_object_type_or_spreads_into_empty_object(c));
+        if second_type.is_some() {
+            return t;
+        }
+        // gets the type as if it had been spread, but where everything in the spread is made optional
+        let _ = readonly;
+        let mut members = tsc_ast::SymbolTable::new();
+        let first_props = relater::get_properties_of_type(self, first_type);
+        for prop in first_props {
+            let declaration_modifiers =
+                relater::get_declaration_modifier_flags_from_symbol(self, prop);
+            if declaration_modifiers
+                .intersects(ModifierFlags::PRIVATE.union(ModifierFlags::PROTECTED))
+            {
+                // do nothing, skip privates
+            } else if self.is_spreadable_property(prop) {
+                let is_setonly_accessor = {
+                    let f = self.program_symbol(prop).flags;
+                    f.intersects(SymbolFlags::SET_ACCESSOR) && !f.intersects(SymbolFlags::GET_ACCESSOR)
+                };
+                let flags = SymbolFlags::PROPERTY.union(SymbolFlags::OPTIONAL);
+                let name = self.program_symbol(prop).name.clone();
+                let prop_check_flags = self.program_symbol(prop).check_flags;
+                let mut check_flags = prop_check_flags & tsc_ast::CheckFlags::LATE;
+                if readonly {
+                    check_flags |= tsc_ast::CheckFlags::READONLY;
+                }
+                let result = self.new_symbol_ex(flags, &name, check_flags);
+                if is_setonly_accessor {
+                    self.value_symbol_links.get(result).resolved_type =
+                        Some(self.undefined_type());
+                } else {
+                    let prop_type = self.get_type_of_symbol(prop);
+                    let optional = self.add_optionality_ex(prop_type, true /*isProperty*/, true /*isOptional*/);
+                    self.value_symbol_links.get(result).resolved_type = Some(optional);
+                }
+                let declarations = self.program_symbol(prop).declarations.clone();
+                self.program_symbol_mut(result).declarations = declarations;
+                let name_type = self.value_symbol_links.get(prop).name_type;
+                self.value_symbol_links.get(result).name_type = name_type;
+                self.mapped_symbol_links.get(result).synthetic_origin = Some(prop);
+                members.set(name, result);
+            }
+        }
+        let symbol = self.type_(first_type).symbol;
+        let spread = self.new_anonymous_type_with_members(
+            symbol,
+            members,
+            ObjectFlags::CONTAINS_OBJECT_OR_ARRAY_LITERAL,
+        );
+        self.type_mut(spread).object_flags |= ObjectFlags::OBJECT_LITERAL;
+        spread
+    }
+
+    /// Go: `func (c *Checker) isSpreadableProperty(prop) bool` (checker.go:13819).
+    pub(crate) fn is_spreadable_property(&self, prop: SymbolId) -> bool {
+        let s = self.program_symbol(prop);
+        let flags = s.flags;
+        let not_private_class_element = !s
+            .declarations
+            .iter()
+            .any(|d| {
+                tsc_ast::utilities::is_private_identifier_class_element_declaration(
+                    self.store(), *d,
+                )
+            });
+        (not_private_class_element
+            && !flags.intersects(
+                SymbolFlags::METHOD.union(SymbolFlags::GET_ACCESSOR).union(SymbolFlags::SET_ACCESSOR),
+            ))
+            || !s.declarations.iter().any(|d| {
+                let parent = self.store().node(*d).parent.get();
+                crate::statements::is_class_like(self.store(), parent)
+            })
+    }
+
+    /// Go: `func (c *Checker) getSpreadSymbol(prop, readonly) *ast.Symbol` (checker.go:13826).
+    pub(crate) fn get_spread_symbol(&mut self, prop: SymbolId, readonly: bool) -> SymbolId {
+        let is_setonly_accessor = {
+            let f = self.program_symbol(prop).flags;
+            f.intersects(SymbolFlags::SET_ACCESSOR) && !f.intersects(SymbolFlags::GET_ACCESSOR)
+        };
+        if !is_setonly_accessor && readonly == relater::is_readonly_symbol(self, prop) {
+            return prop;
+        }
+        let flags = SymbolFlags::PROPERTY
+            .union(self.program_symbol(prop).flags & SymbolFlags::OPTIONAL);
+        let name = self.program_symbol(prop).name.clone();
+        let prop_check_flags = self.program_symbol(prop).check_flags;
+        let mut check_flags = prop_check_flags & tsc_ast::CheckFlags::LATE;
+        if readonly {
+            check_flags |= tsc_ast::CheckFlags::READONLY;
+        }
+        let result = self.new_symbol_ex(flags, &name, check_flags);
+        if is_setonly_accessor {
+            self.value_symbol_links.get(result).resolved_type = Some(self.undefined_type());
+        } else {
+            let t = self.get_type_of_symbol(prop);
+            self.value_symbol_links.get(result).resolved_type = Some(t);
+        }
+        let declarations = self.program_symbol(prop).declarations.clone();
+        self.program_symbol_mut(result).declarations = declarations;
+        let name_type = self.value_symbol_links.get(prop).name_type;
+        self.value_symbol_links.get(result).name_type = name_type;
+        self.mapped_symbol_links.get(result).synthetic_origin = Some(prop);
+        result
+    }
+
+    /// Go: `func (c *Checker) isEmptyObjectTypeOrSpreadsIntoEmptyObject(t) bool`
+    /// (checker.go:13842).
+    pub(crate) fn is_empty_object_type_or_spreads_into_empty_object(&mut self, t: TypeId) -> bool {
+        relater::is_empty_object_type(self, t)
+            || self.type_(t).flags.intersects(
+                TypeFlags::NULL
+                    .union(TypeFlags::UNDEFINED)
+                    .union(TypeFlags::BOOLEAN_LIKE)
+                    .union(TypeFlags::NUMBER_LIKE)
+                    .union(TypeFlags::BIGINT_LIKE)
+                    .union(TypeFlags::STRING_LIKE)
+                    .union(TypeFlags::ENUM_LIKE)
+                    .union(TypeFlags::NON_PRIMITIVE)
+                    .union(TypeFlags::INDEX),
+            )
+    }
+
+    /// Go: `func (c *Checker) isReadonlyAssignmentDeclaration(node) bool` (checker.go:13911).
+    pub(crate) fn is_readonly_assignment_declaration(&mut self, node: NodeId) -> bool {
+        if self.store().node(node).kind != Kind::CallExpression {
+            return false;
+        }
+        let arguments: Vec<NodeId> = self
+            .store()
+            .node(node)
+            .as_call_expression()
+            .expect("CallExpression data")
+            .arguments
+            .as_ref()
+            .map(|l| l.nodes.to_vec())
+            .unwrap_or_default();
+        // PORT: Go indexes Arguments()[2] unguarded (the
+        // Object.defineProperty call shape); the port answers false for the
+        // short list instead of panicking.
+        if arguments.len() <= 2 {
+            return false;
+        }
+        let property_descriptor_type = self.check_expression_cached(arguments[2]);
+        if let Some(_value_type) =
+            self.get_type_of_property_of_type(property_descriptor_type, "value")
+        {
+            if let Some(writable_prop) =
+                self.get_property_of_type(property_descriptor_type, "writable")
+            {
+                let writable_type = {
+                    let value_declaration = self.program_symbol(writable_prop).value_declaration;
+                    if let Some(vd) = value_declaration
+                        && self.store().node(vd).kind == Kind::PropertyAssignment
+                    {
+                        let initializer = crate::ast_shims::initializer_of(self.store(), vd)
+                            .unwrap_or(NodeId::NONE);
+                        self.check_expression(initializer)
+                    } else {
+                        self.get_type_of_symbol(writable_prop)
+                    }
+                };
+                return self.type_(writable_type).flags.intersects(TypeFlags::BOOLEAN_LITERAL)
+                    && !crate::inference::get_boolean_literal_value(self, writable_type);
+            }
+            return true;
+        }
+        self.get_type_of_property_of_type(property_descriptor_type, "set")
+            .is_none()
+    }
+
+    /// Go: `func (c *Checker) checkPropertyAssignment(node, checkMode) *Type` (checker.go:13879).
+    pub(crate) fn check_property_assignment(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
+        // Do not use hasDynamicName here, because that returns false for well known symbols.
+        // We want to perform checkComputedPropertyName for all computed properties, including
+        // well known symbols.
+        if let Some(name) = self.store().node(node).name()
+            && self.store().node(name).kind == Kind::ComputedPropertyName
+        {
+            let _ = self.check_computed_property_name(name);
+        }
+        let initializer = crate::ast_shims::initializer_of(self.store(), node)
+            .expect("PropertyAssignment has an initializer");
+        let initializer_type = self.check_expression_for_mutable_location(initializer, check_mode);
+        let type_node = {
+            let d = self
+                .store()
+                .node(node)
+                .as_property_assignment()
+                .expect("PropertyAssignment data");
+            if d.type_.is_none() { None } else { Some(d.type_) }
+        };
+        if let Some(type_node) = type_node {
+            let t = self.get_type_from_type_node(type_node);
+            self.check_type_assignable_to_and_optionally_elaborate(
+                initializer_type,
+                t,
+                Some(node),
+                Some(initializer),
+                None, /*headMessage*/
+                None,
+            );
+            return t;
+        }
+        initializer_type
+    }
+
+    /// Go: `func (c *Checker) checkShorthandPropertyAssignment(node, inDestructuringPattern, checkMode) *Type`
+    /// (checker.go:13899).
+    pub(crate) fn check_shorthand_property_assignment(
+        &mut self,
+        node: NodeId,
+        in_destructuring_pattern: bool,
+        check_mode: CheckMode,
+    ) -> TypeId {
+        let mut expr = None;
+        if !in_destructuring_pattern {
+            expr = self
+                .store()
+                .node(node)
+                .as_shorthand_property_assignment()
+                .expect("ShorthandPropertyAssignment data")
+                .object_assignment_initializer;
+        }
+        let expr = expr.or_else(|| self.store().node(node).name());
+        let Some(expr) = expr else {
+            return self.error_type();
+        };
+        let expression_type = self.check_expression_for_mutable_location(expr, check_mode);
+        let type_node = {
+            let d = self
+                .store()
+                .node(node)
+                .as_shorthand_property_assignment()
+                .expect("ShorthandPropertyAssignment data");
+            if d.type_.is_none() { None } else { Some(d.type_) }
+        };
+        if let Some(type_node) = type_node {
+            let t = self.get_type_from_type_node(type_node);
+            self.check_type_assignable_to_and_optionally_elaborate(
+                expression_type,
+                t,
+                Some(node),
+                Some(expr),
+                None, /*headMessage*/
+                None,
+            );
+            return t;
+        }
+        expression_type
+    }
+
+    /// Go: `func (c *Checker) checkObjectLiteralMethod(node, checkMode) *Type` (checker.go:13938).
+    pub(crate) fn check_object_literal_method(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
+        // Grammar checking
+        // TODO(port M6 W3): checkGrammarMethod (the statements.rs carrier
+        // is the permissive no-op).
+        if let Some(name) = self.store().node(node).name()
+            && self.store().node(name).kind == Kind::ComputedPropertyName
+        {
+            let _ = self.check_computed_property_name(name);
+        }
+        let uninstantiated_type =
+            self.check_function_expression_or_object_literal_method(node, check_mode);
+        self.instantiate_type_with_single_generic_call_signature(node, uninstantiated_type, check_mode)
+    }
+
+    /// Go: `func (c *Checker) checkFunctionExpressionOrObjectLiteralMethod(node, checkMode) *Type`
+    /// (checker.go:10295).
+    pub(crate) fn check_function_expression_or_object_literal_method(
+        &mut self,
+        node: NodeId,
+        check_mode: CheckMode,
+    ) -> TypeId {
+        self.check_node_deferred(node);
+        // TODO(port M6 S3): checkSourceElement(FullSignature) — the JSDoc
+        // full-signature family; permissive.
+        if self.store().node(node).kind == Kind::FunctionExpression {
+            // TODO(port M6 S3): checkCollisionsForDeclarationName — the
+            // statements.rs stub carrier.
+        }
+        if check_mode.intersects(CheckMode::SKIP_CONTEXT_SENSITIVE)
+            && self.is_context_sensitive(node)
+        {
+            // TODO(port M6 S9): the context-free return-only signature
+            // (getContextualSignature + getReturnTypeFromBody + the
+            // NonInferrableType construction); the seam answers
+            // anyFunctionType.
+            return self.any_function_type.expect("anyFunctionType");
+        }
+        // Grammar checking
+        let _ = self.check_grammar_function_like_declaration(node);
+        // TODO(port M6 S3): checkGrammarForGenerator (function expression arm).
+        // contextuallyCheckFunctionExpressionOrObjectLiteralMethod:
+        // (the getContextualSignature S9 seam is None — the contextual
+        // parameter/return typing stays dormant; the CONTEXT_CHECKED flag
+        // still marks the node like Go).
+        let flags = self.node_links.get(node).flags;
+        if !flags.intersects(crate::types::NodeCheckFlags::CONTEXT_CHECKED) {
+            self.node_links.get(node).flags |= crate::types::NodeCheckFlags::CONTEXT_CHECKED;
+            // Go: signature := FirstOrNil(getSignaturesOfType(getTypeOfSymbol(...))) — the
+            // S8 read seam is empty, so the signature==nil early return fires.
+            let _ = self.get_signatures_of_type(self.error_type(), crate::types::SignatureKind::Call);
+        }
+        let symbol = self.get_symbol_of_declaration(node)
+            .expect("function expression has a symbol");
+        self.get_type_of_symbol(symbol)
+    }
+
+    /// Go: `func (c *Checker) checkClassExpression(node) *Type` (checker.go:10273).
+    pub(crate) fn check_class_expression(&mut self, node: NodeId) -> TypeId {
+        self.check_class_like_declaration(node);
+        self.check_node_deferred(node);
+        self.check_class_expression_external_helpers(node);
+        let symbol = self.get_symbol_of_declaration(node)
+            .expect("class expression has a symbol");
+        self.get_type_of_symbol(symbol)
+    }
+
+    /// Go: `func (c *Checker) checkClassExpressionExternalHelpers(node)` (checker.go:10289)
+    /// — the emit-helpers probe. Permissive (S10's checkExternalEmitHelpers
+    /// seam is the no-op carrier).
+    pub(crate) fn check_class_expression_external_helpers(&mut self, node: NodeId) {
+        // TODO(port M6 S10): getFirstTransformableStaticClassElement +
+        // checkExternalEmitHelpers (SetFunctionName/PropKey).
+        let _ = node;
+    }
+
+    /// Go: `func (c *Checker) checkClassExpressionDeferred(node)` (checker.go:10309).
+    pub(crate) fn check_class_expression_deferred(&mut self, node: NodeId) {
+        let members: Vec<NodeId> = self
+            .store()
+            .node(node)
+            .as_class_expression()
+            .expect("ClassExpression data")
+            .members
+            .as_ref()
+            .map(|l| l.nodes.to_vec())
+            .unwrap_or_default();
+        self.check_source_elements(&members);
+        self.check_constructor_declared_properties(node);
+        self.register_for_unused_identifiers_check(node);
+    }
+
+    /// Go: `func (c *Checker) getContextualSignature(node) *Signature`
+    /// (checker.go:10437 — S9). Permissive None. Dormant until the S9
+    /// contextual-signature callers (checkArrayLiteral et al.) compose.
+    #[allow(dead_code)]
+    pub(crate) fn get_contextual_signature(
+        &mut self,
+        node: NodeId,
+    ) -> Option<crate::types::SignatureId> {
+        // TODO(port M6 S9): the contextual call-signature family.
+        let _ = node;
+        None
+    }
+}
+
+/// Go: the property/shorthand/method membership probe of checkObjectLiteral's
+/// dispatch (checker.go:13456's IsPropertyAssignment ||
+/// IsShorthandPropertyAssignment || IsObjectLiteralMethod, with the
+/// object-literal parent guard for methods).
+#[allow(dead_code)]
+fn is_object_literal_element_of_object_literal_expression_check() {}
+

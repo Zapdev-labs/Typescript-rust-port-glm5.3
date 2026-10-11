@@ -1094,6 +1094,11 @@ impl Checker {
     pub fn program_symbol(&self, id: SymbolId) -> &Symbol {
         self.program.symbol(id)
     }
+    /// The program-level symbol arena slot, mutable (Go's `*ast.Symbol`
+    /// pointer writes; the checker-created spread/readonly symbols use it).
+    pub(crate) fn program_symbol_mut(&mut self, id: SymbolId) -> &mut Symbol {
+        self.program.symbol_mut(id)
+    }
 
     /// Go: `node.Initializer()` through the seam.
     pub fn program_initializer_of(&self, declaration: NodeId) -> Option<NodeId> {

@@ -8163,11 +8163,44 @@ pub(crate) fn is_valid_override_of(c: &mut Checker, source_prop: SymbolId, targe
     true
 }
 
-/// Go: `func (c *Checker) isReadonlySymbol(sym) bool`.
+/// Go: `func (c *Checker) isReadonlySymbol(sym) bool` (checker.go — the real
+/// body; the readonly-modifier read stays on the S6 modifier seam).
 pub(crate) fn is_readonly_symbol(c: &mut Checker, sym: SymbolId) -> bool {
-    // TODO(port M6 S6): the readonly modifier read.
-    let _ = (c, sym);
-    false
+    // The following symbols are considered read-only:
+    // Properties with a 'readonly' modifier
+    // Variables declared with 'const'
+    // Get accessors without matching set accessors
+    // Enum members
+    // Object.defineProperty assignments with writable false or no setter
+    // Unions and intersections of the above (unions and intersections eagerly set isReadonly on creation)
+    let (flags, check_flags) = {
+        let s = c.program_symbol(sym);
+        (s.flags, s.check_flags)
+    };
+    if check_flags.intersects(tsc_ast::CheckFlags::READONLY) {
+        return true;
+    }
+    if flags.intersects(SymbolFlags::PROPERTY)
+        && get_declaration_modifier_flags_from_symbol(c, sym).intersects(ModifierFlags::READONLY)
+    {
+        return true;
+    }
+    if flags.intersects(SymbolFlags::VARIABLE)
+        && c.get_declaration_node_flags_from_symbol(sym)
+            .intersects(tsc_ast::NodeFlags::CONSTANT)
+    {
+        return true;
+    }
+    if flags.intersects(SymbolFlags::ACCESSOR) && !flags.intersects(SymbolFlags::SET_ACCESSOR) {
+        return true;
+    }
+    if flags.intersects(SymbolFlags::ENUM_MEMBER) {
+        return true;
+    }
+    let declarations = c.program_symbol(sym).declarations.to_vec();
+    declarations
+        .iter()
+        .any(|&d| c.is_readonly_assignment_declaration(d))
 }
 
 /// Go: `func (c *Checker) getDeclaringClass(prop) *Type`.

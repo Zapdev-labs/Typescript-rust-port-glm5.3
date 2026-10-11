@@ -2986,7 +2986,7 @@ fn get_bigint_literal_string(c: &Checker, t: TypeId) -> String {
 }
 
 /// Go: `getBooleanLiteralValue(right)`.
-fn get_boolean_literal_value(c: &Checker, t: TypeId) -> bool {
+pub(crate) fn get_boolean_literal_value(c: &Checker, t: TypeId) -> bool {
     c.type_(t)
         .as_literal_type()
         .and_then(|d| d.value.clone())
@@ -3119,7 +3119,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) isNonGenericObjectType(t) bool`.
-    fn is_non_generic_object_type(&mut self, t: TypeId) -> bool {
+    pub(crate) fn is_non_generic_object_type(&mut self, t: TypeId) -> bool {
         self.type_(t).flags.intersects(TypeFlags::OBJECT) && !is_generic_mapped_type(self, t)
     }
 
