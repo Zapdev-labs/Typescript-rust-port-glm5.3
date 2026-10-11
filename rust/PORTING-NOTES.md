@@ -2235,3 +2235,8 @@ declared type predicates, a symbol-links aliasing suspect, TS2322 span
 selection) — recorded for the next tranche. Orchestrator re-verified
 fresh: 16 suites ok, clippy 0, fixture x3 identical, bind 143/143,
 program 15/15, check divergent 99 confirmed, double-run deterministic.
+
+Rig validation (W4, 2026-10-13): forced clean + rebuild — all rails
+green (fixture x3 identical, bind 143/143, program 15/15). W4
+RIG-VALIDATED. W3 tranche 5 (async-2697 + the four printer-probed
+gaps + 2304/2683) dispatched.
