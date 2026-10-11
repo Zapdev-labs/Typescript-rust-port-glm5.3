@@ -10818,8 +10818,13 @@ impl Checker {
                     self.store(),
                     node,
                 ));
+                // Go: `c.resolveExternalModuleName(node, exportDecl.ModuleSpecifier,
+                // false /*ignoreErrors*/, …)` — the error-reporting variant;
+                // the port's public `resolve_external_module_name` carrier is
+                // the ignoreErrors=true twin, which silently swallowed the
+                // export-from TS2307 (ambientShorthand_reExport).
                 let module_symbol = module_specifier
-                    .and_then(|specifier| self.resolve_external_module_name(specifier, attributes_type));
+                    .and_then(|specifier| self.resolve_external_module_name_ex(node, Some(specifier), false, attributes_type));
                 let module_symbol_has_export_assignment = module_symbol
                     .is_some_and(|symbol| u::has_export_assignment_symbol(self.program_symbol(symbol)));
                 if module_symbol_has_export_assignment
@@ -11397,9 +11402,6 @@ impl Checker {
     /// Go: `func (c *Checker) checkAliasSymbol(node)` (checker.go:6937) — the
     /// REAL body, replacing the S6 permissive no-op.
     pub(crate) fn check_alias_symbol(&mut self, node: NodeId) {
-        if std::env::var_os("W3T7PROBE").is_some() {
-            eprintln!("w3t7probe alias: kind={:?}", self.store().node(node).kind);
-        }
         let Some(initial_symbol) = self.get_symbol_of_declaration(node) else {
             return;
         };

@@ -2138,6 +2138,21 @@ pub(crate) fn payload_symbol(node: &Node) -> Option<SymbolId> {
         NodeData::CallSignatureDeclaration(d) => d.symbol,
         NodeData::ConstructSignatureDeclaration(d) => d.symbol,
         NodeData::IndexSignatureDeclaration(d) => d.symbol,
+        // W3T7: the alias family — the binder's DeclarationData symbolizes
+        // every one of these (field_dispatch's set_node_symbol list), and
+        // Go's getSymbolOfDeclaration reads them; the port's omission of
+        // ImportClause made checkAliasSymbol bail before resolveAlias, so
+        // unused default imports never resolved their module (the missing
+        // TS2307 on ambientShorthand_duplicate's `import foo from "foo"`).
+        NodeData::ImportClause(d) => d.symbol,
+        NodeData::ImportSpecifier(d) => d.symbol,
+        NodeData::ImportEqualsDeclaration(d) => d.symbol,
+        NodeData::NamespaceImport(d) => d.symbol,
+        NodeData::NamespaceExport(d) => d.symbol,
+        NodeData::NamespaceExportDeclaration(d) => d.symbol,
+        NodeData::ExportSpecifier(d) => d.symbol,
+        NodeData::ExportAssignment(d) => d.symbol,
+        NodeData::ExportDeclaration(d) => d.symbol,
         // DeclarationBase carriers the binder symbolizes via
         // bindAnonymousDeclaration (checker.go:23404's TypeLiteral read +
         // the mapped-type family).

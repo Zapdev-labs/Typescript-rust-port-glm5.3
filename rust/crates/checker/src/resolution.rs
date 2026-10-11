@@ -2933,12 +2933,6 @@ impl Checker {
 
     /// Go: `func (c *Checker) getTargetOfImportClause(node) *ast.Symbol` (checker.go:14850).
     pub(crate) fn get_target_of_import_clause(&mut self, node: NodeId) -> Option<SymbolId> {
-        if std::env::var_os("W3T7PROBE").is_some() {
-            eprintln!(
-                "w3t7probe import-clause reached: kind={:?}",
-                self.store().node(node).kind
-            );
-        }
         let phase_modifier = match &self.store().node(node).data {
             tsc_ast::NodeData::ImportClause(d) => d.phase_modifier,
             _ => return None,
@@ -4924,15 +4918,6 @@ impl Checker {
         }
         error_node?;
         if let (Some(error_node), Some(message)) = (error_node, module_not_found_error) {
-            if std::env::var_os("W3T7PROBE").is_some() {
-                eprintln!(
-                    "w3t7probe resolve_external_module ERROR: module={:?} msg_code={} ser_level={} current_kind={:?}",
-                    module_reference,
-                    message.code(),
-                    self.serialization_level,
-                    self.current_node.map(|n| self.store().node(n).kind)
-                );
-            }
             self.error(error_node, message, &[module_reference.to_string()]);
         }
         None
