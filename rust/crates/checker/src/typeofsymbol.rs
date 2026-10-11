@@ -93,6 +93,13 @@ use tsc_diagnostics::{
     TYPE_OF_PROPERTY_0_CIRCULARLY_REFERENCES_ITSELF_IN_MAPPED_TYPE_1,
     VARIABLE_0_IMPLICITLY_HAS_AN_1_TYPE,
     VARIABLE_0_IMPLICITLY_HAS_AN_1_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE,
+    A_MEMBER_INITIALIZER_IN_A_ENUM_DECLARATION_CANNOT_REFERENCE_MEMBERS_DECLARED_AFTER_IT_INCLUDING_MEMBERS_DEFINED_IN_OTHER_ENUMS,
+    IN_AMBIENT_ENUM_DECLARATIONS_MEMBER_INITIALIZER_MUST_BE_CONSTANT_EXPRESSION,
+    PROPERTY_0_IS_USED_BEFORE_BEING_ASSIGNED,
+    TYPE_0_IS_NOT_ASSIGNABLE_TO_TYPE_1_AS_REQUIRED_FOR_COMPUTED_ENUM_MEMBER_VALUES,
+    X_CONST_ENUM_MEMBER_INITIALIZERS_MUST_BE_CONSTANT_EXPRESSIONS,
+    X_CONST_ENUM_MEMBER_INITIALIZER_WAS_EVALUATED_TO_A_NON_FINITE_VALUE,
+    X_CONST_ENUM_MEMBER_INITIALIZER_WAS_EVALUATED_TO_DISALLOWED_VALUE_NAN,
     X_0_HAS_A_STRING_TYPE_BUT_MUST_HAVE_SYNTACTICALLY_RECOGNIZABLE_STRING_SYNTAX_WHEN_ISOLATEDMODULES_IS_ENABLED,
     X_0_IMPLICITLY_HAS_AN_1_RETURN_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE,
     X_0_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_ITS_OWN_BASE_EXPRESSION,
@@ -4989,17 +4996,28 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) computeConstantEnumMemberValue(member) evaluator.Result` (24517).
+    /// Go: `func (c *Checker) computeConstantEnumMemberValue(member) evaluator.Result`
+    /// (checker.go:24532).
     fn compute_constant_enum_member_value(&mut self, member: NodeId) -> EvaluatorResult {
         let parent = self.store().node(member).parent.get();
         let is_const_enum = binder_shims::is_enum_const(self.store(), parent);
         let initializer = ast_shims::initializer_of(self.store(), member).expect("checked by caller");
-        let result = self.evaluate_stub(initializer, member);
+        let result = self.evaluate(initializer, member);
         match result.value {
             Some(_) => {
                 if is_const_enum {
-                    // TODO(port M6 evaluator wave): the const-enum NaN/Inf
-                    // initializer diagnostics — the stub only produces
-                    // finite literal values, so this arm is dormant.
+                    // Go: NaN/Inf const-enum initializer diagnostics
+                    // (checker.go:24536).
+                    if let Some(EvaluatorValue::Number(n)) = result.value {
+                        if n.is_inf() || n.is_nan() {
+                            let diag = if n.is_nan() {
+                                &X_CONST_ENUM_MEMBER_INITIALIZER_WAS_EVALUATED_TO_DISALLOWED_VALUE_NAN
+                            } else {
+                                &X_CONST_ENUM_MEMBER_INITIALIZER_WAS_EVALUATED_TO_A_NON_FINITE_VALUE
+                            };
+                            self.error(initializer, diag, &[]);
+                        }
+                    }
                 }
                 if self.compiler_options.get_isolated_modules()
                     && matches!(result.value, Some(EvaluatorValue::String(_)))
@@ -5025,41 +5043,162 @@ impl Checker {
                 }
             }
             None => {
-                // TODO(port M6 evaluator wave): the three Go arms here
-                // (const-enum initializer must be constant, ambient-enum
-                // initializer must be constant, and the assignability check
-                // against numberType) require the real evaluator to
-                // distinguish a failed constant computation from a
-                // non-constant initializer; the permissive stub cannot, so
-                // the diagnostics wait for the evaluator wave rather than
-                // over-reporting on non-literal initializers.
+                // Go: the three None-value arms (checker.go:24549-24553).
+                if is_const_enum {
+                    self.error(
+                        initializer,
+                        &X_CONST_ENUM_MEMBER_INITIALIZERS_MUST_BE_CONSTANT_EXPRESSIONS,
+                        &[],
+                    );
+                } else if self.store().node(parent).flags.intersects(NF::AMBIENT) {
+                    self.error(
+                        initializer,
+                        &IN_AMBIENT_ENUM_DECLARATIONS_MEMBER_INITIALIZER_MUST_BE_CONSTANT_EXPRESSION,
+                        &[],
+                    );
+                } else {
+                    let initializer_type = self.check_expression(initializer);
+                    self.check_type_assignable_to(
+                        initializer_type,
+                        self.number_type(),
+                        Some(initializer),
+                        Some(&TYPE_0_IS_NOT_ASSIGNABLE_TO_TYPE_1_AS_REQUIRED_FOR_COMPUTED_ENUM_MEMBER_VALUES),
+                    );
+                }
             }
         }
         result
     }
 
-    /// TODO(port M6 evaluator wave): `func (c *Checker) evaluate(expr, location)`
-    /// — the const-evaluator. The permissive stub computes exactly the
-    /// syntactic literals (plus unary +/- on a numeric literal) so the enum
-    /// member auto-increment chain and the literal interning behave as Go
-    /// for literal-valued enums; every other expression form resolves to
-    /// nil value (a computed member), which is Go's answer for genuinely
-    /// non-constant initializers.
-    fn evaluate_stub(&mut self, expr: NodeId, _location: NodeId) -> EvaluatorResult {
-        let node = self.store().node(expr);
-        match node.kind {
-            Kind::NumericLiteral => {
-                let text = ast_shims::get_text_of_node(self.store(), expr);
-                let n = tsc_jsnum::from_string(&text);
-                if n.0.is_nan() && !text.contains("NaN") {
-                    EvaluatorResult::new_none()
-                } else {
-                    EvaluatorResult {
-                        value: Some(EvaluatorValue::Number(n)),
-                        is_syntactically_string: false,
-                        resolved_other_files: false,
-                        has_external_references: false,
+    /// Go: `evaluator.NewEvaluator(c.evaluateEntity, ast.OEKParentheses)` —
+    /// `c.evaluate` (internal/evaluator/evaluator.go:24). PORT(M6 W3 T7): the
+    /// real constant-expression evaluator replaces the S2 literal-only stub;
+    /// the computeConstantEnumMemberValue None-arms depend on its ability to
+    /// distinguish constant from non-constant initializers.
+    fn evaluate(&mut self, expr: NodeId, location: NodeId) -> EvaluatorResult {
+        // Go: `ast.SkipOuterExpressions(expr, outerExpressionsToSkip|OEKParentheses)`.
+        let mut expr = expr;
+        while self.store().node(expr).kind == Kind::ParenthesizedExpression {
+            expr = ast_shims::expression_of(self.store(), expr)
+                .expect("ParenthesizedExpression has an expression");
+        }
+        let mut is_syntactically_string = false;
+        let mut resolved_other_files = false;
+        let mut has_external_references = false;
+        match self.store().node(expr).kind {
+            Kind::PrefixUnaryExpression => {
+                let (operand, operator) = {
+                    let data = self
+                        .store()
+                        .node(expr)
+                        .as_prefix_unary_expression()
+                        .expect("PrefixUnaryExpression data");
+                    (data.operand, data.operator)
+                };
+                let result = self.evaluate(operand, location);
+                resolved_other_files = result.resolved_other_files;
+                has_external_references = result.has_external_references;
+                if let Some(EvaluatorValue::Number(value)) = result.value {
+                    match operator {
+                        Kind::PlusToken => {
+                            return EvaluatorResult {
+                                value: Some(EvaluatorValue::Number(value)),
+                                is_syntactically_string,
+                                resolved_other_files,
+                                has_external_references,
+                            };
+                        }
+                        Kind::MinusToken => {
+                            return EvaluatorResult {
+                                value: Some(EvaluatorValue::Number(tsc_jsnum::Number(-value.0))),
+                                is_syntactically_string,
+                                resolved_other_files,
+                                has_external_references,
+                            };
+                        }
+                        Kind::TildeToken => {
+                            return EvaluatorResult {
+                                value: Some(EvaluatorValue::Number(value.bitwise_not())),
+                                is_syntactically_string,
+                                resolved_other_files,
+                                has_external_references,
+                            };
+                        }
+                        _ => {}
                     }
+                }
+            }
+            Kind::BinaryExpression => {
+                let (left_node, right_node, operator_token) = {
+                    let data = self
+                        .store()
+                        .node(expr)
+                        .as_binary_expression()
+                        .expect("BinaryExpression data");
+                    (data.left, data.right, data.operator_token)
+                };
+                let left = self.evaluate(left_node, location);
+                let right = self.evaluate(right_node, location);
+                let operator = self
+                    .store()
+                    .node(operator_token)
+                    .kind;
+                is_syntactically_string = (left.is_syntactically_string || right.is_syntactically_string)
+                    && operator == Kind::PlusToken;
+                resolved_other_files = left.resolved_other_files || right.resolved_other_files;
+                has_external_references = left.has_external_references || right.has_external_references;
+                let value = match (left.value.clone(), right.value.clone()) {
+                    (Some(EvaluatorValue::Number(l)), Some(EvaluatorValue::Number(r))) => {
+                        match operator {
+                            Kind::BarToken => Some(EvaluatorValue::Number(l.bitwise_or(r))),
+                            Kind::AmpersandToken => Some(EvaluatorValue::Number(l.bitwise_and(r))),
+                            Kind::GreaterThanGreaterThanToken => {
+                                Some(EvaluatorValue::Number(l.signed_right_shift(r)))
+                            }
+                            Kind::GreaterThanGreaterThanGreaterThanToken => {
+                                Some(EvaluatorValue::Number(l.unsigned_right_shift(r)))
+                            }
+                            Kind::LessThanLessThanToken => {
+                                Some(EvaluatorValue::Number(l.left_shift(r)))
+                            }
+                            Kind::CaretToken => Some(EvaluatorValue::Number(l.bitwise_xor(r))),
+                            Kind::AsteriskToken => Some(EvaluatorValue::Number(l * r)),
+                            Kind::SlashToken => Some(EvaluatorValue::Number(l / r)),
+                            Kind::PlusToken => Some(EvaluatorValue::Number(l + r)),
+                            Kind::MinusToken => Some(EvaluatorValue::Number(l - r)),
+                            Kind::PercentToken => Some(EvaluatorValue::Number(l.remainder(r))),
+                            Kind::AsteriskAsteriskToken => {
+                                Some(EvaluatorValue::Number(l.exponentiate(r)))
+                            }
+                            _ => None,
+                        }
+                    }
+                    // Go: the string-concatenation fallthrough — `(leftIsStr
+                    // || leftIsNum) && (rightIsStr || rightIsNum) && +`.
+                    (Some(EvaluatorValue::String(l)), Some(EvaluatorValue::String(r)))
+                        if operator == Kind::PlusToken =>
+                    {
+                        Some(EvaluatorValue::String(l + &r))
+                    }
+                    (Some(EvaluatorValue::Number(l)), Some(EvaluatorValue::String(r)))
+                        if operator == Kind::PlusToken =>
+                    {
+                        Some(EvaluatorValue::String(format!("{}{}", l, r)))
+                    }
+                    (Some(EvaluatorValue::String(l)), Some(EvaluatorValue::Number(r)))
+                        if operator == Kind::PlusToken =>
+                    {
+                        Some(EvaluatorValue::String(format!("{}{}", l, r)))
+                    }
+                    _ => None,
+                };
+                if let Some(value) = value {
+                    return EvaluatorResult {
+                        value: Some(value),
+                        is_syntactically_string,
+                        resolved_other_files,
+                        has_external_references,
+                    };
                 }
             }
             Kind::StringLiteral | Kind::NoSubstitutionTemplateLiteral => {
@@ -5071,41 +5210,274 @@ impl Checker {
                     NodeData::NoSubstitutionTemplateLiteral(d) => d.text.to_string(),
                     _ => unreachable!("kind-checked above"),
                 };
-                EvaluatorResult {
+                return EvaluatorResult {
                     value: Some(EvaluatorValue::String(text)),
                     is_syntactically_string: true,
                     resolved_other_files: false,
                     has_external_references: false,
-                }
+                };
             }
-            Kind::PrefixUnaryExpression => {
-                let data = node.as_prefix_unary_expression().expect("PrefixUnaryExpression data");
-                let operand = data.operand;
-                let operator = data.operator;
-                let operand_node = self.store().node(operand);
-                if operand_node.kind == Kind::NumericLiteral {
-                    let text = ast_shims::get_text_of_node(self.store(), operand);
-                    let n = tsc_jsnum::from_string(&text);
-                    if n.0.is_nan() && !text.contains("NaN") {
-                        return EvaluatorResult::new_none();
-                    }
-                    let n = match operator {
-                        Kind::MinusToken => tsc_jsnum::Number(-n.0),
-                        Kind::PlusToken => n,
-                        _ => return EvaluatorResult::new_none(),
-                    };
-                    EvaluatorResult {
-                        value: Some(EvaluatorValue::Number(n)),
-                        is_syntactically_string: false,
-                        resolved_other_files: false,
-                        has_external_references: false,
-                    }
+            Kind::TemplateExpression => {
+                return self.evaluate_template_expression(expr, location);
+            }
+            Kind::NumericLiteral => {
+                let text = ast_shims::get_text_of_node(self.store(), expr);
+                let n = tsc_jsnum::from_string(&text);
+                return EvaluatorResult {
+                    value: Some(EvaluatorValue::Number(n)),
+                    is_syntactically_string: false,
+                    resolved_other_files: false,
+                    has_external_references: false,
+                };
+            }
+            Kind::Identifier => {
+                return self.evaluate_entity(expr, location);
+            }
+            Kind::ElementAccessExpression | Kind::PropertyAccessExpression => {
+                let left = if self.store().node(expr).kind == Kind::ElementAccessExpression {
+                    self.store()
+                        .node(expr)
+                        .as_element_access_expression()
+                        .expect("ElementAccessExpression data")
+                        .expression
                 } else {
-                    EvaluatorResult::new_none()
+                    self.store()
+                        .node(expr)
+                        .as_property_access_expression()
+                        .expect("PropertyAccessExpression data")
+                        .expression
+                };
+                if u::is_entity_name_expression(self.store(), left) {
+                    return self.evaluate_entity(expr, location);
                 }
             }
-            _ => EvaluatorResult::new_none(),
+            _ => {}
         }
+        EvaluatorResult {
+            value: None,
+            is_syntactically_string,
+            resolved_other_files,
+            has_external_references,
+        }
+    }
+
+    /// Go: `func evaluateTemplateExpression(expr, location, evaluate)` (evaluator.go:124).
+    fn evaluate_template_expression(&mut self, expr: NodeId, location: NodeId) -> EvaluatorResult {
+        let (head_text, span_ids) = {
+            let data = self
+                .store()
+                .node(expr)
+                .as_template_expression()
+                .expect("TemplateExpression data");
+            let head_text = match &self.store().node(data.head).data {
+                NodeData::TemplateHead(d) => d.text.to_string(),
+                _ => unreachable!("TemplateExpression head"),
+            };
+            let span_ids = data
+                .template_spans
+                .as_ref()
+                .map(|l| l.nodes.to_vec())
+                .unwrap_or_default();
+            (head_text, span_ids)
+        };
+        let mut sb = head_text;
+        let mut resolved_other_files = false;
+        let mut has_external_references = false;
+        for span in span_ids {
+            let (span_expression, span_literal) = {
+                let span_data = self
+                    .store()
+                    .node(span)
+                    .as_template_span()
+                    .expect("TemplateSpan data");
+                (span_data.expression, span_data.literal)
+            };
+            let span_result = self.evaluate(span_expression, location);
+            let Some(value) = span_result.value else {
+                return EvaluatorResult {
+                    value: None,
+                    is_syntactically_string: true,
+                    resolved_other_files: false,
+                    has_external_references: false,
+                };
+            };
+            // Go: `evaluator.AnyToString`.
+            let value_text = match &value {
+                EvaluatorValue::String(s) => s.clone(),
+                EvaluatorValue::Number(n) => n.to_string(),
+            };
+            sb.push_str(&value_text);
+            sb.push_str(&ast_shims::get_text_of_node(self.store(), span_literal));
+            resolved_other_files = resolved_other_files || span_result.resolved_other_files;
+            has_external_references = has_external_references || span_result.has_external_references;
+        }
+        EvaluatorResult {
+            value: Some(EvaluatorValue::String(sb)),
+            is_syntactically_string: true,
+            resolved_other_files,
+            has_external_references,
+        }
+    }
+
+    /// Go: `func (c *Checker) evaluateEntity(expr, location) evaluator.Result`
+    /// (checker.go:24558).
+    fn evaluate_entity(&mut self, expr: NodeId, location: NodeId) -> EvaluatorResult {
+        match self.store().node(expr).kind {
+            Kind::Identifier | Kind::PropertyAccessExpression => {
+                let Some(symbol) =
+                    self.resolve_entity_name(expr, SymbolFlags::VALUE, true, false, location)
+                else {
+                    return EvaluatorResult::new_none();
+                };
+                if self.store().node(expr).kind == Kind::Identifier {
+                    let text = ast_shims::get_text_of_node(self.store(), expr);
+                    if u::is_infinity_or_nan_string(&text)
+                        && self.get_global_symbol(&text, SymbolFlags::VALUE, None) == Some(symbol)
+                    {
+                        // Technically we resolved a global lib file here, but
+                        // the decision to treat this as numeric is more
+                        // predicated on the fact that the single-file
+                        // resolution *didn't* resolve to a different meaning
+                        // of `Infinity` or `NaN` (Go's comment).
+                        return EvaluatorResult {
+                            value: Some(EvaluatorValue::Number(tsc_jsnum::from_string(&text))),
+                            is_syntactically_string: false,
+                            resolved_other_files: false,
+                            has_external_references: false,
+                        };
+                    }
+                }
+                if self.program.symbol(symbol).flags.contains(SymbolFlags::ENUM_MEMBER) {
+                    if location != NodeId::NONE {
+                        return self.evaluate_enum_member(expr, symbol, location);
+                    }
+                    let value_declaration = self.program.symbol(symbol).value_declaration;
+                    if let Some(declaration) = value_declaration {
+                        return self.get_enum_member_value(declaration);
+                    }
+                    return EvaluatorResult::new_none();
+                }
+                if u::is_constant_variable(self, symbol) {
+                    let declaration = self.program.symbol(symbol).value_declaration;
+                    let has_declaration = declaration.is_some_and(|d| {
+                        let vd = self
+                            .store()
+                            .node(d)
+                            .as_variable_declaration()
+                            .expect("VariableDeclaration data");
+                        vd.type_.is_none() && vd.initializer.is_some()
+                    });
+                    let guard_ok = has_declaration && {
+                        let d = declaration.expect("checked by has_declaration");
+                        location == NodeId::NONE
+                            || (d != location
+                                && self.is_block_scoped_name_declared_before_use(d, location))
+                    };
+                    if let Some(declaration) = declaration
+                        && guard_ok
+                    {
+                        let initializer = ast_shims::initializer_of(self.store(), declaration)
+                            .expect("checked by guard");
+                        let result = self.evaluate(initializer, declaration);
+                        let cross_file = location != NodeId::NONE && !matches!(
+                            (
+                                tsc_ast::utilities::get_source_file_of_node(self.store(), declaration),
+                                tsc_ast::utilities::get_source_file_of_node(self.store(), location),
+                            ),
+                            (Some(a), Some(b)) if std::ptr::eq(a, b)
+                        );
+                        if cross_file {
+                            return EvaluatorResult {
+                                value: result.value,
+                                is_syntactically_string: false,
+                                resolved_other_files: true,
+                                has_external_references: true,
+                            };
+                        }
+                        return EvaluatorResult {
+                            value: result.value,
+                            is_syntactically_string: result.is_syntactically_string,
+                            resolved_other_files: result.resolved_other_files,
+                            has_external_references: true,
+                        };
+                    }
+                }
+                EvaluatorResult::new_none()
+            }
+            Kind::ElementAccessExpression => {
+                let data = self
+                    .store()
+                    .node(expr)
+                    .as_element_access_expression()
+                    .expect("ElementAccessExpression data");
+                let root = data.expression;
+                let argument = data.argument_expression;
+                if u::is_entity_name_expression(self.store(), root)
+                    && binder_shims::is_string_literal_like(self.store().node(argument))
+                {
+                    if let Some(root_symbol) =
+                        self.resolve_entity_name(root, SymbolFlags::VALUE, true, false, location)
+                        && self.program.symbol(root_symbol).flags.contains(SymbolFlags::ENUM)
+                    {
+                        let name = ast_shims::get_text_of_node(self.store(), argument);
+                        let member = self
+                            .program
+                            .symbol(root_symbol)
+                            .exports
+                            .get(&name)
+                            .copied();
+                        if let Some(member) = member {
+                            if location != NodeId::NONE {
+                                return self.evaluate_enum_member(expr, member, location);
+                            }
+                            let value_declaration = self.program.symbol(member).value_declaration;
+                            if let Some(declaration) = value_declaration {
+                                return self.get_enum_member_value(declaration);
+                            }
+                        }
+                    }
+                }
+                EvaluatorResult::new_none()
+            }
+            _ => panic!("Unhandled case in evaluateEntity"),
+        }
+    }
+
+    /// Go: `func (c *Checker) evaluateEnumMember(expr, symbol, location) evaluator.Result`
+    /// (checker.go:24611).
+    fn evaluate_enum_member(&mut self, expr: NodeId, symbol: SymbolId, location: NodeId) -> EvaluatorResult {
+        let declaration = self.program.symbol(symbol).value_declaration;
+        if declaration.is_none() || declaration == Some(location) {
+            let name = self.symbol_to_string(symbol);
+            self.error(expr, &PROPERTY_0_IS_USED_BEFORE_BEING_ASSIGNED, &[name]);
+            return EvaluatorResult::new_none();
+        }
+        let declaration = declaration.expect("checked");
+        if !self.is_block_scoped_name_declared_before_use(declaration, location) {
+            self.error(
+                expr,
+                &A_MEMBER_INITIALIZER_IN_A_ENUM_DECLARATION_CANNOT_REFERENCE_MEMBERS_DECLARED_AFTER_IT_INCLUDING_MEMBERS_DEFINED_IN_OTHER_ENUMS,
+                &[],
+            );
+            return EvaluatorResult {
+                value: Some(EvaluatorValue::Number(tsc_jsnum::Number(0.0))),
+                is_syntactically_string: false,
+                resolved_other_files: false,
+                has_external_references: false,
+            };
+        }
+        let value = self.get_enum_member_value(declaration);
+        let declaration_parent = self.store().node(declaration).parent.get();
+        let location_parent = self.store().node(location).parent.get();
+        if location_parent != declaration_parent {
+            return EvaluatorResult {
+                value: value.value,
+                is_syntactically_string: value.is_syntactically_string,
+                resolved_other_files: value.resolved_other_files,
+                has_external_references: true,
+            };
+        }
+        value
     }
 
     /// Go: `func (c *Checker) getEnumLiteralType(value, enumSymbol, symbol) *Type` (25896).

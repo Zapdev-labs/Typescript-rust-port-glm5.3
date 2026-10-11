@@ -2862,10 +2862,35 @@ impl Checker {
         function_flags: tsc_ast::functionflags::FunctionFlags,
         error_node: Option<NodeId>,
     ) -> bool {
-        // TODO(port M6 S9): getIterationTypesOfGeneratorFunctionReturnType +
-        // the yield-type assignability probe.
-        let _ = (return_type, function_flags, error_node);
-        true
+        // Go: checker.go:30246 — "Naively, one could check that
+        // Generator<any, any, any> is assignable to the return type
+        // annotation. However, that would not catch the error in the
+        // following case."
+        let is_async = function_flags.intersects(tsc_ast::functionflags::FunctionFlags::ASYNC);
+        let generator_yield_type = self
+            .get_iteration_type_of_generator_function_return_type(
+                crate::statements::IterationTypeKind::Yield,
+                return_type,
+                is_async,
+            )
+            .unwrap_or_else(|| self.any_type());
+        let generator_return_type = self
+            .get_iteration_type_of_generator_function_return_type(
+                crate::statements::IterationTypeKind::Return,
+                return_type,
+                is_async,
+            )
+            .unwrap_or(generator_yield_type);
+        let generator_next_type = self
+            .get_iteration_type_of_generator_function_return_type(
+                crate::statements::IterationTypeKind::Next,
+                return_type,
+                is_async,
+            )
+            .unwrap_or_else(|| self.unknown_type());
+        let generator_instantiation =
+            self.create_generator_type(generator_yield_type, generator_return_type, generator_next_type, is_async);
+        self.check_type_assignable_to(generator_instantiation, return_type, error_node, None)
     }
 
     // Go: `func (c *Checker) getAwaitedTypeEx(t, errorNode, diagnosticMessage, args...) *Type`

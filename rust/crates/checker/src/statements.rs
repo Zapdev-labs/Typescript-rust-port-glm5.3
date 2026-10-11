@@ -3727,6 +3727,11 @@ pub(crate) fn members_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> {
         Kind::ClassDeclaration => n.as_class_declaration().expect("data").members.as_ref(),
         Kind::ClassExpression => n.as_class_expression().expect("data").members.as_ref(),
         Kind::InterfaceDeclaration => n.as_interface_declaration().expect("data").members.as_ref(),
+        // Go: `node.Members()` — checkEnumDeclaration walks the enum's
+        // members through checkSourceElements (checker.go:2413's EnumMember
+        // arm -> checkEnumMember). Missing here: enum member initializers
+        // were never checkExpression'd (2339 et al.).
+        Kind::EnumDeclaration => n.as_enum_declaration().expect("data").members.as_ref(),
         Kind::TypeLiteral => n.as_type_literal_node().expect("data").members.as_ref(),
         _ => None,
     };
