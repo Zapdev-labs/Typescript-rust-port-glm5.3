@@ -341,6 +341,10 @@ pub struct ModuleSymbolLinks {
     /// Set on a module symbol when some of its exports were resolved through a 'export type * from "mod"' declaration
     pub type_only_export_star_map: Option<FxHashMap<String, NodeId>>,
     pub exports_checked: bool,
+    /// PORT: Go distinguishes `resolvedExports == nil` from an empty table;
+    /// the port's `SymbolTable` has no nil state, so this marker carries the
+    /// "resolved by getExportsOfModule" bit (S6's getExportsOfModule).
+    pub resolved_exports_computed: bool,
 }
 
 /// Go: `type ReverseMappedSymbolLinks struct`.

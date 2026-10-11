@@ -2011,3 +2011,26 @@ deps artifact, so its mtime survives `rm` + relink — a "0.01s Finished"
 build with an unchanged binary mtime does NOT prove staleness; when in
 doubt, `cargo clean -p` the crate and rebuild before trusting rig twin
 runs. S5 CLOSED.
+
+## M6 S6 — resolution landed (2026-10-11)
+
+resolution.rs ~5,020 lines (resolve_name_worker walk + error ladder,
+merged/late-bound symbols, resolve_alias + 13-arm
+get_target_of_alias_declaration, resolve_entity_name/qualified_name,
+exports machinery, clone_symbol) + resolvecall.rs 2,556 lines (the
+full call-resolution family: get_resolved_signature_ex with cache +
+resolution-start, resolve_call + CallState, choose_overload,
+is_signature_applicable, infer_type_arguments, the arity/constraint
+checks, untyped/error-call paths, check_call_expression +
+check_import_call_expression, decorator/tagged-template/instanceof
+resolvers, the TS18047/18049/18050 null/undefined ladder). Live wiring:
+Call/New expression arms, resolve_untyped_call real, named-import arm
+ignoreErrors=false (TS2307 fires), get_resolved_symbol passes Go's
+exact args (TS2304 fires), get_effective_check_node real. S8-seam guard
+in get_base_constructor_type_of_class (false TS2507 without it —
+remove with S8). Option-vs-nil convention footgun recorded (Go compares
+non-nil resolvingSignature). The wave survived a mid-edit session
+cutoff (tree left non-compiling; resumed session finished it).
+Orchestrator re-verified fresh: 138 tests (10 new s6), clippy 0,
+fixture 9/9, 300-slice twins identical 143/143, program twin 15/15.
+Next: S7 BEFORE S8.

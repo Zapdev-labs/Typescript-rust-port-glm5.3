@@ -183,21 +183,19 @@ fn s5_this_type_in_class_member_is_clean() {
 }
 
 #[test]
-fn s5_generic_arity_ladder_dormant_under_s6() {
-    // The generic-arity ladder (checker.go 23670's TS 2314 and 23744's
-    // TS 2315) composes behind the S6 resolveEntityName seam: with the scope
-    // walk permissive, every type reference resolves to the
-    // unresolved-alias path and getTypeFromClassOrInterfaceReference is
-    // never entered — no false arity error may fire (the W1 permissive
-    // min-count stub would have reported 2314 for every reference).
+fn s5_generic_arity_ladder_matches_go() {
+    // The generic-arity ladder (checker.go 23670's TS 2314 / 23744's TS 2315)
+    // went LIVE with M6 S6's real resolveEntityName: the scope walk now
+    // resolves the interface symbols, so getTypeFromClassOrInterfaceReference
+    // enters its arity arms. Go tsc on the same program reports
+    //   2315 (I not generic), 2314 (G<number>), 2314 (G<number, string,
+    //   boolean>) — verified against go run ./tsc/cmd/tsc. The port pins
+    // that exact ladder.
     let (mut c, file) = check_file(
         "interface I {}\ninterface G<T, U> {}\ndeclare const a: I<number>;\ndeclare const b: G<number>;\ndeclare const d: G<number, string, boolean>;\n",
     );
     let codes = codes(&mut c, file);
-    assert!(
-        !codes.contains(&2314) && !codes.contains(&2315),
-        "no false generic-arity error under the S6 seam, got: {codes:?}"
-    );
+    assert_eq!(codes, vec![2315, 2314, 2314], "Go parity for the arity ladder");
 }
 
 #[test]

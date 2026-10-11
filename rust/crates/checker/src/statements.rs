@@ -1961,10 +1961,10 @@ impl Checker {
         t
     }
 
-    /// Go: `func (c *Checker) getEffectiveCheckNode(node)` (S4). Permissive
-    /// identity.
+    /// Go: `func (c *Checker) getEffectiveCheckNode(node) *ast.Node`
+    /// (checker.go:9607) — skipOuterExpressions(Assertions|Parentheses).
     pub(crate) fn get_effective_check_node(&mut self, node: NodeId) -> NodeId {
-        node
+        self.skip_outer_expressions_assertions_or_parens(node)
     }
 
     /// Go: `func (c *Checker) isTypeEqualityComparableTo(source, target) bool`
@@ -9133,14 +9133,19 @@ impl Checker {
     /// Go: `func (c *Checker) hasExportedMembersOfKind(moduleSymbol, kind) bool`
     /// (checker.go:5915).
     #[allow(dead_code)] // lands with the import/export batch wiring (Go 5420-5943)
-    pub(crate) fn has_exported_members_of_kind(&self, module_symbol: SymbolId, kind: SymbolFlags) -> bool {
-        self.program_symbol(module_symbol)
+    pub(crate) fn has_exported_members_of_kind(&mut self, module_symbol: SymbolId, kind: SymbolFlags) -> bool {
+        // PORT: getSymbolFlags is &mut (the S6 alias-walk); snapshot the
+        // export symbols first so the loop can mutate.
+        let export_symbols: Vec<SymbolId> = self
+            .program_symbol(module_symbol)
             .exports
             .values()
-            .any(|&symbol| {
-                symbol_name(self, symbol) != INTERNAL_SYMBOL_NAME_EXPORT_EQUALS
-                    && self.get_symbol_flags(symbol).intersects(kind)
-            })
+            .copied()
+            .collect();
+        export_symbols.into_iter().any(|symbol| {
+            symbol_name(self, symbol) != INTERNAL_SYMBOL_NAME_EXPORT_EQUALS
+                && self.get_symbol_flags(symbol).intersects(kind)
+        })
     }
 
     /// Go: `func (c *Checker) hasShadowedNamespace(symbol) bool` (checker.go:5923).
@@ -9488,8 +9493,13 @@ impl Checker {
                         }
                     } else {
                         let attributes_type = self.get_type_from_import_attributes(attributes);
-                        resolved_module = self.resolve_external_module_name(
-                            module_specifier,
+                        // Go: c.resolveExternalModuleName(node,
+                        // node.ModuleSpecifier(), false /*ignoreErrors*/, …)
+                        // — the named-import arm reports TS2307/TS2792.
+                        resolved_module = self.resolve_external_module_name_ex(
+                            node,
+                            Some(module_specifier),
+                            false,
                             attributes_type,
                         );
                         if resolved_module.is_some() {
@@ -9536,12 +9546,22 @@ impl Checker {
                 && import_clause.is_none()
             {
                 let ignore_errors = self.compiler_options.no_check == Tristate::TSTrue;
-                // TODO(port M6 S6): resolveExternalModuleNameWorker's
-                // errorMessage plumbing — routed through the permissive
-                // resolveExternalModuleName (no error emitted yet).
-                let _ = ignore_errors;
+                let error_message: Option<&'static Message> = if ignore_errors {
+                    None
+                } else {
+                    Some(
+                        &diag::CANNOT_FIND_MODULE_OR_TYPE_DECLARATIONS_FOR_SIDE_EFFECT_IMPORT_OF_0,
+                    )
+                };
                 let attributes_type = self.get_type_from_import_attributes(attributes);
-                self.resolve_external_module_name(module_specifier, attributes_type);
+                self.resolve_external_module_name_worker(
+                    node,
+                    Some(module_specifier),
+                    error_message,
+                    ignore_errors,
+                    false, /*isForAugmentation*/
+                    attributes_type,
+                );
             }
         }
         self.check_import_attributes(node);
@@ -10480,7 +10500,7 @@ fn is_exclusively_type_only_import_or_export(store: &dyn NodeStore, node: NodeId
 }
 
 /// Go: `ast.GetFirstIdentifier(node)` — the leftmost entity-name leaf.
-fn get_first_identifier(store: &dyn NodeStore, node: NodeId) -> NodeId {
+pub(crate) fn get_first_identifier(store: &dyn NodeStore, node: NodeId) -> NodeId {
     let mut current = node;
     loop {
         match store.node(current).kind {
@@ -10525,7 +10545,7 @@ fn get_verbatim_module_syntax_error_message(
 /// Go: `func (i ModuleKind) String() string` (modulekind_stringer_generated.go)
 /// — the exact stringer table (None..ES2022 contiguous, ESNext..Node20,
 /// NodeNext..Preserve).
-fn module_kind_string(kind: ModuleKind) -> String {
+pub(crate) fn module_kind_string(kind: ModuleKind) -> String {
     match kind {
         ModuleKind::None => "None",
         ModuleKind::CommonJS => "CommonJS",
@@ -10886,7 +10906,7 @@ impl Checker {
 
 /// Go: `ast.IsTypeOnlyImportOrExportDeclaration(node)` — reads the type-only
 /// markers the parser laid down on the import/export payloads.
-fn is_type_only_import_or_export_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
+pub(crate) fn is_type_only_import_or_export_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
     match store.node(node).kind {
         Kind::ImportDeclaration => store
             .node(node)

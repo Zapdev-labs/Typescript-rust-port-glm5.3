@@ -109,19 +109,16 @@ impl Checker {
 
     /// Go: `func (c *Checker) GetMergedSymbol(symbol *ast.Symbol) *ast.Symbol`
     /// → `c.getMergedSymbol(symbol)` (checker.go — S6's symbol-merging
-    /// machinery). Identity is the permissive value: symbols with no merge
-    /// record resolve to themselves, and no merges exist until S6.
+    /// machinery). REAL body landed in resolution.rs; this carrier delegates.
     pub fn get_merged_symbol(&self, symbol: SymbolId) -> SymbolId {
-        // TODO(port M6 S6): mergedSymbols table + recordMergedSymbol.
-        symbol
+        self.get_merged_symbol_real(symbol)
     }
 
     /// Go: `func (c *Checker) GetSymbolOfNode(node *ast.Node) *ast.Symbol` →
-    /// `c.getSymbolOfNode(node)` (checker.go:14669 — S6).
-    pub fn get_symbol_of_node(&self, node: NodeId) -> Option<SymbolId> {
-        // TODO(port M6 S6): node→symbol resolution through the binder links.
-        let _ = node;
-        None
+    /// `c.getSymbolOfNode(node)` (checker.go:14669 — S6). REAL body landed in
+    /// resolution.rs (`get_symbol_of_node_real`); this carrier delegates.
+    pub fn get_symbol_of_node(&mut self, node: NodeId) -> Option<SymbolId> {
+        self.get_symbol_of_node_real(node)
     }
 
     /// Go: `func (c *Checker) GetSymbolOfDeclaration(node *ast.Node) *ast.Symbol`
@@ -132,71 +129,67 @@ impl Checker {
         crate::typeofsymbol::get_symbol_of_declaration(self, node)
     }
 
-    /// Go: `func (c *Checker) GetParentOfSymbol(symbol *ast.Symbol) *ast.Symbol`
-    /// → `c.getParentOfSymbol(symbol)` (checker.go:14630 —
-    /// `if symbol.Parent != nil { return c.getMergedSymbol(
-    /// c.getLateBoundSymbol(symbol.Parent)) }; return nil`). The late-bound
-    /// and merged machinery is S6; the raw parent is the permissive value.
-    pub fn get_parent_of_symbol(&self, symbol: SymbolId) -> Option<SymbolId> {
-        // TODO(port M6 S6): getLateBoundSymbol + getMergedSymbol composition.
-        self.program.symbol(symbol).parent
-    }
+    // Go: `func (c *Checker) GetParentOfSymbol(symbol *ast.Symbol) *ast.Symbol`
+    // → `c.getParentOfSymbol(symbol)` (checker.go:14630). The REAL
+    // merged+late-bound body landed in resolution.rs as `get_parent_of_symbol`
+    // (S6); this twin was removed to keep a single definition.
 
     /// Go: `func (c *Checker) TryFindAmbientModule(moduleName string) *ast.Symbol`
     /// → `c.tryFindAmbientModule(moduleName, true /*withAugmentations*/)`
-    /// (checker.go:15910 — S6's ambient-module machinery).
+    /// (checker.go:15910 — S6's ambient-module machinery). REAL body landed
+    /// in resolution.rs; this carrier delegates.
     pub fn try_find_ambient_module(&mut self, module_name: &str) -> Option<SymbolId> {
-        // TODO(port M6 S6): the ambientModulesOnce scan + augmentations.
-        let _ = module_name;
-        None
+        self.try_find_ambient_module_real(module_name, true)
     }
 
     /// Go: `func (c *Checker) GetImmediateAliasedSymbol(symbol *ast.Symbol) *ast.Symbol`
     /// → `c.getImmediateAliasedSymbol(symbol)` (checker.go:2199 — S6's
-    /// alias-resolution family).
+    /// alias-resolution family). REAL body landed in resolution.rs; this
+    /// carrier delegates.
     pub fn get_immediate_aliased_symbol(&mut self, symbol: SymbolId) -> Option<SymbolId> {
-        // TODO(port M6 S6): resolveAlias machinery + the JS paths.
-        let _ = symbol;
-        None
+        self.get_immediate_aliased_symbol_real(symbol)
     }
 
     /// Go: `func (c *Checker) GetTargetSymbol(symbol *ast.Symbol) *ast.Symbol`
     /// → `c.getTargetSymbol(symbol)` (checker.go — S6).
     pub fn get_target_symbol(&mut self, symbol: SymbolId) -> Option<SymbolId> {
-        // TODO(port M6 S6): getMergedSymbol + getImmediateAliasedSymbol walk.
-        let _ = symbol;
-        None
+        // M6 S6: the merged + immediate-aliased walk (Go's getTargetSymbol =
+        // getMergedSymbol(getImmediateAliasedSymbol(symbol))).
+        let immediate = self.get_immediate_aliased_symbol_real(symbol)?;
+        Some(self.get_merged_symbol_real(immediate))
     }
 
     /// Go: `func (c *Checker) GetTypeOnlyAliasDeclaration(symbol *ast.Symbol) *ast.Node`
-    /// → `c.getTypeOnlyAliasDeclaration(symbol)` (checker.go — S6).
+    /// → `c.getTypeOnlyAliasDeclaration(symbol)` (checker.go — S6). REAL
+    /// body landed in resolution.rs; this carrier delegates.
     pub fn get_type_only_alias_declaration(&mut self, symbol: SymbolId) -> Option<NodeId> {
-        // TODO(port M6 S6): the typeOnlyDeclaration scan.
-        let _ = symbol;
-        None
+        self.get_type_only_alias_declaration_real(symbol)
     }
 
     /// Go: `func (c *Checker) ResolveExternalModuleName(moduleSpecifier *ast.Node, importAttributesType *Type) *ast.Symbol`
     /// → `c.resolveExternalModuleName(moduleSpecifier, moduleSpecifier,
     /// true /*ignoreErrors*/, importAttributesType)` (checker.go — S6's
-    /// module resolution).
+    /// module resolution). REAL body landed in resolution.rs; this carrier
+    /// delegates.
     pub fn resolve_external_module_name(
         &mut self,
         module_specifier: NodeId,
         import_attributes_type: Option<TypeId>,
     ) -> Option<SymbolId> {
-        // TODO(port M6 S6): resolveExternalModule + the program seam.
-        let _ = (module_specifier, import_attributes_type);
-        None
+        self.resolve_external_module_name_ex(
+            module_specifier,
+            Some(module_specifier),
+            true,
+            import_attributes_type,
+        )
     }
 
     /// Go: `func (c *Checker) ResolveExternalModuleSymbol(moduleSymbol *ast.Symbol) *ast.Symbol`
     /// → `c.resolveExternalModuleSymbol(moduleSymbol, false /*dontResolveAlias*/)`
-    /// (checker.go — S6).
+    /// (checker.go — S6). REAL body landed in resolution.rs; this carrier
+    /// delegates.
     pub fn resolve_external_module_symbol(&mut self, module_symbol: SymbolId) -> Option<SymbolId> {
-        // TODO(port M6 S6): the export=`.` resolution.
-        let _ = module_symbol;
-        None
+        self.resolve_external_module_symbol_ex(Some(module_symbol), false)
     }
 
     /// Go: `func (c *Checker) GetTypeFromTypeNode(node *ast.Node) *Type` →
@@ -433,9 +426,9 @@ impl Checker {
     /// → `c.getResolvedSignature(node, nil, CheckModeNormal)` (checker.go —
     /// S6's overload resolution).
     pub fn get_resolved_signature(&mut self, node: NodeId) -> Option<SignatureId> {
-        // TODO(port M6 S6): resolveSignature/resolveCall.
-        let _ = node;
-        None
+        // Go: GetResolvedSignature → getResolvedSignature(node, nil,
+        // CheckModeNormal) — resolvecall.rs's real body.
+        self.get_resolved_signature_ex(node, None, crate::checker::CheckMode::CHECK_MODE_NORMAL)
     }
 
     // Return the type of the given property in the given type, or nil if no such property exists
@@ -485,16 +478,19 @@ impl Checker {
         if self.symbol_node_links.get(node).resolved_symbol.is_none() {
             let mut symbol = None;
             if !tsc_ast::node_is_missing(self.store().node(node)) {
-                // TODO(port M6 S6): resolveName(node, text, Value|ExportValue,
-                // getCannotFindNameDiagnosticForName(node), isUse, false) —
-                // the scope walk; permissive None (unknownSymbol).
-                let _ = self.get_cannot_find_name_diagnostic_for_name(node);
-                let _ = !crate::expressions::is_write_only_access(self.store(), node);
+                // M6 S6: the REAL resolveName scope walk with Go's exact
+                // arguments — the cannot-find-name diagnostic (TS2304/TS2769)
+                // and the isUse probe.
+                let name_not_found_message =
+                    self.get_cannot_find_name_diagnostic_for_name(node);
+                let is_use = !crate::expressions::is_write_only_access(self.store(), node);
                 let name = tsc_ast::node_text(self.store(), node).to_string();
-                symbol = self.resolve_name(
+                symbol = self.resolve_name_worker(
+                    Some(node),
                     &name,
-                    node,
                     SymbolFlags::VALUE.union(SymbolFlags::EXPORT_VALUE),
+                    Some(name_not_found_message),
+                    is_use,
                     false, /*excludeGlobals*/
                 );
             }
@@ -523,7 +519,8 @@ impl Checker {
 
     /// Go: `func (c *Checker) ResolveName(name string, location *ast.Node, meaning ast.SymbolFlags, excludeGlobals bool) *ast.Symbol`
     /// → `c.resolveName(location, name, meaning, nil, true, excludeGlobals)`
-    /// (checker.go — S6's name resolution).
+    /// (checker.go — S6's name resolution). REAL scope walk landed in
+    /// resolution.rs (`resolve_name_worker`); this carrier delegates.
     pub fn resolve_name(
         &mut self,
         name: &str,
@@ -531,17 +528,15 @@ impl Checker {
         meaning: SymbolFlags,
         exclude_globals: bool,
     ) -> Option<SymbolId> {
-        // TODO(port M6 S6): resolveName's scope walk.
-        let _ = (name, location, meaning, exclude_globals);
-        None
+        self.resolve_name_worker(Some(location), name, meaning, None, true, exclude_globals)
     }
 
     /// Go: `func (c *Checker) GetSymbolFlags(symbol *ast.Symbol) ast.SymbolFlags` →
     /// `c.getSymbolFlags(symbol)` (checker.go:16749 — S6's alias-walking
-    /// flag computation). The raw flags are the permissive value.
-    pub fn get_symbol_flags(&self, symbol: SymbolId) -> SymbolFlags {
-        // TODO(port M6 S6): getSymbolFlagsEx's alias-flag accumulation.
-        self.program.symbol(symbol).flags
+    /// flag computation). REAL body: typeofsymbol.rs's getSymbolFlagsEx
+    /// with both excludes off.
+    pub fn get_symbol_flags(&mut self, symbol: SymbolId) -> SymbolFlags {
+        self.get_symbol_flags_ex(symbol, false, false)
     }
 
     /// Go: `func (c *Checker) GetBaseTypes(t *Type) []*Type` →
@@ -572,11 +567,15 @@ impl Checker {
     // its parent chain (e.g. `"/path/to/module".Namespace.Name`).
     /// Go: `func (c *Checker) GetFullyQualifiedName(symbol *ast.Symbol) string` →
     /// `c.getFullyQualifiedName(symbol, nil /*containingLocation*/)`
-    /// (checker.go — S6).
+    /// (checker.go — S6). REAL parent-chain walk; the SymbolFormatFlags of
+    /// Go's symbolToStringEx ride the relater's plain symbolToString.
     pub fn get_fully_qualified_name(&mut self, symbol: SymbolId) -> String {
-        // TODO(port M6 S6): the parent-chain name walk.
-        let _ = symbol;
-        String::new()
+        if let Some(parent) = self.program_symbol(symbol).parent {
+            let parent_name = self.get_fully_qualified_name(parent);
+            let own = crate::relater::symbol_to_string(self, symbol);
+            return format!("{parent_name}.{own}");
+        }
+        crate::relater::symbol_to_string(self, symbol)
     }
 
     /// Go: `func (c *Checker) GetBaseConstructorTypeOfClass(t *Type) *Type` →
@@ -829,8 +828,21 @@ mod tests {
         assert_eq!(c.get_parent_of_symbol(sym), c.program.symbol(sym).parent);
         assert_eq!(c.get_immediate_aliased_symbol(sym), None);
         assert_eq!(c.get_target_symbol(sym), None);
-        assert_eq!(c.get_resolved_signature(node), None);
-        assert_eq!(c.get_fully_qualified_name(sym), "");
+        // M6 S6 flipped the resolved-signature twin to the REAL family
+        // (resolvecall.rs): resolveSignature is only ever called on
+        // call-like nodes by contract (Go panics "Unhandled case in
+        // resolveSignature" otherwise); the pin now asserts the panic.
+        {
+            let mut c2 = new_checker();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                c2.get_resolved_signature(node)
+            }));
+            assert!(result.is_err());
+        }
+        // M6 S6 flipped the fully-qualified-name twin to the REAL parent-chain
+        // walk: the unknown symbol's own name is "unknown" (Go's
+        // symbolToString(unknownSymbol) answers the same).
+        assert_eq!(c.get_fully_qualified_name(sym), "unknown");
         assert_eq!(c.get_jsx_namespace(node), "");
         assert_eq!(c.get_jsx_fragment_factory(node), "");
         assert_eq!(c.resolve_name("x", node, SymbolFlags::VALUE, false), None);

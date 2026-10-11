@@ -1411,11 +1411,10 @@ impl Checker {
         }
     }
 
-    /// TODO(port M6 S6): `resolveUntypedCall` (checker.go:10116) — the
-    /// overload-resolution-failure path. Permissive None until S6.
+    /// M6 S6: `resolveUntypedCall` (checker.go:10116, resolvecall.rs) — the
+    /// deferred-check arm of the overload-resolution-failure path.
     fn resolve_untyped_call_stub(&mut self, node: NodeId) -> Option<crate::types::SignatureId> {
-        let _ = node;
-        None
+        self.resolve_untyped_call(node)
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -1629,7 +1628,7 @@ impl Checker {
     /// Go: `func (c *Checker) checkNonNullTypeWithReporter(t, node, reportError) *Type`
     /// (checker.go:7600). PORT: Go's `reportError func(c *Checker, node,
     /// facts)` method-expression becomes a plain fn pointer.
-    fn check_non_null_type_with_reporter(
+    pub(crate) fn check_non_null_type_with_reporter(
         &mut self,
         t: TypeId,
         node: NodeId,
@@ -2168,15 +2167,18 @@ impl Checker {
                 self.check_indexed_access(node, check_mode)
             }
             Kind::CallExpression => {
-                // TODO(port M6 S4): IsImportCall(node) → checkImportCallExpression;
-                // else checkCallExpression(node, checkMode) (via S6's resolveCall).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S6: IsImportCall(node) → checkImportCallExpression;
+                // else checkCallExpression (resolvecall.rs).
+                if crate::resolvecall::is_import_call(self.store(), node) {
+                    self.check_import_call_expression(node)
+                } else {
+                    self.check_call_expression(node, check_mode)
+                }
             }
             Kind::NewExpression => {
-                // TODO(port M6 S4): checkCallExpression(node, checkMode).
-                let _ = check_mode;
-                self.error_type()
+                // M6 S6: checkCallExpression (resolvecall.rs — the NewExpression
+                // arm resolves the construct signatures).
+                self.check_call_expression(node, check_mode)
             }
             Kind::TaggedTemplateExpression => {
                 // M6 S4: checkTaggedTemplateExpression (expressions.rs,

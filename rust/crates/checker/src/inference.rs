@@ -3040,7 +3040,7 @@ fn tuple_type_fixed_length(c: &Checker, t: TypeId) -> i32 {
 
 impl Checker {
     /// Go: the checker's `couldContainTypeVariables` field (the bound worker).
-    fn could_contain_type_variables(&mut self, t: TypeId) -> bool {
+    pub(crate) fn could_contain_type_variables(&mut self, t: TypeId) -> bool {
         could_contain_type_variables_helper(self, t)
     }
 

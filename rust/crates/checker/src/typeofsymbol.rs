@@ -1022,9 +1022,15 @@ impl Checker {
                 .expect("just set");
         }
         let ctor_flags = self.type_(base_constructor_type).flags;
+        // TODO(port M6 S8): isConstructorType reads getSignaturesOfType
+        // (the structured-members seam, which answers zero signatures until
+        // S8), so every real `extends C` base fires a false TS2507 under the
+        // seam. The guard below only fires the message for non-object bases
+        // — remove `|| ctor_flags.intersects(TypeFlags::OBJECT)` with S8.
         if !ctor_flags.intersects(TypeFlags::ANY)
             && Some(base_constructor_type) != self.null_widening_type
             && !self.is_constructor_type(base_constructor_type)
+            && !ctor_flags.intersects(TypeFlags::OBJECT)
         {
             let type_string = self.type_to_string(base_constructor_type);
             self.error(
@@ -1177,7 +1183,7 @@ impl Checker {
     /// guards against circular constraints.
     ///
     /// Go: `func (c *Checker) is_error_type(t *Type) bool` — `t == c.errorType`.
-    fn is_error_type(&self, t: TypeId) -> bool {
+    pub(crate) fn is_error_type(&self, t: TypeId) -> bool {
         t == self.error_type()
     }
 
@@ -1715,14 +1721,11 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) resolveAlias(symbol *ast.Symbol) *ast.Symbol`
-    /// (checker.go:15028 — S6). TODO(port M6 S6): the alias-resolution walk
-    /// (getMergedSymbol + getTargetOfAliasDeclaration); Go *panics* on an
-    /// unresolvable alias, so the permissive seam resolves to the
-    /// unknownSymbol — getSymbolFlagsEx maps that to SymbolFlagsAll exactly
-    /// like Go's `target == c.unknownSymbol` arm.
+    /// (checker.go:16652). REAL body landed in resolution.rs
+    /// (`resolve_alias_real` — the getTargetOfAliasDeclaration walk with the
+    /// typeResolutions circularity detector); this carrier delegates.
     pub(crate) fn resolve_alias(&mut self, symbol: SymbolId) -> SymbolId {
-        let _ = symbol;
-        self.unknown_symbol()
+        self.resolve_alias_real(symbol)
     }
 
     /// Go: `func (c *Checker) getExportSymbolOfValueSymbolIfExported(symbol) *ast.Symbol`
@@ -1740,14 +1743,10 @@ impl Checker {
         self.get_merged_symbol(symbol)
     }
 
-    /// Go: `func (c *Checker) getTargetOfAliasDeclaration(node *ast.Node) *ast.Symbol`
-    /// (S6). TODO(port M6 S6): the alias-declaration target resolution;
-    /// permissive None (getTypeOfAlias falls back to the alias symbol like
-    /// Go's `core.OrElse(exportSymbol, symbol)`).
-    fn get_target_of_alias_declaration(&mut self, node: Option<NodeId>) -> Option<SymbolId> {
-        let _ = node;
-        None
-    }
+    // Go: `func (c *Checker) getTargetOfAliasDeclaration(node *ast.Node) *ast.Symbol`
+    // — REAL body landed in resolution.rs (`get_target_of_alias_declaration`,
+    // the full 13-arm alias-declaration dispatch); this permissive twin was
+    // removed.
 
     /// Go: `func (c *Checker) removeMissingType(t *Type, isOptional bool) *Type`
     /// (checker.go:29621 — S7). TODO(port M6 S7): the missing-type removal
@@ -1763,7 +1762,7 @@ impl Checker {
     #[allow(dead_code)]
     /// Go: `func (c *Checker) removeOptionalTypeMarker(t *Type) *Type` —
     /// TODO(port M6 S7); identity.
-    fn remove_optional_type_marker(&mut self, t: TypeId) -> TypeId {
+    pub(crate) fn remove_optional_type_marker(&mut self, t: TypeId) -> TypeId {
         t
     }
 

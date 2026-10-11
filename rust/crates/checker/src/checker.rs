@@ -254,7 +254,22 @@ pub struct Checker {
     /// Go: `cachedArgumentsReferenced map[*ast.Node]bool` (checker.go —
     /// containsArgumentsReference's memo).
     pub(crate) cached_arguments_referenced: FxHashMap<NodeId, bool>,
-    // TODO(port M6): signatureLinks, jsxElementLinks (JsxElementLinks), the
+    // ── M6 S6 (resolvecall.rs): the call-resolution family's state ──
+    /// Go: `signatureLinks NodeLinkStore[SignatureLinks]` (checker.go:660's
+    /// field) — getResolvedSignature's per-call-node resolved-signature cache.
+    pub(crate) signature_node_links: LinkStore<NodeId, crate::types::SignatureLinks>,
+    /// Go: `callResolutionStack []*ast.Node` (resolveCall's recursion probe).
+    pub(crate) call_resolution_stack: Vec<NodeId>,
+    /// Go: `isInferencePartiallyBlocked bool` — set when a contextual
+    /// signature inference skips generic functions (S9's inference engine).
+    pub(crate) is_inference_partially_blocked: bool,
+    /// Go: `apparentArgumentCount *int` — the language-service probe
+    /// pickLongestCandidateSignature reads.
+    pub(crate) apparent_argument_count: Option<i32>,
+    /// Go: `cachedSignatures map[CachedSignatureKey]*Signature` —
+    /// getOptionalCallSignature's clone cache (inner/outer call-chain keys).
+    pub(crate) cached_signatures: FxHashMap<(crate::types::SignatureId, u8), crate::types::SignatureId>,
+    // TODO(port M6): jsxElementLinks (JsxElementLinks), the
     // RegExpScanner, patternForType, contextFreeTypes, flow caches.
     // ── Arenas (§5.5) ──
     /// PORT: Go's `core.Arena[Type]` per checker — a plain `Vec<Type>` whose
@@ -538,6 +553,10 @@ pub struct Checker {
     /// recursion sentinel getResolvedTypeParameterDefault marks in-flight
     /// defaults with).
     pub(crate) resolving_default_type: Option<TypeId>,
+    // ── M6 S6 (resolution.rs): the resolution family's state ──
+    /// Go: `mergedSymbols map[*ast.Symbol]*ast.Symbol` (checker.go:14861's
+    /// getMergedSymbol record table).
+    pub(crate) merged_symbols: FxHashMap<SymbolId, SymbolId>,
 }
 
 /// Go: `func createFileIndexMap(files []*ast.SourceFile) map[*ast.SourceFile]int`.
@@ -1471,6 +1490,11 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         active_mappers: Vec::new(),
         active_type_mappers_caches: Vec::new(),
         inference_contexts: Vec::new(),
+        signature_node_links: LinkStore::new(),
+        call_resolution_stack: Vec::new(),
+        is_inference_partially_blocked: false,
+        apparent_argument_count: None,
+        cached_signatures: FxHashMap::default(),
         free_inference_states: Vec::new(),
         reverse_mapped_cache: FxHashMap::default(),
         reverse_homomorphic_mapped_cache: FxHashMap::default(),
@@ -1555,6 +1579,7 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         tuple_types: FxHashMap::default(),
         unresolved_symbols: FxHashMap::default(),
         resolving_default_type: None,
+        merged_symbols: FxHashMap::default(),
     };
 
     // Go: countGlobalSymbols sizes the globals table — a capacity hint; the

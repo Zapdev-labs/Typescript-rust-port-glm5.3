@@ -1094,9 +1094,8 @@ impl Checker {
         candidates_out_array: Option<&mut Vec<crate::types::SignatureId>>,
         check_mode: CheckMode,
     ) -> Option<crate::types::SignatureId> {
-        // TODO(port M6 S6): resolveSignature/resolveCall/chooseOverload.
-        let _ = (node, candidates_out_array, check_mode);
-        None
+        // resolvecall.rs's real getResolvedSignature (S6's call resolution).
+        self.get_resolved_signature_ex(node, candidates_out_array, check_mode)
     }
 }
 
@@ -4205,7 +4204,7 @@ impl Checker {
 
 /// Go: `GetClassLikeDeclarationOfSymbol(parent)` (ast/utilities.go) — the
 /// symbol's class-like declaration.
-fn get_class_like_declaration_of_symbol_for(c: &Checker, symbol: SymbolId) -> Option<NodeId> {
+pub(crate) fn get_class_like_declaration_of_symbol_for(c: &Checker, symbol: SymbolId) -> Option<NodeId> {
     c.program_symbol(symbol)
         .declarations
         .iter()
@@ -4632,9 +4631,11 @@ impl Checker {
         sig: Option<crate::types::SignatureId>,
         node: NodeId,
     ) {
-        // TODO(port M6 S6): isDeprecatedDeclaration on the signature's
-        // declaration + addDeprecatedSuggestionWithSignature.
-        let _ = (sig, node);
+        // resolvecall.rs's real body (the deprecation probes stay
+        // permissive inside it until the deprecation wave).
+        if let Some(sig) = sig {
+            self.check_deprecated_signature_real(sig, node);
+        }
     }
 
     /// Go: `func (c *Checker) checkParenthesizedExpression(node, checkMode) *Type`
@@ -5992,16 +5993,14 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) resolveAliasWithDeprecationCheck(symbol, location) *ast.Symbol`
-    /// (checker.go:16697 — S6). Permissive: the symbol itself (Go's answer
-    /// when the alias chain is trivial).
+    /// (checker.go:16697). REAL body landed in resolution.rs
+    /// (`resolve_alias_with_deprecation_check_real`); this carrier delegates.
     pub(crate) fn resolve_alias_with_deprecation_check(
         &mut self,
         symbol: SymbolId,
         location: NodeId,
     ) -> SymbolId {
-        // TODO(port M6 S6): resolveAlias + the deprecation suggestion probe.
-        let _ = location;
-        symbol
+        self.resolve_alias_with_deprecation_check_real(symbol, location)
     }
 
     /// Go: `func (c *Checker) getResolvedSymbol(node) *ast.Symbol` (checker.go:14161)

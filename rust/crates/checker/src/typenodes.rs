@@ -1131,7 +1131,15 @@ impl Checker {
             .flags
             .intersects(SymbolFlags::LATE_BINDING_CONTAINER)
         {
-            // TODO(port M6 S6): getResolvedMembersOrExportsOfSymbol.
+            // M6 S6: the real early+late-bound resolution (resolution.rs).
+            return self
+                .get_resolved_members_or_exports_of_symbol(
+                    symbol,
+                    crate::types::MembersOrExportsResolutionKind::ResolvedMembers,
+                )
+                .entries()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
         }
         self.program_symbol(symbol)
             .members
@@ -1505,22 +1513,10 @@ impl Checker {
         self.get_unresolved_symbol_for_entity_name(name)
     }
 
-    /// Go: `func (c *Checker) resolveEntityName(name, meaning, ignoreErrors, dontResolveAlias, location) *ast.Symbol`
-    /// (checker.go:16158 — S6's name-resolution ROOT). TODO(port M6 S6): the
-    /// scope walk; permissive None (Go's nil answer) — every type reference
-    /// then takes Go's unresolved-symbol path exactly like a name failure.
-    fn resolve_entity_name(
-        &mut self,
-        name: NodeId,
-        meaning: SymbolFlags,
-        ignore_errors: bool,
-        dont_resolve_alias: bool,
-        location: NodeId,
-    ) -> Option<SymbolId> {
-        // TODO(port M6 S6): resolveName scope walk + resolveQualifiedName.
-        let _ = (name, meaning, ignore_errors, dont_resolve_alias, location);
-        None
-    }
+    // Go: `func (c *Checker) resolveEntityName(name, meaning, ignoreErrors, dontResolveAlias, location) *ast.Symbol`
+    // (checker.go:16158 — S6's name-resolution ROOT). REAL body landed in
+    // resolution.rs (`resolve_entity_name`, same signature); this permissive
+    // twin was removed.
 
     /// Go: `func (c *Checker) getUnresolvedSymbolForEntityName(name) *ast.Symbol` (checker.go:23632).
     fn get_unresolved_symbol_for_entity_name(&mut self, name: NodeId) -> SymbolId {
@@ -2913,20 +2909,9 @@ impl Checker {
         self.get_type_reference_type(node, resolved_symbol)
     }
 
-    /// Go: `func (c *Checker) resolveSymbol(symbol) *ast.Symbol` (checker.go —
-    /// the alias-aware symbol resolution; S6's merged/late-bound composition
-    /// rides the seam).
-    fn resolve_symbol(&mut self, symbol: SymbolId) -> SymbolId {
-        if self
-            .get_symbol_flags(symbol)
-            .intersects(SymbolFlags::ALIAS)
-        {
-            // TODO(port M6 S6): the full resolveAlias walk; the permissive
-            // seam resolves to unknownSymbol (typeofsymbol.rs's convention).
-            return self.resolve_alias(symbol);
-        }
-        self.get_merged_symbol(symbol)
-    }
+    // Go: `func (c *Checker) resolveSymbol(symbol) *ast.Symbol` (checker.go:14755)
+    // — REAL body landed in resolution.rs (`resolve_symbol`, the S6
+    // alias-aware merged resolution); this permissive twin was removed.
 
     /// `getTypeOfSymbol` through the Option surface (the import-type typeof
     /// arm; Go's non-nil symbol always has a type here).
