@@ -2485,7 +2485,7 @@ impl Checker {
     /// number-like type.
     ///
     /// Go: `func (c *Checker) isEvolvingArrayOperationTarget(node) bool` (flow.go:1542).
-    fn is_evolving_array_operation_target(&mut self, node: NodeId) -> bool {
+    pub(crate) fn is_evolving_array_operation_target(&mut self, node: NodeId) -> bool {
         let root = self.get_reference_root(node);
         let parent = self.store().node(root).parent.get();
         let parent_kind = self.store().node(parent).kind;

@@ -8563,10 +8563,12 @@ pub(crate) fn symbol_value_declaration(c: &Checker, sym: SymbolId) -> Option<Nod
 }
 
 /// Go: `getDeclarationModifierFlagsFromSymbol(sym)`.
+/// PORT (W3T4): the real body (utilities.go) — the former M6-S6 stub
+/// returned NONE, which suppressed the abstract-member family
+/// (checkKindsOfPropertyMemberOverrides's 2515 arm and the private-override
+/// skip both key on the ABSTRACT/PRIVATE declaration flags).
 pub(crate) fn get_declaration_modifier_flags_from_symbol(c: &Checker, sym: SymbolId) -> ModifierFlags {
-    // TODO(port M6 S6): the declaration modifier-flags read.
-    let _ = (c, sym);
-    ModifierFlags::NONE
+    u::get_declaration_modifier_flags_from_symbol(c, c.program.node_store(), sym)
 }
 
 /// Go: `func (c *Checker) isValidOverrideOf(sourceProp, targetProp) bool`.

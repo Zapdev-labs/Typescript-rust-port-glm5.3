@@ -2198,3 +2198,15 @@ Rig validation (W3 tranche 3, 2026-10-12): forced clean + rebuild —
 fixture twins identical at parse, bind, AND check; bind 300-slice
 143/143 byte-identical; program twin 15/15. W3 tranche 3 RIG-VALIDATED.
 Tranche 4 (the divergence-family chase) dispatched.
+
+## M6 W3 tranche 4 landed (2026-10-12) — divergence 131 -> 111
+
+Six Go-exact fixes (the check_identifier definite-assignment arms —
+killed both the 2454 x47 and 2339 x54->18 families — plus
+contains_undefined_type, is_mutable_local off-by-one,
+is_prototype_property, get_type_without_signatures, declaration
+modifier flags); 6/6 pins. Orchestrator re-verified fresh: 16 suites
+ok, clippy 0, fixture x3 identical, bind 143/143, program 15/15,
+check divergent 111 confirmed. W4 dispatched (collapses the 41
+type_to_string hash-diffs; then tranche 5 chases async-2697/2304/2683
+with the printer real).

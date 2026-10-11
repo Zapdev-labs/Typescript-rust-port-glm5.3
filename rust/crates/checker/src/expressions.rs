@@ -44,6 +44,7 @@ use tsc_ast::nodeflags::NodeFlags as NF;
 use tsc_ast::{
     is_identifier, Kind, ModifierFlags, NodeId, NodeStore, SymbolFlags, SymbolId,
 };
+use tsc_binder::ast_shims as binder_shims;
 use tsc_binder::scanner_shims::token_to_string;
 use tsc_core::tristate::Tristate;
 use tsc_diagnostics::Message;
@@ -3883,12 +3884,21 @@ impl Checker {
         self.get_narrowable_type_for_reference_real(t, reference, check_mode)
     }
 
-    /// Go: `func (c *Checker) containsUndefinedType(t) bool` (checker.go:27545 region).
+    /// Go: `func (c *Checker) containsUndefinedType(t) bool` (checker.go:11431
+    /// region) — a union contains undefined iff its FIRST constituent does
+    /// (getOptionalType unions put undefinedType first by type id; Go's exact
+    /// `t.Types()[0]` probe, PORT W3T4: the former `distributed().any()` was
+    /// a misport that fired TS2454 on unions Go's probe rejects).
     pub(crate) fn contains_undefined_type(&mut self, t: TypeId) -> bool {
-        self.type_(t)
-            .distributed()
-            .iter()
-            .any(|s| self.type_(*s).flags.intersects(TypeFlags::UNDEFINED))
+        let t = if self.type_(t).flags.intersects(TypeFlags::UNION) {
+            self.type_(t)
+                .as_union_type()
+                .map(|u| u.base.types[0])
+                .unwrap_or(t)
+        } else {
+            t
+        };
+        self.type_(t).flags.intersects(TypeFlags::UNDEFINED)
     }
 
     /// Go: `func (c *Checker) isAutoTypedProperty(property) bool` (checker.go:11529 region — S7
@@ -5633,7 +5643,7 @@ impl Checker {
             self.store().node(tsc_binder::ast_shims::get_root_declaration(self.store(), declaration)).kind
                 == Kind::Parameter;
         let declaration_container = self.get_control_flow_container(declaration);
-        let flow_container = self.get_control_flow_container(node);
+        let mut flow_container = self.get_control_flow_container(node);
         let is_outer_variable = flow_container != declaration_container;
         let is_spread_destructuring_assignment_target = {
             let parent = self.store().node(node).parent.get();
@@ -5654,13 +5664,50 @@ impl Checker {
         // we are referencing a closed-over const variable or parameter or mutable local variable past its last
         // assignment, we extend the origin of the control flow analysis to include the immediately enclosing
         // control flow container.
-        // TODO(port M6 W3): the isPastLastAssignment flow probe — the loop's
-        // condition is permissively false (no container hops).
+        while flow_container != declaration_container
+            && (matches!(
+                self.store().node(flow_container).kind,
+                Kind::FunctionExpression | Kind::ArrowFunction
+            ) || tsc_binder::ast_shims::is_object_literal_or_class_expression_method_or_accessor(
+                self.store(),
+                flow_container,
+            ))
+            && ((u::is_constant_variable(self, local_or_export_symbol)
+                && Some(t) != self.auto_array_type)
+                || (u::is_parameter_or_mutable_local_variable(
+                    self,
+                    self.store(),
+                    local_or_export_symbol,
+                ) && self.is_past_last_assignment(local_or_export_symbol, node)))
+        {
+            flow_container = self.get_control_flow_container(flow_container);
+        }
         // A variable is considered uninitialized when it is possible to analyze the entire control flow graph
         // from declaration to use, and when the variable's declared type doesn't include undefined but the
         // control flow based type does include undefined.
-        let is_never_initialized = false;
-        let _ = (is_never_initialized, is_parameter || is_alias);
+        // PORT (W3T4): the real Go arm — immediateDeclaration is the
+        // pre-alias value declaration (checker.go:11304), the mutable-local
+        // probe is utilities.go:isMutableLocalVariableDeclaration, and the
+        // definite-assignment facts are flow.go's marked-assignment walk.
+        let is_never_initialized = match _immediate_declaration {
+            Some(immediate) if self.store().node(immediate).kind == Kind::VariableDeclaration => {
+                let grandparent = self
+                    .store()
+                    .node(self.store().node(immediate).parent.get())
+                    .parent
+                    .get();
+                !binder_shims::is_for_in_or_of_statement(self.store().node(grandparent))
+                    && crate::ast_shims::initializer_of(self.store(), immediate).is_none()
+                    && self
+                        .store()
+                        .node(immediate)
+                        .as_variable_declaration()
+                        .is_some_and(|d| d.exclamation_token.is_none())
+                    && u::is_mutable_local_variable_declaration(self.store(), immediate)
+                    && !self.is_symbol_assigned_definitely(symbol)
+            }
+            _ => false,
+        };
         let assume_initialized = is_parameter
             || is_alias
             || (is_outer_variable && !is_never_initialized)
@@ -5707,37 +5754,45 @@ impl Checker {
         // A variable is considered uninitialized when it is possible to analyze the entire control flow graph
         // from declaration to use, and when the variable's declared type doesn't include undefined but the
         // control flow based type does include undefined.
-        // TODO(port M6 W3): the definite-assignment flow facts — under the
-        // no-flow seam the flow type is the initial type, and the
-        // used-before-assigned probe cannot distinguish assigned references
-        // (it stays dormant, Go's answer when the reference carries no flow
-        // node); the autoType evolving-array arm composes identically.
-        // TODO(port M6 W3): isEvolvingArrayOperationTarget — permissive
-        // false (no evolving-array flow bookkeeping yet).
-        let is_evolving_array_operation_target = false;
+        // PORT (W3T4): the REAL arms — flow.go's isEvolvingArrayOperationTarget
+        // and the live TS2454 emission with Go's declared-type fallback
+        // (checker.go:11417-11429).
+        let is_evolving_array_operation_target = self.is_evolving_array_operation_target(node);
         if !is_evolving_array_operation_target
             && (t == self.auto_type() || Some(t) == self.auto_array_type)
         {
             if flow_type == self.auto_type() || Some(flow_type) == self.auto_array_type {
-                // The automatic types are only reachable with evolving-array
-                // flow bookkeeping (W3); the two TS7022/TS7005 errors below
-                // fire from this dormant arm once that lands.
-                let _ = (
-                    &VARIABLE_0_IMPLICITLY_HAS_AN_1_TYPE,
-                    &VARIABLE_0_IMPLICITLY_HAS_TYPE_1_IN_SOME_LOCATIONS_WHERE_ITS_TYPE_CANNOT_BE_DETERMINED,
-                );
+                if self.no_implicit_any {
+                    let name = relater::symbol_to_string(self, symbol);
+                    let flow_str = relater::type_to_string(self, flow_type);
+                    let name_of_decl = binder_shims::get_name_of_declaration(
+                        self.store(),
+                        declaration,
+                    )
+                    .unwrap_or(NodeId::NONE);
+                    self.error(
+                        name_of_decl,
+                        &VARIABLE_0_IMPLICITLY_HAS_TYPE_1_IN_SOME_LOCATIONS_WHERE_ITS_TYPE_CANNOT_BE_DETERMINED,
+                        &[name.clone(), flow_str.clone()],
+                    );
+                    self.error(
+                        node,
+                        &VARIABLE_0_IMPLICITLY_HAS_AN_1_TYPE,
+                        &[name, flow_str],
+                    );
+                }
                 return self.convert_auto_to_any(flow_type);
             }
         } else if !assume_initialized
-            && !self.type_(t).flags.intersects(TypeFlags::UNDEFINED)
-            && self.type_(flow_type).flags.intersects(TypeFlags::UNDEFINED)
+            && !self.contains_undefined_type(t)
+            && self.contains_undefined_type(flow_type)
         {
-            // TODO(port M6 W3): the definite-assignment flow facts — the
-            // TS2454 (TS2456 for destructuring) arm stays dormant under the
-            // no-flow seam (the probe can't distinguish assigned
-            // references); the diagnostic constants are referenced here so
-            // the mirror is live for the W3 wave.
-            let _ = VARIABLE_0_IS_USED_BEFORE_BEING_ASSIGNED;
+            // Go: "Return the declared type to reduce follow-on errors"
+            // (checker.go:11426) — the TS2454 emission replaces the flow type
+            // with the declared type.
+            let name = relater::symbol_to_string(self, symbol);
+            self.error(node, &VARIABLE_0_IS_USED_BEFORE_BEING_ASSIGNED, &[name]);
+            return t;
         }
         if assignment_kind != u::AssignmentKind::None {
             // Identifier is target of a compound assignment

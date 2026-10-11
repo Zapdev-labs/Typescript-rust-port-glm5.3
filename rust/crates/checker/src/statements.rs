@@ -7791,11 +7791,26 @@ impl Checker {
             let resolved = relater::resolve_structured_type_members(self, t);
             if !resolved.signatures.is_empty() {
                 let result = self.new_object_type(ObjectFlags::ANONYMOUS, td_symbol);
-                // Go: result.objectFlags |= ObjectFlagsMembersResolved and
-                // copies members/properties from the resolved row.
-                // TODO(port M6 S7): the members/properties copy — the
-                // resolved row's tables; permissive empty until S7 lands.
-                let _ = resolved;
+                // Go: `result.objectFlags |= ObjectFlagsMembersResolved;
+                // result.members = resolved.members;
+                // result.properties = resolved.properties` (checker.go:4592)
+                // — the WITHOUT-signatures twin: members and properties are
+                // copied, the signature lists stay empty, and the
+                // MembersResolved flag pins the row so later member
+                // resolution cannot re-derive the construct signatures from
+                // the symbol. PORT (W3T4): the former permissive stub left
+                // the flag unset and the tables empty, so the apparent ctor
+                // type re-resolved its construct signature — the spurious
+                // TS2417 "Class static side incorrectly extends" family on
+                // abstract classes (the abstract-ctor assignability gate in
+                // signaturesRelatedTo fired on the un-stripped target).
+                self.type_mut(result).object_flags |= ObjectFlags::MEMBERS_RESOLVED;
+                let d = self
+                    .type_mut(result)
+                    .as_structured_type_mut()
+                    .expect("StructuredType data");
+                d.members = resolved.members;
+                d.properties = resolved.properties;
                 return result;
             }
         } else if td_flags.intersects(TypeFlags::INTERSECTION) {
@@ -7932,6 +7947,17 @@ impl Checker {
                         let error_node = self
                             .program_symbol(derived)
                             .value_declaration
+                            // Go: `core.OrElse(ast.GetNameOfDeclaration(
+                            // derived.ValueDeclaration), derived.ValueDeclaration)`
+                            // (checker.go:4757 region) — the NAME node when
+                            // one exists, else the declaration, else nil.
+                            .and_then(|vd| {
+                                tsc_binder::ast_shims::get_name_of_declaration(
+                                    self.store(),
+                                    vd,
+                                )
+                                .or(Some(vd))
+                            })
                             .unwrap_or_default();
                         let base_text = relater::symbol_to_string(self, base);
                         let base_type_text = self.type_to_string(base_type);
@@ -7960,6 +7986,17 @@ impl Checker {
                         let error_node = self
                             .program_symbol(derived)
                             .value_declaration
+                            // Go: `core.OrElse(ast.GetNameOfDeclaration(
+                            // derived.ValueDeclaration), derived.ValueDeclaration)`
+                            // (checker.go:4757 region) — the NAME node when
+                            // one exists, else the declaration, else nil.
+                            .and_then(|vd| {
+                                tsc_binder::ast_shims::get_name_of_declaration(
+                                    self.store(),
+                                    vd,
+                                )
+                                .or(Some(vd))
+                            })
                             .unwrap_or_default();
                         let base_type_text = self.type_to_string(base_type);
                         let base_text = relater::symbol_to_string(self, base);
@@ -7975,6 +8012,14 @@ impl Checker {
                     let error_node = self
                         .program_symbol(derived)
                         .value_declaration
+                        // Go: OrElse(GetNameOfDeclaration(vd), vd).
+                        .and_then(|vd| {
+                            tsc_binder::ast_shims::get_name_of_declaration(
+                                self.store(),
+                                vd,
+                            )
+                            .or(Some(vd))
+                        })
                         .unwrap_or_default();
                     let base_type_text = self.type_to_string(base_type);
                     let base_text = relater::symbol_to_string(self, base);
@@ -7989,6 +8034,14 @@ impl Checker {
                     let error_node = self
                         .program_symbol(derived)
                         .value_declaration
+                        // Go: OrElse(GetNameOfDeclaration(vd), vd).
+                        .and_then(|vd| {
+                            tsc_binder::ast_shims::get_name_of_declaration(
+                                self.store(),
+                                vd,
+                            )
+                            .or(Some(vd))
+                        })
                         .unwrap_or_default();
                     let base_type_text = self.type_to_string(base_type);
                     let base_text = relater::symbol_to_string(self, base);
@@ -8003,9 +8056,12 @@ impl Checker {
             }
         }
         for (error_node, member_info) in not_implemented_info {
-            let is_class_expression = self.store().node(error_node).kind == Kind::ClassExpression
-                || error_node == NodeId::NONE
-                || self.store().node(error_node).name().is_none() && error_node != NodeId::NONE && self.store().node(error_node).kind == Kind::ClassExpression;
+            // Go: `ast.IsClassExpression(errorNode)` with errorNode possibly
+            // nil (the class-expression-less sentinel) — nil is NOT a class
+            // expression (the Non-abstract class expression forms need a real
+            // class-expression node).
+            let is_class_expression = error_node != NodeId::NONE
+                && self.store().node(error_node).kind == Kind::ClassExpression;
             match member_info.missed_properties.len() {
                 1 => {
                     let missed = member_info.missed_properties[0].clone();
@@ -9546,9 +9602,13 @@ impl Checker {
 // Free helpers for the class/interface/enum/module batch.
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Go: `isPrototypeProperty` — the prototype-named synthesized symbol.
+/// Go: `isPrototypeProperty(symbol) bool` (checker.go:22131) — a member of a
+/// prototype somewhere: the Method symbol flag or the SyntheticMethod check
+/// flag. PORT (W3T4): the former `name == "prototype"` stub was a misport
+/// (Go's flag probe, not the binder's synthesized `prototype` property
+/// symbol's name); the members.rs twin (checker.go:22131) is the real body.
 fn is_prototype_property(c: &Checker, symbol: SymbolId) -> bool {
-    c.program_symbol(symbol).name == "prototype"
+    crate::members::is_prototype_property(c, symbol)
 }
 
 /// Go: `ast.GetClassLikeDeclarationOfSymbol` — first class-like declaration

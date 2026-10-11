@@ -403,3 +403,22 @@ Fresh measurement (both drivers, check 300-slice, 384 records):
 - Validation: cargo test -p tsc-checker -p tsc-testrunner green (93
   lib tests incl. 3 w3t3 pins); clippy zero on checker + testrunner
   + bench-harness; go vet + go build clean.
+
+## W3 tranche 4 — the divergence-family chase, first blood (2026-10-12)
+
+Divergent 131 -> 111. One port killed two census families:
+check_identifier's missing live definite-assignment arms (container-hop
+loop, is_never_initialized, TS2454 with Go's declared-type fallback,
+TS7022/7005 autoType) — go-extra 2454: 47->0 AND rust-extra 2339:
+54->18 (the leaked T|undefined flow types were the property-access
+noise). Also: contains_undefined_type misport (Types()[0] probe),
+is_mutable_local_variable_declaration off-by-one, is_prototype_property
+real (Method-flag check; 2425: 21->0), get_type_without_signatures
+real (2417: 17->0, TS2515 now fires both sides), declaration-modifier
+flags real. Progression: 131 -> 115 -> 113 -> 111. Remaining census:
+async-2697 x37 (machinery mirrors Go but the forced signature return-
+type resolution in checkFunctionOrMethodDeclaration isn't — next
+tranche), TS2304 x33, 2683 x17, and 41 hash-only diffs dominated by the
+type_to_string W4 stub (collapse when W4's printer lands). All gates
+held: fixture x3 stages identical, bind 143/143, program 15/15,
+verdict flips 0.

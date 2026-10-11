@@ -1853,10 +1853,12 @@ pub fn is_mutable_local_variable_declaration(
     !(binder_shims::get_combined_modifier_flags(store, declaration)
         .intersects(ModifierFlags::EXPORT)
         || (store.node(pn.parent.get()).kind == Kind::VariableStatement
-            && is_global_source_file(
-                store,
-                store.node(store.node(pn.parent.get()).parent.get()).parent.get(),
-            )))
+            && is_global_source_file(store, store.node(pn.parent.get()).parent.get())))
+    // PORT (W3T4): Go probes `declaration.Parent.Parent.Parent` —
+    // VariableDeclarationList → VariableStatement → SourceFile. The
+    // former code hopped one parent too many (the SourceFile's parent is
+    // the NodeId::NONE sentinel; Go's nil SourceFile-parent never reaches
+    // IsGlobalSourceFile).
 }
 
 /// Go: `ast.IsGlobalSourceFile` — a source file that is neither an external

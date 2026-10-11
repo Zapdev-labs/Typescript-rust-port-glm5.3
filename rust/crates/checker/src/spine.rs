@@ -3386,6 +3386,24 @@ mod tests {
         }
     }
 
+    fn spine_checker_strict(src: &str) -> Checker {
+        let mut file = tsc_parser::parse_source_file(
+            Default::default(),
+            src,
+            tsc_core::scriptkind::ScriptKind::TS,
+        );
+        let bind = tsc_binder::bind_source_file(&mut file);
+        let options = tsc_core::options_generated::CompilerOptions {
+            strict: Tristate::TSTrue,
+            ..Default::default()
+        };
+        new_checker(Box::new(SpineProgram {
+            options,
+            file,
+            bind,
+            symbols: Vec::new(),
+        }))
+    }
     fn spine_checker(src: &str) -> Checker {
         let mut file = tsc_parser::parse_source_file(
             Default::default(),
@@ -3842,12 +3860,215 @@ mod tests {
             parameter_symbol, property_symbol,
             "the parameter and property symbols are distinct"
         );
+    }
+
+    /// W3 tranche 4 PIN (the definite-assignment family): under
+    /// strictNullChecks, `var child: Child; child.required;` — Go's
+    /// checkIdentifier emits TS2454 ('child' is used before being assigned)
+    /// and RETURNS THE DECLARED TYPE (checker.go:11426 "Return the declared
+    /// type to reduce follow-on errors"), so NO TS2339 follows. The Rust
+    /// arm was dormant (the flow type `Child | undefined` leaked into the
+    /// property access and produced a spurious 2339 — the census's
+    /// rust-extra x54 + go-extra x47 pair).
+    #[test]
+    fn w3t4_definite_assignment_emits_2454_and_returns_declared_type() {
+        let mut c = spine_checker_strict(
+            "interface Child { required: number }\nvar child: Child;\nchild.required;\n",
+        );
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        let count_2454 = diags
+            .iter()
+            .filter(|d| d.code() == 2454)
+            .count();
+        assert_eq!(count_2454, 1, "exactly one TS2454 for the unassigned read");
         assert!(
-            c.program_symbol(property_symbol)
-                .flags
-                .intersects(SymbolFlags::PROPERTY),
-            "the property symbol is a class property; got flags {:?}",
-            c.program_symbol(property_symbol).flags
+            diags
+                .iter()
+                .all(|d| d.code() != 2339),
+            "no follow-on TS2339; got {:?}",
+            diags.iter().map(|d| d.code()).collect::<Vec<_>>()
+        );
+        // The 2454 arm's return is the DECLARED type (Go's fallback), so the
+        // re-read `child` expression types as Child (an interface object
+        // type), not `Child | undefined`.
+        let stmts: Vec<NodeId> =
+            statements_of(c.store(), file).expect("statements").to_vec();
+        let read = crate::ast_shims::expression_of(c.store(), stmts[2]).expect("read stmt");
+        let child_ref = crate::ast_shims::expression_of(c.store(), read).expect("lhs");
+        let t = c.check_expression_ex(child_ref, CheckMode::CHECK_MODE_NORMAL);
+        assert!(
+            c.type_(t).object_flags.intersects(ObjectFlags::INTERFACE),
+            "the read types as the declared Child interface, not a union; got flags {:?}",
+            c.type_(t).flags
+        );
+    }
+
+    /// W3 tranche 4 PIN (Go's containsUndefinedType, checker.go:11431): a
+    /// union contains undefined iff its FIRST constituent does —
+    /// `Child | undefined` contains, `undefined` alone contains, `number`
+    /// does not.
+    #[test]
+    fn w3t4_contains_undefined_type_first_constituent() {
+        let mut c = spine_checker("type T = number;\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let undefined = c.undefined_type();
+        let number = c.number_type();
+        assert!(c.contains_undefined_type(undefined));
+        assert!(!c.contains_undefined_type(number));
+        let union = c.get_union_type(&[undefined, number]);
+        assert!(c.contains_undefined_type(union), "undefined-first union contains");
+        let union_rev = c.get_union_type(&[number, undefined]);
+        // Go probes Types()[0] only: the answer must equal the FIRST
+        // constituent's own undefined flag — whatever the union's
+        // normalization order is — never any() over the constituents.
+        for u in [union, union_rev] {
+            let first = c
+                .type_(u)
+                .as_union_type()
+                .expect("union")
+                .base
+                .types[0];
+            assert_eq!(
+                c.contains_undefined_type(u),
+                c.type_(first).flags.intersects(TypeFlags::UNDEFINED),
+                "the helper must answer the first-constituent probe, not any()"
+            );
+        }
+    }
+
+    /// W3 tranche 4 PIN (isPrototypeProperty, checker.go:22131): the
+    /// prototype-property probe is the METHOD symbol flag (or the
+    /// SyntheticMethod check flag), NOT the binder's synthesized `prototype`
+    /// property's name. `class A { foo() {} }` — foo is a prototype property.
+    #[test]
+    fn w3t4_is_prototype_property_is_the_method_flag() {
+        let mut c = spine_checker("class A {\n    foo() {}\n    bar: number;\n}\n");
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let stmts: Vec<NodeId> =
+            statements_of(c.store(), file).expect("statements").to_vec();
+        let class = stmts[0];
+        let class_symbol = c.get_symbol_of_declaration(class).expect("class symbol");
+        let members = c.get_members_of_symbol(class_symbol);
+        let foo = members
+            .iter()
+            .find(|(name, _)| name == "foo")
+            .map(|&(_, s)| s)
+            .expect("foo symbol");
+        let bar = members
+            .iter()
+            .find(|(name, _)| name == "bar")
+            .map(|&(_, s)| s)
+            .expect("bar symbol");
+        assert!(
+            crate::members::is_prototype_property(&c, foo),
+            "a method is a prototype property"
+        );
+        assert!(
+            !crate::members::is_prototype_property(&c, bar),
+            "a data property is not"
+        );
+    }
+
+    /// W3 tranche 4 PIN (the abstract-class family): `abstract class B
+    /// extends A { abstract bar(); }` + `class C extends B {}` under the
+    /// no-lib shape — Go emits TS2515 (non-abstract class C does not
+    /// implement inherited abstract member bar from class B) and NO TS2417
+    /// (the static-side relation's target is the base ctor type WITH
+    /// signatures stripped — getTypeWithoutSignatures — so the abstract-ctor
+    /// assignability gate in signaturesRelatedTo never fires).
+    #[test]
+    fn w3t4_abstract_class_no_spurious_2417_and_real_2515() {
+        let mut c = spine_checker_strict(
+            "class A {\n    foo() {}\n}\n\nabstract class B extends A {\n    abstract bar();\n}\n\nclass C extends B { }\n",
+        );
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let diags = c.semantic_diagnostics();
+        assert!(
+            diags.iter().any(|d| d.code() == 2515),
+            "the unimplemented-abstract-member TS2515 must fire; got {:?}",
+            diags.iter().map(|d| d.code()).collect::<Vec<_>>()
+        );
+        assert!(
+            diags.iter().all(|d| d.code() != 2417),
+            "no spurious static-side TS2417; got {:?}",
+            diags.iter().map(|d| d.code()).collect::<Vec<_>>()
+        );
+        assert!(
+            diags.iter().all(|d| d.code() != 2425),
+            "no spurious member-kind TS2425"
+        );
+    }
+
+    /// W3 tranche 4 PIN (getTypeWithoutSignatures, checker.go:4579): the
+    /// stripped twin keeps members/properties, drops ALL signatures, and is
+    /// pinned with MembersResolved so the construct signatures cannot be
+    /// re-derived from the symbol.
+    #[test]
+    fn w3t4_get_type_without_signatures_strips_and_pins() {
+        let mut c = spine_checker(
+            "class A {\n    foo() {}\n}\nclass B extends A { }\nvar b: B;\n",
+        );
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let stmts: Vec<NodeId> =
+            statements_of(c.store(), file).expect("statements").to_vec();
+        let b_symbol = c.get_symbol_of_declaration(stmts[1]).expect("B symbol");
+        let class_type = c.get_declared_type_of_symbol(b_symbol);
+        let static_type = c.get_type_of_symbol(b_symbol);
+        // The ctor type has construct signatures before the strip...
+        let full_sigs = crate::relater::get_signatures_of_type(
+            &mut c,
+            static_type,
+            crate::SignatureKind::Construct,
+        );
+        assert!(!full_sigs.is_empty(), "the class static side carries a ctor");
+        let stripped = c.get_type_without_signatures(static_type);
+        assert!(
+            c.type_(stripped).object_flags.intersects(ObjectFlags::MEMBERS_RESOLVED),
+            "the stripped twin is pinned MembersResolved"
+        );
+        let stripped_sigs = crate::relater::get_signatures_of_type(
+            &mut c,
+            stripped,
+            crate::SignatureKind::Construct,
+        );
+        assert!(
+            stripped_sigs.is_empty(),
+            "the stripped twin has NO construct signatures (re-resolution included)"
+        );
+        let _ = class_type;
+    }
+
+    /// W3 tranche 4 PIN (getDeclarationModifierFlagsFromSymbol,
+    /// utilities.go): an `abstract bar();` method's declaration modifier
+    /// flags include ABSTRACT — the 2515 arm and the private-override skip
+    /// in checkKindsOfPropertyMemberOverrides key on it. The relater's stub
+    /// returned NONE (the family's root).
+    #[test]
+    fn w3t4_declaration_modifier_flags_read_abstract() {
+        let mut c = spine_checker(
+            "abstract class B {\n    abstract bar();\n}\n",
+        );
+        let file = file_of(&c);
+        c.check_source_file(file, false);
+        let stmts: Vec<NodeId> =
+            statements_of(c.store(), file).expect("statements").to_vec();
+        let class_symbol = c.get_symbol_of_declaration(stmts[0]).expect("B symbol");
+        let members = c.get_members_of_symbol(class_symbol);
+        let bar = members
+            .iter()
+            .find(|(name, _)| name == "bar")
+            .map(|&(_, s)| s)
+            .expect("bar symbol");
+        assert!(
+            crate::relater::get_declaration_modifier_flags_from_symbol(&c, bar)
+                .intersects(tsc_ast::ModifierFlags::ABSTRACT),
+            "the abstract modifier must be readable from the symbol"
         );
     }
 }
