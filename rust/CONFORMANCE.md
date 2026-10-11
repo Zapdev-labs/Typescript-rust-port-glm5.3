@@ -261,3 +261,14 @@ single-`.errors.txt` slice at parse+bind depth.
   split line writes the separator — Go's line join).
 - The `.delete` marker semantics: `NoContent` + an existing reference
   is a `mismatch` at this depth (the real harness accepts the delete).
+
+## Full-corpus sweep — 2026-10-10, post-S4 (rig, fresh release builds at 9fd24bb2f3)
+
+7,567 cases: 2,782 match / 3,681 mismatch / 1,104 missing-baseline at
+parse+bind depth (the checker stage is still deliberately unwired — the
+climb % starts moving at W3). Twin divergence: **382 records — the
+identical pre-existing set recorded at gap-5** (the positioned per-key
+option diagnostics class). **S4 introduced zero new divergences.** Each
+side shows one panic-sentinel stderr line for the same case (part of
+the identical-stream contract, not a regression). Streams on the rig at
+`/tmp/full_rust.ndjson` / `/tmp/full_go.ndjson`.
