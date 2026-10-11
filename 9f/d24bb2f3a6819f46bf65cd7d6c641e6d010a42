@@ -1,0 +1,23 @@
+rust/crates/checker/src/expressions.rs
+  s_8c068fb93d1af2::t_ec0986a1c86782 4252
+  s_8c068fb93d1af2::t_3818372dc1ad0c 4249
+  s_8c068fb93d1af2::t_ee3938a341436b 4231-4248,4250-4251,4253-4255
+rust/crates/checker/src/spine.rs
+  s_8c068fb93d1af2::t_7a7860b2f22dbc 2096-2097
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9fd24bb2f3a6819f46bf65cd7d6c641e6d010a42",
+  "prompts": {},
+  "sessions": {
+    "s_8c068fb93d1af2": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "87e7a801-1720-4aea-8bb1-cd2d72eee97b",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
