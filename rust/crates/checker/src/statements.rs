@@ -7794,20 +7794,48 @@ impl Checker {
                         }
                     }
                 }
-                let static_base_is_class =
-                    self.type_(static_base_type).symbol.is_some_and(|s| {
-                        self.program_symbol(s).flags.intersects(SymbolFlags::CLASS)
-                    }) && self
-                        .type_(base_constructor_type)
-                        .flags
-                        .intersects(TypeFlags::TYPE_PARAMETER);
-                if !static_base_is_class {
+                // Go: `if !(staticBaseType.symbol != nil &&
+                // staticBaseType.symbol.Flags&ast.SymbolFlagsClass != 0) &&
+                // baseConstructorType.flags&TypeFlagsTypeVariable == 0` —
+                // skip only when the base IS a class or IS a type variable
+                // (the port's earlier `!(isClass && isTypeVariable)` inverted
+                // the two). W3T7: the real arm — D0/D4's
+                // "Base constructors must all have the same return type".
+                let static_base_is_class = self
+                    .type_(static_base_type)
+                    .symbol
+                    .is_some_and(|s| self.program_symbol(s).flags.intersects(SymbolFlags::CLASS));
+                let base_is_type_variable = self
+                    .type_(base_constructor_type)
+                    .flags
+                    .intersects(TypeFlags::TYPE_PARAMETER);
+                if !static_base_is_class && !base_is_type_variable {
                     // When the static base type is a "class-like" constructor
-                    // function (but not actually a class), we verify that
-                    // all instantiated base constructor signatures return the
-                    // same type.
-                    // TODO(port M6 S7): getInstantiatedConstructorsForType-
-                    // Arguments — permissive (the constructors list rests).
+                    // function (but not actually a class), we verify
+                    // that all instantiated base constructor signatures
+                    // return the same type.
+                    let base_type_arguments = type_arguments_of(self.store(), base_type_node);
+                    let constructors = self.get_instantiated_constructors_for_type_arguments(
+                        static_base_type,
+                        &base_type_arguments,
+                        base_type_node,
+                    );
+                    if !constructors.iter().all(|&sig| {
+                        let return_type = self.get_return_type_of_signature(sig);
+                        self.is_type_identical_to(return_type, base_type)
+                    }) {
+                        let base_expr = self
+                            .store()
+                            .node(base_type_node)
+                            .as_expression_with_type_arguments()
+                            .expect("ExpressionWithTypeArguments data")
+                            .expression;
+                        self.error(
+                            base_expr,
+                            &diag::BASE_CONSTRUCTORS_MUST_ALL_HAVE_THE_SAME_RETURN_TYPE,
+                            &[],
+                        );
+                    }
                 }
                 self.check_kinds_of_property_member_overrides(class_type, base_type);
             }

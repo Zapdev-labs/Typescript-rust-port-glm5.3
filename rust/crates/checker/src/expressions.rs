@@ -45,6 +45,7 @@ use tsc_ast::{
     is_identifier, Kind, ModifierFlags, NodeId, NodeStore, SymbolFlags, SymbolId,
 };
 use tsc_binder::ast_shims as binder_shims;
+use tsc_binder::node_data as binder_node_data;
 use tsc_binder::scanner_shims::token_to_string;
 use tsc_core::tristate::Tristate;
 use tsc_diagnostics::Message;
@@ -72,6 +73,9 @@ use tsc_diagnostics::{
     PROPERTY_0_IS_PROTECTED_AND_ONLY_ACCESSIBLE_THROUGH_AN_INSTANCE_OF_CLASS_1_THIS_IS_AN_INSTANCE_OF_CLASS_2,
     PROPERTY_0_IS_PROTECTED_AND_ONLY_ACCESSIBLE_WITHIN_CLASS_1_AND_ITS_SUBCLASSES,
     PROPERTY_0_IS_USED_BEFORE_BEING_ASSIGNED,
+    PROPERTY_0_IS_USED_BEFORE_ITS_INITIALIZATION,
+    X_0_IS_DECLARED_HERE,
+    CLASS_0_USED_BEFORE_ITS_DECLARATION,
     PROPERTY_0_MAY_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_2,
     PROPERTY_ASSIGNMENT_EXPECTED,
     RIGHT_OPERAND_OF_IS_UNREACHABLE_BECAUSE_THE_LEFT_OPERAND_IS_NEVER_NULLISH,
@@ -3999,13 +4003,83 @@ impl Checker {
         let Some(value_declaration) = self.program_symbol(prop).value_declaration else {
             return;
         };
-        // (Go's GetSourceFileOfNode(node).IsDeclarationFile early-out is
-        // covered by the permissive W3 skip below.)
+        // Go: the declaration-file early-out — the harness reads the case
+        // text as a regular source file (IsDeclarationFile false), so this
+        // arm only fires on .d.ts units.
+        if self.store().file(node.file_id()).payload().is_declaration_file {
+            return;
+        }
         let declaration_name = tsc_ast::node_text(self.store(), right).to_string();
-        // TODO(port M6 W3): isBlockScopedNameDeclaredBeforeUse (position
-        // ordering) + isInPropertyInitializerOrClassStaticBlock — the
-        // flow-position probes; permissive skip of the TS2729/2512 arms.
-        let _ = (node, value_declaration, declaration_name);
+        let mut diagnostic = None;
+        let in_initializer = self.is_in_property_initializer_or_class_static_block(node, false);
+        if in_initializer
+            && !self.is_optional_property_declaration(value_declaration)
+            && !(tsc_ast::is_access_expression(self.store().node(node))
+                && crate::ast_shims::expression_of(self.store(), node)
+                    .is_some_and(|e| tsc_ast::is_access_expression(self.store().node(e))))
+            && !self.is_block_scoped_name_declared_before_use(value_declaration, right)
+            && !(tsc_ast::is_method_declaration(self.store().node(value_declaration))
+                && self
+                    .get_combined_modifier_flags_cached(value_declaration)
+                    .intersects(ModifierFlags::STATIC))
+            && (self.compiler_options.get_use_define_for_class_fields()
+                || !self.is_property_declared_in_ancestor_class(prop))
+        {
+            diagnostic = Some(self.error(
+                right,
+                &PROPERTY_0_IS_USED_BEFORE_ITS_INITIALIZATION,
+                std::slice::from_ref(&declaration_name),
+            ));
+        } else if tsc_ast::is_class_declaration(self.store().node(value_declaration))
+            && !tsc_ast::is_type_reference_node(self.store().node(self.store().node(node).parent.get()))
+            && !self
+                .store()
+                .node(value_declaration)
+                .flags
+                .intersects(NF::AMBIENT)
+            && !self.is_block_scoped_name_declared_before_use(value_declaration, right)
+        {
+            diagnostic = Some(self.error(
+                right,
+                &CLASS_0_USED_BEFORE_ITS_DECLARATION,
+                std::slice::from_ref(&declaration_name),
+            ));
+        }
+        if let Some(mut diagnostic) = diagnostic {
+            diagnostic.add_related_info(crate::utilities::new_diagnostic_for_node(
+                self.store(),
+                value_declaration,
+                &X_0_IS_DECLARED_HERE,
+                vec![declaration_name],
+            ));
+        }
+    }
+
+    /// Go: `func (c *Checker) isOptionalPropertyDeclaration(node) bool` (checker.go:11969).
+    pub(crate) fn is_optional_property_declaration(&self, node: NodeId) -> bool {
+        tsc_ast::is_property_declaration(self.store().node(node))
+            && !tsc_binder::ast_shims::has_accessor_modifier(self.store().node(node))
+            && binder_node_data::postfix_token_of(self.store(), node)
+                .is_some_and(|t| self.store().node(t).kind == Kind::QuestionToken)
+    }
+
+    /// Go: `func (c *Checker) isPropertyDeclaredInAncestorClass(prop) bool` (checker.go:11973).
+    pub(crate) fn is_property_declared_in_ancestor_class(&mut self, prop: SymbolId) -> bool {
+        let parent = self.program_symbol(prop).parent;
+        if parent.is_some() {
+            let parent = parent.expect("checked");
+            if self.program_symbol(parent).flags.intersects(SymbolFlags::CLASS) {
+                let declared_type = self.get_declared_type_of_symbol(parent);
+                let base_types = self.get_base_types(declared_type);
+                if !base_types.is_empty() {
+                    let prop_name = self.program_symbol(prop).name.clone();
+                    if let Some(super_property) = self.get_property_of_type(base_types[0], &prop_name) {
+                        return self.program_symbol(super_property).value_declaration.is_some();
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Go: `func (c *Checker) getPropertyOfTypeEx(t, name, skipObjectFunctionPropertyAugment, includeTypeOnlyMembers) *ast.Symbol`

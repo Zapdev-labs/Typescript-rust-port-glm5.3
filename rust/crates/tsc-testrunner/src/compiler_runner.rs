@@ -991,6 +991,35 @@ fn shape_hash(lines: &[String]) -> String {
 mod tests {
     use super::*;
 
+    /// W3T7 PIN (the 2703 spans of the BOM'd await_unary cases): Go's check
+    /// twin reads the unit through the map-FS program, and the vfs read
+    /// (tsc/internal/vfs/internal's decodeBytes) strips a leading UTF-8 BOM
+    /// before the parser sees the text — every check-stage position is
+    /// relative to the BOM-LESS text. The seam parses the unit bytes
+    /// directly, so it applies the same strip. The pinned span (35..43 of
+    /// the BOM-less text) is the Go-twin-verified value — the t3 slice run
+    /// collapsed all four BOM'd await_unary records byte-for-byte with this
+    /// strip in place.
+    #[test]
+    fn w3t7_check_seam_strips_utf8_bom() {
+        let content = "\u{feff}async function bar1() {\n    delete await 42;\n}\n";
+        let diags = semantic_diagnostics_of_unit(
+            "/.src/bomprobe.ts",
+            content,
+            &CompilerOptions::default(),
+        );
+        let d = diags
+            .iter()
+            .find(|d| d.code() == 2703)
+            .expect("the delete operand is an await expression, not a reference");
+        assert_eq!(
+            (d.pos() as usize, d.end() as usize),
+            (35, 43),
+            "the span is relative to the BOM-less text; got {:?}",
+            diags.iter().map(|d| (d.code(), d.pos(), d.end())).collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn configured_name_matches_go() {
         assert_eq!(configured_name("foo.ts", ""), "foo.ts");
