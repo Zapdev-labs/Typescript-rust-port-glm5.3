@@ -2097,3 +2097,7 @@ fixture 9/9, 300-slice twins identical 143/143, program twin 15/15.
 Honest remainders bannered to S10/W4/W5 (inferTypeArguments
 contextual-return links, discriminate/literal-widening sub-arms).
 Next: S10.
+
+Rig validation (S9, 2026-10-11): forced clean + rebuild — all three
+twin gates green (fixture 9/9, 300-slice 143/143 byte-identical,
+program twin 15/15). S9 CLOSED.
