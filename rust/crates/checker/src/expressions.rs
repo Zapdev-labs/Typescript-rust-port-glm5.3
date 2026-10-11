@@ -2161,7 +2161,21 @@ impl Checker {
     /// Go: `func (c *Checker) checkExpressionWithTypeArguments(node) *Type` (checker.go:10868).
     pub(crate) fn check_expression_with_type_arguments(&mut self, node: NodeId) -> TypeId {
         self.check_grammar_expression_with_type_arguments(node);
-        let type_arguments = self.store().node(node).as_expression_with_type_arguments().expect("ExpressionWithTypeArguments data").type_arguments.clone();
+        // Go: `node.TypeArguments()` — both ExpressionWithTypeArguments and
+        // TypeQuery (the instantiation-expression form `typeof f<number>`)
+        // carry the shared optional typeArguments list.
+        let n = self.store().node(node);
+        let type_arguments = if n.kind == Kind::ExpressionWithTypeArguments {
+            n.as_expression_with_type_arguments()
+                .expect("ExpressionWithTypeArguments data")
+                .type_arguments
+                .clone()
+        } else {
+            n.as_type_query_node()
+                .expect("TypeQueryNode data")
+                .type_arguments
+                .clone()
+        };
         if let Some(type_arguments) = type_arguments.as_ref() {
             self.check_source_elements(&type_arguments.nodes);
         }

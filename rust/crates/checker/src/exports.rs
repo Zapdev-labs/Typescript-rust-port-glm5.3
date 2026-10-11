@@ -328,13 +328,10 @@ impl Checker {
             .and_then(|d| d.resolved_false_type)
     }
 
-    /// Go: `func (c *Checker) GetDefaultFromTypeParameter(typeParameter *Type) *Type`
-    /// → `c.getDefaultFromTypeParameter(typeParameter)` (checker.go — S2).
-    pub fn get_default_from_type_parameter(&self, type_parameter: TypeId) -> Option<TypeId> {
-        // TODO(port M6 S2): resolvedDefaultType resolution.
-        let _ = type_parameter;
-        None
-    }
+    // (M6 S5): `GetDefaultFromTypeParameter` MOVED — the real body
+    // (checker.go:22446) lives in typenodes.rs as
+    // `get_default_from_type_parameter` (the resolved-default machinery
+    // over the resolvingDefaultType/circularConstraintType sentinels).
 
     /// Go: `func (c *Checker) GetEffectiveDeclarationFlags(n *ast.Node, flagsToCheck ast.ModifierFlags) ast.ModifierFlags`
     /// → `c.getEffectiveDeclarationFlags(n, flagsToCheck)` (checker.go — S8).
@@ -643,14 +640,13 @@ impl Checker {
         false
     }
 
-    /// Go: `func (c *Checker) FillMissingTypeArguments(typeArguments []*Type, typeParameters []*Type, minTypeArgumentCount int, isJavaScriptImplicitAny bool) []*Type`
-    /// → `c.fillMissingTypeArguments(...)` (checker.go — S6). The unchanged
-    /// argument list is the permissive value (no filling).
     // (M6 S5): `FillMissingTypeArguments`/`GetMinTypeArgumentCount` MOVED —
     // the REAL bodies (the defaults-aware machinery, checker.go:22392–22510)
     // live in typenodes.rs as `fill_missing_type_arguments` /
     // `get_min_type_argument_count` (same signatures; the pub API surface is
-    // preserved through them).
+    // preserved through them). `GetDefaultFromTypeParameter` likewise MOVED
+    // (typenodes.rs `get_default_from_type_parameter` — the
+    // resolvingDefaultType/circularConstraintType sentinel machinery).
 
     /// Go: `func (c *Checker) GetWidenedLiteralType(t *Type) *Type` →
     /// `c.getWidenedLiteralType(t)` (checker.go — S9). COLLAPSED PAIR: the

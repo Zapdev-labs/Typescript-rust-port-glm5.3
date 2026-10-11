@@ -1533,7 +1533,7 @@ impl Checker {
         // Go: the assertion arm returns getTypeFromTypeNode(expr.Type())
         // (checker.go:7582) — M6 S5 wires it now that the type-node family
         // is real.
-        if matches!(kind, Kind::TypeAssertion | Kind::AsExpression)
+        if matches!(kind, Kind::TypeAssertionExpression | Kind::AsExpression)
             && !u::is_const_type_reference(
                 self.store(),
                 crate::ast_shims::type_of_node(self.store(), expr).unwrap_or(NodeId::NONE),

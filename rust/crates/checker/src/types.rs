@@ -1259,6 +1259,15 @@ impl Type {
     }
 
     /// Go: `func (t *Type) AsIntersectionType() *IntersectionType`.
+    /// Mutable form of [`Type::as_intersection_type`] (M6 S5: the
+    /// uniqueLiteralFilledInstantiation memoization in isReducibleIntersection).
+    pub fn as_intersection_type_mut(&mut self) -> Option<&mut IntersectionType> {
+        match &mut self.data {
+            TypeData::Intersection(d) => Some(d),
+            _ => None,
+        }
+    }
+
     pub fn as_intersection_type(&self) -> Option<&IntersectionType> {
         match &self.data {
             TypeData::Intersection(d) => Some(d),

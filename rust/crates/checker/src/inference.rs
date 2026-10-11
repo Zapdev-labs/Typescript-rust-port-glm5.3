@@ -1879,7 +1879,7 @@ impl Checker {
             }
         }
         if crate::relater::is_tuple_type(self, t) {
-            for element_type in get_element_types(self, t) {
+            for element_type in self.get_element_types(t) {
                 if self.is_partially_inferable_type(element_type) {
                     return true;
                 }

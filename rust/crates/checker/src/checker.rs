@@ -1686,6 +1686,14 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     c.circular_constraint_type = Some(c.new_anonymous_type(None, &[]));
     // M6 S5: Go's `c.resolvingDefaultType = c.newAnonymousType(nil, nil, nil, nil, nil)`
     // (checker.go:1044) — the recursion sentinel for type-parameter defaults.
+    // Go checker.go:1044 — the NewChecker anonymous-type seeds (M6 S5
+    // adds emptyTypeLiteralType/resolvingDefaultType; the rest of the
+    // marker seeds land with the waves that read them).
+    let type_literal_symbol = c.new_symbol(
+        tsc_ast::SymbolFlags::TYPE_LITERAL,
+        tsc_ast::INTERNAL_SYMBOL_NAME_TYPE,
+    );
+    c.empty_type_literal_type = Some(c.new_anonymous_type(Some(type_literal_symbol), &[]));
     c.resolving_default_type = Some(c.new_anonymous_type(None, &[]));
     let number_type = c.number_type.expect("just created");
     let string_type = c.string_type.expect("just created");

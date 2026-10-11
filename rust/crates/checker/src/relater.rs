@@ -87,8 +87,18 @@ impl IntersectionState {
 // getIntersectionTypeEx parameter; values pinned).
 define_flags!(IntersectionFlags, u32);
 impl IntersectionFlags {
+    // Go checker.go's iota block: SubtypeReduction=1<<0, SupertypeReduction=1<<1,
+    // NoConstraintReduction=1<<2, NoSupertypeReduction=1<<3. (The W2 pin of
+    // NoConstraintReduction at 1<<3 was a mispin; the S7 seam ignored the
+    // flags so no behavior moved. Corrected in M6 S5.)
+    /// Go: `IntersectionFlagsSubtypeReduction`.
+    pub const SUBTYPE_REDUCTION: IntersectionFlags = IntersectionFlags(1 << 0);
+    /// Go: `IntersectionFlagsSupertypeReduction`.
+    pub const SUPERTYPE_REDUCTION: IntersectionFlags = IntersectionFlags(1 << 1);
     /// Go: `IntersectionFlagsNoConstraintReduction`.
-    pub const NO_CONSTRAINT_REDUCTION: IntersectionFlags = IntersectionFlags(1 << 3);
+    pub const NO_CONSTRAINT_REDUCTION: IntersectionFlags = IntersectionFlags(1 << 2);
+    /// Go: `IntersectionFlagsNoSupertypeReduction`.
+    pub const NO_SUPERTYPE_REDUCTION: IntersectionFlags = IntersectionFlags(1 << 3);
 }
 
 define_flags!(RecursionFlags, u32);
@@ -7361,7 +7371,7 @@ pub(crate) fn is_empty_anonymous_object_type(c: &mut Checker, t: TypeId) -> bool
 /// Go: `func (c *Checker) isEmptyArrayLiteralType(t) bool` (checker.go:24054)
 /// — REAL (M6 S5).
 pub(crate) fn is_empty_array_literal_type(c: &mut Checker, t: TypeId) -> bool {
-    let element_type = get_element_type_of_array_type(c, t);
+    let element_type = c.get_element_type_of_array_type(t);
     element_type.is_some_and(|element_type| is_empty_literal_type(c, element_type))
 }
 
@@ -7417,6 +7427,7 @@ pub(crate) fn is_tuple_type(c: &Checker, t: TypeId) -> bool {
 }
 
 /// Go: `func isTupleLikeType(t) bool` (checker.go:24068) — REAL (M6 S5).
+#[allow(dead_code)] // M6 S5: typenodes owns the real body; callers land with the iteration/spread waves
 pub(crate) fn is_tuple_like_type(c: &mut Checker, t: TypeId) -> bool {
     crate::typenodes::is_tuple_like_type(c, t)
 }

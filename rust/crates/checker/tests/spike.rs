@@ -465,17 +465,18 @@ fn gate_demo_enum_member_declared_types_route_through_the_s7_union_seam() {
 }
 
 #[test]
-fn gate_demo_type_alias_declared_type_resolves_through_the_s5_stub() {
+fn gate_demo_type_alias_declared_type_resolves_through_the_type_node_family() {
     // Go: getDeclaredTypeOfTypeAlias pushes DeclaredType on the resolution
-    // stack, resolves the type node, and seeds the generic instantiation
-    // cache; the getTypeFromTypeNode stub (S5) resolves to errorType, so the
-    // alias declared type is errorType until that wave lands (shape pinned,
-    // stub direction documented).
+    // stack and resolves the type node. M6 S5 landed the real
+    // getTypeFromTypeNode family, so `type A = string` now resolves to the
+    // string type (the W1 errorType pin is superseded; resolution caching
+    // and the stack balance stay asserted).
     let (mut c, symbols, _) = check("type A = string;\n");
     let a = symbol_named(&symbols, "A");
     assert!(c.program_symbol(a).flags.intersects(SymbolFlags::TYPE_ALIAS));
     let declared = c.get_declared_type_of_symbol(a);
-    assert_eq!(declared, c.error_type());
+    assert!(flags(&c, declared).intersects(TypeFlags::STRING));
+    assert_eq!(declared, c.string_type());
     assert!(c.type_resolutions_are_balanced());
     assert_eq!(c.get_declared_type_of_symbol(a), declared);
 }

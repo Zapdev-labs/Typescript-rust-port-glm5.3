@@ -44,14 +44,15 @@
 use tsc_ast::ast_generated::{
     is_interface_declaration, is_type_reference_node,
 };
-use tsc_ast::{Kind, Node, NodeFlags as NF, NodeId, SymbolFlags, SymbolId};
+use tsc_ast::{CheckFlags, Kind, Node, NodeFlags as NF, NodeId, SymbolFlags, SymbolId};
+use tsc_core::tristate::Tristate;
 use tsc_binder::ast_shims as binder_shims;
 use tsc_binder::node_data as binder_node_data;
 use tsc_diagnostics as diag;
 
-use crate::todo_shapes::{CacheHashKey, TypeMapperId};
+use crate::todo_shapes::TypeMapperId;
 use crate::types::{
-    self, AccessFlags, ElementFlags, LiteralValue, ObjectFlags, TupleElementInfo, TypeAlias,
+    self, AccessFlags, ElementFlags, ObjectFlags, TupleElementInfo, TypeAlias,
     TypeData, TypeFlags, TypeId,
 };
 use crate::utilities as u;
@@ -80,6 +81,7 @@ fn type_node_type(store: &dyn tsc_ast::NodeStore, node: NodeId) -> Option<NodeId
 }
 
 /// Go: `ast.SkipTypeParentheses(node)` (utilities.go:833).
+#[allow(dead_code)] // the element-access/spread waves consume it
 fn skip_type_parentheses(store: &dyn tsc_ast::NodeStore, mut node: NodeId) -> NodeId {
     while tsc_ast::ast_generated::is_parenthesized_type_node(store.node(node)) {
         node = store
@@ -165,7 +167,7 @@ fn elements_of(store: &dyn tsc_ast::NodeStore, node: NodeId) -> Vec<NodeId> {
         .expect("TupleTypeNode data")
         .elements
         .as_ref()
-        .map(|l| l.nodes.clone())
+        .map(|l| l.nodes.to_vec())
         .unwrap_or_default()
 }
 
@@ -177,7 +179,7 @@ fn union_types_of(store: &dyn tsc_ast::NodeStore, node: NodeId) -> Vec<NodeId> {
         .expect("UnionTypeNode data")
         .types
         .as_ref()
-        .map(|l| l.nodes.clone())
+        .map(|l| l.nodes.to_vec())
         .unwrap_or_default()
 }
 
@@ -189,7 +191,7 @@ fn intersection_types_of(store: &dyn tsc_ast::NodeStore, node: NodeId) -> Vec<No
         .expect("IntersectionTypeNode data")
         .types
         .as_ref()
-        .map(|l| l.nodes.clone())
+        .map(|l| l.nodes.to_vec())
         .unwrap_or_default()
 }
 
@@ -257,6 +259,7 @@ fn is_unary_tuple_type_node(store: &dyn tsc_ast::NodeStore, node: NodeId) -> boo
 }
 
 /// Go: `func getStartElementCount(t *TupleType, flags ElementFlags) int` (checker.go:23894).
+#[allow(dead_code)] // the tuple-assignment/spread waves consume it
 fn get_start_element_count(t: &types::TupleType, flags: ElementFlags) -> usize {
     for (i, info) in t.element_infos.iter().enumerate() {
         if !info.flags.intersects(flags) {
@@ -328,37 +331,53 @@ pub(crate) fn get_generic_object_flags(c: &mut Checker, t: TypeId) -> ObjectFlag
         .flags
         .intersects(TypeFlags::UNION_OR_INTERSECTION.union(TypeFlags::SUBSTITUTION))
     {
-        if !ty.object_flags.intersects(ObjectFlags::IS_GENERIC_TYPE_COMPUTED) {
+        let computed = ty
+            .object_flags
+            .intersects(ObjectFlags::IS_GENERIC_TYPE_COMPUTED);
+        let is_union_or_intersection = ty.flags.intersects(TypeFlags::UNION_OR_INTERSECTION);
+        let substitution = ty
+            .as_substitution_type()
+            .map(|d| (d.base_type(), d.subst_constraint()));
+        if !computed {
             let mut combined_flags = ObjectFlags::NONE;
-            if ty.flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
-                for &u in ty.types() {
-                    combined_flags = combined_flags
-                        .union(get_generic_object_flags(c, u));
+            if is_union_or_intersection {
+                let types: Vec<TypeId> = c.type_(t).types().to_vec();
+                for u in types {
+                    combined_flags =
+                        combined_flags.union(get_generic_object_flags(c, u));
                 }
-            } else {
-                let d = ty.as_substitution_type().expect("SubstitutionType data");
-                combined_flags = get_generic_object_flags(c, d.base_type())
-                    .union(get_generic_object_flags(c, d.subst_constraint().unwrap_or(t)));
+            } else if let Some((base, subst_constraint)) = substitution {
+                // Go: d.base | getSubstitutionConstraint(d.subst).
+                combined_flags = base
+                    .map(|b| get_generic_object_flags(c, b))
+                    .unwrap_or(ObjectFlags::NONE)
+                    .union(
+                        subst_constraint
+                            .map(|s| get_generic_object_flags(c, s))
+                            .unwrap_or_else(|| get_generic_object_flags(c, t)),
+                    );
             }
-            let flags = combined_flags;
             c.type_mut(t).object_flags |=
-                ObjectFlags::IS_GENERIC_TYPE_COMPUTED.union(flags);
+                ObjectFlags::IS_GENERIC_TYPE_COMPUTED.union(combined_flags);
         }
         return c.type_(t).object_flags & ObjectFlags::IS_GENERIC_TYPE;
     }
     let mut combined_flags = ObjectFlags::NONE;
-    let ty = c.type_(t);
-    if ty.flags.intersects(TypeFlags::INSTANTIABLE_NON_PRIMITIVE)
+    let is_instantiable_or_index = c
+        .type_(t)
+        .flags
+        .intersects(TypeFlags::INSTANTIABLE_NON_PRIMITIVE.union(TypeFlags::INDEX))
+        || is_generic_string_like_type(c, t);
+    if c
+        .type_(t)
+        .flags
+        .intersects(TypeFlags::INSTANTIABLE_NON_PRIMITIVE)
         || crate::relater::is_generic_mapped_type(c, t)
         || is_generic_tuple_type(c, t)
     {
         combined_flags |= ObjectFlags::IS_GENERIC_OBJECT_TYPE;
     }
-    if ty
-        .flags
-        .intersects(TypeFlags::INSTANTIABLE_NON_PRIMITIVE.union(TypeFlags::INDEX))
-        || is_generic_string_like_type(c, t)
-    {
+    if is_instantiable_or_index {
         combined_flags |= ObjectFlags::IS_GENERIC_INDEX_TYPE;
     }
     combined_flags
@@ -397,23 +416,42 @@ pub(crate) fn is_single_element_generic_tuple_type(c: &Checker, t: TypeId) -> bo
             .is_some_and(|d| d.element_infos.len() == 1)
 }
 
+/// Go: `func everyType(t, f) bool` (utilities.go — the union/
+/// intersection-distributing predicate; the local form threads `&mut
+/// Checker` through the closure where relater's free fn cannot share the
+/// borrow).
+pub(crate) fn every_type_ex(
+    c: &mut Checker,
+    t: TypeId,
+    mut f: impl FnMut(&mut Checker, TypeId) -> bool,
+) -> bool {
+    if c.type_(t).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+        let types: Vec<TypeId> = c.type_(t).types().to_vec();
+        types.into_iter().all(|s| f(c, s))
+    } else {
+        f(c, t)
+    }
+}
+
 /// Go: `func (c *Checker) isGenericReducibleType(t) bool` (checker.go:25481).
+#[allow(dead_code)] // the S7 reduce* engine consumes it
 pub(crate) fn is_generic_reducible_type(c: &mut Checker, t: TypeId) -> bool {
-    (c.type_(t).flags.intersects(TypeFlags::UNION)
-        && c.type_(t)
-            .object_flags
-            .intersects(ObjectFlags::CONTAINS_INTERSECTIONS)
-        && c.type_(t)
-            .types()
-            .iter()
-            .any(|&u| is_generic_reducible_type(c, u)))
-        || (c.type_(t).flags.intersects(TypeFlags::INTERSECTION)
-            && is_reducible_intersection(c, t))
+    let ty = c.type_(t);
+    let is_union = ty.flags.intersects(TypeFlags::UNION);
+    let is_intersection = ty.flags.intersects(TypeFlags::INTERSECTION);
+    let contains_intersections = ty.object_flags.intersects(ObjectFlags::CONTAINS_INTERSECTIONS);
+    let constituents: Option<Vec<TypeId>> =
+        is_union.then(|| c.type_(t).types().to_vec());
+    (is_union
+        && contains_intersections
+        && constituents.is_some_and(|cs| cs.into_iter().any(|u| is_generic_reducible_type(c, u))))
+        || (is_intersection && is_reducible_intersection(c, t))
 }
 
 /// Go: `func (c *Checker) isReducibleIntersection(t) bool` (checker.go:25486)
 /// — composed over the S7 instantiateType/getReducedType seams (identity
 /// ⇒ never reducible until the instantiation engine lands).
+#[allow(dead_code)] // the S7 reduce* engine consumes it
 pub(crate) fn is_reducible_intersection(c: &mut Checker, t: TypeId) -> bool {
     let unique_literal_filled_instantiation = {
         let existing = c
@@ -474,7 +512,7 @@ pub(crate) fn is_tuple_like_type(c: &mut Checker, t: TypeId) -> bool {
     }
     if is_array_like_type(c, t) {
         if let Some(length_type) = c.get_type_of_property_of_type(t, "length") {
-            return crate::relater::every_type(c, length_type, |t| {
+            return every_type_ex(c, length_type, |c, t| {
                 c.type_(t).flags.intersects(TypeFlags::NUMBER_LITERAL)
             });
         }
@@ -489,12 +527,10 @@ pub(crate) fn is_array_or_tuple_like_type(c: &mut Checker, t: TypeId) -> bool {
 }
 
 /// Go: `func (c *Checker) isArrayOrTupleOrIntersection(t) bool` (checker.go:24085).
+#[allow(dead_code)] // callers land with the iteration/spread waves
 pub(crate) fn is_array_or_tuple_or_intersection(c: &mut Checker, t: TypeId) -> bool {
     c.type_(t).flags.intersects(TypeFlags::INTERSECTION)
-        && c.type_(t)
-            .types()
-            .iter()
-            .all(|&u| crate::relater::is_array_or_tuple_type(c, u))
+        && every_type_ex(c, t, crate::relater::is_array_or_tuple_type)
 }
 
 /// Go: `func (c *Checker) getTupleElementType(t, index) *Type` (checker.go:24088).
@@ -508,10 +544,8 @@ pub(crate) fn get_tuple_element_type(
     if let Some(prop_type) = prop_type {
         return Some(prop_type);
     }
-    if crate::relater::every_type(c, t, |t| is_tuple_type(c, t)) {
-        let undefined_like_type = if c
-            .compiler_options
-            .no_unchecked_index_access()
+    if every_type_ex(c, t, |c, t| is_tuple_type(c, t)) {
+        let undefined_like_type = if c.compiler_options.no_unchecked_indexed_access == Tristate::TSTrue
         {
             Some(c.undefined_type())
         } else {
@@ -602,9 +636,9 @@ pub(crate) fn get_element_type_of_slice_of_tuple_type(
             c,
             element_types,
             if no_reductions {
-                crate::todo_shapes::UnionReduction::NONE
+                crate::todo_shapes::UnionReduction::None
             } else {
-                crate::todo_shapes::UnionReduction::LITERAL
+                crate::todo_shapes::UnionReduction::Literal
             },
             None,
             None,
@@ -630,7 +664,6 @@ pub(crate) fn get_rest_type_of_tuple_type(c: &mut Checker, t: TypeId) -> Option<
 
 /// Go: `type TupleNormalizer struct` (checker.go:23821).
 struct TupleNormalizer {
-    c: *mut Checker,
     types: Vec<TypeId>,
     infos: Vec<TupleElementInfo>,
     last_required_index: isize,
@@ -638,12 +671,9 @@ struct TupleNormalizer {
     last_optional_or_rest_index: isize,
 }
 
-// PORT: Go holds `c *Checker` in the normalizer and mutates the checker
-// freely; the raw-pointer field lets `normalize`/`add` keep Go's exact
-// structure without threading `&mut Checker` through every helper. The
-// pointer is dereferenced only while the normalizer is alive (no aliasing:
-// nothing else borrows the checker inside the scope), mirroring the
-// established §5.4 arena idiom.
+// PORT: Go holds `c *Checker` inside the normalizer and mutates it freely;
+// the crate forbids `unsafe`, so `&mut Checker` threads through
+// `normalize_worker`/`add` instead — the control flow stays Go-identical.
 impl TupleNormalizer {
     /// Go: `func (n *TupleNormalizer) normalize(c, elementTypes, elementInfos) bool`.
     fn normalize(
@@ -652,14 +682,13 @@ impl TupleNormalizer {
         element_infos: &[TupleElementInfo],
     ) -> Option<(Vec<TypeId>, Vec<TupleElementInfo>)> {
         let mut n = TupleNormalizer {
-            c: c as *mut Checker,
             types: Vec::new(),
             infos: Vec::new(),
             last_required_index: -1,
             first_rest_index: -1,
             last_optional_or_rest_index: -1,
         };
-        if !n.normalize_worker(element_types, element_infos) {
+        if !n.normalize_worker(c, element_types, element_infos) {
             return None;
         }
         Some((n.types, n.infos))
@@ -667,15 +696,16 @@ impl TupleNormalizer {
 
     fn normalize_worker(
         &mut self,
+        c: &mut Checker,
         element_types: &[TypeId],
         element_infos: &[TupleElementInfo],
     ) -> bool {
-        let c: &mut Checker = unsafe { &mut *self.c };
         for (i, &t) in element_types.iter().enumerate() {
-            let info = element_infos[i];
+            let info = element_infos[i].clone();
             if info.flags.intersects(ElementFlags::VARIADIC) {
                 if c.type_(t).flags.intersects(TypeFlags::ANY) {
                     self.add(
+                        c,
                         t,
                         TupleElementInfo {
                             flags: ElementFlags::REST,
@@ -688,16 +718,17 @@ impl TupleNormalizer {
                     || crate::relater::is_generic_mapped_type(c, t)
                 {
                     // Generic variadic elements stay as they are.
-                    self.add(t, info);
+                    self.add(c, t, info);
                 } else if is_tuple_type(c, t) {
-                    let spread_types = get_element_types(c, t);
+                    let spread_types = c.get_element_types(t);
                     if spread_types.len() + self.types.len() >= 10_000 {
-                        let message = if u::is_part_of_type_node(c.store(), c.current_node) {
+                        let current_node = c.current_node.expect("currentNode");
+                        let message = if u::is_part_of_type_node(c.store(), current_node) {
                             &diag::TYPE_PRODUCES_A_TUPLE_TYPE_THAT_IS_TOO_LARGE_TO_REPRESENT
                         } else {
                             &diag::EXPRESSION_PRODUCES_A_TUPLE_TYPE_THAT_IS_TOO_LARGE_TO_REPRESENT
                         };
-                        c.error(c.current_node, message, &[]);
+                        c.error(current_node, message, &[]);
                         return false;
                     }
                     // Spread variadic elements with tuple types into the
@@ -710,18 +741,20 @@ impl TupleNormalizer {
                         })
                         .unwrap_or_default();
                     for (j, s) in spread_types.iter().enumerate() {
-                        self.add(*s, spread_infos[j].clone());
+                        self.add(c, *s, spread_infos[j].clone());
                     }
                 } else {
                     // Treat everything else as an array type and create a rest
                     // element.
+                    let number_type = c.number_type();
                     let s = if is_array_like_type(c, t) {
-                        c.get_index_type_of_type(t, c.number_type())
+                        c.get_index_type_of_type(t, number_type)
                     } else {
                         None
                     };
                     let s = s.unwrap_or_else(|| c.error_type());
                     self.add(
+                        c,
                         s,
                         TupleElementInfo {
                             flags: ElementFlags::REST,
@@ -731,7 +764,7 @@ impl TupleNormalizer {
                 }
             } else {
                 // Copy other element kinds with no change.
-                self.add(t, info);
+                self.add(c, t, info);
             }
         }
         // Turn optional elements preceding the last required element into
@@ -744,11 +777,12 @@ impl TupleNormalizer {
         if self.first_rest_index >= 0 && self.first_rest_index < self.last_optional_or_rest_index {
             // Turn elements between first rest and last optional/rest into a
             // single rest element
+            let number_type = c.number_type();
             let mut types = Vec::new();
             for i in self.first_rest_index as usize..=(self.last_optional_or_rest_index as usize) {
                 let mut t = self.types[i];
                 if self.infos[i].flags.intersects(ElementFlags::VARIADIC) {
-                    t = c.get_indexed_access_type(t, c.number_type());
+                    t = c.get_indexed_access_type(t, number_type);
                 }
                 types.push(t);
             }
@@ -763,7 +797,7 @@ impl TupleNormalizer {
     }
 
     /// Go: `func (n *TupleNormalizer) add(t, info)`.
-    fn add(&mut self, t: TypeId, info: TupleElementInfo) {
+    fn add(&mut self, c: &mut Checker, t: TypeId, info: TupleElementInfo) {
         if info.flags.intersects(ElementFlags::REQUIRED) {
             self.last_required_index = self.types.len() as isize;
         }
@@ -773,7 +807,6 @@ impl TupleNormalizer {
         if info.flags.intersects(ElementFlags::OPTIONAL.union(ElementFlags::REST)) {
             self.last_optional_or_rest_index = self.types.len() as isize;
         }
-        let c: &mut Checker = unsafe { &mut *self.c };
         let optional = info.flags.intersects(ElementFlags::OPTIONAL);
         self.types
             .push(crate::relater::add_optionality_ex(c, t, true /*isProperty*/, optional));
@@ -933,7 +966,13 @@ impl Checker {
                         .expect("MappedTypeNode data")
                         .name_type
                         .is_none()
-                    && node == self.store().node(parent).type_.unwrap_or(NodeId::NONE)
+                    && self
+                        .store()
+                        .node(parent)
+                        .as_mapped_type_node()
+                        .expect("MappedTypeNode data")
+                        .type_
+                        == Some(node)
                 {
                     let mapped_type = self.get_type_from_type_node(parent);
                     // Go: getTypeParameterFromMappedType(mappedType) ==
@@ -952,8 +991,8 @@ impl Checker {
                         if let Some(type_parameter) = type_parameter {
                             let constraint = self.get_constraint_of_type_parameter(type_parameter);
                             if let Some(constraint) = constraint
-                                && crate::relater::every_type(self, constraint, |ct| {
-                                    crate::relater::is_array_or_tuple_type(self, ct)
+                                && every_type_ex(self, constraint, |c, ct| {
+                                    crate::relater::is_array_or_tuple_type(c, ct)
                                 })
                             {
                                 // Go: getUnionType([numberType, numericStringType]).
@@ -1034,7 +1073,7 @@ impl Checker {
                     let body = binder_node_data::body_of(self.store(), container);
                     let in_constructor_body = self.store().node(container).kind
                         != Kind::Constructor
-                        || (body.is_some() && u::is_node_descendant_of(self.store(), node, body));
+                        || body.is_some_and(|b| u::is_node_descendant_of(self.store(), node, b));
                     if !is_static && in_constructor_body {
                         let symbol = self
                             .get_symbol_of_declaration(parent)
@@ -1096,8 +1135,8 @@ impl Checker {
         }
         self.program_symbol(symbol)
             .members
-            .iter()
-            .map(|(k, &v)| (k.clone(), v))
+            .entries()
+            .map(|(k, v)| (k.clone(), *v))
             .collect()
     }
 
@@ -1137,7 +1176,7 @@ impl Checker {
                 let d = self
                     .store()
                     .node(node)
-                    .as_indexed_access_type()
+                    .as_indexed_access_type_node()
                     .expect("IndexedAccessTypeNode data");
                 (d.object_type, d.index_type)
             };
@@ -1245,7 +1284,7 @@ impl Checker {
                 let is_const_assertion = u::is_const_type_reference(self.store(), node)
                     && matches!(
                         self.store().node(parent).kind,
-                        Kind::TypeAssertion | Kind::AsExpression
+                        Kind::TypeAssertionExpression | Kind::AsExpression
                     );
                 if is_const_assertion {
                     let expr = crate::ast_shims::expression_of(self.store(), parent)
@@ -1418,7 +1457,6 @@ impl Checker {
             // If the promised type is itself a promise, get the underlying
             // type; otherwise, fallback to the promised type.
             // TODO(port M6 S9): getAwaitedTypeNoAlias(unwrapAwaitedType(...)).
-            let promised_type = promised_type;
             return self.create_type_reference(global_promise_type, vec![promised_type]);
         }
         self.unknown_type()
@@ -1521,7 +1559,7 @@ impl Checker {
             if let Some(&result) = self.unresolved_symbols.get(&path) {
                 return result;
             }
-            let result = self.new_symbol_ex(SymbolFlags::TYPE_ALIAS, &text, crate::types::CheckFlags::UNRESOLVED);
+            let result = self.new_symbol_ex(SymbolFlags::TYPE_ALIAS, &text, CheckFlags::UNRESOLVED);
             self.program_symbol_mut(result).parent = parent_symbol;
             self.unresolved_symbols.insert(path, result);
             let unresolved = self.unresolved_type();
@@ -1786,7 +1824,7 @@ impl Checker {
                     let d = self
                         .store()
                         .node(node)
-                        .as_indexed_access_type()
+                        .as_indexed_access_type_node()
                         .expect("IndexedAccessTypeNode data");
                     (d.object_type, d.index_type)
                 };
@@ -1984,7 +2022,7 @@ impl Checker {
         if self
             .program_symbol(symbol)
             .check_flags
-            .intersects(crate::types::CheckFlags::UNRESOLVED)
+            .intersects(CheckFlags::UNRESOLVED)
         {
             let type_arguments: Vec<TypeId> = type_arguments
                 .iter()
@@ -2069,9 +2107,10 @@ impl Checker {
                     type_arguments: alias_type_arguments,
                 })
             });
+            let type_arguments = self.get_type_arguments_from_node(node);
             return self.get_type_alias_instantiation(
                 symbol,
-                self.get_type_arguments_from_node(node),
+                type_arguments,
                 new_alias,
             );
         }
@@ -2433,7 +2472,7 @@ impl Checker {
             let t = crate::relater::get_union_type_ex(
                 self,
                 types,
-                crate::todo_shapes::UnionReduction::LITERAL,
+                crate::todo_shapes::UnionReduction::Literal,
                 alias,
                 None,
             );
@@ -2504,7 +2543,7 @@ impl Checker {
                     .expect("TemplateLiteralTypeNode data");
                 (d.head, d.template_spans.clone())
             };
-            let spans: Vec<NodeId> = spans.map(|l| l.nodes).unwrap_or_default();
+            let spans: Vec<NodeId> = spans.map(|l| l.nodes.to_vec()).unwrap_or_default();
             let mut texts: Vec<String> = Vec::with_capacity(spans.len() + 1);
             let mut types: Vec<TypeId> = Vec::with_capacity(spans.len());
             texts.push(self.store().node(head).as_template_head().expect("TemplateHead data").text.to_string());
@@ -2758,8 +2797,8 @@ impl Checker {
                     // the symbol, which differs slightly from the exports
                     // lookup process that only looks up namespace members
                     // which is used for most type references.
-                    let merged_resolved_symbol =
-                        self.get_merged_symbol(self.resolve_symbol(current_namespace));
+                    let resolved_symbol = self.resolve_symbol(current_namespace);
+                    let merged_resolved_symbol = self.get_merged_symbol(resolved_symbol);
                     let mut symbol_from_variable: Option<SymbolId> = None;
                     let mut symbol_from_module: Option<SymbolId> = None;
                     if is_type_of {
@@ -2767,26 +2806,19 @@ impl Checker {
                         // includeTypeOnlyMembers form; the plain property
                         // lookup is the seam read.
                         if let Some(type_of_symbol) = self.get_type_of_symbol_opt(merged_resolved_symbol) {
-                            symbol_from_variable = self.get_property_of_type(
-                                type_of_symbol,
-                                tsc_ast::node_text(self.store(), *current),
-                            );
+                            let name = tsc_ast::node_text(self.store(), *current).to_string();
+                            symbol_from_variable = self.get_property_of_type(type_of_symbol, &name);
                         }
                     } else {
-                        symbol_from_module = self
+                        let name = tsc_ast::node_text(self.store(), *current).to_string();
+                        let found: Option<SymbolId> = self
                             .get_members_of_symbol(merged_resolved_symbol)
-                            .iter()
-                            .find(|(name, _)| name == tsc_ast::node_text(self.store(), *current))
-                            .and_then(|(name, symbol)| {
-                                let sym = *symbol;
-                                let _ = name;
-                                // Go: c.getSymbol(exports, name, meaning)
-                                if self.get_symbol_flags(sym).intersects(meaning) {
-                                    Some(sym)
-                                } else {
-                                    None
-                                }
-                            });
+                            .into_iter()
+                            .find(|(member_name, _)| member_name == &name)
+                            .map(|(_, symbol)| symbol);
+                        // Go: c.getSymbol(exports, name, meaning)
+                        symbol_from_module = found
+                            .filter(|&sym| self.get_symbol_flags(sym).intersects(meaning));
                         if symbol_from_module.is_none() {
                             // A CommonJS module might have typedefs exported
                             // alongside an export= — the S6 immediate-module
@@ -2988,13 +3020,13 @@ impl Checker {
             .filter(|e| e.flags.intersects(ElementFlags::REQUIRED.union(ElementFlags::VARIADIC)))
             .count();
         let mut type_parameters: Vec<TypeId> = Vec::with_capacity(arity);
-        let mut members = types::SymbolTable::new();
+        let mut members = tsc_ast::SymbolTable::new();
         let mut combined_flags = ElementFlags::NONE;
         if arity != 0 {
-            for i in 0..arity {
+            for (i, info) in element_infos.iter().enumerate() {
                 let type_parameter = self.new_type_parameter(None);
                 type_parameters.push(type_parameter);
-                let flags = element_infos[i].flags;
+                let flags = info.flags;
                 combined_flags |= flags;
                 if !combined_flags.intersects(ElementFlags::VARIABLE) {
                     let mut symbol_flags =
@@ -3003,9 +3035,9 @@ impl Checker {
                         symbol_flags = SymbolFlags::PROPERTY;
                     }
                     let check_flags = if readonly {
-                        crate::types::CheckFlags::READONLY
+                        CheckFlags::READONLY
                     } else {
-                        crate::types::CheckFlags::NONE
+                        CheckFlags::NONE
                     };
                     let property = self.new_symbol_ex(symbol_flags, &i.to_string(), check_flags);
                     self.value_symbol_links.get(property).resolved_type = Some(type_parameter);
@@ -3013,14 +3045,14 @@ impl Checker {
                 }
             }
         }
-        let fixed_length = members.len();
+        let fixed_length = members.size();
         let length_symbol = self.new_symbol_ex(
             SymbolFlags::PROPERTY,
             "length",
             if readonly {
-                crate::types::CheckFlags::READONLY
+                CheckFlags::READONLY
             } else {
-                crate::types::CheckFlags::NONE
+                CheckFlags::NONE
             },
         );
         if combined_flags.intersects(ElementFlags::VARIABLE) {
@@ -3129,7 +3161,9 @@ impl Checker {
         &mut self,
         type_arguments: &[TypeId],
         type_parameters: &[TypeId],
-        min_type_argument_count: usize,
+        // PORT: Go's parameter is unused in the body (checker.go:22412) —
+        // the `_` spelling is the faithful mirror.
+        _min_type_argument_count: usize,
         is_java_script_implicit_any: bool,
     ) -> Vec<TypeId> {
         let num_type_parameters = type_parameters.len();
@@ -3171,13 +3205,14 @@ impl Checker {
         self.unknown_type()
     }
 
-    /// Go: `func (c *Checker) getDefaultFromTypeParameter(t) *Type` (checker.go:22446).
-    fn get_default_from_type_parameter(&mut self, t: TypeId) -> Option<TypeId> {
+    /// Go: `func (c *Checker) getDefaultFromTypeParameter(t) *Type` (checker.go:22446)
+    /// — REAL body (the pub-API twin; the exports.rs stub was removed).
+    pub fn get_default_from_type_parameter(&mut self, t: TypeId) -> Option<TypeId> {
         if !self.type_(t).flags.intersects(TypeFlags::TYPE_PARAMETER) {
             return None;
         }
         let default_type = self.get_resolved_type_parameter_default(t);
-        if default_type != self.no_constraint_type && default_type != self.circular_constraint_type {
+        if default_type != self.no_constraint_type() && default_type != self.circular_constraint_type() {
             return Some(default_type);
         }
         None
@@ -3196,18 +3231,22 @@ impl Checker {
         };
         if resolved_default_type.is_none() {
             if let Some(target) = target {
+                // Go: instantiate the target's resolved default through
+                // the type-parameter's mapper; a nil default (the port's
+                // noConstraintType sentinel) maps to noConstraintType.
                 let target_default = self.get_resolved_type_parameter_default(target);
-                if let Some(mapper) = mapper {
-                    let instantiated = self.instantiate_type(target_default, mapper);
-                    if let Some(d) = self.type_mut(t).as_type_parameter_mut() {
-                        d.resolved_default_type = Some(instantiated);
+                let no_constraint = self.no_constraint_type();
+                let resolved = if target_default != no_constraint {
+                    match mapper {
+                        Some(mapper) => self.instantiate_type(target_default, mapper),
+                        // Go: instantiateType(t, nil) is the identity.
+                        None => target_default,
                     }
                 } else {
-                    // Go: an unresolvable default maps to noConstraintType.
-                    let nc = self.no_constraint_type();
-                    if let Some(d) = self.type_mut(t).as_type_parameter_mut() {
-                        d.resolved_default_type = Some(nc);
-                    }
+                    no_constraint
+                };
+                if let Some(d) = self.type_mut(t).as_type_parameter_mut() {
+                    d.resolved_default_type = Some(resolved);
                 }
             } else {
                 // To block recursion, set the initial value to the
@@ -3310,9 +3349,3 @@ fn is_local_type_alias(c: &mut Checker, symbol: SymbolId) -> bool {
     declaration.is_some_and(|d| u::get_containing_function(c.store(), d).is_some())
 }
 
-/// Go: `func (c *Checker) getElementTypes(t) []*Type` — the free-fn form the
-/// TupleNormalizer uses (Go calls the method; the free shape avoids the
-/// `&mut` reborrow inside the normalizer's unsafe scope).
-fn get_element_types(c: &mut Checker, t: TypeId) -> Vec<TypeId> {
-    c.get_element_types(t)
-}
