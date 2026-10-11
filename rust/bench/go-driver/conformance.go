@@ -1237,6 +1237,22 @@ func confSemanticDiagnosticsOfUnit(unitName, content string, config *tsoptions.P
 	fileChecker, _ := checker.NewChecker(program, nil)
 	diags := fileChecker.GetDiagnostics(context.Background(), files[0])
 	diags = append(diags, fileChecker.GetGlobalDiagnostics()...)
+	// W3T7 PROBE (temporary): print each diagnostic's pos/end + the text
+	// slice, gated on W3T7PROBE (2703 span divergence bisect).
+	if os.Getenv("W3T7PROBE") != "" && strings.Contains(unitName, "await_unary") {
+		for _, d := range diags {
+			pos, end := int(d.Pos()), int(d.End())
+			lo, hi := pos, end
+			if lo > len(content) {
+				lo = len(content)
+			}
+			if hi > len(content) {
+				hi = len(content)
+			}
+			fmt.Fprintf(os.Stderr, "w3t7probe-go file=%s code=%d pos=%d end=%d text=%q\n",
+				unitName, d.Code(), pos, end, content[lo:hi])
+		}
+	}
 	return diags
 }
 
