@@ -1,0 +1,28 @@
+rust/crates/checker/src/expressions.rs
+  s_892629877855c7::t_0c077c434deedb 2400-2402,2413
+  s_892629877855c7::t_e159ac43c2fd06 2406-2411
+  s_892629877855c7::t_436535f21d63db 2403
+  s_892629877855c7::t_486770c60b6152 2404
+  s_892629877855c7::t_b89fbb9e0b0f03 2405,2412
+rust/bench/go-driver/conformance.go
+  s_892629877855c7::t_6d83aba8e2b1cc 1245
+  s_892629877855c7::t_ecd569ba298d71 1243
+  s_892629877855c7::t_696710e96c28f8 1247
+  s_892629877855c7::t_5bf29280b5f4d2 1244,1246,1248
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "826a7c8693e87fe0f3c4f6a2d2f679ac62eb8a69",
+  "prompts": {},
+  "sessions": {
+    "s_892629877855c7": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "65473163-6e1c-4c85-a37e-15d0274087bf",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
