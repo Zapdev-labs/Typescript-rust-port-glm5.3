@@ -1530,10 +1530,19 @@ impl Checker {
                 crate::types::SignatureKind::Construct,
             );
         }
-        // Go: the assertion arm returns getTypeFromTypeNode(expr.Type()) —
-        // TODO(port M6 S5): the type-node family; skipped (None) so the
-        // quick path stays transparent until getTypeFromTypeNode is real.
-        let _ = kind;
+        // Go: the assertion arm returns getTypeFromTypeNode(expr.Type())
+        // (checker.go:7582) — M6 S5 wires it now that the type-node family
+        // is real.
+        if matches!(kind, Kind::TypeAssertion | Kind::AsExpression)
+            && !u::is_const_type_reference(
+                self.store(),
+                crate::ast_shims::type_of_node(self.store(), expr).unwrap_or(NodeId::NONE),
+            )
+        {
+            let type_node = crate::ast_shims::type_of_node(self.store(), expr)
+                .expect("assertion expressions carry a type");
+            return Some(self.get_type_from_type_node(type_node));
+        }
         let n = self.store().node(node);
         if binder_shims::is_literal_expression(n) || binder_shims::is_boolean_literal(n) {
             return Some(self.check_expression(node));

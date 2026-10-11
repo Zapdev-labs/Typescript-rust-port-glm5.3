@@ -646,26 +646,11 @@ impl Checker {
     /// Go: `func (c *Checker) FillMissingTypeArguments(typeArguments []*Type, typeParameters []*Type, minTypeArgumentCount int, isJavaScriptImplicitAny bool) []*Type`
     /// → `c.fillMissingTypeArguments(...)` (checker.go — S6). The unchanged
     /// argument list is the permissive value (no filling).
-    #[allow(clippy::too_many_arguments)]
-    pub fn fill_missing_type_arguments(
-        &mut self,
-        type_arguments: &[TypeId],
-        type_parameters: &[TypeId],
-        min_type_argument_count: usize,
-        is_java_script_implicit_any: bool,
-    ) -> Vec<TypeId> {
-        // TODO(port M6 S6): the wildcard/any padding.
-        let _ = (type_parameters, min_type_argument_count, is_java_script_implicit_any);
-        type_arguments.to_vec()
-    }
-
-    /// Go: `func (c *Checker) GetMinTypeArgumentCount(typeParameters []*Type) int`
-    /// → `c.getMinTypeArgumentCount(typeParameters)` (checker.go:22397 — S7).
-    /// The full count is the permissive value (every argument required).
-    pub fn get_min_type_argument_count(&self, type_parameters: &[TypeId]) -> usize {
-        // TODO(port M6 S7): the optional/rest prefix count.
-        type_parameters.len()
-    }
+    // (M6 S5): `FillMissingTypeArguments`/`GetMinTypeArgumentCount` MOVED —
+    // the REAL bodies (the defaults-aware machinery, checker.go:22392–22510)
+    // live in typenodes.rs as `fill_missing_type_arguments` /
+    // `get_min_type_argument_count` (same signatures; the pub API surface is
+    // preserved through them).
 
     /// Go: `func (c *Checker) GetWidenedLiteralType(t *Type) *Type` →
     /// `c.getWidenedLiteralType(t)` (checker.go — S9). COLLAPSED PAIR: the

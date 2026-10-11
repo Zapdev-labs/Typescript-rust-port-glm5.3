@@ -521,6 +521,23 @@ pub struct Checker {
     /// Go: `moduleImportAttributesTypes map[*ast.Symbol]*Type` — the
     /// module-attributes cache getTypeOfModuleImportAttributes reads.
     pub(crate) module_import_attributes_types: FxHashMap<SymbolId, TypeId>,
+    // ── M6 S5 (typenodes.rs): the type-node family's state ──
+    /// Go: `errorTypes map[CacheHashKey]*Type` (checker.go:24130 region —
+    /// the unresolved-alias error types getTypeFromTypeAliasReference caches).
+    pub(crate) error_types: FxHashMap<crate::todo_shapes::CacheHashKey, TypeId>,
+    /// Go: `uniqueESSymbolTypes map[*ast.Symbol]*Type` (checker.go:23457's
+    /// getESSymbolLikeTypeForNode cache).
+    pub(crate) unique_essymbol_types: FxHashMap<SymbolId, TypeId>,
+    /// Go: `tupleTypes map[CacheHashKey]*Type` (checker.go:25312's
+    /// getTupleTargetType cache).
+    pub(crate) tuple_types: FxHashMap<crate::todo_shapes::CacheHashKey, TypeId>,
+    /// Go: `unresolvedSymbols map[string]*ast.Symbol` (checker.go:23632's
+    /// getUnresolvedSymbolForEntityName path-keyed table).
+    pub(crate) unresolved_symbols: FxHashMap<String, SymbolId>,
+    /// Go: `resolvingDefaultType *Type` (checker.go:1042 region — the
+    /// recursion sentinel getResolvedTypeParameterDefault marks in-flight
+    /// defaults with).
+    pub(crate) resolving_default_type: Option<TypeId>,
 }
 
 /// Go: `func createFileIndexMap(files []*ast.SourceFile) map[*ast.SourceFile]int`.
@@ -1235,25 +1252,26 @@ impl Checker {
         contains_arguments
     }
 
-    /// Go: `func (c *Checker) isArrayType(t *Type) bool` (checker.go:24005 —
-    /// needs the global array types, S7). Permissive W1 stub: false.
+    /// Go: `func (c *Checker) isArrayType(t *Type) bool` (checker.go:24005)
+    /// — REAL body (M6 S5; the type-node family's array/tuple predicate
+    /// block). A type is an array type if it is a reference to the global
+    /// Array or global ReadonlyArray type.
     #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
     pub(crate) fn is_array_type(&self, t: TypeId) -> bool {
-        // TODO(port M6 S7): t.objectFlags&Reference && target is globalArrayType/ReadonlyArrayType.
-        let _ = t;
-        false
+        self.type_(t).object_flags.intersects(ObjectFlags::REFERENCE)
+            && self
+                .type_(t)
+                .target()
+                .is_some_and(|target| {
+                    Some(target) == self.global_array_type
+                        || Some(target) == self.global_readonly_array_type
+                })
     }
 
-    /// Go: `func (c *Checker) getTypeFromTypeNode(node *ast.Node) *Type`
-    /// (checker.go:23295 — S5). Obvious-error W1 stub: `errorType`
-    /// (jsdoc.go's `arguments`-matching arm is the only W1 caller, and it is
-    /// itself gated by the `containsArgumentsReference` stub).
-    #[allow(dead_code)] // W1 periphery surface — the S-wave consumers land with M6
-    pub(crate) fn get_type_from_type_node(&mut self, node: NodeId) -> TypeId {
-        // TODO(port M6 S5): the type-node resolution family.
-        let _ = node;
-        self.error_type()
-    }
+    // (M6 S5): `getTypeFromTypeNode` (checker.go:23295) MOVED — the real
+    // body + the whole getTypeFrom*TypeNode family lives in
+    // typenodes.rs (the one-.rs-per-region split; this stub was the
+    // errorType placeholder the pre-S5 waves called).
 
     // ────────────────────────────────────────────────────────────────────────
     // The activeMappers stack (Go checker.go 22634–22666 — landed with the
@@ -1532,6 +1550,11 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         iteration_types_cache: FxHashMap::default(),
         merged_exports_checked: FxHashSet::default(),
         module_import_attributes_types: FxHashMap::default(),
+        error_types: FxHashMap::default(),
+        unique_essymbol_types: FxHashMap::default(),
+        tuple_types: FxHashMap::default(),
+        unresolved_symbols: FxHashMap::default(),
+        resolving_default_type: None,
     };
 
     // Go: countGlobalSymbols sizes the globals table — a capacity hint; the
@@ -1661,6 +1684,9 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     // the no-constraint/circular-constraint sentinels.
     c.no_constraint_type = Some(c.new_anonymous_type(None, &[]));
     c.circular_constraint_type = Some(c.new_anonymous_type(None, &[]));
+    // M6 S5: Go's `c.resolvingDefaultType = c.newAnonymousType(nil, nil, nil, nil, nil)`
+    // (checker.go:1044) — the recursion sentinel for type-parameter defaults.
+    c.resolving_default_type = Some(c.new_anonymous_type(None, &[]));
     let number_type = c.number_type.expect("just created");
     let string_type = c.string_type.expect("just created");
     let any_type = c.any_type.expect("just created");

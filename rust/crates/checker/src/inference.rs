@@ -2811,7 +2811,7 @@ fn is_no_infer_type(c: &Checker, t: TypeId) -> bool {
 }
 
 /// Go: `func (c *Checker) getActualTypeVariable(t) *Type`.
-fn get_actual_type_variable(c: &mut Checker, t: TypeId) -> TypeId {
+pub(crate) fn get_actual_type_variable(c: &mut Checker, t: TypeId) -> TypeId {
     // TODO(port M6 S7): the indexed-access/substitution unwrapping
     // (getSimplifiedType's variable exposure); permissive identity.
     let _ = c;
@@ -2924,27 +2924,9 @@ impl Checker {
     }
 }
 
-/// Go: `func (c *Checker) getElementTypes(t) []*Type`.
-fn get_element_types(c: &mut Checker, t: TypeId) -> Vec<TypeId> {
-    // TODO(port M6 S7): the tuple element-type reader (TargetTupleType
-    // elementInfos walk); permissive the type arguments.
-    get_type_arguments(c, t)
-}
-
-/// Go: `func (c *Checker) getElementTypeOfSliceOfTupleType(t, index, endSkipCount, writing, noReductions) *Type`.
-#[allow(clippy::too_many_arguments)]
-fn get_element_type_of_slice_of_tuple_type_helper(
-    c: &mut Checker,
-    t: TypeId,
-    index: usize,
-    end_skip_count: usize,
-    _writing: bool,
-    _no_reductions: bool,
-) -> Option<TypeId> {
-    // TODO(port M6 S7): the slice union construction; permissive None.
-    let _ = (c, t, index, end_skip_count);
-    None
-}
+// (M6 S5): `getElementTypes` and `getElementTypeOfSliceOfTupleType` MOVED —
+// the REAL bodies live in typenodes.rs (checker.go:23990/25347); the
+// inference engine's call sites resolve through the Checker methods.
 
 /// Go: `func (c *Checker) isObjectTypeWithInferableIndex(t) bool` — the
 /// relater.rs free fn (re-exported for the engine's call shape).
@@ -3068,7 +3050,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getActualTypeVariable(t) *Type`.
-    fn get_actual_type_variable(&mut self, t: TypeId) -> TypeId {
+    pub(crate) fn get_actual_type_variable(&mut self, t: TypeId) -> TypeId {
         get_actual_type_variable(self, t)
     }
 
@@ -3103,11 +3085,6 @@ impl Checker {
         is_skip_direct_inference_node_for_symbol(self, symbol)
     }
 
-    /// Go: `func (c *Checker) getElementTypes(t) []*Type`.
-    fn get_element_types(&mut self, t: TypeId) -> Vec<TypeId> {
-        get_element_types(self, t)
-    }
-
     /// Go: `c.parseBigIntLiteralType(str)`.
     fn parse_bigint_literal_type(&mut self, s: &str) -> TypeId {
         parse_bigint_literal_type(self, s)
@@ -3132,7 +3109,9 @@ impl Checker {
         writing: bool,
         no_reductions: bool,
     ) -> Option<TypeId> {
-        get_element_type_of_slice_of_tuple_type_helper(self, t, index, end_skip_count, writing, no_reductions)
+        crate::typenodes::get_element_type_of_slice_of_tuple_type(
+            self, t, index, end_skip_count, writing, no_reductions,
+        )
     }
 
     /// Go: `func (c *Checker) isObjectTypeWithInferableIndex(t) bool`.

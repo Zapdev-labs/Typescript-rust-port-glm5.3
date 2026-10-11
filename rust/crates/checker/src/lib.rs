@@ -130,6 +130,7 @@ pub mod statements;
 pub mod stringer_generated;
 pub mod symboltracker;
 pub mod todo_shapes;
+pub mod typenodes;
 pub mod typeofsymbol;
 pub mod tracer;
 pub mod tracing;

@@ -1917,8 +1917,11 @@ impl Checker {
         index_type: TypeId,
         access_flags: AccessFlags,
         access_node: Option<NodeId>,
+        potential_alias: Option<Box<crate::types::TypeAlias>>,
     ) -> TypeId {
-        let _ = (access_flags, access_node);
+        // M6 S5: the potentialAlias parameter (Go checker.go:23425's call)
+        // rides through to the S10 constructor seam.
+        let _ = (access_flags, access_node, potential_alias);
         crate::relater::get_indexed_access_type(self, object_type, index_type)
     }
 
@@ -2550,6 +2553,7 @@ impl Checker {
                         index_type,
                         access_flags,
                         Some(name),
+                        None,
                     );
                     t = self.get_flow_type_of_destructuring(declaration, declared_type);
                 }
@@ -4201,7 +4205,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) newTypeParameter(symbol)` (checker.go:25702).
-    fn new_type_parameter(&mut self, symbol: Option<SymbolId>) -> TypeId {
+    pub(crate) fn new_type_parameter(&mut self, symbol: Option<SymbolId>) -> TypeId {
         let t = self.new_type(
             TypeFlags::TYPE_PARAMETER,
             ObjectFlags::NONE,

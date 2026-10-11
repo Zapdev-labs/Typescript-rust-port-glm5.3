@@ -1814,6 +1814,7 @@ impl Checker {
                         crate::types::AccessFlags::NONE
                     },
                 Some(name),
+                None,
             );
             let t = self.get_flow_type_of_destructuring(property, element_type);
             let expr = if property_kind == Kind::PropertyAssignment {

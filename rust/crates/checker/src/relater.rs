@@ -7358,81 +7358,110 @@ pub(crate) fn is_empty_anonymous_object_type(c: &mut Checker, t: TypeId) -> bool
     false
 }
 
-/// Go: `func (c *Checker) isEmptyArrayLiteralType(t) bool`.
+/// Go: `func (c *Checker) isEmptyArrayLiteralType(t) bool` (checker.go:24054)
+/// — REAL (M6 S5).
 pub(crate) fn is_empty_array_literal_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7): the empty-array-literal marker on array types.
-    let _ = (c, t);
-    false
+    let element_type = get_element_type_of_array_type(c, t);
+    element_type.is_some_and(|element_type| is_empty_literal_type(c, element_type))
 }
 
-/// Go: `func (c *Checker) isArrayType(t) bool`.
+/// Go: `func (c *Checker) isEmptyLiteralType(t) bool` (checker.go:24060) —
+/// REAL (M6 S5).
+pub(crate) fn is_empty_literal_type(c: &Checker, t: TypeId) -> bool {
+    if c.strict_null_checks {
+        Some(t) == c.implicit_never_type
+    } else {
+        Some(t) == c.undefined_widening_type
+    }
+}
+
+/// Go: `func (c *Checker) isArrayType(t) bool` (checker.go:24005) — REAL
+/// (M6 S5; delegates to the Checker method over the seeded global array
+/// types).
 pub(crate) fn is_array_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7): the globalArrayType-target reference check.
-    let _ = (c, t);
-    false
+    c.is_array_type(t)
 }
 
-/// Go: `func (c *Checker) isReadonlyArrayType(t) bool`.
-pub(crate) fn is_readonly_array_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7): the globalReadonlyArrayType-target check.
-    let _ = (c, t);
-    false
+/// Go: `func (c *Checker) isReadonlyArrayType(t) bool` (checker.go:24011) —
+/// REAL (M6 S5).
+pub(crate) fn is_readonly_array_type(c: &Checker, t: TypeId) -> bool {
+    c.type_(t).object_flags.intersects(ObjectFlags::REFERENCE)
+        && c.type_(t).target() == c.global_readonly_array_type
 }
 
-/// Go: `func (c *Checker) isArrayOrTupleType(t) bool`.
+/// Go: `func (c *Checker) isArrayOrTupleType(t) bool` (checker.go:24027) —
+/// REAL (M6 S5).
 pub(crate) fn is_array_or_tuple_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7).
-    let _ = (c, t);
-    false
+    c.is_array_type(t) || crate::typenodes::is_tuple_type(c, t)
 }
 
-/// Go: `func (c *Checker) isMutableArrayOrTuple(t) bool`.
+/// Go: `func (c *Checker) isMutableArrayOrTuple(t) bool` (checker.go:24030) —
+/// REAL (M6 S5).
 pub(crate) fn is_mutable_array_or_tuple(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7).
-    let _ = (c, t);
-    false
+    (c.is_array_type(t) && !is_readonly_array_type(c, t))
+        || (crate::typenodes::is_tuple_type(c, t)
+            && !c.type_(t)
+                .target()
+                .and_then(|target| c.type_(target).as_tuple_type())
+                .is_some_and(|d| d.readonly))
 }
 
-/// Go: `func isMutableTupleType(t) bool`.
-pub(crate) fn is_mutable_tuple_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7).
-    let _ = (c, t);
-    false
+/// Go: `func isMutableTupleType(t) bool` (checker.go:24018) — REAL (M6 S5).
+pub(crate) fn is_mutable_tuple_type(c: &Checker, t: TypeId) -> bool {
+    crate::typenodes::is_mutable_tuple_type(c, t)
 }
 
-/// Go: `func isTupleType(t) bool`.
-pub(crate) fn is_tuple_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7): the instantiable-target-tuple check.
-    let _ = (c, t);
-    false
+/// Go: `func isTupleType(t) bool` (checker.go:24015) — REAL (M6 S5).
+pub(crate) fn is_tuple_type(c: &Checker, t: TypeId) -> bool {
+    crate::typenodes::is_tuple_type(c, t)
 }
 
-/// Go: `func isTupleLikeType(t) bool` (utilities.go).
-#[allow(dead_code)] // TODO(port M6 W2): Go-mirrored; callers land with inference.rs
+/// Go: `func isTupleLikeType(t) bool` (checker.go:24068) — REAL (M6 S5).
 pub(crate) fn is_tuple_like_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7).
-    let _ = (c, t);
-    false
+    crate::typenodes::is_tuple_like_type(c, t)
 }
 
-/// Go: `func (c *Checker) isArrayLikeType(t) bool`.
+/// Go: `func (c *Checker) isArrayLikeType(t) bool` (checker.go:24049) —
+/// REAL (M6 S5).
 pub(crate) fn is_array_like_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7).
-    let _ = (c, t);
-    false
+    crate::typenodes::is_array_like_type(c, t)
 }
 
-/// Go: `func (c *Checker) isGenericTupleType(t) bool`.
-pub(crate) fn is_generic_tuple_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7).
-    let _ = (c, t);
-    false
+/// Go: `func isGenericTupleType(t) bool` (checker.go:24021) — REAL (M6 S5).
+pub(crate) fn is_generic_tuple_type(c: &Checker, t: TypeId) -> bool {
+    crate::typenodes::is_generic_tuple_type(c, t)
 }
 
-/// Go: `func (c *Checker) isGenericMappedType(t) bool`.
+/// Go: `func (c *Checker) isGenericMappedType(t) bool` (checker.go:25471)
+/// — REAL (M6 S5; composed over the S8 constraint/nameType component seams).
 pub(crate) fn is_generic_mapped_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7): the contains-marker check on mapped types.
-    let _ = (c, t);
+    if c.type_(t).object_flags.intersects(ObjectFlags::MAPPED) {
+        let constraint = get_constraint_type_from_mapped_type(c, t);
+        // Go: c.isGenericIndexType(constraint) — the S8 constraint seam
+        // answers None until the mapped-type component resolution lands, in
+        // which case the whole probe rests.
+        if let Some(constraint) = constraint
+            && crate::typenodes::get_generic_object_flags(c, constraint)
+                .intersects(ObjectFlags::IS_GENERIC_INDEX_TYPE)
+        {
+            return true;
+        }
+        // A mapped type is generic if the 'as' clause references generic types
+        // other than the iteration type. To determine this, we substitute the
+        // constraint type (that we now know isn't generic) for the iteration
+        // type and check whether the resulting type is generic.
+        let name_type = get_name_type_from_mapped_type(c, t);
+        if let (Some(name_type), Some(constraint)) = (name_type, constraint) {
+            let type_parameter = get_type_parameter_from_mapped_type(c, t);
+            let mapper = new_simple_type_mapper(c, type_parameter, constraint);
+            let substituted = c.instantiate_type(name_type, mapper);
+            if crate::typenodes::get_generic_object_flags(c, substituted)
+                .intersects(ObjectFlags::IS_GENERIC_INDEX_TYPE)
+            {
+                return true;
+            }
+        }
+    }
     false
 }
 
@@ -7443,11 +7472,11 @@ pub(crate) fn is_partial_mapped_type(c: &mut Checker, t: TypeId) -> bool {
     false
 }
 
-/// Go: `func (c *Checker) isGenericObjectType(t) bool`.
+/// Go: `func (c *Checker) isGenericObjectType(t) bool` (checker.go:25489) —
+/// REAL (M6 S5).
 pub(crate) fn is_generic_object_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7): the containsGenericLocal check.
-    let _ = (c, t);
-    false
+    crate::typenodes::get_generic_object_flags(c, t)
+        .intersects(ObjectFlags::IS_GENERIC_OBJECT_TYPE)
 }
 
 /// Go: `func (c *Checker) isNonGenericObjectType(t) bool`.
@@ -7457,11 +7486,11 @@ pub(crate) fn is_non_generic_object_type(c: &mut Checker, t: TypeId) -> bool {
     false
 }
 
-/// Go: `func (c *Checker) isGenericIndexType(t) bool`.
+/// Go: `func (c *Checker) isGenericIndexType(t) bool` (checker.go:25492) —
+/// REAL (M6 S5).
 pub(crate) fn is_generic_index_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7).
-    let _ = (c, t);
-    false
+    crate::typenodes::get_generic_object_flags(c, t)
+        .intersects(ObjectFlags::IS_GENERIC_INDEX_TYPE)
 }
 
 /// Go: `func (c *Checker) isMappedTypeGenericIndexedAccess(t) bool`.
@@ -7484,11 +7513,10 @@ pub(crate) fn is_distributed_type_parameter(c: &Checker, t: TypeId) -> bool {
     false
 }
 
-/// Go: `func isSingleElementGenericTupleType(t) bool`.
-pub(crate) fn is_single_element_generic_tuple_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7): arity-1 tuple target with a generic element.
-    let _ = (c, t);
-    false
+/// Go: `func isSingleElementGenericTupleType(t) bool` (checker.go:24024) —
+/// REAL (M6 S5).
+pub(crate) fn is_single_element_generic_tuple_type(c: &Checker, t: TypeId) -> bool {
+    crate::typenodes::is_single_element_generic_tuple_type(c, t)
 }
 
 /// Go: `func isStaticPrivateIdentifierProperty(prop) bool`.
@@ -7940,29 +7968,26 @@ pub(crate) fn get_type_arguments(c: &Checker, t: TypeId) -> Vec<TypeId> {
         .unwrap_or_default()
 }
 
-/// Go: `func (c *Checker) getTypeReferenceArity(t) int`.
+/// Go: `func (c *Checker) getTypeReferenceArity(t) int` (checker.go:23995)
+/// — REAL (M6 S5): the arity is the target interface's type-parameter count.
 pub(crate) fn get_type_reference_arity(c: &Checker, t: TypeId) -> i32 {
-    get_type_arguments(c, t).len() as i32
+    c.type_(t)
+        .target()
+        .and_then(|target| c.type_(target).as_interface_type())
+        .map(|d| d.type_parameters().len() as i32)
+        .unwrap_or(0)
 }
 
-/// Go: `func (c *Checker) getMinTypeArgumentCount(typeParameters) int`.
+/// Go: `func (c *Checker) getMinTypeArgumentCount(typeParameters) int`
+/// (checker.go:22397) — REAL (M6 S5; delegates to the defaults-aware count).
 pub(crate) fn get_min_type_argument_count(c: &mut Checker, params: &[TypeId]) -> usize {
-    // TODO(port M6 S9): the defaults-aware minimum.
-    let _ = c;
-    params.len()
+    c.get_min_type_argument_count(params)
 }
 
-/// Go: `func (c *Checker) fillMissingTypeArguments(typeArguments, typeParameters, minTypeArgumentCount, includeEmptyArray) []*Type`.
-pub(crate) fn fill_missing_type_arguments(c: &mut Checker, type_arguments: &[TypeId], _params: &[TypeId], min_type_argument_count: usize, _include_empty_array: bool) -> Vec<TypeId> {
-    // TODO(port M6 S7): the defaults-filling instantiation.
-    if type_arguments.len() >= min_type_argument_count {
-        return type_arguments.to_vec();
-    }
-    let mut filled = type_arguments.to_vec();
-    while filled.len() < min_type_argument_count {
-        filled.push(c.unknown_type());
-    }
-    filled
+/// Go: `func (c *Checker) fillMissingTypeArguments(typeArguments, typeParameters, minTypeArgumentCount, isJavaScriptImplicitAny) []*Type`
+/// (checker.go:22412) — REAL (M6 S5; delegates to the defaults-filling body).
+pub(crate) fn fill_missing_type_arguments(c: &mut Checker, type_arguments: &[TypeId], params: &[TypeId], min_type_argument_count: usize, include_empty_array: bool) -> Vec<TypeId> {
+    c.fill_missing_type_arguments(type_arguments, params, min_type_argument_count, include_empty_array)
 }
 
 /// Go: the typeAliasLinks `typeParameters` read.
@@ -8370,13 +8395,6 @@ impl Checker {
         target
     }
 
-    /// Go: `func (c *Checker) getTypeAliasInstantiation(alias, typeArguments) *Type`.
-    pub(crate) fn get_type_alias_instantiation(&mut self, symbol: SymbolId, type_arguments: Vec<TypeId>) -> TypeId {
-        // TODO(port M6 S7/W4): the alias instantiation.
-        let _ = (symbol, type_arguments);
-        self.error_type()
-    }
-
     /// Go: `func (c *Checker) TypeToString(t) string` (checker.go) — the
     /// W4-stub free fn, surfaced as the Go method form.
     pub(crate) fn type_to_string(&mut self, t: TypeId) -> String {
@@ -8418,10 +8436,12 @@ impl Checker {
         get_indexed_access_type(self, t, key)
     }
 
-    /// Go: `func (c *Checker) getElementTypeOfArrayType(t) *Type`.
+    /// Go: `func (c *Checker) getElementTypeOfArrayType(t) *Type`
+    /// (checker.go:24039) — REAL (M6 S5).
     pub(crate) fn get_element_type_of_array_type(&mut self, t: TypeId) -> Option<TypeId> {
-        // TODO(port M6 S7): the resolvedTypeArguments[0] read.
-        let _ = t;
+        if self.is_array_type(t) {
+            return get_type_arguments(self, t).first().copied();
+        }
         None
     }
 
@@ -8453,11 +8473,10 @@ impl Checker {
         t
     }
 
-    /// Go: `func (c *Checker) isGenericType(t) bool`.
+    /// Go: `func (c *Checker) isGenericType(t) bool` (checker.go:25486) —
+    /// REAL (M6 S5): `getGenericObjectFlags(t) != 0`.
     pub(crate) fn is_generic_type(&mut self, t: TypeId) -> bool {
-        // TODO(port M6 S7): the IS_GENERIC object-flags check.
-        let _ = t;
-        false
+        !crate::typenodes::get_generic_object_flags(self, t).is_empty()
     }
 
     /// Go: the predicate combiner's union/intersection construction.

@@ -5701,10 +5701,10 @@ impl Checker {
         if !relater::is_error_type(self, t) {
             let type_arguments = type_arguments_of(self.store(), node);
             if !type_arguments.is_empty() {
-                // TODO(port M6 S5): getTypeParametersForTypeReferenceOrImport
-                // — the type-parameter resolution seam; permissive empty
-                // (checkTypeArgumentConstraints rests).
-                let type_parameters: Vec<TypeId> = Vec::new();
+                // M6 S5: getTypeParametersForTypeReferenceOrImport (Go
+                // checker.go:17574) — the real type-parameter resolution for
+                // the constraint check (typenodes.rs).
+                let type_parameters = self.get_type_parameters_for_type_reference_or_import(node);
                 if !type_parameters.is_empty() {
                     self.check_type_argument_constraints(node, &type_parameters);
                 }
@@ -5730,15 +5730,10 @@ impl Checker {
             let constraint = self.get_constraint_of_type_parameter(type_parameter);
             if let Some(constraint) = constraint {
                 if type_arguments.is_none() {
-                    // TODO(port M6 S5): getEffectiveTypeArguments — the
-                    // deferred type-argument resolution; permissive: the
-                    // raw nodes' types via getTypeFromTypeNode.
-                    type_arguments = Some(
-                        type_argument_nodes
-                            .iter()
-                            .map(|&ta| self.get_type_from_type_node(ta))
-                            .collect(),
-                    );
+                    // M6 S5: getEffectiveTypeArguments (Go checker.go:22392)
+                    // — the real defaults-aware type-argument resolution
+                    // (typenodes.rs).
+                    type_arguments = Some(self.get_effective_type_arguments(node, type_parameters));
                     let args = type_arguments.clone().expect("checked");
                     mapper = Some(self.new_type_mapper(type_parameters, &args));
                 }
