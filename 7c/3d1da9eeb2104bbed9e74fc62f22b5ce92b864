@@ -1,0 +1,35 @@
+rust/crates/tsc-testrunner/src/compiler_runner.rs
+  s_892629877855c7::t_8c0cfe098d822e 994-998,1003-1016,1018-1022
+  s_892629877855c7::t_e7db74b3541bbb 999-1002,1017
+rust/crates/checker/src/expressions.rs
+  s_892629877855c7::t_ebad56a799f6f7 4018-4019
+  s_892629877855c7::t_7ff11fd06855ce 76-78
+  s_892629877855c7::t_15e9c303161238 4030
+  s_892629877855c7::t_db2f96958fa1bd 4031
+  s_892629877855c7::t_33f108c1f020d1 4034
+  s_892629877855c7::t_c1e1dfe646a4d0 4062-4063
+  s_892629877855c7::t_6f018ce2ade135 4044
+  s_892629877855c7::t_c0aa6aedb9d603 48
+  s_892629877855c7::t_8023958e4581b0 4045
+  s_892629877855c7::t_6e21a265e883cb 4052
+  s_892629877855c7::t_1c6eff5a361ae9 4006-4011,4013-4017,4020-4029,4032-4033,4035-4038,4040-4043,4046-4051,4053-4061,4064-4082
+  s_892629877855c7::t_04169c76574125 4039
+rust/crates/checker/src/statements.rs
+  s_892629877855c7::t_3d752f3a185263 7797-7812,7814-7838
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "7c3d1da9eeb2104bbed9e74fc62f22b5ce92b864",
+  "prompts": {},
+  "sessions": {
+    "s_892629877855c7": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "65473163-6e1c-4c85-a37e-15d0274087bf",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
