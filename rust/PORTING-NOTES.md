@@ -2384,3 +2384,15 @@ raw-link, get_parameter_count TARGET read). Panics 502->191; divergent
 300-slice gates held; rig validation queued. Plus the tsoptions
 UndefinedTextRange span fix (orchestrator, the tranche's flagged
 follow-up) — all gates re-verified fresh.
+
+Rig validation (sweep tranche 2 + tsoptions span fix, 2026-10-14):
+forced clean + rebuild — all rails green (fixture x3 identical, bind
+143/143, CHECK zero divergence, program 15/15). Tranche 2 RIG-
+VALIDATED on both machines. Tranche 3 in flight: type_of_node sentinel
+leak (51+2 cases) + try_get_this_type_at_ex nil-parent guard (32) —
+85/181 unique panic cases now produce real records; all gates held
+locally; the remaining 96 re-censused by backtrace (nodebuilder
+typenode 19, InterfaceType data 15, Type.Target 11, mapper OOB 10,
+resolveAlias export= 7, ...). Worker resumed after a mid-tranche
+cutoff; nodebuilder/relater in-flight edits verified compiling + 19
+suites green before resume.
