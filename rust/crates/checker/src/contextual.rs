@@ -129,7 +129,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) findContextualNode(node *ast.Node, includeCaches bool) int`
     /// (checker.go:31449).
-    fn find_contextual_node(&self, node: NodeId, include_caches: bool) -> Option<usize> {
+    pub(crate) fn find_contextual_node(&self, node: NodeId, include_caches: bool) -> Option<usize> {
         for (i, info) in self.contextual_infos.iter().enumerate() {
             if info.node == Some(node) && (include_caches || !info.is_cache) {
                 return Some(i);
@@ -196,8 +196,52 @@ impl Checker {
                 };
                 self.is_context_sensitive_impl(e)
             }
-            // TODO(port W5): the JSX arms (KindJsxAttributes/Attribute/
-            // Expression) ride the JSX wave.
+            // M6 W5: the JSX arms (Go checker.go:31463-31474).
+            Kind::JsxAttributes => {
+                // Go: some(Properties, isContextSensitive) || the opening
+                // element's element children (the context-sensitivity
+                // reaches through the children into nested lambdas).
+                let props = crate::jsx::jsx_properties_of(self.store(), node);
+                let props_sensitive =
+                    props.into_iter().any(|p| self.is_context_sensitive_impl(p));
+                if props_sensitive {
+                    return true;
+                }
+                let parent = self.store().node(node).parent.get();
+                if parent != NodeId::NONE
+                    && self.store().node(parent).kind == Kind::JsxOpeningElement
+                {
+                    let element = self.store().node(parent).parent.get();
+                    let children = crate::jsx::jsx_children_of(self.store(), element);
+                    return children
+                        .into_iter()
+                        .any(|child| self.is_context_sensitive_impl(child));
+                }
+                false
+            }
+            Kind::JsxAttribute => {
+                // If there is no initializer, JSX attribute has a boolean
+                // value of true which is not context sensitive (Go comment).
+                let initializer = self
+                    .store()
+                    .node(node)
+                    .as_jsx_attribute()
+                    .expect("data")
+                    .initializer;
+                initializer.is_some_and(|init| self.is_context_sensitive_impl(init))
+            }
+            Kind::JsxExpression => {
+                // It is possible to that node.expression is undefined
+                // (e.g <div x={} />) (Go comment).
+                let expression = self
+                    .store()
+                    .node(node)
+                    .as_jsx_expression()
+                    .expect("data")
+                    .expression;
+                expression.is_some_and(|e| self.is_context_sensitive_impl(e))
+            }
+            // TODO(port M6 S4): KindYieldExpression rides the S4 leaves.
             _ => false,
         }
     }
@@ -405,11 +449,19 @@ impl Checker {
                 let t = type_of_node(self, parent);
                 t.and_then(|t| self.try_get_type_from_type_node(t))
             }
-            // TODO(port M6 W5/W4): KindJsxExpression/JsxAttribute/
-            // JsxSpreadAttribute/JsxOpeningElement/JsxSelfClosingElement arms
-            // ride the W5 JSX wave; KindDecorator needs W4's decorator
+            // M6 W5: the JSX arms (Go checker.go:29949-29953) — the
+            // jsx.go contextual family. KindDecorator needs W4's decorator
             // signature machinery; KindImportAttribute needs the global
             // ImportAttributes type resolver.
+            Kind::JsxExpression => {
+                self.get_contextual_type_for_jsx_expression(parent, context_flags)
+            }
+            Kind::JsxAttribute | Kind::JsxSpreadAttribute => {
+                self.get_contextual_type_for_jsx_attribute(parent, context_flags)
+            }
+            Kind::JsxOpeningElement | Kind::JsxSelfClosingElement => {
+                self.get_contextual_jsx_element_attributes_type(parent, context_flags)
+            }
             _ => None,
         }
     }
@@ -1150,14 +1202,16 @@ impl Checker {
         );
         // REAL (M6 S10, checker.go:31252): the union discriminate arms —
         // discriminateContextualTypeByObjectMembers for object literals;
-        // discriminateContextualTypeByJSXAttributes stays W5 (jsx.go's wave).
+        // discriminateContextualTypeByJSXAttributes for JsxAttributes
+        // (REAL M6 W5 — jsx.go's arm).
         if self.type_(apparent_type).flags.intersects(TypeFlags::UNION) {
             let node_kind = self.store().node(node).kind;
             if node_kind == Kind::ObjectLiteralExpression {
                 return self.discriminate_contextual_type_by_object_members(node, apparent_type);
             }
-            // TODO(port M6 W5): discriminateContextualTypeByJSXAttributes —
-            // jsx.go's arm (the JSX wave; IsJsxAttributes discriminant).
+            if node_kind == Kind::JsxAttributes {
+                return self.discriminate_contextual_type_by_jsx_attributes(node, apparent_type);
+            }
         }
         Some(apparent_type)
     }
@@ -1545,8 +1599,15 @@ impl Checker {
         } else {
             self.get_resolved_signature(call_target)
         }?;
-        // TODO(port W5): the JsxOpeningLikeElement first-argument arm rides
-        // the W5 JSX wave.
+        // M6 W5 (Go checker.go:30341): the JsxOpeningLikeElement
+        // first-argument arm — getEffectiveFirstArgumentForJsxSignature.
+        if tsc_ast::utilities::is_jsx_opening_like_element(self.store().node(call_target))
+            && arg_index == 0
+        {
+            return Some(
+                self.get_effective_first_argument_for_jsx_signature(signature, call_target),
+            );
+        }
         let parameters = self.signatures[signature.0 as usize].parameters.clone();
         let rest_index = parameters.len().saturating_sub(1);
         if arg_index >= rest_index && self.has_effective_rest_parameter(signature) {

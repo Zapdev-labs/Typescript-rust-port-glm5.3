@@ -1845,8 +1845,9 @@ if candidates.is_empty() {
     }
 
     /// Go: `func (c *Checker) getTypeOfFirstParameterOfSignatureWithFallback(signature, fallbackType) *Type`
-    /// (checker.go:29537).
-    fn get_type_of_first_parameter_of_signature_with_fallback(
+    /// (checker.go:29537). pub(crate) since M6 W5 (jsx.go's
+    /// getJsxPropsTypeFromCallSignature).
+    pub(crate) fn get_type_of_first_parameter_of_signature_with_fallback(
         &mut self,
         signature: crate::types::SignatureId,
         fallback_type: TypeId,

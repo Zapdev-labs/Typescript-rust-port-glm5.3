@@ -1174,7 +1174,7 @@ fn diag_args_to_strings(args: &[DiagArg]) -> Vec<String> {
 /// Go: `NewDiagnosticForNode(node, message, args...)` — the errorNode-optional
 /// form the relater needs (`createDiagnosticChainFromErrorChain` tolerates a
 /// nil node in Go).
-fn diagnostic_for_node(
+pub(crate) fn diagnostic_for_node(
     c: &Checker,
     node: Option<NodeId>,
     message: &'static Message,
@@ -1217,12 +1217,16 @@ fn create_diagnostic_chain_from_error_chain(
             Some(diagnostic)
         }
         Some(next) => {
-            // Go: NewDiagnosticChainForNode(chain, errorNode, message, args)
-            // — the chain head carries the related info; the tail is linked
-            // through the diagnostic's message chain (diagnostics wave).
+            // Go: `ast.NewDiagnosticChain(next, chain.message, chain.args...)`
+            // — NewDiagnostic(next.file, next.loc, message, args)
+            //   .AddMessageChain(next).SetRelatedInfo(next.relatedInformation)
+            // (relater.go:4733). The nested chain entry rides the head's
+            // message chain; the head inherits the entry's related info.
             let mut diagnostic = diagnostic_for_node(c, error_node, chain.message, &chain.args);
-            for info in next.related_information() {
-                diagnostic.add_related_info(info.clone());
+            let next_related = next.related_information().to_vec();
+            diagnostic.add_message_chain(next);
+            for info in next_related {
+                diagnostic.add_related_info(info);
             }
             Some(diagnostic)
         }
@@ -1230,7 +1234,7 @@ fn create_diagnostic_chain_from_error_chain(
 }
 
 /// Go: `func (c *Checker) reportDiagnostic(diagnostic, diagnosticOutput)`.
-fn report_diagnostic(
+pub(crate) fn report_diagnostic(
     c: &mut Checker,
     diagnostic: Option<tsc_ast::Diagnostic>,
     diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
@@ -1334,7 +1338,7 @@ impl Checker {
 }
 
 /// Go: `func isHyphenatedJsxName(name) bool`.
-fn is_hyphenated_jsx_name(name: &str) -> bool {
+pub(crate) fn is_hyphenated_jsx_name(name: &str) -> bool {
     name.contains('-')
 }
 
@@ -3816,17 +3820,79 @@ impl Relater {
                 let name = c.program_symbol(prop).name.clone();
                 if !c.is_known_property(reduced_target, &name, is_comparing_jsx_attributes_flags) {
                     if report_errors {
-                        // TODO(port M6 W5 jsx): the JSX-attribute error arms
-                        // (getSuggestedSymbolForNonexistentJSXAttribute,
-                        // IsJsxAttributes/IsJsxOpeningLikeElement routing).
-                        // The non-JSX arm below is ported; until the jsx wave,
-                        // object-literal comparisons take it unconditionally.
-                        // TODO(port M6 S6): getSuggestionForNonexistentProperty
-                        // — the Did-you-mean elaboration.
+                        // Report error in terms of object types in the target
+                        // as those are the only ones we check in isKnownProperty
+                        // (Go comment, relater.go:2763).
                         let error_target = filter_type_is_excess_property_check_target(c, reduced_target);
-                        let __ts0 = symbol_to_string(c, prop);
-                        let __ts1 = type_to_string(c, error_target);
-                        self.report_error(c, &msg::OBJECT_LITERAL_MAY_ONLY_SPECIFY_KNOWN_PROPERTIES_AND_0_DOES_NOT_EXIST_IN_TYPE_1, &[DiagArg::Str(__ts0), DiagArg::Str(__ts1)]);
+                        // We know *exactly* where things went wrong when
+                        // comparing the types. Use this property as the error
+                        // node as this will be more helpful in reasoning
+                        // about what went wrong (Go comment).
+                        let error_node = self.error_node;
+                        debug_assert!(error_node.is_some(), "No errorNode in hasExcessProperties");
+                        let error_node_file = error_node
+                            .and_then(|n| tsc_ast::utilities::get_source_file_of_node(c.store(), n))
+                            .map(|f| f.as_node_id());
+                        let error_node_parent_kind = error_node
+                            .map(|n| c.store().node(c.store().node(n).parent.get()).kind);
+                        let is_jsx_error_site = error_node
+                            .is_some_and(|n| {
+                                c.store().node(n).kind == Kind::JsxAttributes
+                                    || tsc_ast::utilities::is_jsx_opening_like_element(c.store().node(n))
+                            })
+                            || matches!(
+                                error_node_parent_kind,
+                                Some(Kind::JsxOpeningElement)
+                                    | Some(Kind::JsxSelfClosingElement)
+                                    | Some(Kind::JsxOpeningFragment)
+                            );
+                        if is_jsx_error_site {
+                            // JsxAttributes has an object-literal flag and
+                            // undergo same type-assignablity check as normal
+                            // object-literal. However, using an object-literal
+                            // error message will be very confusing to the
+                            // users so we give different a message (Go
+                            // comment, relater.go:2778).
+                            let mut error_node = error_node;
+                            let value_declaration = c.program_symbol(prop).value_declaration;
+                            if let Some(value_declaration) = value_declaration {
+                                if c.store().node(value_declaration).kind == Kind::JsxAttribute {
+                                    let decl_name = c.store().node(value_declaration).name();
+                                    let decl_file = decl_name.and_then(|n| {
+                                        tsc_ast::utilities::get_source_file_of_node(c.store(), n)
+                                    })
+                                    .map(|f| f.as_node_id());
+                                    // Note: extraneous children (as in
+                                    // `<NoChild>extra</NoChild>`) don't pass
+                                    // this check, since `children` is a
+                                    // Kind.PropertySignature instead of a
+                                    // Kind.JsxAttribute (Go comment).
+                                    if decl_file == error_node_file && decl_name.is_some() {
+                                        error_node = decl_name;
+                                    }
+                                }
+                            }
+                            self.error_node = error_node;
+                            let prop_name = symbol_to_string(c, prop);
+                            let suggestion_symbol =
+                                c.get_suggested_symbol_for_nonexistent_jsx_attribute(&prop_name, error_target);
+                            if let Some(suggestion_symbol) = suggestion_symbol {
+                                let error_target_string = type_to_string(c, error_target);
+                                let suggestion_string = symbol_to_string(c, suggestion_symbol);
+                                self.report_error(c, &msg::PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_2, &[DiagArg::Str(prop_name), DiagArg::Str(error_target_string), DiagArg::Str(suggestion_string)]);
+                            } else {
+                                let error_target_string = type_to_string(c, error_target);
+                                self.report_error(c, &msg::PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1, &[DiagArg::Str(prop_name), DiagArg::Str(error_target_string)]);
+                            }
+                        } else {
+                            // The non-JSX arm (Go relater.go:2791+): the
+                            // object-literal message. TODO(port M6 S6):
+                            // getSuggestionForNonexistentProperty — the
+                            // Did-you-mean elaboration.
+                            let __ts0 = symbol_to_string(c, prop);
+                            let __ts1 = type_to_string(c, error_target);
+                            self.report_error(c, &msg::OBJECT_LITERAL_MAY_ONLY_SPECIFY_KNOWN_PROPERTIES_AND_0_DOES_NOT_EXIST_IN_TYPE_1, &[DiagArg::Str(__ts0), DiagArg::Str(__ts1)]);
+                        }
                     }
                     return true;
                 }
@@ -6225,7 +6291,22 @@ impl Relater {
         } else if c.type_(source).symbol.is_some() && s_flags.intersects(TypeFlags::OBJECT) && c.global_object_type == Some(source) {
             self.report_error(c, &msg::THE_OBJECT_TYPE_IS_ASSIGNABLE_TO_VERY_FEW_OTHER_TYPES_DID_YOU_MEAN_TO_USE_THE_ANY_TYPE_INSTEAD, &[]);
         } else if c.type_(source).object_flags.intersects(ObjectFlags::JSX_ATTRIBUTES) && t_flags.intersects(TypeFlags::INTERSECTION) {
-            // TODO(port M6 W5 jsx): the JSX IntrinsicAttributes check.
+            // M6 W5 (Go relater.go:4754-4760): the JSX IntrinsicAttributes
+            // check — the error is suppressed when the intersection carries
+            // JSX.IntrinsicAttributes or JSX.IntrinsicClassAttributes (the
+            // intersection always accepts those library-managed parts).
+            let target_types = c.type_(target).types().to_vec();
+            let intrinsic_attributes =
+                c.get_jsx_type(crate::jsx::jsx_names::INTRINSIC_ATTRIBUTES, self.error_node);
+            let intrinsic_class_attributes =
+                c.get_jsx_type(crate::jsx::jsx_names::INTRINSIC_CLASS_ATTRIBUTES, self.error_node);
+            if !c.is_error_type(intrinsic_attributes)
+                && !c.is_error_type(intrinsic_class_attributes)
+                && (target_types.contains(&intrinsic_attributes)
+                    || target_types.contains(&intrinsic_class_attributes))
+            {
+                return;
+            }
         } else if c.type_(original_target).flags.intersects(TypeFlags::INTERSECTION)
             && c.type_(original_target).object_flags.intersects(ObjectFlags::IS_NEVER_INTERSECTION)
         {
@@ -7463,8 +7544,8 @@ impl Checker {
                 return self.elaborate_arrow_function(node, source, target, relation, diagnostic_output);
             }
             Kind::JsxAttributes => {
-                // TODO(port M6 W5 jsx): elaborateJsxComponents.
-                return false;
+                // M6 W5: elaborateJsxComponents (Go relater.go:468-469).
+                return self.elaborate_jsx_components(node, source, target, relation, diagnostic_output);
             }
             _ => {}
         }
@@ -7572,6 +7653,243 @@ impl Checker {
         // flow wave.
         let _ = (node, source, target, relation, diagnostic_output);
         false
+    }
+
+    /// Go: `func (c *Checker) elaborateElement(source, target, relation, prop, next, nameType, errorMessage, diagnosticFactory, diagnosticOutput) bool` (relater.go:539) —
+    /// REAL (M6 W5): the per-property elaboration primitive
+    /// `elaborateObjectLiteral`/`elaborateJsxComponents` drive. The S4
+    /// object-literal walk above stays stubbed (its own wave); the JSX wave
+    /// required this function now.
+    ///
+    /// PORT: Go's `diagnosticFactory func(prop *ast.Node) *ast.Diagnostic`
+    /// (the JSX text-child "components don't accept text" factory) is the
+    /// captured triple (tag-name node, children prop name, children target
+    /// type) — see jsx.rs's module PORT note.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn elaborate_element(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        relation: RelationKind,
+        prop: Option<NodeId>,
+        next: Option<NodeId>,
+        name_type: TypeId,
+        error_message: Option<&'static Message>,
+        diagnostic_factory: Option<(NodeId, String, TypeId)>,
+        mut diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
+    ) -> bool {
+        let target_prop_type =
+            self.get_best_match_indexed_access_type_or_undefined(source, target, name_type);
+        let Some(target_prop_type) = target_prop_type else {
+            // Don't elaborate on indexes on generic variables (Go comment).
+            return false;
+        };
+        if self.type_(target_prop_type).flags.intersects(TypeFlags::INDEXED_ACCESS) {
+            return false;
+        }
+        let source_prop_type = self.get_indexed_access_type_or_undefined(
+            source,
+            name_type,
+            crate::types::AccessFlags::NONE,
+            None,
+            None,
+        );
+        let Some(source_prop_type) = source_prop_type else {
+            // Don't elaborate on indexes on generic variables (Go comment).
+            return false;
+        };
+        if self.check_type_related_to(source_prop_type, target_prop_type, relation, None /*errorNode*/) {
+            // Don't elaborate on indexes on generic variables or when types
+            // match (Go comment).
+            return false;
+        }
+        if let Some(next) = next {
+            if self.elaborate_error(
+                Some(next),
+                source_prop_type,
+                target_prop_type,
+                relation,
+                None, /*headMessage*/
+                diagnostic_output.as_deref_mut(),
+            ) {
+                return true;
+            }
+        }
+        // Issue error on the prop itself, since the prop couldn't elaborate
+        // the error (Go comment).
+        let mut diags: Vec<tsc_ast::Diagnostic> = Vec::new();
+        // Use the expression type, if available (Go comment).
+        let mut specific_source = source_prop_type;
+        if let Some(next) = next {
+            specific_source =
+                self.check_expression_for_mutable_location_with_contextual_type(next, source_prop_type);
+        }
+        if let Some((tag_name, children_prop_name, children_target_type)) = diagnostic_factory {
+            // Use the custom diagnostic factory if provided (e.g., for JSX
+            // text children with dynamic error messages) — Go's
+            // diagnosticFactory(prop) (relater.go:566 comment).
+            let tag_name_text = crate::ast_shims::get_text_of_node(self.store(), tag_name);
+            let children_target_type_string = crate::nodebuilder::type_to_string(self, children_target_type);
+            diags.push(diagnostic_for_node(
+                self,
+                prop,
+                &msg::X_0_COMPONENTS_DON_T_ACCEPT_TEXT_AS_CHILD_ELEMENTS_TEXT_IN_JSX_HAS_THE_TYPE_STRING_BUT_THE_EXPECTED_TYPE_OF_1_IS_2,
+                &[DiagArg::Str(tag_name_text), DiagArg::Str(children_prop_name), DiagArg::Str(children_target_type_string)],
+            ));
+        } else if self.exact_optional_property_types
+            && self.is_exact_optional_property_mismatch(Some(specific_source), Some(target_prop_type))
+        {
+            let specific_source_string = crate::nodebuilder::type_to_string(self, specific_source);
+            let target_prop_type_string = crate::nodebuilder::type_to_string(self, target_prop_type);
+            diags.push(diagnostic_for_node(
+                self,
+                prop,
+                &msg::TYPE_0_IS_NOT_ASSIGNABLE_TO_TYPE_1_WITH_EXACTOPTIONALPROPERTYTYPES_COLON_TRUE_CONSIDER_ADDING_UNDEFINED_TO_THE_TYPE_OF_THE_TARGET,
+                &[DiagArg::Str(specific_source_string), DiagArg::Str(target_prop_type_string)],
+            ));
+        } else {
+            let prop_name = self.get_property_name_from_index(name_type, None /*accessNode*/);
+            let target_optional_symbol = self
+                .get_property_of_type(target, &prop_name)
+                .unwrap_or_else(|| self.unknown_symbol());
+            let target_is_optional = self
+                .program_symbol(target_optional_symbol)
+                .flags
+                .intersects(SymbolFlags::OPTIONAL);
+            let source_optional_symbol = self
+                .get_property_of_type(source, &prop_name)
+                .unwrap_or_else(|| self.unknown_symbol());
+            let source_is_optional = self
+                .program_symbol(source_optional_symbol)
+                .flags
+                .intersects(SymbolFlags::OPTIONAL);
+            let target_prop_type = self.remove_missing_type(target_prop_type, target_is_optional);
+            let source_prop_type =
+                self.remove_missing_type(source_prop_type, target_is_optional && source_is_optional);
+            let result = self.check_type_related_to_ex(
+                specific_source,
+                target_prop_type,
+                relation,
+                prop,
+                error_message,
+                Some(&mut diags),
+            );
+            if result && specific_source != source_prop_type {
+                // If for whatever reason the expression type doesn't yield an
+                // error, make sure we still issue an error on the
+                // sourcePropType (Go comment).
+                self.check_type_related_to_ex(
+                    source_prop_type,
+                    target_prop_type,
+                    relation,
+                    prop,
+                    error_message,
+                    Some(&mut diags),
+                );
+            }
+        }
+        if diags.is_empty() {
+            return false;
+        }
+        let mut diagnostic = diags[0].clone();
+        let mut property_name = String::new();
+        let mut target_prop: Option<SymbolId> = None;
+        if u::is_type_usable_as_property_name(self.type_(name_type)) {
+            property_name = u::get_property_name_from_type(self.type_(name_type));
+            target_prop = self.get_property_of_type(target, &property_name);
+        }
+        let mut issued_elaboration = false;
+        if target_prop.is_none() {
+            let index_info = get_applicable_index_info(self, target, name_type);
+            if let Some(index_info) = index_info {
+                let declaration = self.index_infos[index_info.0 as usize].declaration;
+                if let Some(declaration) = declaration {
+                    let file = tsc_ast::utilities::get_source_file_of_node(self.store(), declaration)
+                        .map(|f| f.as_node_id());
+                    if file.is_some_and(|f| !self.program.is_source_file_default_library(f)) {
+                        issued_elaboration = true;
+                        diagnostic.add_related_info(diagnostic_for_node(
+                            self,
+                            Some(declaration),
+                            &msg::THE_EXPECTED_TYPE_COMES_FROM_THIS_INDEX_SIGNATURE,
+                            &[],
+                        ));
+                    }
+                }
+            }
+        }
+        if !issued_elaboration {
+            let target_node: Option<NodeId> = target_prop
+                .map(|p| self.program_symbol(p).declarations.first().copied())
+                .unwrap_or_default()
+                .or_else(|| {
+                    self.type_(target)
+                        .symbol
+                        .map(|s| self.program_symbol(s).declarations.first().copied())
+                        .unwrap_or_default()
+                });
+            if let Some(target_node) = target_node {
+                if property_name.is_empty()
+                    || self.type_(name_type).flags.intersects(TypeFlags::UNIQUE_ESSYMBOL)
+                {
+                    property_name = crate::nodebuilder::type_to_string(self, name_type);
+                }
+                let file = tsc_ast::utilities::get_source_file_of_node(self.store(), target_node)
+                    .map(|f| f.as_node_id());
+                if file.is_some_and(|f| !self.program.is_source_file_default_library(f)) {
+                    let property_name_clone = property_name.clone();
+                    let target_string = crate::nodebuilder::type_to_string(self, target);
+                    diagnostic.add_related_info(diagnostic_for_node(
+                        self,
+                        Some(target_node),
+                        &msg::THE_EXPECTED_TYPE_COMES_FROM_PROPERTY_0_WHICH_IS_DECLARED_HERE_ON_TYPE_1,
+                        &[DiagArg::Str(property_name_clone), DiagArg::Str(target_string)],
+                    ));
+                }
+            }
+        }
+        report_diagnostic(self, Some(diagnostic), diagnostic_output);
+        true
+    }
+
+    /// Go: `func (c *Checker) getBestMatchIndexedAccessTypeOrUndefined(source, target, nameType) *Type` (relater.go:618) —
+    /// REAL (M6 W5; required by elaborateElement and
+    /// elaborateIterableOrArrayLikeTargetElementwise).
+    pub(crate) fn get_best_match_indexed_access_type_or_undefined(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        name_type: TypeId,
+    ) -> Option<TypeId> {
+        let idx = self.get_indexed_access_type_or_undefined(
+            target,
+            name_type,
+            crate::types::AccessFlags::NONE,
+            None,
+            None,
+        );
+        if idx.is_some() {
+            return idx;
+        }
+        if self.type_(target).flags.intersects(TypeFlags::UNION) {
+            let best = get_best_matching_type(
+                self,
+                source,
+                target,
+                TypeComparerKind::Assignable,
+                None,
+            );
+            if let Some(best) = best {
+                return self.get_indexed_access_type_or_undefined(
+                    best,
+                    name_type,
+                    crate::types::AccessFlags::NONE,
+                    None,
+                    None,
+                );
+            }
+        }
+        None
     }
 }
 
@@ -8180,6 +8498,20 @@ pub(crate) fn every_type(c: &mut Checker, t: TypeId, mut f: impl FnMut(TypeId) -
         return c.type_(t).types().iter().all(|&t| f(t));
     }
     f(t)
+}
+
+/// Go: `func someType(t, f) bool` — the `&mut Checker`-predicate twin
+/// (M6 W5: jsx.go's children default passes c.isTupleLikeType).
+pub(crate) fn some_type_with_mut(
+    c: &mut Checker,
+    t: TypeId,
+    mut f: impl FnMut(&mut Checker, TypeId) -> bool,
+) -> bool {
+    if c.type_(t).flags.intersects(TypeFlags::UNION) {
+        let types = c.type_(t).types().to_vec();
+        return types.iter().any(|&t| f(c, t));
+    }
+    f(c, t)
 }
 
 /// Go: `func someType(t, f) bool`.

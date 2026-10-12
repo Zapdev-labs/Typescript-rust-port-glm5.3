@@ -2891,8 +2891,10 @@ pub(crate) fn is_initializer_big_int_literal_expression(
     false
 }
 
-/// Go: `getIdentifierFromEntityNameExpression` (grammarchecks.go:58).
-#[allow(dead_code)] // the jsx wave's call sites
+/// Go: `getIdentifierFromEntityNameExpression` (grammarchecks.go:58) — its Go
+/// callers are checker.go:4457/4458 (the heritage-clause compare), not the
+/// JSX family; kept Go-mirrored, allowed dead.
+#[allow(dead_code)] // the checker.go:4457 heritage-clause wave
 pub(crate) fn get_identifier_from_entity_name_expression(
     store: &dyn NodeStore,
     node: NodeId,
@@ -4982,7 +4984,6 @@ impl Checker {
     /// family (jsx.go's wave owns the leaf callers; the bodies land here).
     /// The node is the JsxOpeningLikeElement (Go reads node.TagName(),
     /// node.Attributes().Properties(), node.TypeArgumentList()).
-    #[allow(dead_code)] // the jsx.go wave's call sites
     pub(crate) fn check_grammar_jsx_element(&mut self, node: NodeId) -> bool {
         let (tag_name, attributes) = {
             let n = self.store().node(node);
@@ -5046,7 +5047,6 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkGrammarJsxName(node) bool`.
-    #[allow(dead_code)] // the jsx.go wave's call sites
     pub(crate) fn check_grammar_jsx_name(&mut self, node: NodeId) -> bool {
         if self.store().node(node).kind == Kind::PropertyAccessExpression
             && crate::ast_shims::expression_of(self.store(), node)
@@ -5083,7 +5083,6 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkGrammarJsxExpression(node) bool`.
-    #[allow(dead_code)] // the jsx.go wave's call sites
     pub(crate) fn check_grammar_jsx_expression(&mut self, node: NodeId) -> bool {
         let expression = self
             .store()

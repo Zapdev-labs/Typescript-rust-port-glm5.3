@@ -842,8 +842,8 @@ impl Checker {
                     Some(self.get_widened_type_for_assignment_declaration(symbol))
                 }
                 Kind::JsxAttribute => {
-                    // TODO(port M6 W5 jsx): checkJsxAttribute(declaration, CheckModeNormal).
-                    Some(self.error_type())
+                    // M6 W5 (Go checker.go:17012): checkJsxAttribute(declaration, CheckModeNormal).
+                    Some(self.check_jsx_attribute(declaration, CheckMode::CHECK_MODE_NORMAL))
                 }
                 Kind::EnumMember => Some(self.get_type_of_enum_member(symbol)),
                 _ => panic!(

@@ -627,9 +627,94 @@ impl Checker {
     }
 
     /// Go: `func (r *NameResolver) symbolReferenced(symbol, meaning)` (the
-    /// checker hook, checker.go:1543).
-    fn symbol_referenced(&mut self, symbol: SymbolId, meaning: SymbolFlags) {
+    /// checker hook, checker.go:1543). pub(crate) since M6 W5 (jsx.go's
+    /// markJsxAliasReferenced).
+    pub(crate) fn symbol_referenced(&mut self, symbol: SymbolId, meaning: SymbolFlags) {
         self.symbol_reference_links.get(symbol).reference_kinds |= meaning;
+    }
+
+    /// Go: `func (c *Checker) markAliasSymbolAsReferenced(symbol)` (checker.go:15493) —
+    /// REAL (M6 W5: jsx.go's markJsxAliasReferenced reaches it). When an
+    /// alias symbol is referenced, we need to mark the entity it references
+    /// as referenced and in turn repeat that until we reach a non-alias or
+    /// an exported entity (Go comment, verbatim).
+    pub(crate) fn mark_alias_symbol_as_referenced(&mut self, symbol: SymbolId) {
+        if !self.alias_symbol_links.get(symbol).referenced {
+            self.alias_symbol_links.get(symbol).referenced = true;
+            let node = self.get_declaration_of_alias_symbol(symbol);
+            let Some(node) = node else {
+                panic!("Unexpected nil in markAliasSymbolAsReferenced");
+            };
+            // We defer checking of the reference of an `import =` until the
+            // import itself is referenced, This way a chain of imports can
+            // be elided if ultimately the final input is only used in a type
+            // position. (Go comment, verbatim.)
+            let module_reference = {
+                let n = self.store().node(node);
+                if n.kind == Kind::ImportEqualsDeclaration {
+                    Some(n.as_import_equals_declaration().expect("ImportEqualsDeclaration data").module_reference)
+                } else {
+                    None
+                }
+            };
+            if let Some(module_reference) = module_reference {
+                if self.store().node(module_reference).kind != Kind::ExternalModuleReference {
+                    let resolved = self.resolve_symbol(symbol);
+                    if self.get_symbol_flags(resolved).intersects(SymbolFlags::VALUE) {
+                        // import foo = <symbol>
+                        let left = crate::jsx::get_first_identifier(self.store(), module_reference);
+                        self.mark_identifier_alias_referenced(left);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) markIdentifierAliasReferenced(location *ast.IdentifierNode)` (checker.go:15483).
+    pub(crate) fn mark_identifier_alias_referenced(&mut self, location: NodeId) {
+        if crate::utilities::is_in_type_query(self.store(), location) {
+            return;
+        }
+        let symbol = self.get_resolved_symbol(location);
+        if symbol.is_some_and(|symbol| {
+            Some(symbol) != self.arguments_symbol
+                && symbol != self.unknown_symbol()
+        }) {
+            self.mark_alias_referenced(symbol.expect("checked"), location);
+        }
+    }
+
+    /// Go: `func (c *Checker) markAliasReferenced(symbol, location)` (checker.go:15466) —
+    /// REAL (M6 W5: markIdentifierAliasReferenced's chain).
+    pub(crate) fn mark_alias_referenced(&mut self, symbol: SymbolId, location: NodeId) {
+        if !self.can_collect_symbol_alias_accessibility_data {
+            return;
+        }
+        let is_non_local = is_non_local_alias(self.program_symbol(symbol), SymbolFlags::VALUE);
+        if is_non_local && !crate::utilities::is_in_type_query(self.store(), location) {
+            let target = self.resolve_alias(symbol);
+            if self
+                .get_symbol_flags_ex(symbol, true /*excludeTypeOnlyMeanings*/, false /*excludeLocalMeanings*/)
+                .intersects(SymbolFlags::VALUE | SymbolFlags::EXPORT_VALUE)
+            {
+                // An alias resolving to a const enum cannot be elided if
+                // (1) 'isolatedModules' is enabled (because the const enum
+                // value will not be inlined), or if (2) the alias is an
+                // export of a const enum declaration that will be preserved
+                // (Go comment, verbatim).
+                if self.compiler_options.get_isolated_modules()
+                    || self.compiler_options.should_preserve_const_enums()
+                        && is_export_or_export_expression(self.store(), location)
+                    || {
+                        let exported =
+                            self.get_export_symbol_of_value_symbol_if_exported(target);
+                        !is_const_enum_or_const_enum_only_module(self, exported)
+                    }
+                {
+                    self.mark_alias_symbol_as_referenced(symbol);
+                }
+            }
+        }
     }
 
     /// Go: the shared `KindModuleDeclaration` switch body of NameResolver.Resolve
@@ -1394,7 +1479,7 @@ impl Checker {
     /// candidate filter (getCandidateName) and `c.compareSymbols` as the
     /// tie-break. Names less than length 3 only check for case-insensitive
     /// equality, not levenshtein distance.
-    fn get_spelling_suggestion_for_name(
+    pub(crate) fn get_spelling_suggestion_for_name(
         &mut self,
         name: &str,
         candidates: &[SymbolId],
@@ -4869,7 +4954,7 @@ impl Checker {
     /// file-resolution half rides the program seam (GetResolvedModule /
     /// GetModeForUsageLocation are program services the Rust Program trait
     /// does not expose yet) — permissive None outside ambient modules.
-    fn resolve_external_module(
+    pub(crate) fn resolve_external_module(
         &mut self,
         // PORT: `location` is the ancestor-walk root of Go's context-specifier
         // derivation; the port's file-resolution half is the program seam, so
@@ -5173,6 +5258,39 @@ fn is_non_local_alias(symbol: &Symbol, excludes: SymbolFlags) -> bool {
         && (symbol.flags & (SymbolFlags::ALIAS | excludes)) == SymbolFlags::ALIAS
         || symbol.flags.intersects(SymbolFlags::ALIAS)
             && symbol.flags.intersects(SymbolFlags::ASSIGNMENT)
+}
+
+/// Go: `func isExportOrExportExpression(location) bool` (checker.go:28885) —
+/// M6 W5: markAliasReferenced's const-enum-export test.
+fn is_export_or_export_expression(store: &dyn NodeStore, location: NodeId) -> bool {
+    // Go: FindAncestor with the parent-kind walk (checker.go:28885-28897).
+    let mut n = location;
+    loop {
+        let parent = store.node(n).parent.get();
+        if parent == NodeId::NONE {
+            return false;
+        }
+        let pn = store.node(parent);
+        if pn.kind == Kind::ExportAssignment {
+            let d = pn.as_export_assignment().expect("ExportAssignment data");
+            if d.expression == n && crate::utilities::is_entity_name_expression(store, n) {
+                return true;
+            }
+        } else if pn.kind == Kind::ExportSpecifier {
+            let d = pn.as_export_specifier().expect("ExportSpecifier data");
+            if d.name == n || d.property_name == Some(n) {
+                return true;
+            }
+        }
+        n = parent;
+    }
+}
+
+/// Go: `func isConstEnumOrConstEnumOnlyModule(s *ast.Symbol) bool` (emitresolver.go).
+/// M6 W5: markAliasReferenced's elision test.
+fn is_const_enum_or_const_enum_only_module(c: &Checker, symbol: SymbolId) -> bool {
+    let flags = c.program_symbol(symbol).flags;
+    flags.intersects(SymbolFlags::CONST_ENUM | SymbolFlags::CONST_ENUM_ONLY_MODULE)
 }
 
 /// Go: `func GetExternalModuleRequireArgument(node) *ast.Node` (utilities.go):

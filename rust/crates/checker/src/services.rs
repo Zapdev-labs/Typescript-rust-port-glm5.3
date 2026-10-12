@@ -1254,20 +1254,18 @@ impl Checker {
     /// Go: `func (c *Checker) GetJsxIntrinsicTagNamesAt(location) []*ast.Symbol` (services.go:857).
     ///
     /// Returns all the properties of the Jsx.IntrinsicElements interface.
+    /// REAL (M6 W5): getJsxType(JsxNames.IntrinsicElements, location).
     pub fn get_jsx_intrinsic_tag_names_at(&mut self, location: NodeId) -> Vec<SymbolId> {
-        // PORT(jsx wave): getJsxType(JsxNames.IntrinsicElements, location)
-        // — the jsx wave's resolver; permissive empty.
-        let _ = location;
-        Vec::new()
+        let intrinsics =
+            self.get_jsx_type(crate::jsx::jsx_names::INTRINSIC_ELEMENTS, Some(location));
+        self.get_properties_of_type(intrinsics)
     }
 
-    /// Go: `func (c *Checker) GetContextualTypeForJsxAttribute(attribute) *Type` (services.go:865).
-    pub fn get_contextual_type_for_jsx_attribute(&mut self, attribute: NodeId) -> Option<TypeId> {
-        // PORT(jsx wave): getContextualTypeForJsxAttribute — same wave.
-        let _ = attribute;
-        None
-    }
-
+    /// Go: `func (c *Checker) GetContextualTypeForJsxAttribute(attribute) *Type` (services.go:865) —
+    /// M6 W5: the exported one-argument carrier IS the internal
+    /// getContextualTypeForJsxAttribute (jsx.rs) with ContextFlagsNone;
+    /// Rust forbids the same-name method pair Go's case distinction allows,
+    /// so this wrapper was folded into the jsx.rs method's surface.
     /// Go: `func (c *Checker) GetConstantValue(node) any` (services.go:869).
     pub fn get_constant_value(&mut self, node: NodeId) -> Option<EvaluatorValue> {
         if self.store().node(node).kind == Kind::EnumMember {

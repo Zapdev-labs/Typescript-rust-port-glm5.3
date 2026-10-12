@@ -2312,3 +2312,31 @@ Rig validation (W3 COMPLETE, 2026-10-14): forced clean + rebuild —
 RIG-CHECK-IDENTICAL (zero divergence confirmed on the rig), fixture
 x3 identical, bind 143/143, program twin 15/15. W3 CLOSED ON BOTH
 MACHINES. W5 (jsx, the final M6 wave) dispatched.
+
+## M6 W5 COMPLETE — jsx landed; M6 CLOSED (2026-10-14)
+
+jsx.rs 3,409 lines: the full jsx.go family (checkJsxElement/Fragment/
+attributes, element-type resolution, JSX namespace walks, JsxElementLinks,
+the checker jsx fields, Program::get_jsx_runtime_import_specifier;
+parse_isolated_entity_name via the subtree-copy PORT). Two real bugs
+fixed by its gates: the FRESH_LITERAL flag loss (Go's closure mutates
+the CAPTURED objectFlags — the port's macro copied it; excess-property
+checks missed) and the lost diagnostic-chain elaboration (relater.go:
+4733 pushes next onto the head's message chain — the TS2339 under
+TS2322 vanished). All W5 banners wired. PLUS the orchestrator's
+full-corpus finding: an infinite loop in
+lookup_symbol_for_private_identifier_declaration — Go's GetContaining-
+Class is FindAncestor(node.PARENT, IsClassLike) (utilities.go:1739) but
+the port's helper was INCLUSIVE, so the class cursor returned itself
+forever (the full-corpus check sweep hung at record 410,
+classStaticBlock15). Fixed Go-exact in utilities.rs; the sweep now
+passes 410 (777 records in 4 min). NEW FRONTIER: the full corpus
+exposes a pre-existing stack overflow on classes/members/privateNames
+(the pre-fix binary HUNG on the same dir — a separate recursion bug
+between private-identifier resolution and property-access checking on
+nested classes; next tranche). Orchestrator re-verified fresh (W5 +
+hang fix together): 17 suites ok, clippy 0 real warnings, fixture x3
+IDENTICAL, bind 143/143, CHECK 300-SLICE IDENTICAL (zero divergence
+held through W5), program twin 15/15, tsc/packages/tools clean.
+M6 — the checker, the port's long pole — IS CLOSED. Next: the
+full-corpus check sweep tranche, then M7 (emit back end).

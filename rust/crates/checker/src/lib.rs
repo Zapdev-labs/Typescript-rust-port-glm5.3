@@ -127,6 +127,7 @@ pub mod grammarchecks;
 pub mod index;
 pub mod inference;
 pub mod jsdoc;
+pub mod jsx;
 pub mod links;
 pub mod mapper;
 pub mod members;

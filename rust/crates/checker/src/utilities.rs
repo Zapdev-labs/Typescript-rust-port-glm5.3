@@ -1764,9 +1764,17 @@ fn is_class_like(node: &Node) -> bool {
 }
 
 /// Go: `ast.GetContainingClass` — walks up to the nearest class-like
-/// container through the non-decorated path.
+/// container through the non-decorated path. PORT(hang fix, 2026-10-14):
+/// Go is `FindAncestor(node.Parent, IsClassLike)` (utilities.go:1739) — the
+/// walk starts at the PARENT, exclusive of the node itself. The port passed
+/// `node` to the inclusive find_ancestor, so re-invoking with a class-like
+/// cursor (the private-identifier/lexical lookup loops in expressions.rs)
+/// returned the same class forever — the full-corpus check sweep hung at
+/// record 410 (classStaticBlock15) inside
+/// lookup_symbol_for_private_identifier_declaration.
 pub(crate) fn get_containing_class(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
-    find_ancestor(store, node, &mut is_class_like)
+    let parent = store.node(node).parent.get();
+    find_ancestor(store, parent, &mut is_class_like)
 }
 
 /// Go: `func isClassInstanceProperty(node *ast.Node) bool`.

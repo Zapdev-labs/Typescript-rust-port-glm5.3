@@ -141,9 +141,10 @@ pub struct FlowState;
 #[derive(Debug, Default)]
 pub struct FlowLoopInfo;
 
-/// Go: `JsxElementLinks` (checker/jsx.go — M6 wave 5).
-#[derive(Debug, Default)]
-pub struct JsxElementLinks;
+/// Go: `JsxElementLinks` (checker/jsx.go — M6 wave 5). REAL since W5: the
+/// re-export of jsx.rs's field-carrying struct (the store is
+/// `Checker::jsx_element_links`).
+pub use crate::jsx::JsxElementLinks;
 
 /// Go: `*NodeBuilder` (checker/nodebuilder*.go — M6 wave 4).
 #[derive(Debug, Default)]

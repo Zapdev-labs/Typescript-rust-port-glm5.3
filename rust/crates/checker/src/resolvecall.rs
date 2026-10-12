@@ -125,10 +125,9 @@ impl Checker {
             }
             Kind::Decorator => self.resolve_decorator(node, candidates_out_array, check_mode),
             Kind::JsxOpeningFragment | Kind::JsxOpeningElement | Kind::JsxSelfClosingElement => {
-                // TODO(port M6 jsx wave): resolveJsxOpeningLikeElement — the
-                // JSX attribute/type-argument surface; the untyped-call
-                // composition keeps JSX calls any-typed.
-                self.resolve_untyped_call(node)
+                // M6 W5: resolveJsxOpeningLikeElement — jsx.go's resolver
+                // (the shared overload-resolution engine, S6's resolveCall).
+                self.resolve_jsx_opening_like_element(node, candidates_out_array, check_mode)
             }
             Kind::BinaryExpression => {
                 self.resolve_instanceof_expression(node, candidates_out_array, check_mode)
@@ -668,7 +667,7 @@ impl Checker {
     /// Go; the port keeps a `CallState` value and threads `&mut` through the
     /// chooseOverload ladder exactly like Go's captured closure state.
     #[allow(clippy::too_many_arguments)]
-    fn resolve_call(
+    pub(crate) fn resolve_call(
         &mut self,
         node: NodeId,
         signatures: &[SignatureId],
@@ -1081,16 +1080,29 @@ impl Checker {
                 arg_count = 1;
             }
             Kind::JsxOpeningElement | Kind::JsxSelfClosingElement => {
-                // TODO(port M6 jsx wave): the attributes-end probe; the jsx
-                // arm rides the jsx wave.
+                // M6 W5: Go's attributes-end probe — `node.Attributes().End()
+                // == node.End()` (checker.go:9340): the call is incomplete
+                // when the attributes list runs to the element's end (an
+                // unclosed `<div` with attributes in error recovery).
+                let attributes_end = crate::jsx::jsx_attributes_of(self.store(), node)
+                    .map(|attributes| self.store().node(attributes).loc.end());
+                let node_end = self.store().node(node).loc.end();
+                call_is_incomplete = attributes_end == Some(node_end);
+                if call_is_incomplete {
+                    return true;
+                }
                 arg_count = if effective_minimum_arguments == 0 {
                     args.len()
                 } else {
                     1
                 };
                 if !args.is_empty() {
+                    // class may have argumentless ctor functions - still
+                    // resolve ctor and compare vs props member type (Go).
                     effective_parameter_count = 1;
                 }
+                // sfc may specify context argument - handled by framework
+                // and not typechecked (Go).
                 effective_minimum_arguments = effective_minimum_arguments.min(1);
             }
             Kind::NewExpression
@@ -1305,7 +1317,21 @@ impl Checker {
         report_errors: bool,
         mut diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
     ) -> bool {
-        // TODO(port M6 jsx wave): checkApplicableSignatureForJsxCallLikeElement.
+        // M6 W5: Go `ast.IsJsxCallLike(node)` → checkApplicableSignatureForJsxCallLikeElement
+        // (checker.go:9483 — jsx.go's applicability probe).
+        if matches!(
+            self.store().node(node).kind,
+            Kind::JsxOpeningElement | Kind::JsxSelfClosingElement | Kind::JsxOpeningFragment
+        ) {
+            return self.check_applicable_signature_for_jsx_call_like_element(
+                node,
+                signature,
+                relation,
+                check_mode,
+                report_errors,
+                diagnostic_output,
+            );
+        }
         let this_type = self
             .get_this_type_of_signature(signature)
             .filter(|&t| t != self.void_type());
@@ -1513,6 +1539,11 @@ impl Checker {
         check_mode: CheckMode,
         context: crate::todo_shapes::InferenceContextId,
     ) -> Vec<TypeId> {
+        // M6 W5: Go's JSX branch (checker.go:9616-9617) —
+        // inferJsxTypeArguments over the attributes' contextual type.
+        if tsc_ast::utilities::is_jsx_opening_like_element(self.store().node(node)) {
+            return self.infer_jsx_type_arguments(node, signature, check_mode, context);
+        }
         // TODO(port M6 S9): the contextual-return inference half (getContextualType
         // → inferTypes against the signature's return type + the return
         // mapper) rides the S9 contextual-typing engine; the seam answers
@@ -2027,7 +2058,11 @@ impl Checker {
                 let _ = self.check_expression(template);
             }
             Kind::JsxOpeningElement | Kind::JsxSelfClosingElement => {
-                // TODO(port M6 jsx wave): checkExpression(node.Attributes()).
+                // M6 W5 (checker.go:10124): checkExpression(node.Attributes()).
+                let attributes = crate::jsx::jsx_attributes_of(self.store(), node);
+                if let Some(attributes) = attributes {
+                    let _ = self.check_expression(attributes);
+                }
             }
             Kind::BinaryExpression => {
                 let left = match &self.store().node(node).data {
@@ -2048,14 +2083,14 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) resolveErrorCall(node) *Signature` (checker.go:10141).
-    fn resolve_error_call(&mut self, node: NodeId) -> Option<SignatureId> {
+    pub(crate) fn resolve_error_call(&mut self, node: NodeId) -> Option<SignatureId> {
         self.resolve_untyped_call(node);
         self.unknown_signature
     }
 
     /// Go: `func (c *Checker) isUntypedFunctionCall(funcType, apparentFuncType, numCallSignatures, numConstructSignatures) bool`
     /// (checker.go:10146).
-    fn is_untyped_function_call(
+    pub(crate) fn is_untyped_function_call(
         &mut self,
         func_type: TypeId,
         apparent_func_type: TypeId,
@@ -2335,7 +2370,31 @@ impl Checker {
     // argument lists until the factory surface lands.
     pub(crate) fn get_effective_call_arguments(&mut self, node: NodeId) -> Vec<NodeId> {
         match self.store().node(node).kind {
-            Kind::JsxOpeningFragment => Vec::new(),
+            Kind::JsxOpeningFragment => {
+                // M6 W5 (checker.go:30595): the fragment's synthetic
+                // first argument carries emptyFreshJsxObjectType ("this
+                // attributes Type does not include a children property yet,
+                // the same way a fragment created with <React.Fragment> does
+                // not at this stage").
+                let t = self.empty_fresh_jsx_object_type();
+                let synthetic = tsc_ast::Node {
+                    kind: Kind::SyntheticExpression,
+                    flags: tsc_ast::NodeFlags::NONE,
+                    loc: self.store().node(node).loc,
+                    id: std::cell::Cell::new(0),
+                    parent: std::cell::Cell::new(NodeId::NONE),
+                    data: tsc_ast::NodeData::SyntheticExpression(Box::new(
+                        tsc_ast::SyntheticExpression {
+                            type_: std::sync::Arc::new(t),
+                            is_spread: false,
+                            tuple_name_source: None,
+                        },
+                    )),
+                };
+                let arg = self.program.node_store_mut().alloc(synthetic);
+                self.program.node_store_mut().node_mut(arg).parent.set(node);
+                vec![arg]
+            }
             Kind::TaggedTemplateExpression => {
                 // TODO(port M6 factory): the TemplateStringsArray synthetic
                 // first argument + the span expressions; empty until then.
@@ -2353,8 +2412,22 @@ impl Checker {
                 }
             }
             Kind::JsxOpeningElement | Kind::JsxSelfClosingElement => {
-                // TODO(port M6 jsx wave): the attributes argument.
-                Vec::new()
+                // M6 W5 (checker.go:30600): the attributes are the single
+                // argument when present (non-empty attributes, or an opening
+                // element with children).
+                let attributes = crate::jsx::jsx_attributes_of(self.store(), node)
+                    .expect("opening-like elements have attributes");
+                let has_properties =
+                    !crate::jsx::jsx_properties_of(self.store(), attributes).is_empty();
+                let has_children = self.store().node(node).kind == Kind::JsxOpeningElement && {
+                        let parent = self.store().node(node).parent.get();
+                        !crate::jsx::jsx_children_of(self.store(), parent).is_empty()
+                    };
+                if has_properties || has_children {
+                    vec![attributes]
+                } else {
+                    Vec::new()
+                }
             }
             _ => {
                 let args = binder_node_data::arguments_of(self.store(), node).to_vec();

@@ -5417,6 +5417,22 @@ impl Checker {
         self.get_widened_literal_like_type_for_contextual_type(t, contextual_type)
     }
 
+    /// Go: `func (c *Checker) checkExpressionForMutableLocationWithContextualType(next, sourcePropType) *Type` (relater.go:630) —
+    /// REAL (M6 W5: required by elaborateElement and
+    /// elaborateIterableOrArrayLikeTargetElementwise; the relater.go source
+    /// lives in the elaboration family).
+    pub(crate) fn check_expression_for_mutable_location_with_contextual_type(
+        &mut self,
+        next: NodeId,
+        source_prop_type: crate::types::TypeId,
+    ) -> crate::types::TypeId {
+        self.push_contextual_type(Some(next), Some(source_prop_type), false /*isCache*/);
+        let result =
+            self.check_expression_for_mutable_location(next, CheckMode::CONTEXTUAL);
+        self.pop_contextual_type();
+        result
+    }
+
     /// Go: `func (c *Checker) getWidenedLiteralLikeTypeForContextualType(t, contextualType) *Type`
     /// (checker.go:26049). REAL body (isLiteralOfContextualType's contextual
     /// probe is S9-bannered; with the getContextualType S9 seam the arms are
@@ -6816,17 +6832,28 @@ impl Checker {
             )
     }
 
-    /// Go: `func (c *Checker) checkContextualDeprecations(node)` (checker.go:13605).
+    /// Go: `func (c *Checker) checkContextualDeprecations(node)` (checker.go:13605) —
+    /// M6 W5: Go's `node.Properties()` reads both the ObjectLiteral and the
+    /// JsxAttributes payloads (checkObjectLiteral's dispatch reaches here
+    /// for KindJsxAttributes too — checker.go:13605's caller).
     pub(crate) fn check_contextual_deprecations(&mut self, node: NodeId) {
         let contextual_type = self.get_apparent_type_of_contextual_type(node, crate::types::ContextFlags::NONE);
         let property_nodes: Vec<NodeId> = {
-            let d = self
-                .store()
-                .node(node)
-                .as_object_literal_expression()
-                .expect("ObjectLiteralExpression data");
-            d.properties
-                .as_ref()
+            let n = self.store().node(node);
+            let properties = match n.kind {
+                Kind::ObjectLiteralExpression => n
+                    .as_object_literal_expression()
+                    .expect("ObjectLiteralExpression data")
+                    .properties
+                    .clone(),
+                Kind::JsxAttributes => n
+                    .as_jsx_attributes()
+                    .expect("JsxAttributes data")
+                    .properties
+                    .clone(),
+                _ => None,
+            };
+            properties
                 .map(|l| l.nodes.to_vec())
                 .unwrap_or_default()
         };

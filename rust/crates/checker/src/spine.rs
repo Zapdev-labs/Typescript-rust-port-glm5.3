@@ -1392,10 +1392,12 @@ impl Checker {
                 self.check_type_parameter_deferred(node);
             }
             Kind::JsxSelfClosingElement => {
-                // TODO(port M6 W5): checkJsxSelfClosingElementDeferred (jsx.go).
+                // M6 W5: checkJsxSelfClosingElementDeferred (jsx.go).
+                self.check_jsx_self_closing_element_deferred(node);
             }
             Kind::JsxElement => {
-                // TODO(port M6 W5): checkJsxElementDeferred (jsx.go).
+                // M6 W5: checkJsxElementDeferred (jsx.go).
+                self.check_jsx_element_deferred(node);
             }
             Kind::TypeAssertionExpression | Kind::AsExpression => {
                 // M6 S4: checkAssertionDeferred (expressions.rs).
@@ -2274,29 +2276,25 @@ impl Checker {
                 self.check_synthetic_expression(node)
             }
             Kind::JsxExpression => {
-                // TODO(port M6 W5): checkJsxExpression(node, checkMode) — jsx.go.
-                let _ = check_mode;
-                self.error_type()
+                // M6 W5: checkJsxExpression(node, checkMode) — jsx.go.
+                self.check_jsx_expression(node, check_mode)
             }
             Kind::JsxElement => {
-                // TODO(port M6 W5): checkJsxElement(node, checkMode) — jsx.go
+                // M6 W5: checkJsxElement(node, checkMode) — jsx.go
                 // (M6-DISPATCH risk 3 signature).
-                let _ = check_mode;
-                self.error_type()
+                self.check_jsx_element(node, check_mode)
             }
             Kind::JsxSelfClosingElement => {
-                // TODO(port M6 W5): checkJsxSelfClosingElement(node, checkMode) — jsx.go.
-                let _ = check_mode;
-                self.error_type()
+                // M6 W5: checkJsxSelfClosingElement(node, checkMode) — jsx.go.
+                self.check_jsx_self_closing_element(node, check_mode)
             }
             Kind::JsxFragment => {
-                // TODO(port M6 W5): checkJsxFragment(node) — jsx.go.
-                self.error_type()
+                // M6 W5: checkJsxFragment(node) — jsx.go.
+                self.check_jsx_fragment(node)
             }
             Kind::JsxAttributes => {
-                // TODO(port M6 W5): checkJsxAttributes(node, checkMode) — jsx.go.
-                let _ = check_mode;
-                self.error_type()
+                // M6 W5: checkJsxAttributes(node, checkMode) — jsx.go.
+                self.check_jsx_attributes(node, check_mode)
             }
             Kind::JsxOpeningElement => {
                 panic!("Should never directly check a JsxOpeningElement")
@@ -3316,6 +3314,18 @@ impl Checker {
     /// Go: the `emptyGenericType` field (non-nil after NewChecker).
     pub(crate) fn empty_generic_type(&self) -> TypeId {
         self.empty_generic_type.expect("emptyGenericType")
+    }
+
+    /// Go: the `emptyJsxObjectType` field (non-nil after NewChecker; M6 W5).
+    pub(crate) fn empty_jsx_object_type(&self) -> TypeId {
+        self.empty_jsx_object_type.expect("emptyJsxObjectType")
+    }
+
+    /// Go: the `emptyFreshJsxObjectType` field (non-nil after NewChecker;
+    /// M6 W5 — the fragment synthetic-argument type).
+    pub(crate) fn empty_fresh_jsx_object_type(&self) -> TypeId {
+        self.empty_fresh_jsx_object_type
+            .expect("emptyFreshJsxObjectType")
     }
 
     /// `Option`-free comparison helper for Go's `x == c.emptyGenericType`

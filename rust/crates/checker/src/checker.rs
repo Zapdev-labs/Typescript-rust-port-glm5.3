@@ -186,6 +186,21 @@ pub trait Program {
     fn is_source_file_default_library(&self, _file: NodeId) -> bool {
         false
     }
+    /// Go: `Program.GetJSXRuntimeImportSpecifier(path) (moduleReference string,
+    /// specifier *ast.Node)` (program.go:2228 — the file loader's react-jsx
+    /// auto-import bookkeeping). M6 W5: the checker's
+    /// getJsxNamespaceContainerForImplicitImport reads it. PORT: the trait
+    /// hands back the module-reference STRING only (Go's second return, the
+    /// synthetic import-specifier NODE, rides the program merge; the checker
+    /// uses the canonical JSX tag as the error location meanwhile). The
+    /// permissive default mirrors a program with no react-jsx auto-import
+    /// data; the compiler Program (tsc_compiler::Program) cannot override
+    /// yet (its jsx_runtime_import_specifiers map landed with the file
+    /// loader wave but the crate is outside this wave's write scope — the
+    /// check twin's CheckerUnitProgram carries the twin answer).
+    fn get_jsx_runtime_import_specifier(&self, _file: NodeId) -> Option<String> {
+        None
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -597,6 +612,23 @@ pub struct Checker {
     pub(crate) any_readonly_array_type: Option<TypeId>,
     /// Go: `globalThisType`.
     pub(crate) global_this_type: Option<TypeId>,
+    // ── M6 W5 (jsx.go): the JSX state ──
+    /// Go: `jsxElementLinks nodeLinkStore[JsxElementLinks]` (jsx.go:39's
+    /// store field, checker.go struct slot) — keyed by node (opening-like
+    /// elements) AND by the file node (the implicit-import container +
+    /// first-jsx-tag caches).
+    pub(crate) jsx_element_links: crate::links::NodeLinkStore<crate::jsx::JsxElementLinks>,
+    /// Go: `emptyJsxObjectType *Type` (checker.go:749 —
+    /// `c.newAnonymousType(nil, ...)` at checker.go:1033).
+    pub(crate) empty_jsx_object_type: Option<TypeId>,
+    /// Go: `emptyFreshJsxObjectType *Type` (checker.go:750 — the fragment
+    /// synthetic-expression argument's type).
+    pub(crate) empty_fresh_jsx_object_type: Option<TypeId>,
+    /// Go: `_jsxNamespace string` (jsx.go's lazy "React" default).
+    pub(crate) jsx_namespace_field: String,
+    /// Go: `_jsxFactoryEntity *ast.Node` (jsx.go's synthetic
+    /// `<ns>.createElement` qualified name).
+    pub(crate) jsx_factory_entity_field: Option<NodeId>,
     /// Go: `globalCallableFunctionType`/`globalNewableFunctionType` (the
     /// getGlobalStrictFunctionType pair).
     pub(crate) global_callable_function_type: Option<TypeId>,
@@ -1734,6 +1766,12 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         auto_array_type: None,
         any_readonly_array_type: None,
         global_this_type: None,
+        // M6 W5 (jsx.go) state.
+        jsx_element_links: crate::links::NodeLinkStore::new(),
+        empty_jsx_object_type: None,
+        empty_fresh_jsx_object_type: None,
+        jsx_namespace_field: String::new(),
+        jsx_factory_entity_field: None,
         global_callable_function_type: None,
         global_newable_function_type: None,
         global_regexp_type: None,
@@ -2081,6 +2119,11 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
     // note lives there).
     c.empty_object_type = Some(c.new_anonymous_type(None, &[]));
     c.empty_generic_type = Some(c.new_anonymous_type(None, &[]));
+    // Go (checker.go:1033-1034): emptyJsxObjectType/emptyFreshJsxObjectType
+    // — plain empty anonymous types (M6 W5; the fresh twin is the fragment
+    // synthetic-expression argument's type).
+    c.empty_jsx_object_type = Some(c.new_anonymous_type(None, &[]));
+    c.empty_fresh_jsx_object_type = Some(c.new_anonymous_type(None, &[]));
     // Go: `c.unknownEmptyObjectType = c.newAnonymousType(nil, nil, nil, nil, nil)`
     // (checker.go:1033) — REAL (M6 S7; removeSubtypes/createUnknownUnionType
     // compare against it).

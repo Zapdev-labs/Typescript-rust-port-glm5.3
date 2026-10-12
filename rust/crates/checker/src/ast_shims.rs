@@ -362,6 +362,15 @@ pub fn entity_name_to_string(store: &dyn NodeStore, name: NodeId) -> String {
     }
 }
 
+/// Go: `(*Node).Text()` read on a JsxAttribute's name — the jsx.go wave's
+/// `attribute.Name().Text()` sites (jsx.go:224/299). The JsxNamespacedName
+/// arm routes through the binder's ported `Text()` arm
+/// (`jsx_namespaced_name_text`, "ns:name"); identifiers fall through to
+/// `node_text`.
+pub fn jsx_name_text(store: &dyn NodeStore, node: NodeId) -> String {
+    tsc_binder::ast_shims::jsx_namespaced_name_text(store, node)
+}
+
 /// Go: `func GetTextOfNode(node *ast.Node) string` (scanner/utilities.go) —
 /// the includeTrivia=false path. The JSDoc source normalization and
 /// reparser-transformed-literal arms are unreachable for the spike's parsed

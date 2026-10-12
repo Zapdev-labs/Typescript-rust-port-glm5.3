@@ -15,6 +15,7 @@ tsc-core = { path = "../core" }
 tsc-debug = { path = "../debug" }
 tsc-diagnostics = { path = "../diagnostics" }
 tsc-jsnum = { path = "../jsnum" }
+tsc-parser = { path = "../parser" } # Go checker imports parser (jsx.go:1491 ParseIsolatedEntityName)
 tsc-scanner = { path = "../scanner" }
 tsc-stringutil = { path = "../stringutil" } # Go relater.go: CombineSurrogatePairs/DecodeJSStringRune (template-literal inference)
 tsc-tspath = { path = "../tspath" } # Go checker.go: tspath.IsExternalModuleNameRelative (checker.go:5486)

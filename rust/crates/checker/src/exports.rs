@@ -527,21 +527,30 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) GetJsxNamespace(location *ast.Node) string` →
-    /// `c.getJsxNamespace(location)` (jsx.go — the jsx wave).
+    /// `c.getJsxNamespace(location)` (jsx.go:1404) — REAL (M6 W5).
     pub fn get_jsx_namespace(&mut self, location: NodeId) -> String {
-        // TODO(port M6 jsx wave): the JSX namespace resolution.
-        let _ = location;
-        String::new()
+        self.get_jsx_namespace_string(Some(location))
     }
 
     /// Go: `func (c *Checker) GetJsxFragmentFactory(location *ast.Node) string` —
     /// `entity := c.getJsxFragmentFactoryEntity(location);
     /// if entity != nil { return ast.GetFirstIdentifier(entity).Text() }; return ""`
-    /// (jsx.go — the jsx wave).
+    /// (jsx.go:1476) — REAL (M6 W5).
     pub fn get_jsx_fragment_factory(&mut self, location: NodeId) -> String {
-        // TODO(port M6 jsx wave): getJsxFragmentFactoryEntity.
-        let _ = location;
-        String::new()
+        match self.get_jsx_fragment_factory_entity(Some(location)) {
+            Some(entity) => {
+                let mut node = entity;
+                loop {
+                    let n = self.store().node(node);
+                    if n.kind == tsc_ast::Kind::QualifiedName {
+                        node = n.as_qualified_name().expect("data").left;
+                    } else {
+                        return tsc_ast::node_text(self.store(), node).to_string();
+                    }
+                }
+            }
+            None => String::new(),
+        }
     }
 
     /// Go: `func (c *Checker) ResolveName(name string, location *ast.Node, meaning ast.SymbolFlags, excludeGlobals bool) *ast.Symbol`
@@ -873,7 +882,13 @@ mod tests {
         // walk: the unknown symbol's own name is "unknown" (Go's
         // symbolToString(unknownSymbol) answers the same).
         assert_eq!(c.get_fully_qualified_name(sym), "unknown");
-        assert_eq!(c.get_jsx_namespace(node), "");
+        // M6 W5 flipped the JSX namespace/fragment-factory twins to the REAL
+        // family (jsx.rs): get_jsx_namespace answers the default "React"
+        // namespace (Go getJsxNamespace with no pragma/factory options and
+        // no file pragmas — jsxNamespace default), and
+        // get_jsx_fragment_factory still answers "" (Go: no fragment
+        // factory without jsxFragmentFactory/pragma).
+        assert_eq!(c.get_jsx_namespace(node), "React");
         assert_eq!(c.get_jsx_fragment_factory(node), "");
         assert_eq!(c.resolve_name("x", node, SymbolFlags::VALUE, false), None);
         // M6 W2 wired the real relater: identity comparability of a type
