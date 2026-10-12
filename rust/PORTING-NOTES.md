@@ -2307,3 +2307,8 @@ members_of arm, the real const-evaluator, is_external_module_
 augmentation, the async-generator 2318 nested-stub pair, the @ts-check
 directive gate. Orchestrator re-verified fresh: check twin IDENTICAL,
 all rails green, 256 tests. W3 COMPLETE after seven tranches.
+
+Rig validation (W3 COMPLETE, 2026-10-14): forced clean + rebuild —
+RIG-CHECK-IDENTICAL (zero divergence confirmed on the rig), fixture
+x3 identical, bind 143/143, program twin 15/15. W3 CLOSED ON BOTH
+MACHINES. W5 (jsx, the final M6 wave) dispatched.
