@@ -2297,3 +2297,13 @@ rails green (fixture x3 identical, bind 143/143, program 15/15). W3
 tranche 6 RIG-VALIDATED. Tranche 7 (S8 generic-member instantiation +
 2414 collisions wiring + 2307 ambient seam-shape + the final hash-diffs)
 dispatched — the zero-divergence push.
+
+## M6 W3 CLOSED — check-stage twin divergence ZERO (2026-10-14)
+
+Tranche 7 (survived a box-reboot cutoff via continuation discipline):
+27 -> 25 (S8 generic-member instantiation landed — the E3<T>.m() ->
+string mapping, EPromise.then) -> 0. Final fixes: the EnumDeclaration
+members_of arm, the real const-evaluator, is_external_module_
+augmentation, the async-generator 2318 nested-stub pair, the @ts-check
+directive gate. Orchestrator re-verified fresh: check twin IDENTICAL,
+all rails green, 256 tests. W3 COMPLETE after seven tranches.

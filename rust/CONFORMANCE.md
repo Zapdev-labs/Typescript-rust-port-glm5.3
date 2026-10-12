@@ -422,3 +422,24 @@ tranche), TS2304 x33, 2683 x17, and 41 hash-only diffs dominated by the
 type_to_string W4 stub (collapse when W4's printer lands). All gates
 held: fixture x3 stages identical, bind 143/143, program 15/15,
 verdict flips 0.
+
+## W3 COMPLETE — the check-stage twin is at ZERO divergence (2026-10-14)
+
+The final tranche (t7) drove the remaining 25 to 0: members_of had NO
+EnumDeclaration arm (enum members were never walked — checkEnumMember
+never ran), the REAL const-evaluator landed (evaluator.go: evaluate/
+evaluate_entity with cross-file provenance, the 14 binary numeric ops,
+templates; the 'foo'.length corpus scan), is_external_module_
+augmentation real (parent-placement rules), the async-generator 2318
+arm (the "lib seam" hypothesis was WRONG — two nested stubs:
+checkGeneratorInstantiationAssignability + createGeneratorType's
+missing-global fallback), the @ts-check directive gate for 7006.
+Orchestrator fresh-binary verification: CHECK 300-SLICE TWIN
+BYTE-IDENTICAL (0/174/210/0 both drivers, zero divergent records),
+bind gate 143/163/78/0 identical, fixture x3 identical, program twin
+15/15, 256 tests, clippy 0, tsc/packages/tools clean. The W3 climb:
+232 -> 131 -> 111 -> 99 -> 83 -> 27 -> 25 -> 0 across seven tranches,
+two hypotheses falsified honestly, every regression rail green
+throughout. Remaining scope is harness-side (exact-match/missing-
+baseline vs the reference baselines, the lib-less twin shape), not
+checker divergence. W5 (jsx) is the last M6 wave.
