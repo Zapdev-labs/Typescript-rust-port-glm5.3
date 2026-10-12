@@ -71,6 +71,7 @@ use tsc_ast::{
     CheckFlags, Kind, ModifierFlags, Node, NodeData, NodeId, NodeStore, SymbolFlags, SymbolId,
     SymbolTable,
 };
+use tsc_core::tristate::Tristate;
 use tsc_diagnostics::Message;
 use tsc_diagnostics::TYPE_PARAMETER_0_HAS_A_CIRCULAR_CONSTRAINT;
 use tsc_diagnostics::{
@@ -3625,11 +3626,32 @@ impl Checker {
 
     /// Go: `func (c *Checker) reportImplicitAny(declaration, t, wideningKind)`.
     pub(crate) fn report_implicit_any(&mut self, declaration: NodeId, t: TypeId, widening_kind: WideningKind) {
-        // TODO(port M6 S4): the IsCheckJSEnabledForFile gate — implicit any
-        // errors are only reported in TS and ts-check JS files; the current
-        // is_in_js_file read keeps JS files silent like Go.
+        // Go: `if ast.IsInJSFile(declaration) &&
+        // !ast.IsCheckJSEnabledForFile(...)` — only report implicit any
+        // errors/suggestions in TS and ts-check JS files
+        // (ast/utilities.go:2962: the file's // @ts-check directive wins
+        // over the compilerOptions.checkJs default).
         if tsc_ast::utilities::is_in_js_file(self.store().node(declaration)) {
-            return;
+            let check_js_enabled =
+                match tsc_ast::utilities::get_source_file_of_node(self.store(), declaration) {
+                    Some(file) => {
+                        let directive = self
+                            .store()
+                            .node(file.as_node_id())
+                            .as_source_file()
+                            .expect("SourceFile data")
+                            .check_js_directive
+                            .clone();
+                        match directive {
+                            Some(directive) => directive.enabled,
+                            None => self.compiler_options.check_js == Tristate::TSTrue,
+                        }
+                    }
+                    None => self.compiler_options.check_js == Tristate::TSTrue,
+                };
+            if !check_js_enabled {
+                return;
+            }
         }
         // TODO(port M6 W4 nodebuilder): TypeToString — the real printer;
         // the stub prints empty (the diagnostic's typeAsString argument).
@@ -5414,26 +5436,24 @@ impl Checker {
                 let argument = data.argument_expression;
                 if u::is_entity_name_expression(self.store(), root)
                     && binder_shims::is_string_literal_like(self.store().node(argument))
-                {
-                    if let Some(root_symbol) =
+                    && let Some(root_symbol) =
                         self.resolve_entity_name(root, SymbolFlags::VALUE, true, false, location)
-                        && self.program.symbol(root_symbol).flags.contains(SymbolFlags::ENUM)
-                    {
-                        let name = ast_shims::get_text_of_node(self.store(), argument);
-                        let member = self
-                            .program
-                            .symbol(root_symbol)
-                            .exports
-                            .get(&name)
-                            .copied();
-                        if let Some(member) = member {
-                            if location != NodeId::NONE {
-                                return self.evaluate_enum_member(expr, member, location);
-                            }
-                            let value_declaration = self.program.symbol(member).value_declaration;
-                            if let Some(declaration) = value_declaration {
-                                return self.get_enum_member_value(declaration);
-                            }
+                    && self.program.symbol(root_symbol).flags.contains(SymbolFlags::ENUM)
+                {
+                    let name = ast_shims::get_text_of_node(self.store(), argument);
+                    let member = self
+                        .program
+                        .symbol(root_symbol)
+                        .exports
+                        .get(&name)
+                        .copied();
+                    if let Some(member) = member {
+                        if location != NodeId::NONE {
+                            return self.evaluate_enum_member(expr, member, location);
+                        }
+                        let value_declaration = self.program.symbol(member).value_declaration;
+                        if let Some(declaration) = value_declaration {
+                            return self.get_enum_member_value(declaration);
                         }
                     }
                 }

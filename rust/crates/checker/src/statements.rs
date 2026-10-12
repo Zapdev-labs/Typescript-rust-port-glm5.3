@@ -9674,7 +9674,7 @@ impl Checker {
                             &[],
                         );
                     } else if tsc_tspath::is_external_module_name_relative(
-                        &tsc_ast::node_text(self.store(), d.name),
+                        tsc_ast::node_text(self.store(), d.name),
                     ) {
                         // Go: tspath.IsExternalModuleNameRelative(name) —
                         // W3T7: the 2436 leg of ambientErrors

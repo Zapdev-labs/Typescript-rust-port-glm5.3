@@ -1416,6 +1416,9 @@ impl Checker {
                 };
                 // Go: the rest-type spread check — diagnosticOutput passes
                 // straight through (same W3T7 fix as the argument loop).
+                // This is the final use, but as_deref_mut keeps the
+                // call-shape uniform with the loop's reborrows.
+                #[allow(clippy::needless_option_as_deref)]
                 if !self.check_type_related_to_ex(
                     spread_type,
                     rest_type,

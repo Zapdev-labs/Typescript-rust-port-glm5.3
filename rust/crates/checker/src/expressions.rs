@@ -3866,28 +3866,6 @@ impl Checker {
         true
     }
 
-    /// Go: `func (c *Checker) symbolHasNonMethodDeclaration(symbol) bool` (checker.go:12150).
-    pub(crate) fn symbol_has_non_method_declaration(&mut self, symbol: SymbolId) -> bool {
-        self.for_each_property(symbol, |prop, c| {
-            !c.program_symbol(prop).flags.intersects(SymbolFlags::METHOD)
-        })
-    }
-
-    /// Go: `func (c *Checker) forEachProperty(prop, callback) bool` (checker.go:12155).
-    /// The synthetic-property fan-out reads valueSymbolLinks'
-    /// containingType (S7); the non-synthetic arm is real.
-    pub(crate) fn for_each_property(
-        &mut self,
-        prop: SymbolId,
-        mut callback: impl FnMut(SymbolId, &mut Checker) -> bool,
-    ) -> bool {
-        if !self.program_symbol(prop).check_flags.intersects(tsc_ast::CheckFlags::SYNTHETIC) {
-            return callback(prop, self);
-        }
-        // TODO(port M6 S7): the synthetic fan-out over containingType.
-        false
-    }
-
     /// Go: `func (c *Checker) isClassDerivedFromDeclaringClasses(class, prop, writing) bool`
     /// (checker.go:12202).
     pub(crate) fn is_class_derived_from_declaring_classes(
@@ -4090,9 +4068,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) isPropertyDeclaredInAncestorClass(prop) bool` (checker.go:11973).
     pub(crate) fn is_property_declared_in_ancestor_class(&mut self, prop: SymbolId) -> bool {
-        let parent = self.program_symbol(prop).parent;
-        if parent.is_some() {
-            let parent = parent.expect("checked");
+        if let Some(parent) = self.program_symbol(prop).parent {
             if self.program_symbol(parent).flags.intersects(SymbolFlags::CLASS) {
                 let declared_type = self.get_declared_type_of_symbol(parent);
                 let base_types = self.get_base_types(declared_type);
