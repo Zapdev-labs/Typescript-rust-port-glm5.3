@@ -2367,3 +2367,20 @@ Rig validation (full-corpus sweep tranche 1, 2026-10-14): forced clean
 CHECK zero divergence, program 15/15). Tranche 1 RIG-VALIDATED. Tranche
 2 (the 320-case NodeId::NONE panic family + the tslib/panic census)
 dispatched.
+
+## Full-corpus sweep tranche 2 landed (2026-10-14, dc61acbfa9) — sentinels 502 -> 191, divergent 2,532 -> 2,423
+
+The NodeId::NONE family (~320 cases) fell to the real root cause:
+Go's getControlFlowContainer is a FindAncestor that legitimately
+returns nil (the binder's CommonJS module/exports symbols use the
+SourceFile as valueDeclaration — parent Go-nil); the port's
+Option-aversion turned that into a panic. Now Option<NodeId> Go-exact
+at every call site. Nine further sibling fixes (is_alias_symbol_
+declaration completed, MODULE_EXPORTS through resolveExternalModule-
+Symbol, LOC-based synthesized guards, resolve_signature left.PARENT,
+nil-tolerant find_constructor_declaration, get_resolved_symbol_or_nil
+raw-link, get_parameter_count TARGET read). Panics 502->191; divergent
+2,532->2,423 (3,068 pre-tranche-1). 19 suites + 5 fcs2 pins; all
+300-slice gates held; rig validation queued. Plus the tsoptions
+UndefinedTextRange span fix (orchestrator, the tranche's flagged
+follow-up) — all gates re-verified fresh.
