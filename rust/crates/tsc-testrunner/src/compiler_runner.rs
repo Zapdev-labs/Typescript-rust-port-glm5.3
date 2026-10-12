@@ -80,7 +80,7 @@ use crate::test_case_parser::{
 // The W3 check stage: the per-file checker seam
 // ──────────────────────────────────────────────────────────────────────
 
-use tsc_ast::{NodeStore, SourceFile, Symbol, SymbolId};
+use tsc_ast::{NodeId, NodeStore, SourceFile, Symbol, SymbolId};
 use tsc_binder::{BindResult, bind_source_file};
 use tsc_checker::{Program, new_checker};
 use tsc_core::options_generated::{CompilerOptions, ModuleKind};
@@ -121,6 +121,30 @@ impl Program for CheckerUnitProgram {
     // be kept for `flow_arena`); NewChecker's BindSourceFiles call is the
     // no-op — the same shape the checker's own tests use.
     fn bind_source_files(&mut self) {}
+    // M6 W5: the JSX react-jsx auto-import seam — mirrors the Go program's
+    // jsxRuntimeImportSpecifiers map (the file loader computes the
+    // specifier per JS/TSX file via GetJSXImplicitImportBase +
+    // GetJSXRuntimeImport; the twin program has exactly one file).
+    fn get_jsx_runtime_import_specifier(&self, file: NodeId) -> Option<String> {
+        if file != self.source_file.as_node_id() {
+            return None;
+        }
+        if tsc_compiler::ast_shims::is_source_file_js_by_file(&self.source_file)
+            || self.source_file.payload().script_kind == ScriptKind::TSX
+        {
+            let specifier = tsc_compiler::ast_shims::get_jsx_runtime_import(
+                &tsc_compiler::ast_shims::get_jsx_implicit_import_base(
+                    &self.options,
+                    &self.source_file,
+                ),
+                &self.options,
+            );
+            if !specifier.is_empty() {
+                return Some(specifier);
+            }
+        }
+        None
+    }
     fn node_store(&self) -> &dyn NodeStore {
         &self.source_file
     }

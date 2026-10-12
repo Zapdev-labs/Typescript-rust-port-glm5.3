@@ -392,6 +392,15 @@ pub fn is_shorthand_ambient_module(store: &dyn NodeStore, node: Option<NodeId>) 
     })
 }
 
+/// Go: `func NodeIsSynthesized(node *ast.Node) bool` (ast/utilities.go) —
+/// the LOC-based probe (`PositionIsSynthesized(pos) || PositionIsSynthesized(end)`,
+/// i.e. pos/end < 0), NOT the NodeFlagsSynthesized bit. The checker-copied
+/// entity names (markAsSynthetic, jsx.go) are distinguished by their (-1,-1)
+/// loc alone.
+pub fn node_is_synthesized(node: &tsc_ast::Node) -> bool {
+    node.loc.pos() < 0 || node.loc.end() < 0
+}
+
 /// Go: `func getAliasDeclarationFromName(node *ast.Node) *ast.Node`.
 pub fn get_alias_declaration_from_name(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
     let parent = store.node(node).parent.get();

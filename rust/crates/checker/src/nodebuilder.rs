@@ -530,13 +530,15 @@ fn get_name_of_symbol_as_written(c: &mut Checker, ctx: &mut NbCtx, symbol: Symbo
             || sym.declarations.is_empty()
             || {
                 // Different binding context (source file vs ambient module):
-                // FindAncestor(decl, isDefaultBindingContext) mismatch.
+                // Go nodebuilderimpl.go:985 — the comparison runs only when
+                // enclosingDeclaration is non-nil (nil enclosing keeps the
+                // symbol name; it never forces the "default" spelling).
                 let decl = sym.declarations[0];
-                let decl_ctx = find_binding_context(c, decl);
-                let enclosing_ctx = ctx
-                    .enclosing_declaration
-                    .map(|n| find_binding_context(c, n));
-                Some(decl_ctx) != enclosing_ctx
+                ctx.enclosing_declaration.is_some_and(|enclosing| {
+                    let decl_ctx = find_binding_context(c, decl);
+                    let enclosing_ctx = find_binding_context(c, enclosing);
+                    decl_ctx != enclosing_ctx
+                })
             })
     {
         return "default".to_string();
@@ -595,26 +597,34 @@ fn get_name_of_symbol_as_written(c: &mut Checker, ctx: &mut NbCtx, symbol: Symbo
 }
 
 /// Go: `node.Parent` (nil when absent) — the Rust port stores a
-/// `Cell<NodeId>` with `NodeId(0)` as the nil sentinel (ast lib.rs:244).
+/// `Cell<NodeId>` with `NodeId::NONE` (u64::MAX) as the nil sentinel
+/// (SPEC §5.1; the SourceFile node itself carries a NONE parent).
+/// PORT (FCS): the former probe treated `NodeId(0)` as the sentinel — but
+/// node 0 of file 0 is the real SourceFile, so every top-level node's
+/// parent walk stopped one level early, and a SourceFile-declared symbol
+/// (the binder's CommonJS module/exports symbols) yielded `Some(NONE)`
+/// and a foreign-node panic at the VariableDeclaration probe below.
 fn parent_node(nd: &tsc_ast::Node) -> Option<NodeId> {
     let p = nd.parent.get();
-    (p != NodeId(0)).then_some(p)
+    (p != NodeId::NONE).then_some(p)
 }
 
 /// Go: `isDefaultBindingContext` (nodebuilderimpl.go:933) — the
-/// FindAncestor-or-nil probe. Returns the binding-context node's id (0 for
-/// "not found", distinct from any real node id because ids are 1-based).
-fn find_binding_context(c: &Checker, location: NodeId) -> u64 {
+/// FindAncestor-or-nil probe. Returns the binding-context node itself
+/// (Go compares the FindAncestor result pointers, nil == nil; the port's
+/// Option<NodeId> equality is that exact comparison — the former
+/// node-id encoding collided with the id cell's 0-means-unassigned).
+fn find_binding_context(c: &Checker, location: NodeId) -> Option<NodeId> {
     let store = c.store();
     let mut node = Some(location);
     while let Some(n) = node {
         let nd = store.node(n);
         if nd.kind == Kind::SourceFile || binder_shims::is_ambient_module(store, n) {
-            return nd.id.get();
+            return Some(n);
         }
         node = parent_node(nd);
     }
-    0
+    None
 }
 
 /// Go: `core.FirstNonNil(symbol.Declarations, ast.GetNameOfDeclaration)`.

@@ -1662,18 +1662,19 @@ pub fn get_declaration_of_kind(
 }
 
 /// Go: `func FindConstructorDeclaration(node *ClassLikeDeclaration) *Node`.
+///
+/// PORT (FCS): Go's `NodeIsPresent(member.Body())` is nil-tolerant
+/// (utilities.go:66 — `node == nil` arm); a bodyless constructor overload
+/// made the port's `unwrap_or_default` hand NodeId::NONE to store.node.
 pub fn find_constructor_declaration(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
     node_data::members_of(store, node)
         .iter()
         .copied()
         .find(|&member| {
             is_constructor_declaration(store.node(member))
-                && tsc_ast::node_is_present(store.node(body_of_or_missing(store, member)))
+                && node_data::body_of(store, member)
+                    .is_some_and(|b| tsc_ast::node_is_present(store.node(b)))
         })
-}
-
-fn body_of_or_missing(store: &dyn NodeStore, member: NodeId) -> NodeId {
-    node_data::body_of(store, member).unwrap_or_default()
 }
 
 /// Go: `func ModuleExportNameIsDefault(node *Node) bool`.

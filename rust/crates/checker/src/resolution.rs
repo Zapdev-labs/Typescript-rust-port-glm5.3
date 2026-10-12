@@ -4025,8 +4025,15 @@ impl Checker {
 
     /// Go: `func (c *Checker) getResolvedSymbolOrNil(node) *ast.Symbol`
     /// (checker.go:14174).
+    ///
+    /// PORT (FCS): Go's body is the raw LINK READ
+    /// (`c.symbolNodeLinks.Get(node).resolvedSymbol`) — it never resolves
+    /// (getResolvedSymbol's resolveName/node.Text() path panics in Go on
+    /// non-name nodes, so callers reach it only for already-checked nodes;
+    /// the former delegation to get_resolved_symbol made the
+    /// getTargetOfAliasLikeExpression fallback panic on PropertyAccess).
     pub(crate) fn get_resolved_symbol_or_nil(&mut self, node: NodeId) -> Option<SymbolId> {
-        let symbol = self.get_resolved_symbol(node);
+        let symbol = self.symbol_node_links.get(node).resolved_symbol;
         symbol.filter(|&s| s != self.unknown_symbol())
     }
 
@@ -4055,9 +4062,7 @@ impl Checker {
             Kind::Identifier => {
                 let mut message: Option<&'static Message> = None;
                 if !ignore_errors {
-                    if meaning == SymbolFlags::NAMESPACE
-                        || self.store().node(name).flags.intersects(NF::SYNTHESIZED)
-                    {
+                    if meaning == SymbolFlags::NAMESPACE || u::node_is_synthesized(self.store().node(name)) {
                         message = Some(&diag::CANNOT_FIND_NAMESPACE_0);
                     } else {
                         let first = crate::statements::get_first_identifier(self.store(), name);
@@ -4155,7 +4160,15 @@ impl Checker {
         if let Some(symbol_id) = symbol.filter(|&s| s != self.unknown_symbol()) {
             let mut symbol_id = symbol_id;
             let name_parent = self.store().node(name).parent.get();
-            if !self.store().node(name).flags.intersects(NF::SYNTHESIZED)
+            // PORT (FCS): Go's guards here are the LOC-based
+            // `ast.NodeIsSynthesized(name)` (pos/end < 0 — utilities.go:2766),
+            // NOT the NodeFlagsSynthesized bit: the checker-copied entity
+            // names (parse_isolated_entity_name's markAsSynthetic loc
+            // (-1,-1), jsx.go:1084) are excluded by the loc probe only. The
+            // flag bit misport let a synthetic alias-resolving name reach
+            // getAliasDeclarationFromName, whose parent walk hit the
+            // parentless copied QualifiedName (Go: node.Parent nil).
+            if !u::node_is_synthesized(self.store().node(name))
                 && binder_shims::is_entity_name(self.store().node(name))
                 && (self.program_symbol(symbol_id).flags.intersects(SymbolFlags::ALIAS)
                     || name_parent != NodeId::NONE

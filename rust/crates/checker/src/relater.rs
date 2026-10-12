@@ -2209,10 +2209,20 @@ impl Checker {
         if s.has_rest_parameter() {
             let rest_type = self.get_type_of_symbol(s.parameters[length as usize - 1]);
             if self.is_tuple_type(rest_type) {
-                let tuple = self.type_(rest_type).as_tuple_type().expect("tuple target");
-                let target = self.type_(tuple.base.base.base.target.expect("tuple target")).as_tuple_type().expect("TupleType data");
-                return length + target.fixed_length
-                    - i32::from(target.combined_flags.intersects(ElementFlags::VARIABLE));
+                // PORT (FCS): Go relater.go:2213 — `restType.TargetTupleType()`:
+                // isTupleType guarantees restType is a REFERENCE whose target
+                // carries the TupleType data (the former body read the
+                // reference's own data, whose target is None — the "tuple
+                // target" panics on readonlyRestParameters et al); and Go's
+                // `- IfElse(combinedFlags&Variable != 0, 0, 1)` subtracts ONE
+                // when NOT variable (the port had the IfElse inverted).
+                let target = self
+                    .type_(rest_type)
+                    .target()
+                    .expect("FCS: isTupleType guarantees the tuple target");
+                let tuple = self.type_(target).as_tuple_type().expect("TupleType data");
+                return length + tuple.fixed_length
+                    - i32::from(!tuple.combined_flags.intersects(ElementFlags::VARIABLE));
             }
         }
         length

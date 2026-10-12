@@ -788,18 +788,38 @@ impl Checker {
             return Some(self.report_circularity_error(symbol));
         }
         let result = if self.program.symbol(symbol).flags.intersects(SymbolFlags::MODULE_EXPORTS) {
-            // TODO(port M6 S6): the `exports` arm resolves through
-            // resolveExternalModuleSymbol; the named arm builds an anonymous
-            // type over symbol.Members — permissive: the anonymous type with
-            // the declared member set.
-            let members: Vec<SymbolId> = self
-                .program
-                .symbol(symbol)
-                .members
-                .entries()
-                .map(|(_, &s)| s)
-                .collect();
-            Some(self.new_anonymous_type(Some(symbol), &members))
+            // PORT (FCS): Go checker.go:16986-16991 — the `exports` symbol
+            // resolves through the SourceFile's module symbol's export=
+            // (the type of `module.exports` is the type of the module's
+            // exported value, e.g. `typeof Handler`); every other
+            // ModuleExports symbol (`module`) is an anonymous type over its
+            // Members — the member-carrying constructor (the S1
+            // new_anonymous_type seam drops members, which made
+            // `module.exports` fail with a spurious 2339 on `{}`).
+            if self.program.symbol(symbol).name == "exports" {
+                let file_symbol = self
+                    .program
+                    .symbol(symbol)
+                    .value_declaration
+                    .and_then(|d| self.get_symbol_of_declaration(d));
+                match file_symbol {
+                    Some(file_symbol) => {
+                        let target = self.resolve_external_module_symbol(file_symbol);
+                        Some(match target {
+                            Some(target) => self.get_type_of_symbol(target),
+                            None => self.error_type(),
+                        })
+                    }
+                    None => Some(self.error_type()),
+                }
+            } else {
+                let members = self.program.symbol(symbol).members.clone();
+                Some(self.new_anonymous_type_with_members(
+                    Some(symbol),
+                    members,
+                    crate::types::ObjectFlags::NONE,
+                ))
+            }
         } else {
             let declaration_kind = self.store().node(declaration).kind;
             match declaration_kind {
@@ -4360,9 +4380,17 @@ fn find_declaration_of_kind(c: &Checker, declarations: &[NodeId], kind: Kind) ->
         .find(|&d| store.node(d).kind == kind)
 }
 
-/// Go: `ast.IsAliasSymbolDeclaration(node)` (utilities.go) — the alias
+/// Go: `ast.IsAliasSymbolDeclaration(node)` (utilities.go:2711) — the alias
 /// declaration kinds (the binder doesn't carry it; S2's
 /// getDeclarationOfAliasSymbol is the sole checker-side consumer).
+/// PORT (FCS): the former body dropped three Go arms — the
+/// require-initialized VariableDeclaration/BindingElement arm, the
+/// BinaryExpression arm (`module.exports = <alias>` /
+/// `exports.name = <alias>`, the JS CommonJS alias forms whose omission
+/// made the binder's expando `Strings` alias hit resolveAlias's
+/// "Unexpected nil" panic), and Go's real ExpressionIsAlias probe for
+/// ExportAssignment (entity-name OR class expression, not the bare
+/// identifier/qualified-name check).
 fn is_alias_symbol_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
     let n = store.node(node);
     match n.kind {
@@ -4378,10 +4406,18 @@ fn is_alias_symbol_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
                 .as_export_assignment()
                 .expect("ExportAssignment data")
                 .expression;
-            // Go: ExpressionIsAlias — an Identifier or QualifiedName (the
-            // entity-name forms; everything else is a value expression).
-            let e = store.node(expr);
-            matches!(e.kind, Kind::Identifier | Kind::QualifiedName)
+            tsc_binder::ast_shims::expression_is_alias(store, expr)
+        }
+        Kind::VariableDeclaration | Kind::BindingElement => {
+            tsc_binder::ast_shims::is_variable_declaration_initialized_to_require(store, node)
+        }
+        Kind::BinaryExpression => {
+            let d = n.as_binary_expression().expect("BinaryExpression data");
+            matches!(
+                tsc_ast::get_assignment_declaration_kind(store, node),
+                tsc_ast::JSDeclarationKind::ModuleExports
+                    | tsc_ast::JSDeclarationKind::ExportsProperty
+            ) && tsc_binder::ast_shims::expression_is_alias(store, d.right)
         }
         _ => false,
     }

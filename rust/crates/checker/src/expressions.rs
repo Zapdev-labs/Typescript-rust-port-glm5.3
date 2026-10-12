@@ -818,11 +818,18 @@ impl Checker {
                 &[],
             );
         }
-        // TODO(port M6 S6): getResolvedSignature(left.Parent, nil, checkMode) —
-        // the hasInstance resolution; permissive error-signature shape (Go's
-        // resolveSignature never returns nil — the error signature's return
-        // type is errorType, which is what the stubbed seam yields here).
-        let signature = self.get_resolved_signature_stub(left, None, check_mode);
+        // PORT (FCS): Go checker.go:13298 — `getResolvedSignature(left.Parent, ...)`:
+        // the node resolved is the enclosing BINARY expression (resolveSignature
+        // → resolveInstanceofExpression), not the left operand itself (the
+        // former pass of `left` hit resolveSignature's KindIdentifier panic);
+        // plus Go's resolvingSignature early-out (SkipGenericFunctions).
+        let signature = self
+            .get_resolved_signature_stub(self.store().node(left).parent.get(), None, check_mode);
+        if signature.is_some() && signature == self.resolving_signature {
+            // CheckMode.SkipGenericFunctions is enabled and this is a call to a generic function that
+            // returns a function type. We defer checking and return silentNeverType.
+            return self.silent_never_type();
+        }
         let return_type = match signature {
             Some(sig) => self.get_return_type_of_signature(sig),
             None => self.error_type(),
@@ -3426,6 +3433,12 @@ impl Checker {
                         && !tsc_binder::ast_shims::is_static(self.store().node(declaration))
                     {
                         let flow_container = self.get_control_flow_container(node);
+                        // PORT (FCS): Go dereferences the FindAncestor result
+                        // unconditionally (checker.go:11653's
+                        // `IsConstructorDeclaration(flowContainer)`); nil here is
+                        // Go's nil-pointer panic — the port keeps the same
+                        // unreachable-state failure.
+                        let flow_container = flow_container.expect("FCS: Go nil control flow container");
                         if self.store().node(flow_container).kind == Kind::Constructor
                             && self.store().node(flow_container).parent.get()
                                 == self.store().node(declaration).parent.get()
@@ -3471,9 +3484,17 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getControlFlowContainer(node) *ast.Node` (checker.go:11670).
-    pub(crate) fn get_control_flow_container(&mut self, node: NodeId) -> NodeId {
+    ///
+    /// PORT (FCS): Go's body is `ast.FindAncestor(node.Parent, callback)` —
+    /// the walk starts at the node's parent and returns nil when that parent
+    /// is Go nil or the chain exhausts. The binder's CommonJS `module`/
+    /// `exports` symbols (declareCommonJSVariable, binder.go:1627) carry the
+    /// SourceFile as their value declaration, whose Parent is Go nil — the
+    /// port's NodeId::NONE — so `None` is a REAL, reachable answer here
+    /// (checker.go:11364's declarationContainer), not an error state.
+    pub(crate) fn get_control_flow_container(&mut self, node: NodeId) -> Option<NodeId> {
         let mut parent = self.store().node(node).parent.get();
-        loop {
+        while parent != NodeId::NONE {
             let n = self.store().node(parent);
             let is_match = (tsc_ast::is_function_like(n)
                 && tsc_binder::ast_shims::get_immediately_invoked_function_expression(self.store(), parent).is_none())
@@ -3481,14 +3502,11 @@ impl Checker {
                 || n.kind == Kind::SourceFile
                 || n.kind == Kind::PropertyDeclaration;
             if is_match {
-                return parent;
+                return Some(parent);
             }
-            let next = n.parent.get();
-            if next == parent {
-                panic!("no control flow container");
-            }
-            parent = next;
+            parent = n.parent.get();
         }
+        None
     }
 
     /// Go: `func (c *Checker) getFlowTypeOfProperty(reference, prop) *Type` (checker.go:11681).
@@ -3942,18 +3960,103 @@ impl Checker {
         false
     }
 
-    /// Go: `func (c *Checker) isAssignmentToReadonlyEntity(node, prop, assignmentKind) bool`
-    /// (checker.go:11513 region).
+    /// Go: `func (c *Checker) isAssignmentToReadonlyEntity(expr, prop, assignmentKind) bool`
+    /// (checker.go:27815). PORT (FCS): the REAL body — the former stub kept
+    /// only the isReadonlySymbol probe and dropped the CommonJS
+    /// module.exports early-out, the namespace-import alias arm, and the
+    /// constructor-allowance block (checker.go:27822-27852), whose
+    /// `getControlFlowContainer(expr)` is Go's explicitly nil-tolerant read
+    /// (`ctor == nil || !ast.IsConstructorDeclaration(ctor)`).
     pub(crate) fn is_assignment_to_readonly_entity(
         &mut self,
         node: NodeId,
         prop: SymbolId,
         assignment_kind: u::AssignmentKind,
     ) -> bool {
-        if assignment_kind != u::AssignmentKind::None {
-            let is_write_access = is_write_access(self, node);
-            if is_write_access || !self.is_readonly_symbol(prop) {
-                return is_write_access && self.is_readonly_symbol(prop);
+        if assignment_kind == u::AssignmentKind::None {
+            // no assignment means it doesn't matter whether the entity is readonly
+            return false;
+        }
+        if tsc_ast::is_access_expression(self.store().node(node)) {
+            let inner = tsc_binder::ast_shims::skip_parentheses(
+                self.store(),
+                crate::ast_shims::expression_of(self.store(), node)
+                    .expect("access expression has an expression"),
+            );
+            if tsc_ast::is_identifier(self.store().node(inner)) {
+                let expression_symbol = self.get_resolved_symbol(inner);
+                // CommonJS module.exports is never readonly
+                if let Some(expression_symbol) = expression_symbol
+                    && self
+                        .program_symbol(expression_symbol)
+                        .flags
+                        .intersects(SymbolFlags::MODULE_EXPORTS)
+                {
+                    return false;
+                }
+            }
+        }
+        if self.is_readonly_symbol(prop) {
+            // Allow assignments to readonly properties within constructors of the same class declaration.
+            let is_property = self.program_symbol(prop).flags.intersects(SymbolFlags::PROPERTY);
+            if is_property
+                && tsc_ast::is_access_expression(self.store().node(node))
+                && {
+                    let expr = crate::ast_shims::expression_of(self.store(), node)
+                        .expect("access expression has an expression");
+                    self.store().node(expr).kind == Kind::ThisKeyword
+                }
+            {
+                // Look for if this is the constructor for the class that `symbol` is a property of.
+                let ctor = self.get_control_flow_container(node);
+                if !matches!(ctor, Some(c) if self.store().node(c).kind == Kind::Constructor) {
+                    return true;
+                }
+                let ctor = ctor.expect("FCS: ctor checked above");
+                let value_declaration = self.program_symbol(prop).value_declaration;
+                if let Some(value_declaration) = value_declaration {
+                    let is_assignment_declaration =
+                        tsc_ast::is_binary_expression(self.store().node(value_declaration));
+                    let is_local_property_declaration = self.store().node(ctor).parent.get()
+                        == self.store().node(value_declaration).parent.get();
+                    let is_local_parameter_property =
+                        ctor == self.store().node(value_declaration).parent.get();
+                    let symbol_parent = self.program_symbol(prop).parent;
+                    let is_local_this_property_assignment = is_assignment_declaration
+                        && symbol_parent
+                            .and_then(|p| self.program_symbol(p).value_declaration)
+                            .is_some_and(|vd| self.store().node(vd).parent.get()
+                                == self.store().node(ctor).parent.get());
+                    let is_local_this_property_assignment_constructor_function =
+                        is_assignment_declaration
+                            && symbol_parent
+                                .and_then(|p| self.program_symbol(p).value_declaration)
+                                .is_some_and(|vd| vd == ctor);
+                    let is_writeable_symbol = is_local_property_declaration
+                        || is_local_parameter_property
+                        || is_local_this_property_assignment
+                        || is_local_this_property_assignment_constructor_function;
+                    return !is_writeable_symbol;
+                }
+            }
+            return true;
+        }
+        if tsc_ast::is_access_expression(self.store().node(node)) {
+            // references through namespace import should be readonly
+            let inner = tsc_binder::ast_shims::skip_parentheses(
+                self.store(),
+                crate::ast_shims::expression_of(self.store(), node)
+                    .expect("access expression has an expression"),
+            );
+            if tsc_ast::is_identifier(self.store().node(inner))
+                && let Some(expression_symbol) = self.get_resolved_symbol(inner)
+                && self
+                    .program_symbol(expression_symbol)
+                    .flags
+                    .intersects(SymbolFlags::ALIAS)
+            {
+                let declaration = self.get_declaration_of_alias_symbol(expression_symbol);
+                return declaration.is_some_and(|d| tsc_ast::is_namespace_import(self.store().node(d)));
             }
         }
         false
@@ -5815,6 +5918,11 @@ impl Checker {
         let is_parameter =
             self.store().node(tsc_binder::ast_shims::get_root_declaration(self.store(), declaration)).kind
                 == Kind::Parameter;
+        // PORT (FCS): Go's container values are `*ast.Node` — nil when the
+        // walk starts from/escapes through a parentless node (the CommonJS
+        // module/exports symbols' SourceFile declaration, checker.go:11364).
+        // The pointer comparison below is the port's Option equality
+        // (nil == nil matches None == None).
         let declaration_container = self.get_control_flow_container(declaration);
         let mut flow_container = self.get_control_flow_container(node);
         let is_outer_variable = flow_container != declaration_container;
@@ -5838,12 +5946,17 @@ impl Checker {
         // assignment, we extend the origin of the control flow analysis to include the immediately enclosing
         // control flow container.
         while flow_container != declaration_container
+            // PORT (FCS): Go dereferences flowContainer in the loop condition
+            // (checker.go:11376's IsFunctionExpressionOrArrowFunction); a nil
+            // container is Go's nil-pointer panic — the port keeps the same
+            // unreachable-state failure (nil can only be declarationContainer
+            // here, from the CommonJS SourceFile-declaration walk).
             && (matches!(
-                self.store().node(flow_container).kind,
+                self.store().node(flow_container.expect("FCS: Go nil flow container")).kind,
                 Kind::FunctionExpression | Kind::ArrowFunction
             ) || tsc_binder::ast_shims::is_object_literal_or_class_expression_method_or_accessor(
                 self.store(),
-                flow_container,
+                flow_container.expect("FCS: Go nil flow container"),
             ))
             && ((u::is_constant_variable(self, local_or_export_symbol)
                 && Some(t) != self.auto_array_type)
@@ -5853,7 +5966,8 @@ impl Checker {
                     local_or_export_symbol,
                 ) && self.is_past_last_assignment(local_or_export_symbol, node)))
         {
-            flow_container = self.get_control_flow_container(flow_container);
+            flow_container = self
+                .get_control_flow_container(flow_container.expect("FCS: Go nil flow container"));
         }
         // A variable is considered uninitialized when it is possible to analyze the entire control flow graph
         // from declaration to use, and when the variable's declared type doesn't include undefined but the
@@ -5917,12 +6031,16 @@ impl Checker {
         } else {
             self.get_optional_type(t, false /*isProperty*/)
         };
+        // PORT (FCS): Go passes the (possibly nil) flowContainer through
+        // (checker.go:11402/11405); flow.rs's NodeId(0) is the PORT-noted
+        // nil sentinel for that parameter.
+        let flow_container_arg = flow_container.unwrap_or(NodeId(0));
         let flow_type = if is_automatic_type_in_non_null {
             let non_nullable =
-                self.get_flow_type_of_reference_ex(node, t, initial_type, flow_container, None);
+                self.get_flow_type_of_reference_ex(node, t, initial_type, flow_container_arg, None);
             relater::get_non_nullable_type(self, non_nullable)
         } else {
-            self.get_flow_type_of_reference_ex(node, t, initial_type, flow_container, None)
+            self.get_flow_type_of_reference_ex(node, t, initial_type, flow_container_arg, None)
         };
         // A variable is considered uninitialized when it is possible to analyze the entire control flow graph
         // from declaration to use, and when the variable's declared type doesn't include undefined but the
