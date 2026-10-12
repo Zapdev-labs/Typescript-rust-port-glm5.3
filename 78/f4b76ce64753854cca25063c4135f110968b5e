@@ -1,0 +1,94 @@
+rust/crates/checker/src/ast_shims.rs
+  s_8d9ceee5b5ef86::t_a53123b4288fa8 365-373
+rust/crates/checker/src/resolvecall.rs
+  s_8d9ceee5b5ef86::t_ba8cdc7e818ef2 1320-1334
+  s_8d9ceee5b5ef86::t_c6d4364c9e86ff 128-130
+  s_8d9ceee5b5ef86::t_831bd7f2d6db4d 2061-2065
+  s_8d9ceee5b5ef86::t_0b46eb13c4efd1 2373-2397,2415-2430
+  s_8d9ceee5b5ef86::t_c2b49fd8678e9a 1083-1093,1100-1101,1104-1105
+  s_8d9ceee5b5ef86::t_4638eff7d14003 1542-1546
+rust/crates/checker/src/expressions.rs
+  s_8d9ceee5b5ef86::t_51bd7a85e51d59 5420-5435
+  s_8d9ceee5b5ef86::t_45c3e64a7fd73c 6849,6853
+  s_8d9ceee5b5ef86::t_9cdbe7f79ecb17 6835-6838,6842-6848,6850-6852,6854-6856
+rust/crates/checker/src/contextual.rs
+  s_8d9ceee5b5ef86::t_f4089aa535fdf6 1602-1610
+  s_8d9ceee5b5ef86::t_92f90276d6eb2f 132
+  s_8d9ceee5b5ef86::t_75a7f49fe911c3 1205-1206,1212-1214
+  s_8d9ceee5b5ef86::t_8937bb78a58425 452-453,456-464
+  s_8d9ceee5b5ef86::t_94d5143b4d25e4 199-244
+rust/crates/checker/src/jsx.rs
+  s_8d9ceee5b5ef86::t_9e0af786644da0 3344-3359
+  s_8d9ceee5b5ef86::t_0f6e8ba8a81f00 1149
+  s_8d9ceee5b5ef86::t_4031837df7a7ec 1770
+  s_8d9ceee5b5ef86::t_3729cbf539f214 2998-3034
+  s_8d9ceee5b5ef86::t_95e5b7e6fd7e9f 179
+  s_8d9ceee5b5ef86::t_7ef8cbb03f382f 1-66,69-175,182-260,262-485,487-616,618-646,650-656,658-696
+  s_8d9ceee5b5ef86::t_71eb71c6453b4d 176-178
+  s_8d9ceee5b5ef86::t_b3b926af3def3a 1201
+  s_8d9ceee5b5ef86::t_483f20721511fa 1401-1408
+  s_8d9ceee5b5ef86::t_258810e6cc8986 2802-2805
+rust/crates/checker/src/exports.rs
+  s_8d9ceee5b5ef86::t_9b1063ea79238d 530,532,538,540-553
+  s_8d9ceee5b5ef86::t_948156da7dfd03 885-891
+rust/crates/checker/src/statements.rs
+  s_8d9ceee5b5ef86::t_5c846a4f334e20 1848-1850
+rust/crates/checker/src/grammarchecks.rs
+  s_8d9ceee5b5ef86::t_2debe57bf4a7a4 2894-2897
+rust/crates/checker/src/utilities.rs
+  s_c760161dda2d19::t_a7310f3e4a2acf 1767-1774,1776-1777
+rust/crates/checker/src/typeofsymbol.rs
+  s_8d9ceee5b5ef86::t_d18357ab688fe0 845-846
+rust/crates/checker/src/services.rs
+  s_8d9ceee5b5ef86::t_4a385e1583554d 1257,1259-1261
+  s_8d9ceee5b5ef86::t_b3b3e5cb5816e6 1264-1268
+rust/crates/checker/src/todo_shapes.rs
+  s_8d9ceee5b5ef86::t_66c52c29d5e8f8 144-147
+rust/crates/checker/src/spine.rs
+  s_8d9ceee5b5ef86::t_908317474d0579 1395-1396,1399-1400
+  s_8d9ceee5b5ef86::t_274271198b0544 3319-3330
+  s_8d9ceee5b5ef86::t_0314034ead231b 2279-2280,2283,2285,2288-2289,2292-2293,2296-2297
+rust/crates/checker/src/checker.rs
+  s_8d9ceee5b5ef86::t_1f1d37bb47e72b 189-203
+  s_8d9ceee5b5ef86::t_3af7c9400a6aa9 2122-2126
+  s_8d9ceee5b5ef86::t_731166598ca6bc 1769-1774
+  s_8d9ceee5b5ef86::t_c365fa8d85fe44 615-631
+rust/crates/checker/src/lib.rs
+  s_8d9ceee5b5ef86::t_f5ea0e37fc9ff7 130
+rust/crates/checker/src/relater.rs
+  s_8d9ceee5b5ef86::t_271bc71cb90deb 3823-3825,3827-3895
+  s_8d9ceee5b5ef86::t_57bdd9f84a5757 6294-6299,6301,6303-6309
+  s_8d9ceee5b5ef86::t_d5053c83d74f84 7547-7548
+  s_8d9ceee5b5ef86::t_5b9c4434cd9775 6300,6302
+  s_8d9ceee5b5ef86::t_031406b448faa3 1237
+  s_8d9ceee5b5ef86::t_2315ebd791d55b 7657-7730,7732-7739,7741-7751,7753,7757-7758,7760,7764-7832,7834-7893
+rust/crates/checker/src/resolution.rs
+  s_8d9ceee5b5ef86::t_f3076432491fcf 630-632
+  s_8d9ceee5b5ef86::t_2b78aa46c32a12 636-661,664-692,694-707,713-719
+  s_8d9ceee5b5ef86::t_8019bbf89f193a 5263-5295
+  s_8d9ceee5b5ef86::t_d9b456c84048a2 708-712
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "78f4b76ce64753854cca25063c4135f110968b5e",
+  "prompts": {},
+  "sessions": {
+    "s_8d9ceee5b5ef86": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "f2fe916d-f3f6-412f-8c7c-cb42a6355fe8",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    },
+    "s_c760161dda2d19": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "e48660fc-43c1-451f-9234-7c7ba6128c6a",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
