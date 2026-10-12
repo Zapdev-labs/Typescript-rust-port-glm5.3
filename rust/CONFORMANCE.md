@@ -443,3 +443,18 @@ two hypotheses falsified honestly, every regression rail green
 throughout. Remaining scope is harness-side (exact-match/missing-
 baseline vs the reference baselines, the lib-less twin shape), not
 checker divergence. W5 (jsx) is the last M6 wave.
+
+## W5 COMPLETE — M6 CLOSED (2026-10-14, 78f4b76ce6, rig-validated)
+
+jsx.rs 3,409 lines; the last 300-slice check divergence (TS2322 +
+related-info chain on JSX excess property checks) fell to two real
+bugs: the FRESH_LITERAL closure-capture loss (Go's closure mutates the
+captured flags; the port's macro copied them) and the lost diagnostic-
+chain elaboration (relater.go:4733). The 300-slice check twin stays at
+ZERO divergence through W5 on both machines. Full-corpus frontier: the
+orchestrator's sweep found + fixed the GetContainingClass inclusive-
+walk infinite loop (record 410) and exposed a separate pre-existing
+recursion overflow on classes/members/privateNames — the full-corpus
+check sweep tranche is dispatched. M6 (the checker, the port's long
+pole) IS CLOSED: S1-S10 + W1-W5 all landed, verified, and
+rig-validated.
