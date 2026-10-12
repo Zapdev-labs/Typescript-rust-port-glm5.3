@@ -3060,9 +3060,25 @@ impl Checker {
                 // element property). This call also checks that the parentType
                 // is in fact an iterable or array (depending on target
                 // language).
-                // TODO(port M6 S3): checkIteratedTypeOrElementType — the
-                // destructuring iterated-type machinery; permissive errorType.
-                let element_type = self.error_type();
+                // REAL (FCS destructuring tranche, checker.go:18152): the
+                // destructuring iterated-type machinery — the S3-era
+                // errorType stub swallowed Go's 2461 "Type 'null' is not an
+                // array type" for non-array-like destructuring sources.
+                // Go: IterationUseDestructuring|IfElse(rest, 0, PossiblyOutOfBounds)
+                // — the `|0` arm is a no-op (Go's IfElse yields 0).
+                let use_flags = if u::has_dot_dot_dot_token(self.store(), declaration) {
+                    crate::statements::IterationUse::DESTRUCTURING
+                } else {
+                    crate::statements::IterationUse::DESTRUCTURING
+                        | crate::statements::IterationUse::POSSIBLY_OUT_OF_BOUNDS
+                };
+                let undefined_type = self.undefined_type();
+                let element_type = self.check_iterated_type_or_element_type(
+                    use_flags,
+                    parent_type,
+                    undefined_type,
+                    Some(pattern),
+                );
                 let index = binding_pattern_elements(self.store(), pattern)
                     .iter()
                     .position(|&e| e == declaration)

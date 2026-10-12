@@ -3803,44 +3803,77 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getReducedType(t *Type) *Type` (checker.go:22244)
-    /// — REAL (M6 S7): the unionOrIntersection resolvedReducedType walk over
-    /// isReducibleIntersection (typenodes.rs, REAL since S5).
+    /// — REAL (FCS): Go's exact two-arm shape. PORT(FCS recursion,
+    /// never-intersection guard): the S7-era port routed intersections
+    /// through isReducibleIntersection (typenodes.rs) — an invented shape
+    /// (Go's getReducedType never calls isReducibleIntersection; its real
+    /// consumer is isGenericReducibleType, checker.go:25481). Each level
+    /// instantiated a FRESH intersection (uniqueLiteralFilledInstantiation
+    /// of a fresh instantiation), so get_reduced_type ↔
+    /// is_reducible_intersection mutual-recursed without bound and the
+    /// full-corpus sweep stack-overflowed
+    /// (classes/mixinAbstractClasses.2.ts). Go's real guard —
+    /// IsNeverIntersectionComputed is set on the type BEFORE the recursive
+    /// property walk (somePropertyReducesToNever), so re-entrant
+    /// getReducedType calls on the same intersection skip the walk — is
+    /// now ported exactly. The union arm keeps Go's
+    /// ContainsIntersections gate + the resolvedReducedType memo; the
+    /// constituent reducer is getReducedUnionType (Go 22297), ported below.
     pub fn get_reduced_type(&mut self, t: TypeId) -> TypeId {
-        if self.type_(t).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
-            if let Some(reduced) = self.type_(t).as_union_type().and_then(|d| d.resolved_reduced_type) {
-                return reduced;
-            }
-            if self.type_(t).flags.intersects(TypeFlags::INTERSECTION)
-                && crate::typenodes::is_reducible_intersection(self, t)
-            {
-                let reduced = self.get_reduced_type_worker(t);
-                if let Some(d) = self.type_mut(t).as_intersection_type_mut() {
-                    d.resolved_apparent_type = None;
+        if self.type_(t).flags.intersects(TypeFlags::UNION) {
+            if self.type_(t).object_flags.intersects(ObjectFlags::CONTAINS_INTERSECTIONS) {
+                if let Some(reduced) = self.type_(t).as_union_type().and_then(|d| d.resolved_reduced_type) {
+                    return reduced;
                 }
-                // PORT: Go stores resolvedReducedType on the shared
-                // UnionOrIntersectionType; the arena keeps it on the union
-                // payload (the only reader of this memo is the union arm
-                // above — reducible intersections carry their own memo in
-                // is_reducible_intersection).
+                let reduced = self.get_reduced_union_type(t);
                 if let Some(d) = self.type_mut(t).as_union_type_mut() {
                     d.resolved_reduced_type = Some(reduced);
                 }
                 return reduced;
             }
-            return t;
+        } else if self.type_(t).flags.intersects(TypeFlags::INTERSECTION) {
+            if !self
+                .type_(t)
+                .object_flags
+                .intersects(ObjectFlags::IS_NEVER_INTERSECTION_COMPUTED)
+            {
+                self.type_mut(t).object_flags |= ObjectFlags::IS_NEVER_INTERSECTION_COMPUTED;
+                let types = self.type_(t).types().to_vec();
+                if !self.is_mapping_of_same_object_type(&types) && self.some_property_reduces_to_never(t) {
+                    self.type_mut(t).object_flags |= ObjectFlags::IS_NEVER_INTERSECTION;
+                }
+            }
+            if self
+                .type_(t)
+                .object_flags
+                .intersects(ObjectFlags::IS_NEVER_INTERSECTION)
+            {
+                return self.never_type();
+            }
         }
         t
     }
 
-    /// Go: `func (c *Checker) getReducedTypeWorker(t *Type) *Type` (checker.go:22260)
-    /// — the reduction engine over the constituents.
-    fn get_reduced_type_worker(&mut self, t: TypeId) -> TypeId {
-        // TODO(port M6 S8): the full intersection constituent comparison
-        // (checker.go:22260-22320: reduceContravariantIndexInfo +
-        // isSameIndexInfo + the union-of-reduced cross product). The S8
-        // member-resolution machinery gates the property walk; until it
-        // lands, permissive identity keeps reducible intersections stable.
-        t
+    /// Go: `func (c *Checker) getReducedUnionType(unionType) *Type`
+    /// (checker.go:22297) — map getReducedType over the constituents,
+    /// identity when unchanged, else the re-united type (with its own
+    /// resolvedReducedType memo, Go's exact tail).
+    fn get_reduced_union_type(&mut self, union_type: TypeId) -> TypeId {
+        let constituents = self.type_(union_type).types().to_vec();
+        let reduced_types: Vec<TypeId> = constituents
+            .iter()
+            .map(|&t| self.get_reduced_type(t))
+            .collect();
+        if reduced_types == constituents {
+            return union_type;
+        }
+        let reduced = self.get_union_type(&reduced_types);
+        if self.type_(reduced).flags.intersects(TypeFlags::UNION)
+            && let Some(d) = self.type_mut(reduced).as_union_type_mut()
+        {
+            d.resolved_reduced_type = Some(reduced);
+        }
+        reduced
     }
 
     /// Go: `func (c *Checker) isArrayOrTupleOrIntersection(t) bool`.

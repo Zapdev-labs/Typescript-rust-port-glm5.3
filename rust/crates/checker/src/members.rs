@@ -3374,7 +3374,9 @@ impl Checker {
 
     #[allow(dead_code)] // S8 surface — the later-wave consumers land with M6
     /// Go: `func (c *Checker) isMappingOfSameObjectType(types) bool` (checker.go:22258).
-    fn is_mapping_of_same_object_type(&mut self, types: &[TypeId]) -> bool {
+    /// pub(crate) since FCS: get_reduced_type (uniontypes.rs) consumes it —
+    /// Go's getReducedType intersection arm (checker.go:22251).
+    pub(crate) fn is_mapping_of_same_object_type(&mut self, types: &[TypeId]) -> bool {
         if !types.is_empty()
             && self.type_(types[0]).object_flags.intersects(ObjectFlags::MAPPED)
         {
@@ -3393,9 +3395,12 @@ impl Checker {
         false
     }
 
-    #[allow(dead_code)] // S8 surface — the later-wave consumers land with M6
     /// Go: `func (c *Checker) somePropertyReducesToNever(t) bool` (checker.go:22271).
-    fn some_property_reduces_to_never(&mut self, t: TypeId) -> bool {
+    /// pub(crate) since FCS: get_reduced_type (uniontypes.rs) consumes it —
+    /// Go's getReducedType intersection arm (checker.go:22253), where the
+    /// IsNeverIntersectionComputed-before-the-walk guard breaks the
+    /// re-entrant cycle (see uniontypes.rs's PORT note).
+    pub(crate) fn some_property_reduces_to_never(&mut self, t: TypeId) -> bool {
         // Collect declaration counts for each property across all constituent
         // types of the intersection (Go's comment).
         let mut counts: tsc_collections::OrderedMap<String, i32> = tsc_collections::OrderedMap::new();
@@ -3421,7 +3426,6 @@ impl Checker {
         false
     }
 
-    #[allow(dead_code)] // S8 surface — the later-wave consumers land with M6
     /// Go: `func (c *Checker) isNeverReducedProperty(prop) bool` (checker.go:22308).
     fn is_never_reduced_property(&mut self, prop: SymbolId) -> bool {
         self.is_discriminant_with_never_type(prop) || is_conflicting_private_property(self, prop)
@@ -4952,6 +4956,7 @@ impl Checker {
                         false, /*ignoreThisTypes*/
                         false, /*ignoreReturnTypes*/
                         crate::relater::TypeComparerKind::Identical,
+                        None, /*relater — the checker-level method comparer*/
                     ) == crate::types::Ternary::False
                 })
             {

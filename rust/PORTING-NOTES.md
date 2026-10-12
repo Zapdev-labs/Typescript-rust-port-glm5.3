@@ -2340,3 +2340,24 @@ IDENTICAL, bind 143/143, CHECK 300-SLICE IDENTICAL (zero divergence
 held through W5), program twin 15/15, tsc/packages/tools clean.
 M6 — the checker, the port's long pole — IS CLOSED. Next: the
 full-corpus check sweep tranche, then M7 (emit back end).
+
+## M6+ full-corpus sweep tranche 1 landed (2026-10-14) — sweep COMPLETES; divergent 3,068 -> 2,532
+
+The sweep now runs 7,567/7,567 exit 0 (the privateNames recursion
+resolved earlier in the tranche series). Six Go-exact fixes: the REAL
+using/await-using Disposable initializer check (checker.go:6088-6126,
+the TS2318s + the asyncDispose hint chain), the fast-path iteration
+resolver pair un-collapsed (6565 reportErrors=false — spurious 2318s +
+downstream 2495s on every fast-path probe), is_array_like_type stub ->
+real body delegation, getBindingElementTypeFromParentType Array arm
+(the 2461s), hasExcessProperties' errorNode reassignment (2802), and
+includeUndefinedInIndexSignature nil-tolerance (flow.go:2339 — a 300-
+slice gate regression caught by the fix itself). Census: usingDeclar-
+ations (323) ELIMINATED, statements/for-ofStatements (104) eliminated,
+destructuring 119->77; panics 513->502. Orchestrator re-verified fresh:
+18 suites ok, clippy 0, fixture x3 identical, bind 143/143, CHECK
+ZERO divergence held, program twin 15/15. Next tranche: the
+NodeId::NONE-is-foreign-to-file-0 panic family (320 cases —
+check_identifier -> get_control_flow_container on NONE parents,
+dominating jsdoc/declarations + node/allowJs), then the 2354 tslib
+family + the remaining panic families.

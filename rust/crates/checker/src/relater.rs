@@ -1869,11 +1869,20 @@ impl Checker {
             false, /*reportErrors*/
             None,  /*errorReporter*/
             TypeComparerKind::Assignable,
+            None, /*relater — Go: c.compareTypesAssignable, a method comparer*/
+            IntersectionState::NONE,
             None, /*reportUnreliableMarkers*/
         ) != Ternary::False
     }
 
     /// Go: `func (c *Checker) compareSignaturesRelated(source, target, checkMode, reportErrors, errorReporter, compareTypes, reportUnreliableMarkers) Ternary`.
+    ///
+    /// PORT(signature recursion, FCS): `relater` + `intersection_state`
+    /// carry what Go's `compareTypes` closure captures (the ACTIVE relater
+    /// and the ambient intersection state — `signatureRelatedTo`'s
+    /// `isRelatedToWorker`, relater.go:4586); the kind enum alone can't.
+    /// `None` + `IntersectionState::NONE` is Go's method-shaped comparer
+    /// (`c.compareTypesAssignable`, relater.go:1488 — a fresh relater).
     #[allow(clippy::too_many_arguments)]
     pub fn compare_signatures_related(
         &mut self,
@@ -1883,6 +1892,8 @@ impl Checker {
         report_errors: bool,
         error_reporter: Option<ErrorReporterKind>,
         compare_types: TypeComparerKind,
+        mut relater: Option<&mut Relater>,
+        intersection_state: IntersectionState,
         report_unreliable_markers: Option<crate::todo_shapes::TypeMapperId>,
     ) -> Ternary {
         let mut source = source;
@@ -1927,7 +1938,15 @@ impl Checker {
         let target_rest_type = self.get_non_array_rest_type(target);
         if source_rest_type.is_some() || target_rest_type.is_some() {
             let rest = source_rest_type.or(target_rest_type).expect("checked");
-            self.instantiate_type(rest, report_unreliable_markers.expect("reportUnreliableMarkers"));
+            // Go: `c.instantiateType(rest, reportUnreliableMarkers)` — the
+            // result is DISCARDED (a warm-up read so the unreliable-mapper
+            // tracking sees the rest type), and a nil mapper is identity
+            // (checker.go:22565's `m == nil` arm returns t). PORT(FCS): the
+            // port `.expect`ed a mapper here and panicked on the Go-nil path
+            // (the mixinAbstractClasses.2 harness sentinel).
+            if let Some(m) = report_unreliable_markers {
+                self.instantiate_type(rest, m);
+            }
         }
         let kind = sig(self, target)
             .declaration
@@ -1946,10 +1965,10 @@ impl Checker {
                     // void sources are assignable to anything (Go, verbatim).
                     let mut related = Ternary::False;
                     if !strict_variance {
-                        related = invoke_comparer(self, compare_types, None, source_this_type, target_this_type, false);
+                        related = invoke_comparer(self, compare_types, relater.as_deref_mut(), intersection_state, source_this_type, target_this_type, false);
                     }
                     if related == Ternary::False {
-                        related = invoke_comparer(self, compare_types, None, target_this_type, source_this_type, report_errors);
+                        related = invoke_comparer(self, compare_types, relater.as_deref_mut(), intersection_state, target_this_type, source_this_type, report_errors);
                     }
                     if related == Ternary::False {
                         if report_errors {
@@ -2026,15 +2045,17 @@ impl Checker {
                         report_errors,
                         error_reporter,
                         compare_types,
+                        relater.as_deref_mut(),
+                        intersection_state,
                         report_unreliable_markers,
                     )
                 } else {
                     let mut r = Ternary::False;
                     if !check_mode.intersects(SignatureCheckMode::CALLBACK) && !strict_variance {
-                        r = invoke_comparer(self, compare_types, None, source_type, target_type, false);
+                        r = invoke_comparer(self, compare_types, relater.as_deref_mut(), intersection_state, source_type, target_type, false);
                     }
                     if r == Ternary::False {
-                        invoke_comparer(self, compare_types, None, target_type, source_type, report_errors)
+                        invoke_comparer(self, compare_types, relater.as_deref_mut(), intersection_state, target_type, source_type, report_errors)
                     } else {
                         r
                     }
@@ -2045,7 +2066,7 @@ impl Checker {
                     && check_mode.intersects(SignatureCheckMode::STRICT_ARITY)
                     && i >= self.get_min_argument_count(source)
                     && i < self.get_min_argument_count(target)
-                    && invoke_comparer(self, compare_types, None, source_type, target_type, false) != Ternary::False
+                    && invoke_comparer(self, compare_types, relater.as_deref_mut(), intersection_state, source_type, target_type, false) != Ternary::False
                 {
                     return Ternary::False;
                 }
@@ -2079,6 +2100,8 @@ impl Checker {
                                 report_errors,
                                 error_reporter,
                                 compare_types,
+                                relater.as_deref_mut(),
+                                intersection_state,
                             ),
                         );
                     }
@@ -2098,10 +2121,10 @@ impl Checker {
                 // return types bi-variantly (Go comment, verbatim).
                 let mut related = Ternary::False;
                 if check_mode.intersects(SignatureCheckMode::BIVARIANT_CALLBACK) {
-                    related = invoke_comparer(self, compare_types, None, target_return_type, source_return_type, false);
+                    related = invoke_comparer(self, compare_types, relater.as_deref_mut(), intersection_state, target_return_type, source_return_type, false);
                 }
                 if related == Ternary::False {
-                    related = invoke_comparer(self, compare_types, None, source_return_type, target_return_type, report_errors);
+                    related = invoke_comparer(self, compare_types, relater, intersection_state, source_return_type, target_return_type, report_errors);
                 }
                 result = ternary_and(result, related);
                 if result == Ternary::False && report_errors {
@@ -2112,7 +2135,10 @@ impl Checker {
         result
     }
 
-    /// Go: `func (c *Checker) compareTypePredicateRelatedTo(source, target, reportErrors, errorReporter, compareTypes) Ternary`.
+    /// Go: `func (c *Checker) compareTypePredicateRelatedTo(source, target, reportErrors, errorReporter, compareTypes) Ternary`
+    /// — `relater`/`intersection_state` carry Go's `compareTypes` closure
+    /// capture (see `compare_signatures_related`'s PORT note).
+    #[allow(clippy::too_many_arguments)]
     pub fn compare_type_predicate_related_to(
         &mut self,
         source: &TypePredicate,
@@ -2120,6 +2146,8 @@ impl Checker {
         report_errors: bool,
         error_reporter: Option<ErrorReporterKind>,
         compare_types: TypeComparerKind,
+        relater: Option<&mut Relater>,
+        intersection_state: IntersectionState,
     ) -> Ternary {
         if source.kind != target.kind {
             if report_errors {
@@ -2136,7 +2164,7 @@ impl Checker {
             }
         let related = match (source.t, target.t) {
             (Some(a), Some(b)) if a == b => Ternary::True,
-            (Some(a), Some(b)) => invoke_comparer(self, compare_types, None, a, b, report_errors),
+            (Some(a), Some(b)) => invoke_comparer(self, compare_types, relater, intersection_state, a, b, report_errors),
             _ => Ternary::False,
         };
         if related == Ternary::False && report_errors {
@@ -2868,10 +2896,15 @@ impl Checker {
                 ignore_this_types,
                 ignore_return_types,
                 compare_types,
+                None, /*relater — the checker-level method comparer*/
             ) != Ternary::False).copied()
     }
 
-    /// Go: `func (c *Checker) compareSignaturesIdentical(source, target, partialMatch, ignoreThisTypes, ignoreReturnTypes, compareTypes) Ternary`.
+    /// Go: `func (c *Checker) compareSignaturesIdentical(source, target, partialMatch, ignoreThisTypes, ignoreReturnTypes, compareTypes) Ternary`
+    /// — `relater` carries Go's `compareTypes` closure capture
+    /// (`r.isRelatedToSimple` from `signaturesIdenticalTo`, relater.go:4601;
+    /// the checker-level callers pass the method comparer → `None`).
+    #[allow(clippy::too_many_arguments)]
     pub fn compare_signatures_identical(
         &mut self,
         source: crate::types::SignatureId,
@@ -2880,6 +2913,7 @@ impl Checker {
         ignore_this_types: bool,
         ignore_return_types: bool,
         compare_types: TypeComparerKind,
+        mut relater: Option<&mut Relater>,
     ) -> Ternary {
         let mut source = source;
         if source == target {
@@ -2909,7 +2943,8 @@ impl Checker {
                 let constraints_ok = invoke_comparer(
                     self,
                     compare_types,
-                    None,
+                    relater.as_deref_mut(),
+                    IntersectionState::NONE,
                     s_constraint_inst,
                     t_constraint,
                     true,
@@ -2918,7 +2953,8 @@ impl Checker {
                 let defaults_ok = invoke_comparer(
                     self,
                     compare_types,
-                    None,
+                    relater.as_deref_mut(),
+                    IntersectionState::NONE,
                     s_default_inst,
                     t_default,
                     true,
@@ -2933,7 +2969,7 @@ impl Checker {
         if !ignore_this_types {
             if let Some(source_this_type) = self.get_this_type_of_signature(source) {
                 if let Some(target_this_type) = self.get_this_type_of_signature(target) {
-                    let related = invoke_comparer(self, compare_types, None, source_this_type, target_this_type, true);
+                    let related = invoke_comparer(self, compare_types, relater.as_deref_mut(), IntersectionState::NONE, source_this_type, target_this_type, true);
                     if related == Ternary::False {
                         return Ternary::False;
                     }
@@ -2944,7 +2980,7 @@ impl Checker {
         for i in 0..self.get_parameter_count(target) as usize {
             let s = self.get_type_at_position(source, i);
             let t = self.get_type_at_position(target, i);
-            let related = invoke_comparer(self, compare_types, None, t, s, true);
+            let related = invoke_comparer(self, compare_types, relater.as_deref_mut(), IntersectionState::NONE, t, s, true);
             if related == Ternary::False {
                 return Ternary::False;
             }
@@ -2960,6 +2996,7 @@ impl Checker {
                         source_type_predicate,
                         target_type_predicate,
                         compare_types,
+                        relater.as_deref_mut(),
                     ),
                 );
             } else {
@@ -2967,7 +3004,7 @@ impl Checker {
                 let target_return = self.get_return_type_of_signature(target);
                 result = ternary_and(
                     result,
-                    invoke_comparer(self, compare_types, None, source_return, target_return, true),
+                    invoke_comparer(self, compare_types, relater, IntersectionState::NONE, source_return, target_return, true),
                 );
             }
         }
@@ -3032,12 +3069,15 @@ impl Checker {
         true
     }
 
-    /// Go: `func (c *Checker) compareTypePredicatesIdentical(source, target, compareTypes) Ternary`.
+    /// Go: `func (c *Checker) compareTypePredicatesIdentical(source, target, compareTypes) Ternary`
+    /// — `relater` carries Go's closure capture (see
+    /// `compare_signatures_identical`'s PORT note).
     pub(crate) fn compare_type_predicates_identical(
         &mut self,
         source: Option<Box<TypePredicate>>,
         target: Option<Box<TypePredicate>>,
         compare_types: TypeComparerKind,
+        relater: Option<&mut Relater>,
     ) -> Ternary {
         match (&source, &target) {
             (None, _) | (_, None) => Ternary::False,
@@ -3047,7 +3087,7 @@ impl Checker {
                 }
                 match (s.t, t.t) {
                     (Some(a), Some(b)) if a == b => Ternary::True,
-                    (Some(a), Some(b)) => invoke_comparer(self, compare_types, None, a, b, true),
+                    (Some(a), Some(b)) => invoke_comparer(self, compare_types, relater, IntersectionState::NONE, a, b, true),
                     _ => Ternary::False,
                 }
             }
@@ -3594,7 +3634,12 @@ impl Relater {
         self.is_related_to_ex(c, source, target, RecursionFlags::BOTH, false, None, IntersectionState::NONE)
     }
 
-    /// Go: `func (r *Relater) isRelatedToWorker(source, target, reportErrors) Ternary`.
+    /// Go: `func (r *Relater) isRelatedToWorker(source, target, reportErrors) Ternary` —
+    /// Go's template-literal matching (relater.go:3616) and inference-context
+    /// creation (relater.go:3768) still call this method form; the signature
+    /// family now routes through the closure-captured form in
+    /// `invoke_comparer` (see the PORT note there).
+    #[allow(dead_code)] // TODO(port M6 W2): the template-literal/inference call sites.
     pub(crate) fn is_related_to_worker(&mut self, c: &mut Checker, source: TypeId, target: TypeId, report_errors: bool) -> Ternary {
         self.is_related_to_ex(c, source, target, RecursionFlags::BOTH, report_errors, None, IntersectionState::NONE)
     }
@@ -3886,9 +3931,64 @@ impl Relater {
                             }
                         } else {
                             // The non-JSX arm (Go relater.go:2791+): the
-                            // object-literal message. TODO(port M6 S6):
+                            // object-literal message. REAL (FCS excess-
+                            // property tranche): Go reassigns
+                            // r.errorNode = prop.ValueDeclaration.Name() when
+                            // the property is assigned inside the literal
+                            // itself (the ancestor + same-file gates) — the
+                            // port dropped the reassignment, reporting the
+                            // error on the whole literal node instead of the
+                            // property name (the 2353 position family).
+                            // TODO(port M6 S6):
                             // getSuggestionForNonexistentProperty — the
                             // Did-you-mean elaboration.
+                            let mut error_node = self.error_node;
+                            let object_literal_declaration = c
+                                .type_(source)
+                                .symbol
+                                .and_then(|s| c.program.symbol(s).declarations.first().copied());
+                            if let (Some(prop_value_declaration), Some(object_literal_declaration)) =
+                                (c.program_symbol(prop).value_declaration, object_literal_declaration)
+                            {
+                                let is_object_literal_element = matches!(
+                                    c.store().node(prop_value_declaration).kind,
+                                    Kind::PropertyAssignment
+                                        | Kind::ShorthandPropertyAssignment
+                                        | Kind::SpreadAssignment
+                                        | Kind::MethodDeclaration
+                                        | Kind::GetAccessor
+                                        | Kind::SetAccessor
+                                );
+                                if is_object_literal_element
+                                    && crate::ast_shims::find_ancestor(
+                                        c.store(),
+                                        prop_value_declaration,
+                                        &mut |n: &tsc_ast::Node| {
+                                            n.id.get() == object_literal_declaration.0
+                                        },
+                                    )
+                                    .is_some()
+                                    && error_node
+                                        .and_then(|n| {
+                                            tsc_ast::utilities::get_source_file_of_node(
+                                                c.store(), n,
+                                            )
+                                        })
+                                        .map(|f| f.as_node_id())
+                                        == tsc_ast::utilities::get_source_file_of_node(
+                                            c.store(),
+                                            object_literal_declaration,
+                                        )
+                                        .map(|f| f.as_node_id())
+                                {
+                                    if let Some(name_node) =
+                                        c.store().node(prop_value_declaration).name()
+                                    {
+                                        error_node = Some(name_node);
+                                    }
+                                }
+                            }
+                            self.error_node = error_node;
                             let __ts0 = symbol_to_string(c, prop);
                             let __ts1 = type_to_string(c, error_target);
                             self.report_error(c, &msg::OBJECT_LITERAL_MAY_ONLY_SPECIFY_KNOWN_PROPERTIES_AND_0_DOES_NOT_EXIST_IN_TYPE_1, &[DiagArg::Str(__ts0), DiagArg::Str(__ts1)]);
@@ -6063,7 +6163,7 @@ impl Relater {
         target: crate::types::SignatureId,
         erase: bool,
         report_errors: bool,
-        _intersection_state: IntersectionState,
+        intersection_state: IntersectionState,
     ) -> Ternary {
         let mut check_mode = SignatureCheckMode::NONE;
         if self.relation == RelationKind::Subtype {
@@ -6074,7 +6174,12 @@ impl Relater {
         let source = if erase { get_erased_signature(c, source) } else { source };
         let target = if erase { get_erased_signature(c, target) } else { target };
         let unreliable_mapper = report_unreliable_mapper(c);
-        c.compare_signatures_related(source, target, check_mode, report_errors, Some(ErrorReporterKind::Relater), TypeComparerKind::RelatedToWorker, unreliable_mapper)
+        // PORT(signature recursion, FCS): Go passes `isRelatedToWorker` — a
+        // closure over THIS relater with the ambient intersection state
+        // (relater.go:4586) — as compareTypes; the relater thread is the
+        // maybe-key cycle guard for cyclic signature comparisons (see
+        // `invoke_comparer`'s PORT note).
+        c.compare_signatures_related(source, target, check_mode, report_errors, Some(ErrorReporterKind::Relater), TypeComparerKind::RelatedToWorker, Some(self), intersection_state, unreliable_mapper)
     }
 
     /// Go: `func (r *Relater) signaturesIdenticalTo(...) Ternary`.
@@ -6086,7 +6191,7 @@ impl Relater {
         }
         let mut result = Ternary::True;
         for i in 0..source_signatures.len() {
-            let related = c.compare_signatures_identical(source_signatures[i], target_signatures[i], false, false, false, TypeComparerKind::RelatedToSimple);
+            let related = c.compare_signatures_identical(source_signatures[i], target_signatures[i], false, false, false, TypeComparerKind::RelatedToSimple, Some(&mut *self));
             if related == Ternary::False {
                 return Ternary::False;
             }
@@ -6622,13 +6727,29 @@ fn is_object_type_with_inferable_index(c: &mut Checker, t: TypeId) -> bool {
 /// getBestMatchingType/findMatchingDiscriminantType family (the call sites
 /// pass `r.isRelatedToSimple` or `c.compareTypesAssignableSimple`); the port
 /// threads the active relater (None for the checker-level comparers).
+///
+/// PORT(signature recursion, FCS): Go's `signatureRelatedTo` builds its
+/// `compareTypes` as a closure over the ACTIVE relater —
+/// `isRelatedToWorker := func(s, t, reportErrors) {
+///     r.isRelatedToEx(s, t, RecursionFlagsBoth, reportErrors, nil, intersectionState)
+/// }` (relater.go:4586). The port's kind enum dropped that capture: the
+/// signature ladder re-entered through a FRESH relater
+/// (`checkTypeRelatedTo`), so the maybe-key cycle guard
+/// (`recursiveTypeRelatedTo`'s "already being compared → Maybe") never
+/// fired across nesting levels and cyclic comparisons (the full-corpus
+/// sweep's privateNames stack overflow at privateNameSetterExprReturnValue)
+/// descended without bound. The relater + the ambient intersection state
+/// are now threaded through `compare_signatures_related` exactly as the
+/// closure captured them; `report_errors` is threaded for the Worker arm
+/// (Go's closure passes it; the old port hardcoded `false`).
 fn invoke_comparer(
     c: &mut Checker,
     kind: TypeComparerKind,
     relater: Option<&mut Relater>,
+    intersection_state: IntersectionState,
     source: TypeId,
     target: TypeId,
-    _report_errors: bool,
+    report_errors: bool,
 ) -> Ternary {
     match kind {
         TypeComparerKind::Identical => c.compare_types_identical(source, target),
@@ -6637,8 +6758,21 @@ fn invoke_comparer(
         TypeComparerKind::RelatedToSimple | TypeComparerKind::RelatedToWorker => {
             match relater {
                 Some(r) => match kind {
+                    // Go `r.isRelatedToSimple` (relater.go:2621): reportErrors
+                    // false, IntersectionStateNone — verbatim method.
                     TypeComparerKind::RelatedToSimple => r.is_related_to_simple(c, source, target),
-                    _ => r.is_related_to_worker(c, source, target, false),
+                    // Go signatureRelatedTo's closure (relater.go:4586):
+                    // RecursionFlagsBoth + reportErrors + the AMBIENT
+                    // intersection state.
+                    _ => r.is_related_to_ex(
+                        c,
+                        source,
+                        target,
+                        RecursionFlags::BOTH,
+                        report_errors,
+                        None,
+                        intersection_state,
+                    ),
                 },
                 None => {
                     // PORT: unreachable through checker-level entry points
@@ -7162,7 +7296,7 @@ fn discriminate_type_by_discriminable_items(
                 };
                 let mut is_match = false;
                 for &s in &prop_type_distributed {
-                    if invoke_comparer(c, kind, relater.as_deref_mut(), s, target_type, false) != Ternary::False {
+                    if invoke_comparer(c, kind, relater.as_deref_mut(), IntersectionState::NONE, s, target_type, false) != Ternary::False {
                         is_match = true;
                         break;
                     }
@@ -7278,7 +7412,7 @@ pub(crate) fn infer_types_from_template_literal_type(
                     .map(|(&s, &t)| {
                         let __lift52 = get_base_constraint_or_type(c, s);
                         let __lift51 = get_base_constraint_or_type(c, t);
-                        if invoke_comparer(c, kind, relater.as_deref_mut(), __lift52, __lift51, false) != Ternary::False {
+                        if invoke_comparer(c, kind, relater.as_deref_mut(), IntersectionState::NONE, __lift52, __lift51, false) != Ternary::False {
                             s
                         } else {
                             get_string_like_type_for_type(c, s).expect("string-like")
@@ -7434,7 +7568,7 @@ fn is_valid_type_for_template_literal_placeholder(
         }
         return true;
     }
-    if c.type_(target).flags.intersects(TypeFlags::STRING) || invoke_comparer(c, kind, relater.as_deref_mut(), source, target, false) != Ternary::False {
+    if c.type_(target).flags.intersects(TypeFlags::STRING) || invoke_comparer(c, kind, relater.as_deref_mut(), IntersectionState::NONE, source, target, false) != Ternary::False {
         return true;
     }
     if c.type_(source).flags.intersects(TypeFlags::STRING_LITERAL) {
@@ -7453,7 +7587,7 @@ fn is_valid_type_for_template_literal_placeholder(
         return texts.len() == 2
             && texts[0].is_empty()
             && texts[1].is_empty()
-            && invoke_comparer(c, kind, relater, types[0], target, false) != Ternary::False;
+            && invoke_comparer(c, kind, relater, IntersectionState::NONE, types[0], target, false) != Ternary::False;
     }
     false
 }
@@ -9086,8 +9220,8 @@ pub(crate) fn compare_properties(c: &mut Checker, source_prop: SymbolId, target_
         TypeComparerKind::Identical => c.compare_types_identical(source_type, target_type),
         TypeComparerKind::Assignable => c.compare_types_assignable_simple(source_type, target_type),
         TypeComparerKind::SubtypeOf => c.compare_types_subtype_of(source_type, target_type),
-        TypeComparerKind::RelatedToSimple => invoke_comparer(c, kind, relater, source_type, target_type, false),
-        TypeComparerKind::RelatedToWorker => invoke_comparer(c, kind, relater, source_type, target_type, false),
+        TypeComparerKind::RelatedToSimple => invoke_comparer(c, kind, relater, IntersectionState::NONE, source_type, target_type, false),
+        TypeComparerKind::RelatedToWorker => invoke_comparer(c, kind, relater, IntersectionState::NONE, source_type, target_type, false),
     }
 }
 

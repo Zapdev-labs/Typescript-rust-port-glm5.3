@@ -192,11 +192,13 @@ impl Checker {
     ///
     /// Go: `func (c *Checker) IsArrayLikeType(t *Type) bool` →
     /// `c.isArrayLikeType(t)` (checker.go:24049 — needs global array types +
-    /// the relater, S7/S10).
-    pub fn is_array_like_type(&self, t: TypeId) -> bool {
-        // TODO(port M6 S7/S10): isArrayType || assignability to ReadonlyArray<any>.
-        let _ = t;
-        false
+    /// the relater, S7/S10). REAL (FCS): delegates to typenodes's Go-exact
+    /// body — the W1-era `false` stub flipped the iteration fallback (the
+    /// 2495 "not an array type" family) for every array-like probe in a
+    /// lib-less global table ({} stays array-like: assignable to the
+    /// missing-ReadonlyArray sentinel, Go's emptyObjectType).
+    pub fn is_array_like_type(&mut self, t: TypeId) -> bool {
+        crate::typenodes::is_array_like_type(self, t)
     }
 
     /// Go: `func (c *Checker) GetPropertiesOfType(t *Type) []*ast.Symbol` →
@@ -847,7 +849,13 @@ mod tests {
         assert!(c.get_properties_of_type(t).is_empty());
         assert_eq!(c.get_property_of_type(t, "x"), None);
         assert!(!c.type_has_call_or_construct_signatures(t));
-        assert!(!c.is_array_like_type(t));
+        // The W1 `is_array_like_type == false` pin is SUPERSEDED (FCS):
+        // the real body delegates to typenodes (Go checker.go:24049) —
+        // in the lib-less global table the missing-ReadonlyArray
+        // sentinel (emptyObjectType) accepts the synthetic t, so the
+        // predicate reads true (Go's exact shape in the same
+        // environment).
+        assert!(c.is_array_like_type(t));
         assert!(!c.is_array_type(t));
         assert!(c.get_type_predicate_of_signature(SignatureId(0)).is_none());
         assert_eq!(c.get_true_type_of_conditional_type(t), None);

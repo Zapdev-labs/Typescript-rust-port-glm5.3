@@ -203,7 +203,25 @@ impl Checker {
         }
     }
 
+    /// Go: the resolver pair's `getGlobalIterableType` closure — the
+    /// NON-checked row (report_errors=false; no TS2318 on a lib-less
+    /// global table). getIterationTypesOfIterableFast reads THIS one
+    /// (checker.go:6565), NOT the checked variant — the port had collapsed
+    /// the pair, emitting 2318s the Go fast path never reports (FCS
+    /// for-of divergence fix).
+    pub(crate) fn get_global_iterable_type_of_resolver(&mut self, r: IterationTypesResolver) -> TypeId {
+        match r.kind {
+            IterationTypesResolverKind::Sync => self.get_global_iterable_type(),
+            IterationTypesResolverKind::Async => self.get_global_async_iterable_type(),
+        }
+    }
+
     /// Go: the resolver pair's `getGlobalIterableTypeChecked` closure.
+    /// Go's only consumer is getIterationTypesOfIteratorWorker's error
+    /// probe (checker.go:6676) — the port's worker doesn't yet run that
+    /// arm (its checkTypeAssignableToEx diagnostic-output path is the
+    /// missing S8 member seam), so the accessor is currently uncalled.
+    #[allow(dead_code)] // TODO(port M6 S8): the worker's iterable-assignability error probe
     pub(crate) fn get_global_iterable_type_checked_of_resolver(&mut self, r: IterationTypesResolver) -> TypeId {
         match r.kind {
             IterationTypesResolverKind::Sync => self.get_global_iterable_type_checked(),
@@ -2294,7 +2312,8 @@ impl Checker {
             if iteration_types.yield_type.is_some() || iterable_exists {
                 let yield_type = iteration_types.yield_type?;
                 if possible_out_of_bounds {
-                    return Some(self.include_undefined_in_index_signature_stub(yield_type));
+                    return self
+                        .include_undefined_in_index_signature_stub(Some(yield_type));
                 }
                 return Some(yield_type);
             }
@@ -2324,9 +2343,8 @@ impl Checker {
                 // a string.
                 if self.type_(array_type).flags.intersects(TypeFlags::NEVER) {
                     if possible_out_of_bounds {
-                        return Some(
-                            self.include_undefined_in_index_signature_stub(self.string_type()),
-                        );
+                        return self
+                            .include_undefined_in_index_signature_stub(Some(self.string_type()));
                     }
                     return Some(self.string_type());
                 }
@@ -2352,7 +2370,8 @@ impl Checker {
             }
             if has_string_constituent {
                 if possible_out_of_bounds {
-                    return Some(self.include_undefined_in_index_signature_stub(self.string_type()));
+                    return self
+                        .include_undefined_in_index_signature_stub(Some(self.string_type()));
                 }
                 return Some(self.string_type());
             }
@@ -2384,9 +2403,7 @@ impl Checker {
             ));
         }
         if use_.intersects(IterationUse::POSSIBLY_OUT_OF_BOUNDS) {
-            return Some(self.include_undefined_in_index_signature_stub(
-                array_element_type.expect("array element type"),
-            ));
+            return self.include_undefined_in_index_signature_stub(array_element_type);
         }
         array_element_type
     }
@@ -2593,7 +2610,7 @@ impl Checker {
         // As an optimization, if the type is an instantiation of the global
         // Iterable/IteratorObject/IterableIterator/Generator types, just
         // grab the related type arguments.
-        let iterable_type = self.get_global_iterable_type_checked_of_resolver(r);
+        let iterable_type = self.get_global_iterable_type_of_resolver(r);
         let iterator_object_type = self.get_global_iterator_object_type_of_resolver(r);
         let iterable_iterator_type = self.get_global_iterable_iterator_type_of_resolver(r);
         let generator_type = self.get_global_generator_type_of_resolver(r);
@@ -3209,10 +3226,20 @@ impl Checker {
         }
     }
 
-    /// Go: `func (c *Checker) includeUndefinedInIndexSignature(t)` (S10's
-    /// index-signature family). Permissive identity.
-    pub(crate) fn include_undefined_in_index_signature_stub(&mut self, t: TypeId) -> TypeId {
-        t
+    /// Go: `func (c *Checker) includeUndefinedInIndexSignature(t)` (flow.go:2339)
+    /// — REAL (FCS): the nil-tolerant shape (Go returns nil for nil; the
+    /// S10-era identity stub `.expect`ed the array element type Go leaves
+    /// nil when the source has no number index signature).
+    pub(crate) fn include_undefined_in_index_signature_stub(
+        &mut self,
+        t: Option<TypeId>,
+    ) -> Option<TypeId> {
+        let t = t?;
+        if self.compiler_options.no_unchecked_indexed_access == Tristate::TSTrue {
+            let missing_type = self.missing_type();
+            return Some(relater::get_union_type(self, vec![t, missing_type]));
+        }
+        Some(t)
     }
 }
 
@@ -4040,11 +4067,97 @@ impl Checker {
                         None,
                         None,
                     );
-                    // The using/await-using disposable checks need S7's
-                    // union construction + the global Disposable types;
-                    // with the permissive global sentinels the gate reads
-                    // absent, exactly like a program without the lib.
-                    // TODO(port M6 S7): getUnionType + getGlobalDisposableType.
+                    // Go: the using/await-using initializer Disposable
+                    // checks (checker.go:6088-6126). REAL (FCS usingDeclarations
+                    // tranche): with W3T3's real global resolvers the
+                    // Disposable/AsyncDisposable lookups now emit Go's 2318s
+                    // exactly when the lib lacks them (the S7-era stub read
+                    // absent and the whole family silently passed).
+                    let block_scope_kind = self.get_combined_node_flags_cached(node) & NF::BLOCK_SCOPED;
+                    if block_scope_kind == NF::AWAIT_USING {
+                        let global_async_disposable_type = self.get_global_async_disposable_type();
+                        let global_disposable_type = self.get_global_disposable_type();
+                        if global_async_disposable_type != self.empty_object_type()
+                            && global_disposable_type != self.empty_object_type()
+                        {
+                            let null_type = self.null_type();
+                            let undefined_type = self.undefined_type();
+                            let optional_disposable_type = relater::get_union_type(
+                                self,
+                                vec![
+                                    global_async_disposable_type,
+                                    global_disposable_type,
+                                    null_type,
+                                    undefined_type,
+                                ],
+                            );
+                            let widened = self
+                                .widen_type_for_variable_like_declaration(Some(initializer_type), node, false);
+                            self.check_type_assignable_to(
+                                widened,
+                                optional_disposable_type,
+                                Some(initializer),
+                                Some(&diag::THE_INITIALIZER_OF_AN_AWAIT_USING_DECLARATION_MUST_BE_EITHER_AN_OBJECT_WITH_A_SYMBOL_ASYNCDISPOSE_OR_SYMBOL_DISPOSE_METHOD_OR_BE_NULL_OR_UNDEFINED),
+                            );
+                        }
+                    } else if block_scope_kind == NF::USING {
+                        let global_disposable_type = self.get_global_disposable_type();
+                        if global_disposable_type != self.empty_object_type() {
+                            let null_type = self.null_type();
+                            let undefined_type = self.undefined_type();
+                            let optional_disposable_type = relater::get_union_type(
+                                self,
+                                vec![global_disposable_type, null_type, undefined_type],
+                            );
+                            let widened_initializer_type = self
+                                .widen_type_for_variable_like_declaration(Some(initializer_type), node, false);
+                            let mut diags: Vec<tsc_ast::Diagnostic> = Vec::new();
+                            if !self.check_type_assignable_to_ex(
+                                widened_initializer_type,
+                                optional_disposable_type,
+                                Some(initializer),
+                                Some(&diag::THE_INITIALIZER_OF_A_USING_DECLARATION_MUST_BE_EITHER_AN_OBJECT_WITH_A_SYMBOL_DISPOSE_METHOD_OR_BE_NULL_OR_UNDEFINED),
+                                Some(&mut diags),
+                            ) {
+                                let global_async_disposable_type =
+                                    self.get_global_async_disposable_type();
+                                let optional_async_disposable_type = relater::get_union_type(
+                                    self,
+                                    vec![global_async_disposable_type, null_type, undefined_type],
+                                );
+                                // Go: diags[0] then conditionally append the
+                                // asyncDispose hint chain
+                                // (NewDiagnosticChain(nil, …) — the
+                                // no-location chain diagnostic, the
+                                // diagnostic_for_node None-node idiom), then
+                                // c.addDiagnostic(diags[0]) unconditionally.
+                                let mut head = diags
+                                    .first()
+                                    .cloned()
+                                    .expect("checkTypeAssignableToEx failed → diags[0] (Go dereferences)");
+                                if global_async_disposable_type != self.empty_object_type()
+                                    && self.is_type_assignable_to(
+                                        widened_initializer_type,
+                                        optional_async_disposable_type,
+                                    )
+                                {
+                                    let hint = tsc_ast::Diagnostic::new(
+                                        None,
+                                        tsc_ast::TextRange::new(0, 0),
+                                        diag::THIS_INITIALIZER_HAS_A_SYMBOL_ASYNCDISPOSE_METHOD_DID_YOU_MEAN_TO_USE_AWAIT_USING.code(),
+                                        diag::THIS_INITIALIZER_HAS_A_SYMBOL_ASYNCDISPOSE_METHOD_DID_YOU_MEAN_TO_USE_AWAIT_USING.category(),
+                                        "" /*source*/,
+                                        Some(&diag::THIS_INITIALIZER_HAS_A_SYMBOL_ASYNCDISPOSE_METHOD_DID_YOU_MEAN_TO_USE_AWAIT_USING),
+                                        "" /*messageText*/,
+                                        diag::THIS_INITIALIZER_HAS_A_SYMBOL_ASYNCDISPOSE_METHOD_DID_YOU_MEAN_TO_USE_AWAIT_USING.key(),
+                                        vec![],
+                                    );
+                                    head.add_message_chain(hint);
+                                }
+                                self.add_diagnostic(head);
+                            }
+                        }
+                    }
                 }
             }
             let declarations = self.program.symbol(symbol).declarations.clone();

@@ -1046,6 +1046,7 @@ impl Checker {
                         true,   /*ignoreThisTypes*/
                         true,   /*ignoreReturnTypes*/
                         crate::relater::TypeComparerKind::Identical,
+                        None, /*relater — the checker-level method comparer*/
                     ) == crate::types::Ternary::False
                 {
                     // Signatures aren't identical, do not use (Go's comment)

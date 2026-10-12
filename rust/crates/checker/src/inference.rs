@@ -419,8 +419,9 @@ fn get_single_type_variable_from_intersection_types(
         }
         let v = c
             .type_(t)
-            .distributed()
-            .into_iter()
+            .types()
+            .iter()
+            .copied()
             .find(|t| get_inference_info_for_type(c, n, *t).is_some());
         match v {
             None => return None,
@@ -500,8 +501,11 @@ impl Checker {
         }
         if source == target && self.type_(source).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
             // When source and target are the same union or intersection type, just relate each constituent
-            // type to itself. (Go comment, verbatim.)
-            let constituents = self.type_(source).distributed();
+            // type to itself. (Go comment, verbatim.) PORT(FCS recursion, intersection self-cycle):
+            // Go iterates `source.Types()` — the RAW constituents; the
+            // port's distributed() self-returns for intersections, making
+            // this arm recurse into the same pair forever.
+            let constituents = self.type_(source).types().to_vec();
             for t in constituents {
                 self.infer_from_types(n, t, t);
             }
@@ -550,25 +554,28 @@ impl Checker {
             }
             source = get_union_type(self, sources);
         } else if self.type_(target).flags.intersects(TypeFlags::INTERSECTION)
-            && !self
-                .type_(target)
-                .distributed()
-                .iter()
-                .all(|&t| self.is_non_generic_object_type(t))
+            && !{
+                let constituents = self.type_(target).types().to_vec();
+                constituents
+                    .iter()
+                    .all(|&t| self.is_non_generic_object_type(t))
+            }
         {
             // We reduce intersection types unless they're simple combinations of object types. For example,
             // when inferring from 'string[] & { extra: any }' to 'string[] & T' we want to remove string[] and
             // infer { extra: any } for T. But when inferring to 'string[] & Iterable<T>' we want to keep the
-            // string[] on the source side and infer string for T. (Go comment, verbatim.)
+            // string[] on the source side and infer string for T. (Go comment, verbatim.) PORT(FCS):
+            // Go gates on `core.Every(target.Types(), …)` — the raw constituents (distributed() self-returns
+            // for intersections).
             if !self.type_(source).flags.intersects(TypeFlags::UNION) {
                 let source_types: Vec<TypeId> =
                     if self.type_(source).flags.intersects(TypeFlags::INTERSECTION) {
-                        self.type_(source).distributed()
+                        self.type_(source).types().to_vec()
                     } else {
                         vec![source]
                     };
                 // Infer between identically matching source and target constituents and remove the matching types. (Go comment, verbatim.)
-                let target_types = self.type_(target).distributed();
+                let target_types = self.type_(target).types().to_vec();
                 let (sources, targets) = self.infer_from_matching_types(
                     n,
                     source_types,
@@ -719,7 +726,14 @@ impl Checker {
         } else if self.type_(target).flags.intersects(TypeFlags::CONDITIONAL) {
             self.invoke_once(n, source, target, Checker::infer_to_conditional_type);
         } else if self.type_(target).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
-            let target_types = self.type_(target).distributed();
+            // PORT(FCS recursion, intersection self-cycle): Go passes
+            // `target.Types()` — the RAW constituents (inference.go:243) —
+            // to inferToMultipleTypes; the port's distributed() self-returns
+            // for intersections, so the per-target loop re-dispatched the
+            // SAME (source, intersection) pair forever (the
+            // intersectionTypeInference.ts sweep overflow:
+            // infer_from_types ↔ infer_to_multiple_types mutual recursion).
+            let target_types = self.type_(target).types().to_vec();
             let target_flags = self.type_(target).flags;
             self.infer_to_multiple_types(n, source, target_types, target_flags);
         } else if self.type_(source).flags.intersects(TypeFlags::UNION) {
@@ -1769,7 +1783,10 @@ impl Checker {
             || self.type_(constraint_type).flags.intersects(TypeFlags::INTERSECTION)
         {
             let mut result = false;
-            for t in self.type_(constraint_type).distributed() {
+            // PORT(FCS): Go iterates `constraintType.Types()` — the raw
+            // union-or-intersection constituents (inference.go:962);
+            // distributed() self-returns for intersections.
+            for t in self.type_(constraint_type).types().to_vec() {
                 result = self.infer_to_mapped_type(n, source, target, t) || result;
             }
             return result;
@@ -2054,10 +2071,14 @@ impl Checker {
             .as_reverse_mapped_type()
             .and_then(|d| d.constraint_type)
             .expect("reverse mapped");
+        // PORT(FCS): Go filters `origin.Types()` — the raw constituents
+        // (inference.go:1183; origin is intersection-gated);
+        // distributed() self-returns for intersections.
         let constituents: Vec<TypeId> = self
             .type_(origin)
-            .distributed()
-            .into_iter()
+            .types()
+            .iter()
+            .copied()
             .filter(|&t| t != constraint_type)
             .collect();
         let limited_constraint = crate::relater::get_intersection_type(self, constituents);
@@ -2142,10 +2163,16 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) isTypeParameterAtTopLevel(t, tp, depth) bool`.
+    /// PORT(FCS recursion, intersection self-cycle): Go's union-or-
+    /// intersection arm iterates `t.Types()` — the RAW constituents
+    /// (inference.go:1507) — not Distributed() (which self-returns for
+    /// intersections); the port's distributed() made every intersection
+    /// reaching this arm recurse into itself (the
+    /// mixinAbstractClassesReturnTypeInference.ts sweep overflow).
     fn is_type_parameter_at_top_level(&mut self, t: TypeId, tp: TypeId, depth: usize) -> bool {
         t == tp
             || (self.type_(t).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) && {
-                let constituents = self.type_(t).distributed();
+                let constituents = self.type_(t).types().to_vec();
                 constituents
                     .iter()
                     .any(|&t| self.is_type_parameter_at_top_level(t, tp, depth))
@@ -2765,7 +2792,10 @@ fn get_type_depth(c: &Checker, t: TypeId, max_depth: i32) -> i32 {
             }
         }
         if c.type_(t).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
-            let types = c.type_(t).distributed();
+            // PORT(FCS): Go reads `t.Types()` — the raw constituents;
+            // distributed() self-returns for intersections, which made
+            // getTypeDepth feed an intersection back to itself.
+            let types = c.type_(t).types().to_vec();
             return get_type_list_depth(c, &types, max_depth);
         }
     }
@@ -2921,7 +2951,15 @@ fn could_contain_type_variables_helper(c: &mut Checker, t: TypeId) -> bool {
         && !c.type_(t).flags.intersects(TypeFlags::ENUM_LITERAL)
         && !is_non_generic_top_level_type(c, t)
     {
-        let constituents = c.type_(t).distributed();
+        // PORT(FCS recursion, intersection self-cycle): Go's union arm
+        // iterates `t.Types()` — the RAW union-or-intersection constituent
+        // list (types.go:780). The port used `distributed()`, which for an
+        // INTERSECTION returns `[t]` (the type itself — distributed is the
+        // union-flattening read), so every intersection reaching this arm
+        // recursed into itself before the memo flag landed and the
+        // full-corpus sweep stack-overflowed (classes/mixinAbstractClasses
+        // .2.ts). `types()` is Go's exact read.
+        let constituents = c.type_(t).types().to_vec();
         result = constituents
             .iter()
             .any(|&t| could_contain_type_variables_helper(c, t));
