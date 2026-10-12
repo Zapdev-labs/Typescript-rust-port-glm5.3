@@ -1,0 +1,95 @@
+rust/crates/checker/src/contextual.rs
+  s_3f2cb77a19fcf9::t_6ce5d0dccd4bb1 1049
+rust/crates/checker/src/statements.rs
+  s_3f2cb77a19fcf9::t_9a309bebc43a87 2613
+  s_3f2cb77a19fcf9::t_a9e2450df5b635 206-218
+  s_3f2cb77a19fcf9::t_8841f467996651 2316
+  s_3f2cb77a19fcf9::t_ccd7c6b4be3474 4070-4094,4096-4112,4114-4127,4138-4143,4154,4156,4158-4160
+  s_3f2cb77a19fcf9::t_a18d552c8544ac 220-224
+  s_3f2cb77a19fcf9::t_717d45b3fe97cf 4128-4137,4144-4153,4155,4157
+  s_3f2cb77a19fcf9::t_d1ebd03df2394f 2315
+  s_3f2cb77a19fcf9::t_eb7edb27ef541e 3229-3242
+rust/crates/checker/src/exports.rs
+  s_3f2cb77a19fcf9::t_5d6276cd5802c4 852-858
+  s_3f2cb77a19fcf9::t_c60e2c6c39d34b 195-201
+rust/crates/checker/src/uniontypes.rs
+  s_3f2cb77a19fcf9::t_5dd69c2fc03217 3806-3821,3823-3826,3828,3834-3852,3857-3876
+rust/crates/checker/tests/fcs_relater.rs
+  s_3f2cb77a19fcf9::t_d857e7e1a453bb 269-271,278-332
+  s_3f2cb77a19fcf9::t_d67e2ff037f2f9 272-277
+  s_3f2cb77a19fcf9::t_dffb48a5719230 210-223,228-229
+  s_3f2cb77a19fcf9::t_72a41ab7a07817 1-173,243-259,261-268
+  s_3f2cb77a19fcf9::t_84b1c1d78d8d2c 174-209,230-242
+  s_3f2cb77a19fcf9::t_f410399f2143d3 260
+  s_3f2cb77a19fcf9::t_a076eb4b67a2ac 224-227
+rust/crates/checker/src/members.rs
+  s_3f2cb77a19fcf9::t_a0c2a93502000c 3399-3403
+  s_3f2cb77a19fcf9::t_a979a5174cfcb0 3377-3379
+  s_3f2cb77a19fcf9::t_434cb6f57db7aa 4959
+rust/crates/checker/src/typeofsymbol.rs
+  s_3f2cb77a19fcf9::t_adf663c3bd334a 3067-3074
+  s_3f2cb77a19fcf9::t_6c917f8355df40 3076-3081
+  s_3f2cb77a19fcf9::t_7f79399c6b1113 3063-3066,3075
+rust/crates/checker/src/relater.rs
+  s_3f2cb77a19fcf9::t_8675ce08fdddd9 1879-1885,1895-1896
+  s_3f2cb77a19fcf9::t_ee2a0a3ce3475c 6194
+  s_3f2cb77a19fcf9::t_904900920c38a4 2138-2141,2149-2150,2167
+  s_3f2cb77a19fcf9::t_93398755e1e1e0 7415
+  s_3f2cb77a19fcf9::t_0aeca7f182d8a4 2069
+  s_3f2cb77a19fcf9::t_6e3fd14e58758e 2903-2906,2916
+  s_3f2cb77a19fcf9::t_9c081d93ef809a 7299
+  s_3f2cb77a19fcf9::t_95476c3978b353 2124
+  s_3f2cb77a19fcf9::t_a570a824e128be 2972
+  s_3f2cb77a19fcf9::t_2d1521c0b8c4af 3080
+  s_3f2cb77a19fcf9::t_708deb434f59c0 2103-2104
+  s_3f2cb77a19fcf9::t_9f0b028893a121 2907
+  s_3f2cb77a19fcf9::t_d9c01f6767498e 2946-2947,2956-2957
+  s_3f2cb77a19fcf9::t_0f865ddea73f53 2999
+  s_3f2cb77a19fcf9::t_739b4c52479652 3637-3642
+  s_3f2cb77a19fcf9::t_52f37d93ba39c2 3966,3968
+  s_3f2cb77a19fcf9::t_14a90440bb46d6 3090
+  s_3f2cb77a19fcf9::t_456c3563f8707b 2899
+  s_3f2cb77a19fcf9::t_73a51afab2003d 2983
+  s_3f2cb77a19fcf9::t_e841e952a6882e 3967
+  s_3f2cb77a19fcf9::t_5b443bf5d6b93b 6730-6744,6749,6752,6761-6762,6764-6775
+  s_3f2cb77a19fcf9::t_3a8c5717528074 7590
+  s_3f2cb77a19fcf9::t_144421f63d50bc 2127
+  s_3f2cb77a19fcf9::t_3b7ebb36374493 1941-1949
+  s_3f2cb77a19fcf9::t_f17413f239e3d5 3934-3942,3945-3962,3965,3969,3971-3991
+  s_3f2cb77a19fcf9::t_2c5424940ac136 1968,1971
+  s_3f2cb77a19fcf9::t_cf06429566e4ad 3007
+  s_3f2cb77a19fcf9::t_993b7779d9bf2d 3963-3964,3970
+  s_3f2cb77a19fcf9::t_d18f304458d3a6 1872-1873
+  s_3f2cb77a19fcf9::t_7ee2914ebe6982 6166,6177-6182
+  s_3f2cb77a19fcf9::t_2ed0276db4c569 9223-9224
+  s_3f2cb77a19fcf9::t_e50abb3c1542b6 3072-3074
+  s_3f2cb77a19fcf9::t_54dc7e562526a8 7571
+  s_3f2cb77a19fcf9::t_6a1ed56edb38c0 2048-2049,2055,2058
+rust/crates/checker/src/inference.rs
+  s_3f2cb77a19fcf9::t_f549485ca3a284 2795-2798
+  s_3f2cb77a19fcf9::t_5a1b1c3468f4be 2954-2962
+  s_3f2cb77a19fcf9::t_5929b8797c5ff8 557-562
+  s_3f2cb77a19fcf9::t_40f2988db4699f 567-569,573,578
+  s_3f2cb77a19fcf9::t_67a7c4b6a8f17c 2074-2076,2079-2081
+  s_3f2cb77a19fcf9::t_d2db862ed3fb52 1786-1789
+  s_3f2cb77a19fcf9::t_29d8d3081e8aa3 729-736
+  s_3f2cb77a19fcf9::t_788c700d37a33e 422-424
+  s_3f2cb77a19fcf9::t_1ad8b162488b5f 504-508
+  s_3f2cb77a19fcf9::t_6d6c409c7278f3 2166-2171,2175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "83f4b4bb105bf2444c0f1f511bc45a9ae88a002d",
+  "prompts": {},
+  "sessions": {
+    "s_3f2cb77a19fcf9": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "ee57024f-ebb8-43e6-b9fd-6343b477cf5e",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
