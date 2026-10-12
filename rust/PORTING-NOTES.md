@@ -2361,3 +2361,9 @@ NodeId::NONE-is-foreign-to-file-0 panic family (320 cases —
 check_identifier -> get_control_flow_container on NONE parents,
 dominating jsdoc/declarations + node/allowJs), then the 2354 tslib
 family + the remaining panic families.
+
+Rig validation (full-corpus sweep tranche 1, 2026-10-14): forced clean
++ rebuild — all rails green (fixture x3 identical, bind 143/143,
+CHECK zero divergence, program 15/15). Tranche 1 RIG-VALIDATED. Tranche
+2 (the 320-case NodeId::NONE panic family + the tslib/panic census)
+dispatched.
