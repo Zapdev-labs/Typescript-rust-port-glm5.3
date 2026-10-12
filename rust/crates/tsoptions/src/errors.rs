@@ -92,9 +92,12 @@ pub fn create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
 /// Go: `ast.NewCompilerDiagnostic(message, args...)`.
 pub fn new_compiler_diagnostic(message: &'static Message, args: &[String]) -> Diagnostic {
     let text = tsc_diagnostics::format(message.text(), args);
+    // PORT(FCS, 2026-10-14): Go passes core.UndefinedTextRange() — {-1, -1}
+    // (core/text.go:18), not {0, 0}; the config-diagnostic span families
+    // (TS5055/TS5024 et al.) diverged on the zero range.
     Diagnostic::new(
         None,
-        TextRange::new(0, 0),
+        TextRange::new(-1, -1),
         message.code(),
         message.category(),
         "",
