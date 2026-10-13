@@ -6644,15 +6644,18 @@ impl Checker {
                         member,
                     ) && !self.store().node(param).name().is_some_and(|n| is_binding_pattern(self.store(), n))
                     {
-                        check_property_or_accessor(
-                            self,
-                            &mut instance_names,
-                            &mut static_names,
-                            param,
-                            1,
-                            false,
-                            param_name.as_ref(),
-                        );
+                        if let Some(param_symbol) = param_symbol {
+                            check_property_or_accessor(
+                                self,
+                                node,
+                                &mut instance_names,
+                                &mut static_names,
+                                param_symbol,
+                                1,
+                                false,
+                                param_name.as_ref(),
+                            );
+                        }
                     }
                 }
             } else {
@@ -6692,9 +6695,10 @@ impl Checker {
                     if let Some(symbol) = symbol {
                         check_property_or_accessor(
                             self,
+                            node,
                             &mut instance_names,
                             &mut static_names,
-                            member,
+                            symbol,
                             1,
                             is_static,
                             // Go reads symbol.Name through checkPropertyOrAccessor
@@ -6708,9 +6712,10 @@ impl Checker {
                     if let Some(symbol) = symbol {
                         check_property_or_accessor(
                             self,
+                            node,
                             &mut instance_names,
                             &mut static_names,
-                            member,
+                            symbol,
                             2,
                             is_static,
                             Some(&self.program_symbol(symbol).name.clone()),
@@ -7671,17 +7676,30 @@ pub(crate) fn get_type_predicate_parent(store: &dyn NodeStore, node: NodeId) -> 
 
 /// The `checkPropertyOrAccessor` closure of checkObjectTypeForDuplicate-
 /// Declarations. `symbol_name` is the Go `symbol.Name` read.
+/// PORT(FCS tranche 9): Go's `case state == 1 || state == 2 && kind != 2`
+/// arm calls reportDuplicateMemberErrors(node, symbol.Name, true, isStatic,
+/// Duplicate_identifier_0) — the W-port stub recorded state 3 without
+/// reporting, so the whole duplicate-member TS2300 family never fired
+/// (the 125-record missing side). Go's `len(symbol.Declarations) > 1`
+/// gate (checker.go:3199) also participates: members whose symbol has a
+/// SINGLE declaration never enter the state machine — distinct symbols
+/// that share a NAME (the binder's "__computed" computed-name members,
+/// awaitAndYieldInProperty) must not collide.
 #[allow(clippy::too_many_arguments)]
 fn check_property_or_accessor(
-    _c: &mut Checker,
+    c: &mut Checker,
+    node: NodeId,
     instance_names: &mut FxHashMap<String, i32>,
     static_names: &mut FxHashMap<String, i32>,
-    declaration: NodeId,
+    symbol: SymbolId,
     kind: i32,
     is_static: bool,
     symbol_name: Option<&String>,
 ) {
     let Some(symbol_name) = symbol_name else { return };
+    if c.program_symbol(symbol).declarations.len() <= 1 {
+        return;
+    }
     let names = if is_static { static_names } else { instance_names };
     let state = names.get(symbol_name).copied().unwrap_or(0);
     match state {
@@ -7692,8 +7710,15 @@ fn check_property_or_accessor(
             if (kind != 2 || state == 1) => {
                 // Error on second property or combination of property and
                 // accessor
-                let _ = declaration;
-                // reported below via the caller's node context
+                let name = symbol_name.clone();
+                c.report_duplicate_member_errors(
+                    node,
+                    &name,
+                    true, /*checkStatic*/
+                    is_static,
+                    &diag::DUPLICATE_IDENTIFIER_0,
+                );
+                // Record that errors have been reported
                 names.insert(symbol_name.clone(), 3);
             }
         _ => {}
@@ -9342,17 +9367,16 @@ impl Checker {
                         continue;
                     };
                     let t = self.get_type_of_symbol(symbol);
-                    // TODO(port M6 W3): containsUndefinedType — the flow-
-                    // based definite-assignment analysis; permissive false
-                    // (no undefined constituents on the direct type).
-                    if !self.type_(t).flags.intersects(TypeFlags::ANY_OR_UNKNOWN) {
-                        let initialized = constructor.is_some_and(|ctor| {
-                            // TODO(port M6 W3): isPropertyInitializedIn-
-                            // Constructor — the flow walk; permissive true
-                            // (the getFlowTypeOfReferenceEx seam is W3's).
-                            let _ = ctor;
-                            true
-                        });
+                    // PORT(FCS tranche 9): Go's containsUndefinedType
+                    // (checker.go:5101 — a union contains undefined iff its
+                    // FIRST constituent does) skips the TS2564 check for
+                    // optional-undefined types; the W3 TODO stub was
+                    // permissive false (extra TS2564s Go never reports).
+                    if !(self.type_(t).flags.intersects(TypeFlags::ANY_OR_UNKNOWN)
+                        || self.contains_undefined_type(t))
+                    {
+                        let initialized = constructor
+                            .is_some_and(|ctor| self.is_property_initialized_in_constructor(prop_name, t, ctor));
                         if !initialized {
                             let name_text = tsc_scanner::utilities::declaration_name_to_string(
                                 self.store(),
@@ -9370,12 +9394,117 @@ impl Checker {
         }
     }
 
+    /// Go: `func (c *Checker) isPropertyInitializedInConstructor(propName, propType, constructor) bool` (checker.go:5085).
+    ///
+    /// PORT(FCS tranche 9): the synthetic `this.<name>` reference Go's
+    /// factory builds — allocated through the `NodeStore::alloc` seam (the
+    /// `new_this_property_access_synthetic` idiom, flow.rs), wired to the
+    /// constructor's ReturnFlowNode, and resolved through the real
+    /// `getFlowTypeOfReferenceEx` flow walk (flow.rs — the W3 TODO stub
+    /// answered "initialized" for every constructor).
+    pub(crate) fn is_property_initialized_in_constructor(
+        &mut self,
+        prop_name: NodeId,
+        prop_type: TypeId,
+        constructor: NodeId,
+    ) -> bool {
+        // The `this` keyword expression.
+        let this_expression = tsc_ast::Node {
+            kind: Kind::ThisKeyword,
+            flags: NF::NONE,
+            loc: tsc_ast::TextRange::undefined(),
+            id: std::cell::Cell::new(0),
+            parent: std::cell::Cell::new(NodeId::NONE),
+            data: tsc_ast::NodeData::KeywordExpression(Box::new(tsc_ast::KeywordExpression {
+                flow_node: None,
+            })),
+        };
+        let this_expression_id = self.program.node_store_mut().alloc(this_expression);
+        // The reference: `this[expr]` for computed property names,
+        // `this.<name>` otherwise (Go passes the member's OWN name node).
+        let is_computed = self.store().node(prop_name).kind == Kind::ComputedPropertyName;
+        let reference_node = if is_computed {
+            let argument_expression = crate::ast_shims::expression_of(self.store(), prop_name)
+                .expect("ComputedPropertyName carries an expression");
+            tsc_ast::Node {
+                kind: Kind::ElementAccessExpression,
+                flags: NF::NONE,
+                loc: tsc_ast::TextRange::undefined(),
+                id: std::cell::Cell::new(0),
+                parent: std::cell::Cell::new(NodeId::NONE),
+                data: tsc_ast::NodeData::ElementAccessExpression(Box::new(
+                    tsc_ast::ElementAccessExpression {
+                        flow_node: None,
+                        facts: 0,
+                        expression: this_expression_id,
+                        question_dot_token: None,
+                        argument_expression,
+                    },
+                )),
+            }
+        } else {
+            tsc_ast::Node {
+                kind: Kind::PropertyAccessExpression,
+                flags: NF::NONE,
+                loc: tsc_ast::TextRange::undefined(),
+                id: std::cell::Cell::new(0),
+                parent: std::cell::Cell::new(NodeId::NONE),
+                data: tsc_ast::NodeData::PropertyAccessExpression(Box::new(
+                    tsc_ast::PropertyAccessExpression {
+                        flow_node: None,
+                        facts: 0,
+                        expression: this_expression_id,
+                        question_dot_token: None,
+                        name: prop_name,
+                    },
+                )),
+            }
+        };
+        let reference = self.program.node_store_mut().alloc(reference_node);
+        // Parent + flow-node wiring (Go: reference.Expression().Parent =
+        // reference; reference.Parent = constructor; FlowNodeData().FlowNode
+        // = constructor.AsConstructorDeclaration().ReturnFlowNode).
+        let return_flow_node = {
+            let store = self.program.node_store_mut();
+            store.node_mut(this_expression_id).parent.set(reference);
+            store.node_mut(reference).parent.set(constructor);
+            let return_flow_node = store
+                .node(constructor)
+                .as_constructor_declaration()
+                .and_then(|d| d.return_flow_node);
+            match &mut store.node_mut(reference).data {
+                tsc_ast::NodeData::PropertyAccessExpression(d) => d.flow_node = return_flow_node,
+                tsc_ast::NodeData::ElementAccessExpression(d) => d.flow_node = return_flow_node,
+                _ => {}
+            }
+            return_flow_node
+        };
+        let initial_type = self.get_optional_type(prop_type, false);
+        let flow_type = self.get_flow_type_of_reference_ex(
+            reference,
+            prop_type,
+            initial_type,
+            NodeId(0),
+            return_flow_node,
+        );
+        !self.contains_undefined_type(flow_type)
+    }
+
     /// Go: `func (c *Checker) isPropertyWithoutInitializer(node) bool` (checker.go:5081).
     pub(crate) fn is_property_without_initializer(&self, node: NodeId) -> bool {
         self.store().node(node).kind == Kind::PropertyDeclaration
             && !crate::ast_shims::has_modifier(self.store().node(node), ModifierFlags::ABSTRACT)
-            // TODO(port M6 W3): isExclamationToken(node.PostfixToken()) —
-            // the definite-assignment `!`; permissive false.
+            // PORT(FCS tranche 9): Go's isExclamationToken(node.PostfixToken())
+            // (utilities.go) — the definite-assignment assertion `x!: T`
+            // means the property is NOT "without initializer" for the
+            // TS2564 check; the W3 TODO stub always treated it as
+            // uninitialized (the bogus-TS2564 family).
+            && !self
+                .store()
+                .node(node)
+                .as_property_declaration()
+                .and_then(|d| d.postfix_token)
+                .is_some_and(|t| self.store().node(t).kind == Kind::ExclamationToken)
             && crate::ast_shims::initializer_of(self.store(), node).is_none()
     }
 

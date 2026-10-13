@@ -2388,54 +2388,69 @@ impl Checker {
                 // PORT: Go's `every`/`some` closures become explicit loops —
                 // the Rust closures would need two live `&mut self` captures
                 // (isTypeAssignableTo inside every() inside the outer block).
-                let prefer_covariant_type = match inferred_covariant_type {
-                    Some(covariant) if inferred_contravariant_type.is_none() || {
+                // PORT(FCS tranche 9): Go's
+                // `preferCovariantType := inferredCovariantType != nil && (inferredContravariantType == nil ||
+                //     flags-check && some(contraCandidates) && every(inferences))`
+                // SHORT-CIRCUITS to true when there is no contravariant
+                // inference — the some/every checks only run on the
+                // contravariant-present path. The prior shape ran the
+                // some(contraCandidates) test even in the
+                // contravariant==None arm, where the empty contra list made
+                // it false and discarded a perfectly good covariant
+                // inference (T={Shape} fell to unknownType, keyof T to
+                // never, and the whole keyof-constraint family diverged).
+                let prefer_covariant_type = if let Some(covariant) = inferred_covariant_type {
+                    if inferred_contravariant_type.is_none() {
+                        true
+                    } else {
                         let covariant_flags = self.type_(covariant).flags;
-                        !covariant_flags.intersects(TypeFlags::NEVER | TypeFlags::ANY)
-                    } =>
-                    {
-                        // Go: some(inferenceContraCandidates, t => isTypeAssignableTo(covariant, t))
-                        let mut contra_matched = false;
-                        for &t in &inference_contra_candidates {
-                            if self.is_type_assignable_to(covariant, t) {
-                                contra_matched = true;
-                                break;
-                            }
-                        }
-                        if !contra_matched {
+                        if covariant_flags.intersects(TypeFlags::NEVER | TypeFlags::ANY) {
                             false
                         } else {
-                            // Go: every(range, other => other == index ||
-                            // getConstraintOfTypeParameter(...) != typeParameter ||
-                            // every(...candidates, t => isTypeAssignableTo(t, covariant)))
-                            let others: Vec<(TypeId, Vec<TypeId>)> = self.inference_contexts[n.0 as usize]
-                                .inferences
-                                .iter()
-                                .enumerate()
-                                .filter(|(i, _)| *i != index)
-                                .map(|(_, inf)| (inf.type_parameter, inf.candidates.clone()))
-                                .collect();
-                            let mut all_ok = true;
-                            for (other_type_parameter, candidates) in others {
-                                if self.get_constraint_of_type_parameter(other_type_parameter)
-                                    != Some(type_parameter)
-                                {
-                                    continue;
-                                }
-                                for &t in &candidates {
-                                    if !self.is_type_assignable_to(t, covariant) {
-                                        all_ok = false;
-                                        break;
-                                    }
-                                }
-                                if !all_ok {
+                            // Go: some(inferenceContraCandidates, t => isTypeAssignableTo(covariant, t))
+                            let mut contra_matched = false;
+                            for &t in &inference_contra_candidates {
+                                if self.is_type_assignable_to(covariant, t) {
+                                    contra_matched = true;
                                     break;
                                 }
                             }
-                            all_ok
+                            if !contra_matched {
+                                false
+                            } else {
+                                // Go: every(range, other => other == index ||
+                                // getConstraintOfTypeParameter(...) != typeParameter ||
+                                // every(...candidates, t => isTypeAssignableTo(t, covariant)))
+                                let others: Vec<(TypeId, Vec<TypeId>)> = self.inference_contexts[n.0 as usize]
+                                    .inferences
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(i, _)| *i != index)
+                                    .map(|(_, inf)| (inf.type_parameter, inf.candidates.clone()))
+                                    .collect();
+                                let mut all_ok = true;
+                                for (other_type_parameter, candidates) in others {
+                                    if self.get_constraint_of_type_parameter(other_type_parameter)
+                                        != Some(type_parameter)
+                                    {
+                                        continue;
+                                    }
+                                    for &t in &candidates {
+                                        if !self.is_type_assignable_to(t, covariant) {
+                                            all_ok = false;
+                                            break;
+                                        }
+                                    }
+                                    if !all_ok {
+                                        break;
+                                    }
+                                }
+                                all_ok
+                            }
                         }
                     }
-                    _ => false,
+                } else {
+                    false
                 };
                 if prefer_covariant_type {
                     inferred_type = inferred_covariant_type;

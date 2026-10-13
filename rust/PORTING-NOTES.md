@@ -2520,3 +2520,23 @@ PLAIN-sweep census: divergent 1,688 (1,461 count / 227 hash), identical
 fresh on the rig. Honest residuals: TS2532 +12 (flow-narrowing now visible
 under correct contextual typing), TS2345 +7, TS7053 stragglers. Next by
 census: TS2345 (213 extra/59 missing), TS2564 (154), TS2300 (125), TS2532.
+
+## Full-corpus sweep tranche 9 landed (2026-10-21, RIG-VALIDATED) — divergent 1,688 -> 1,574
+
+Three families: (1) TS2345 — get_inferred_type's prefer-covariant short-
+circuit ran the some(contraCandidates) test even with NO contravariant
+inference, discarding the good covariant inference (T={Shape} fell to
+unknown, keyof T collapsed to never — every keyof-constrained call reported
+a bogus never-assignability); Go-exact nested if/else (extra 213->192).
+(2) TS2564 — is_property_without_initializer ignored the definite-
+assignment ! token; the containsUndefinedType gate was a permissive stub;
+and isPropertyInitializedInConstructor ported IN FULL (Go checker.go:5085:
+synthetic this.<name> reference via the node_store_mut alloc seam, wired to
+the constructor's ReturnFlowNode through the real getFlowTypeOfReferenceEx
+walk) — total 261 -> 7. (3) TS2300 — the checkPropertyOrAccessor closure's
+error arm was a no-op (report_duplicate_memberErrors now real) + Go's
+len(declarations)>1 gate (missing 125 -> 18). PLAIN-sweep census: divergent
+1,574 (1,346 count / 228 hash), identical 5,993/7,567; both drivers
+0/3,826/3,741/0; panics 0. 47 suites (3 fcs9 pin suites); clippy 0; all
+300-slice gates green fresh. Next by census: TS2322 (187/174), TS2339
+(156/316), TS2345 residuals, TS2300 computed-name statics seam, TS2532 61.
