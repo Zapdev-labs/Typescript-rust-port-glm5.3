@@ -7081,9 +7081,20 @@ impl Checker {
         let function_flags = tsc_ast::functionflags::get_function_flags(self.store(), node);
         // Do not use hasDynamicName here, because that returns false for
         // well known symbols.
+        // PORT(FCS, tranche 4): Go checker.go:3450 calls the FULL
+        // checkComputedPropertyName here (the semantic check — it visits
+        // the computed name's expression, which is where
+        // checkThisExpression's this-in-computed-property-name 2465 and
+        // the expression's own diagnostics come from). The port had
+        // checkGrammarComputedPropertyName (the grammar-only variant Go
+        // calls from checkMethodDeclaration's checkGrammarMethod arm) —
+        // class-method computed names were never semantically checked
+        // (es6/computedProperties count-diff family: Go emits
+        // X_this_cannot_be_referenced_in_a_computed_property_name for
+        // `[this.bar()]() {}`, the port emitted nothing).
         if let Some(name) = self.store().node(node).name() {
             if self.store().node(name).kind == Kind::ComputedPropertyName {
-                self.check_grammar_computed_property_name(name);
+                let _ = self.check_computed_property_name(name);
             }
         }
         if self.has_bindable_name(node) {

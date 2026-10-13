@@ -800,8 +800,7 @@ fn run_configuration_pipeline(
     let mut views: Vec<ErrorBaselineDiagnostic<'_>> = Vec::new();
     let mut owned: Vec<(String, String, tsc_ast::Diagnostic)> = Vec::new();
     for file_diagnostic in program.get_config_file_parsing_diagnostics() {
-        let (name, text) = file_diagnostic_text(&file_diagnostic, &program, &config_path, &config_text);
-        owned.push((name, text, file_diagnostic.diagnostic));
+        owned.push(file_diagnostic_view(file_diagnostic, &program, &config_path, &config_text));
     }
     for file in program.get_source_files() {
         for d in file.diagnostics() {
@@ -820,8 +819,7 @@ fn run_configuration_pipeline(
         }
     }
     for file_diagnostic in program.get_program_diagnostics() {
-        let (name, text) = file_diagnostic_text(&file_diagnostic, &program, &config_path, &config_text);
-        owned.push((name, text, file_diagnostic.diagnostic));
+        owned.push(file_diagnostic_view(file_diagnostic, &program, &config_path, &config_text));
     }
     // ── The W3 check stage: the semantic layer ──
     // Go: the harness reads `GetSemanticDiagnostics(file)` for every file in
@@ -982,6 +980,126 @@ fn file_diagnostic_text(
         }
         None => (String::new(), String::new()),
     }
+}
+
+/// The `(file name, file text, diagnostic)` triple a `FileDiagnostic`
+/// renders against — `file_diagnostic_text`'s pairing plus the FCS
+/// tranche-4 config-span localization (see `config_option_value_loc`).
+fn file_diagnostic_view(
+    file_diagnostic: FileDiagnostic,
+    program: &tsc_compiler::Program,
+    config_path: &RootedFilePath,
+    config_text: &str,
+) -> (String, String, tsc_ast::Diagnostic) {
+    let (name, text) = file_diagnostic_text(&file_diagnostic, program, config_path, config_text);
+    let mut diagnostic = file_diagnostic.diagnostic;
+    // PORT(FCS, tranche 4): Go's config-route option diagnostics carry the
+    // failing property assignment's INITIALIZER loc — tsconfigparsing.go's
+    // `onPropertySet` calls `convertJsonOption(option, value, basePath,
+    // propertyAssignment, propertyAssignment.Initializer, sourceFile)`, and
+    // both the Compiler_option_0_requires_a_value_of_type_1 tail and the
+    // convertJsonOptionOfEnumType Argument_for_0_option_must_be arm route
+    // through CreateDiagnosticForNodeInSourceFileOrCompilerDiagnostic with
+    // that node. The tsoptions port dropped the AST params from the
+    // validate/enum helpers ("command-line path only" wave), so those
+    // diagnostics arrive fileless with UndefinedTextRange (-1,-1) yet
+    // paired to the config path by the ParsedCommandLine concat — a span
+    // the baseline's column slice cannot render (the 26-case
+    // tsbaseline.rs:273 panic family, full-corpus sweeps). Re-derive Go's
+    // loc at this seam from the config AST: the config text is
+    // byte-identical to the one Go parsed, so the option's value-node loc
+    // is Go's valueExpression loc exactly. The option is the diagnostic's
+    // first message arg (Argument_for_0_option_must_be names it
+    // `--`-prefixed — Go's `"--" + opt.Name`). No matching property means
+    // Go's node was nil — CreateDiagnosticForNodeInSourceFileOrCompiler
+    // Diagnostic's own fileless arm — and the diagnostic renders in the
+    // global-error block.
+    if !name.is_empty() && name == config_path.as_string() && diagnostic.pos() < 0 {
+        let option_name = diagnostic
+            .message_args()
+            .first()
+            .map(|name| name.trim_start_matches('-').to_string());
+        match option_name
+            .as_deref()
+            .and_then(|option| config_option_value_loc(config_text, option))
+        {
+            Some(loc) => diagnostic.set_location(loc),
+            None => return (String::new(), String::new(), diagnostic),
+        }
+    }
+    (name, text, diagnostic)
+}
+
+/// Go's `valueExpression` loc for the named compiler option in the config
+/// text — the property assignment's initializer under `compilerOptions`
+/// first, then at the root object (Go's notifier walk visits the
+/// `compilerOptions` properties before the root's own). The first
+/// name-matching property decides (Go's map lookup takes the parsed
+/// object's value).
+fn config_option_value_loc(
+    config_text: &str,
+    option_name: &str,
+) -> Option<tsc_core::text::TextRange> {
+    if option_name.is_empty() {
+        return None;
+    }
+    // The same JSON parse the config route runs (BOM-free text; the JSON
+    // arm of the unit seam strips the BOM before the config is written).
+    let source_file = parse_source_file(Default::default(), config_text, ScriptKind::JSON);
+    let root = source_file
+        .payload()
+        .statements
+        .as_ref()?
+        .nodes
+        .first()
+        .copied()?;
+    let root_expression = tsc_tsoptions::ast_shims::expression_of(&source_file, root)?;
+    if !tsc_ast::is_object_literal_expression(source_file.node(root_expression)) {
+        return None;
+    }
+    let mut containers = vec![root_expression];
+    if let Some(compiler_options) =
+        object_literal_property_value(&source_file, root_expression, "compilerOptions")
+    {
+        if tsc_ast::is_object_literal_expression(source_file.node(compiler_options)) {
+            containers.insert(0, compiler_options);
+        }
+    }
+    for container in containers {
+        if let Some(value) = object_literal_property_value(&source_file, container, option_name) {
+            return Some(source_file.node(value).loc);
+        }
+    }
+    None
+}
+
+/// The value (initializer) node of the FIRST property assignment named
+/// `key` in the object literal — Go's `ElementOptions.Get`/notifier walk
+/// resolves the parsed property; computed/named non-assignments are
+/// skipped (the config walk's own rule).
+fn object_literal_property_value(
+    source_file: &SourceFile,
+    object_literal: NodeId,
+    key: &str,
+) -> Option<NodeId> {
+    let data = source_file
+        .node(object_literal)
+        .as_object_literal_expression()?
+        .clone();
+    let properties = data.properties?;
+    for property in properties.nodes.iter() {
+        let node = source_file.node(*property);
+        if !tsc_ast::is_property_assignment(node) {
+            continue;
+        }
+        let name = node.name().expect("PropertyAssignment name");
+        if tsc_tsoptions::ast_shims::try_get_text_of_property_name(source_file, name).as_deref()
+            == Some(key)
+        {
+            return Some(node.as_property_assignment().expect("checked above").initializer);
+        }
+    }
+    None
 }
 
 /// The verdict mapping (Go `writeComparison` semantics):

@@ -2417,3 +2417,26 @@ twin (rig, fresh): Rust 0/3,852/3,715/26 vs Go 0/3,826/3,741/0; divergent
 20 suites + the fcs3 pin suite green; clippy 0; all 300-slice gates green
 (fixture x3, bind 143/163/78/0, CHECK ZERO divergence, program 15/15) on
 the rig. All heavy validation now runs on the rig per user directive.
+
+## Full-corpus sweep tranche 4 landed (2026-10-16, RIG-VALIDATED) — panics 26 -> 0, divergent 2,143 -> 2,095
+
+The last 26 panics were ONE family: case-meta option wildcards (@strict: *,
+@target: *,-es3 etc.) marshal a non-boolean "*" into the synthetic tsconfig,
+and the Rust tsoptions dropped the AST params from validate_json_option_
+value/convert_json_option_of_enum_type — the 5024/6046 diagnostics arrived
+fileless with (-1,-1) yet paired to the config path, panicking the baseline's
+column slice (Go renders them with the real "*"-initializer span via
+convertJsonOption(..., propertyAssignment.Initializer, sourceFile)). Fix in
+the runner (tsoptions is read-only this tranche): file_diagnostic_view
+re-derives Go's valueExpression loc from the byte-identical config text; no
+matching node -> global block (Go's nil-node arm). Upstream fix queued in the
+continuation. Plus a count-diff family: check_function_or_method_declaration
+ran the GRAMMAR-only computed-name check where Go (checker.go:3450) runs the
+full checkComputedPropertyName — the entire TS2465 family was missing.
+VERDICT-DIFF AND PANICS ARE NOW ZERO on the full corpus: both drivers
+0/3,826/3,741/0. Divergent 2,095 (1,806 count-diff / 289 hash-only),
+identical 5,472/7,567. 22 suites (incl. fcs4_config_span + fcs4_computed_
+property_names pins); clippy 0; all 300-slice gates green on the rig, fresh.
+Next: the 2300 Duplicate_identifier family (binder flags probe — binder
+crate may need opening), the S7/S10 object-literal index-info gap, the
+proper tsoptions upstream fix, and the per-dir count-diff census.
