@@ -2460,3 +2460,25 @@ banked: rust-extra TS2318 532 / TS2307 522 / TS2367 397 / TS2683 218;
 rust-missing TS2711 76 / TS7053 314 / TS2834 300 / TS2300 125. Both
 drivers 0/3,826/3,741/0; 39 test-result-ok lines; clippy 0; all
 300-slice gates green fresh on the rig.
+
+## Full-corpus sweep tranche 6 landed (2026-10-18, RIG-VALIDATED) — divergent 1,963 -> 1,880, panics held at 0
+
+Worker fixes: the full module-not-found ladder (checker.go:15690-15746 tail:
+json arm, extensionless-ESM 2834/2835 with real suggestion derivation, plain
+2307) + ~15 mode-derivation helpers; get_script_kind_from_file_name in the
+runner (JSON/Unknown units skipped per conformance.go:1202); the real
+is_type_equality_comparable_to (13105) and get_contextual_this_parameter_type
+(12260); is_import_call's IsImportPhaseMetaProperty arm. ORCHESTRATOR CATCH:
+the worker's final tree had 13 NEW panics (NodeId::NONE down resolveExternal-
+Module) on react-jsx/jsxdev variants — its 0-panic claim was measured on the
+dump sweep, not the plain conformance sweep. Root cause (gdb-style walk
+trace): the implicit-import first-JSX-tag walk had a `!` visitor inversion —
+it stopped on the first child subtree WITHOUT a JSX tag, so files whose first
+statement isn't JSX found no canonical error tag and passed NONE as the
+resolveExternalModule location. Fixed Go-exact (the visitor answers true to
+STOP, i.e. on found). Plain-sweep census after the fix: divergent 1,880
+(1,622 count-diff / 258 hash-only), identical 5,687/7,567, both drivers
+0/3,826/3,741/0, verdict-diff 0. 41 test-result-ok lines (2 new suites, 10
+pins); clippy 0; all 300-slice gates green fresh on the rig. Next tranche's
+top families: the per-unit resolveModuleName seam (root of remaining TS2307
+246/TS2318), the widened-literal layer, TS7053/TS2300/TS2345/TS2564/TS2571.

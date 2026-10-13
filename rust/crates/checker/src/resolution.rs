@@ -54,6 +54,11 @@ use tsc_ast::{
     SymbolTable, INTERNAL_SYMBOL_NAME_DEFAULT, INTERNAL_SYMBOL_NAME_EXPORT_EQUALS,
     INTERNAL_SYMBOL_NAME_EXPORT_STAR,
 };
+use tsc_core::compileroptions::{
+    ResolutionMode, ResolutionModeCommonJS, ResolutionModeESM, ResolutionModeNone,
+};
+// FCS tranche 6: the module-not-found ladder's mode derivation types.
+use tsc_core::options_generated::{CompilerOptions, JsxEmit, ModuleKind, ModuleResolutionKind};
 use tsc_core::tristate::Tristate;
 use tsc_diagnostics as diag;
 use tsc_diagnostics::Message;
@@ -4970,9 +4975,10 @@ impl Checker {
     pub(crate) fn resolve_external_module(
         &mut self,
         // PORT: `location` is the ancestor-walk root of Go's context-specifier
-        // derivation; the port's file-resolution half is the program seam, so
-        // it stays unused until the seam grows the resolved-module surface.
-        _location: NodeId,
+        // derivation (checker.go:15470-15506) — REAL as of FCS tranche 6
+        // (the mode derivation reads it); the resolved-module lookup half
+        // stays on the program seam.
+        location: NodeId,
         module_reference: &str,
         module_not_found_error: Option<&'static Message>,
         error_node: Option<NodeId>,
@@ -5002,23 +5008,213 @@ impl Checker {
             );
         }
 
-        // TODO(port M6 program seam): the file-resolution half below —
-        // program.GetModeForUsageLocation / GetResolvedModule /
-        // GetSourceFileForResolvedModule and the resolution-diagnostic ladder
-        // (TS2307 chains, ts-extension rewrites, node16 mode mismatches) —
-        // reads the host's module-resolution results, which the Rust Program
-        // trait does not carry yet. Permissive None until the seam grows a
-        // resolved-module surface.
+        // TODO(port M6 program seam): the resolved-module half below —
+        // program.GetResolvedModule / GetSourceFileForResolvedModule and the
+        // resolution-diagnostic ladder (TS2307 chains, ts-extension rewrites,
+        // node16 mode mismatches) — reads the host's module-resolution
+        // results, which the Rust Program trait does not carry yet.
+        // Permissive None until the seam grows a resolved-module surface.
         let pattern_ambient_module =
             self.try_resolve_pattern_ambient_module(None, module_reference, import_attributes_type);
         if pattern_ambient_module.is_some() {
             return pattern_ambient_module;
         }
-        error_node?;
-        if let (Some(error_node), Some(message)) = (error_node, module_not_found_error) {
-            self.error(error_node, message, &[module_reference.to_string()]);
+
+        // Go: resolveExternalModule's tail (checker.go:15690-15746) — the
+        // module-not-found ladder. The resolved-module arms (the
+        // projectReference redirect, the resolutionDiagnostic report, the
+        // AlternateResult not-found chain) ride the program seam (the
+        // single-file twin resolves no modules — the same reads fail in
+        // Go's per-unit twin, which lands this ladder in the same place);
+        // what remains is Go-exact: the TS2732 json arm, the TS2834/2835
+        // extensionless-ESM arms (through the real mode derivation), then
+        // the plain module-not-found error. PORT(FCS tranche 6).
+        let importing_source_file = self.get_source_file_node_of(location);
+        let mode = self.get_mode_for_usage_location(importing_source_file, location);
+
+        let error_node = error_node?;
+        if let Some(message) = module_not_found_error {
+            // Go: `isExtensionlessRelativePathImport` (checker.go:15727).
+            let is_extensionless_relative_path_import = tsc_tspath::path_is_relative(module_reference)
+                && !tsc_tspath::has_extension(module_reference);
+            // Go: `resolutionIsNode16OrNext` — the checker's own
+            // moduleResolutionKind field (checker.go:15728).
+            let resolution_is_node16_or_next = self.module_resolution_kind
+                == ModuleResolutionKind::Node16
+                || self.module_resolution_kind == ModuleResolutionKind::NodeNext;
+            if !self.compiler_options.get_resolve_json_module()
+                && tsc_tspath::file_extension_is(module_reference, tsc_tspath::EXTENSION_JSON)
+            {
+                self.error(
+                    error_node,
+                    &diag::CANNOT_FIND_MODULE_0_CONSIDER_USING_RESOLVEJSONMODULE_TO_IMPORT_MODULE_WITH_JSON_EXTENSION,
+                    &[module_reference.to_string()],
+                );
+            } else if mode == ResolutionModeESM
+                && resolution_is_node16_or_next
+                && is_extensionless_relative_path_import
+            {
+                let mut suggested_ext = String::new();
+                if !tsc_tspath::has_trailing_directory_separator(module_reference) {
+                    let file_name = self.program.source_file_name(importing_source_file);
+                    let absolute_ref = tsc_tspath::RootedFilePath::from(file_name.as_str())
+                        .directory()
+                        .resolve_file(module_reference);
+                    suggested_ext = self.get_suggested_import_extension(&absolute_ref);
+                }
+                if !suggested_ext.is_empty() {
+                    self.error(
+                        error_node,
+                        &diag::RELATIVE_IMPORT_PATHS_NEED_EXPLICIT_FILE_EXTENSIONS_IN_ECMASCRIPT_IMPORTS_WHEN_MODULERESOLUTION_IS_NODE16_OR_NODENEXT_DID_YOU_MEAN_0,
+                        &[format!("{module_reference}{suggested_ext}")],
+                    );
+                } else {
+                    self.error(
+                        error_node,
+                        &diag::RELATIVE_IMPORT_PATHS_NEED_EXPLICIT_FILE_EXTENSIONS_IN_ECMASCRIPT_IMPORTS_WHEN_MODULERESOLUTION_IS_NODE16_OR_NODENEXT_CONSIDER_ADDING_AN_EXTENSION_TO_THE_IMPORT_PATH,
+                        &[],
+                    );
+                }
+            } else {
+                self.error(error_node, message, &[module_reference.to_string()]);
+            }
         }
         None
+    }
+
+    // ── The resolution-mode derivation (Go checker.go:15470-15506's
+    // context-specifier derivation + compiler/fileloader.go:1029-1100's
+    // getModeForUsageLocation/getDefaultResolutionModeForFile chain) —
+    // REAL as of FCS tranche 6 (feeds the module-not-found ladder) ──
+
+    /// Go: `mode` of `resolveExternalModule` (checker.go:15506-15510) —
+    /// `getModeForUsageLocation(importingSourceFile, contextSpecifier)` when
+    /// the context specifier is a string literal, else
+    /// `getDefaultResolutionModeForFile(importingSourceFile)`.
+    fn get_mode_for_usage_location(
+        &self,
+        importing_source_file: NodeId,
+        location: NodeId,
+    ) -> ResolutionMode {
+        let store = self.store();
+        let context_specifier = get_context_specifier(store, location).filter(|specifier| {
+            tsc_ast::utilities::is_string_literal_like(store.node(*specifier))
+        });
+        let Some(context_specifier) = context_specifier else {
+            // Go: getDefaultResolutionModeForFile (fileloader.go:1029-1035)
+            // — GetImpliedNodeFormatForEmitWorker under node16/nodenext
+            // (or the exports/imports resolvers).
+            return if import_syntax_affects_module_resolution(&self.compiler_options) {
+                let file_name = self.program.source_file_name(importing_source_file);
+                let meta = self.program.source_file_meta_data(importing_source_file);
+                get_implied_node_format_for_emit_worker(
+                    &file_name,
+                    self.compiler_options.get_emit_module_kind(),
+                    &meta,
+                )
+            } else {
+                ResolutionModeNone
+            };
+        };
+        // Go: getModeForUsageLocation (fileloader.go:1037-1067).
+        let parent = store.node(context_specifier).parent.get();
+        if parent != NodeId::NONE {
+            let parent_node = store.node(parent);
+            if (tsc_ast::is_import_declaration(parent_node)
+                || parent_node.kind == Kind::JSImportDeclaration
+                || tsc_ast::is_export_declaration(parent_node)
+                || tsc_ast::is_jsdoc_import_tag(parent_node))
+                && crate::statements::is_exclusively_type_only_import_or_export(store, parent)
+            {
+                // Go: the type-only declaration's attributes override.
+                let attributes = match &parent_node.data {
+                    tsc_ast::NodeData::ImportDeclaration(d) => d.attributes,
+                    tsc_ast::NodeData::ExportDeclaration(d) => d.attributes,
+                    tsc_ast::NodeData::JSDocImportTag(d) => d.attributes,
+                    _ => None,
+                };
+                if let Some(attributes) = attributes {
+                    let (override_mode, ok) = get_resolution_mode_override(store, attributes);
+                    if ok {
+                        return override_mode;
+                    }
+                }
+            }
+            if tsc_ast::is_literal_type_node(parent_node) {
+                // Go: the import-type literal argument's attributes override.
+                let grandparent = parent_node.parent.get();
+                if grandparent != NodeId::NONE
+                    && tsc_ast::is_import_type_node(store.node(grandparent))
+                    && let tsc_ast::NodeData::ImportTypeNode(d) = &store.node(grandparent).data
+                    && let Some(attributes) = d.attributes
+                {
+                    let (override_mode, ok) = get_resolution_mode_override(store, attributes);
+                    if ok {
+                        return override_mode;
+                    }
+                }
+            }
+        }
+        if import_syntax_affects_module_resolution(&self.compiler_options) {
+            let file_name = self.program.source_file_name(importing_source_file);
+            let meta = self.program.source_file_meta_data(importing_source_file);
+            get_emit_syntax_for_usage_location_worker(
+                store,
+                context_specifier,
+                &file_name,
+                &meta,
+                &self.compiler_options,
+            )
+        } else {
+            ResolutionModeNone
+        }
+    }
+
+    /// Go: `func (c *Checker) getSuggestedImportExtension(extensionlessImportPath) string`
+    /// (checker.go:15838) — the FileExists probe ladder through the program
+    /// seam. REAL as of FCS tranche 6; the twin answer ("the unit file
+    /// exists") is exactly Go's per-unit twin resolution ("./index" from
+    /// index.mts suggests ".mjs" because index.mts is the only file in the
+    /// map FS).
+    fn get_suggested_import_extension(
+        &self,
+        extensionless_import_path: &tsc_tspath::RootedFilePath,
+    ) -> String {
+        let exists =
+            |ext: &str| self.program.file_exists(extensionless_import_path.append_suffix(ext).as_string());
+        if exists(".mts") {
+            return ".mjs".to_string();
+        }
+        if exists(".ts") {
+            return ".js".to_string();
+        }
+        if exists(".cts") {
+            return ".cjs".to_string();
+        }
+        if exists(".mjs") {
+            return ".mjs".to_string();
+        }
+        if exists(".js") {
+            return ".js".to_string();
+        }
+        if exists(".cjs") {
+            return ".cjs".to_string();
+        }
+        if exists(".tsx") {
+            // Go: IfElse(Jsx == JsxEmitPreserve, ".jsx", ".js").
+            return if self.compiler_options.jsx == JsxEmit::Preserve {
+                ".jsx".to_string()
+            } else {
+                ".js".to_string()
+            };
+        }
+        if exists(".jsx") {
+            return ".jsx".to_string();
+        }
+        if exists(".json") {
+            return ".json".to_string();
+        }
+        String::new()
     }
 
     /// Go: `func (c *Checker) tryResolvePatternAmbientModule(resolvedSymbol, moduleReference, importAttributesType) *ast.Symbol`
@@ -5388,4 +5584,408 @@ fn is_declaration_node(store: &dyn NodeStore, node: NodeId) -> bool {
 /// `is_declaration_node` (Go's kind list is exactly the payload-carrying set).
 fn can_have_symbol(store: &dyn NodeStore, node: NodeId) -> bool {
     crate::typeofsymbol::payload_symbol(store.node(node)).is_some()
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// The resolution-mode derivation free helpers (FCS tranche 6) — Go
+// checker.go:15470-15506 (the context-specifier derivation) +
+// compiler/fileloader.go:1029-1100 (the mode workers) + ast/utilities.go's
+// ShouldTransformImportCall + ast/ast.go's
+// ImportAttributesNode.GetResolutionModeOverride. Local copies of the
+// compiler crate's ast_shims (checker cannot depend on tsc-compiler).
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: checker.go:15470-15506 — the context-specifier derivation of
+/// `resolveExternalModule`.
+fn get_context_specifier(store: &dyn NodeStore, location: NodeId) -> Option<NodeId> {
+    let location_node = store.node(location);
+    let parent = location_node.parent.get();
+    let is_name_of_module_declaration = parent != NodeId::NONE && {
+        let parent_node = store.node(parent);
+        tsc_ast::is_module_declaration(parent_node)
+            && matches!(&parent_node.data, tsc_ast::NodeData::ModuleDeclaration(d) if d.name == location)
+    };
+    if tsc_ast::utilities::is_string_literal_like(location_node)
+        || is_name_of_module_declaration
+    {
+        return Some(location);
+    }
+    if tsc_ast::is_module_declaration(location_node) {
+        return match &location_node.data {
+            tsc_ast::NodeData::ModuleDeclaration(d) => Some(d.name),
+            _ => None,
+        };
+    }
+    if is_literal_import_type_node(store, location) {
+        // Go: location.AsImportTypeNode().Argument.AsLiteralTypeNode().Literal.
+        return match &location_node.data {
+            tsc_ast::NodeData::ImportTypeNode(d) => {
+                match &store.node(d.argument).data {
+                    tsc_ast::NodeData::LiteralTypeNode(lit) => Some(lit.literal),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+    }
+    if is_variable_declaration_initialized_to_bare_or_accessed_require(store, location) {
+        return get_module_specifier_of_bare_or_accessed_require(store, location);
+    }
+    // Go: the four FindAncestor probes (checker.go:15493-15505).
+    if let Some(ancestor) = find_ancestor_matching(store, location, |store, node| {
+        crate::resolvecall::is_import_call(store, node)
+    }) {
+        // Go: contextSpecifier = ancestor.Arguments()[0].
+        if let tsc_ast::NodeData::CallExpression(call) = &store.node(ancestor).data
+            && let Some(arguments) = &call.arguments
+            && let Some(first) = arguments.nodes.first()
+        {
+            return Some(*first);
+        }
+        return None;
+    }
+    if let Some(ancestor) = find_ancestor_matching(store, location, |store, node| {
+        crate::statements::is_import_declaration_or_js_import_declaration(store, node)
+    }) {
+        return crate::ast_shims::module_specifier_of(store, ancestor);
+    }
+    if let Some(ancestor) = find_ancestor_matching(store, location, |_, node| {
+        tsc_ast::is_export_declaration(store.node(node))
+    }) {
+        return crate::ast_shims::module_specifier_of(store, ancestor);
+    }
+    if let Some(ancestor) = find_ancestor_matching(store, location, |_, node| {
+        tsc_ast::is_import_equals_declaration(store.node(node))
+    }) {
+        // Go: the external-module-reference arm's Expression().
+        if let tsc_ast::NodeData::ImportEqualsDeclaration(d) = &store.node(ancestor).data
+            && store.node(d.module_reference).kind == Kind::ExternalModuleReference
+            && let tsc_ast::NodeData::ExternalModuleReference(reference) =
+                &store.node(d.module_reference).data
+        {
+            return Some(reference.expression);
+        }
+        return None;
+    }
+    None
+}
+
+/// Go: `ast.FindAncestor` — the local walk (the checker's ast_shims copy
+/// takes a `&Node`-only predicate; these probes read child nodes).
+fn find_ancestor_matching(
+    store: &dyn NodeStore,
+    node: NodeId,
+    predicate: impl Fn(&dyn NodeStore, NodeId) -> bool,
+) -> Option<NodeId> {
+    let mut node = node;
+    loop {
+        if predicate(store, node) {
+            return Some(node);
+        }
+        let parent = store.node(node).parent.get();
+        if parent == NodeId::NONE {
+            return None;
+        }
+        node = parent;
+    }
+}
+
+/// Go: `func IsLiteralImportTypeNode(node) bool` (ast/utilities.go:1338).
+fn is_literal_import_type_node(store: &dyn NodeStore, node: NodeId) -> bool {
+    let n = store.node(node);
+    tsc_ast::is_import_type_node(n)
+        && match &n.data {
+            tsc_ast::NodeData::ImportTypeNode(d) => {
+                let argument = store.node(d.argument);
+                tsc_ast::is_literal_type_node(argument)
+                    && match &argument.data {
+                        tsc_ast::NodeData::LiteralTypeNode(lit) => {
+                            store.node(lit.literal).kind == Kind::StringLiteral
+                        }
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+}
+
+/// Go: `func IsVariableDeclarationInitializedToBareOrAccessedRequire(node) bool`
+/// (ast/utilities.go:2912).
+fn is_variable_declaration_initialized_to_bare_or_accessed_require(
+    store: &dyn NodeStore,
+    node: NodeId,
+) -> bool {
+    is_variable_declaration_initialized_with_require_helper(store, node, true)
+}
+
+/// Go: `func isVariableDeclarationInitializedWithRequireHelper(node, allowAccessedRequire) bool`
+/// (ast/utilities.go:2916).
+fn is_variable_declaration_initialized_with_require_helper(
+    store: &dyn NodeStore,
+    node: NodeId,
+    allow_accessed_require: bool,
+) -> bool {
+    let n = store.node(node);
+    if !tsc_ast::utilities::is_in_js_file(n) {
+        return false;
+    }
+    if n.kind != Kind::VariableDeclaration {
+        return false;
+    }
+    let Some(mut initializer) = crate::ast_shims::initializer_of(store, node) else {
+        return false;
+    };
+    if allow_accessed_require {
+        initializer = get_leftmost_access_expression(store, initializer);
+    }
+    // Go: node.Parent.Parent.ModifierFlags()&ModifierFlagsExport == 0.
+    let list = n.parent.get();
+    let statement = if list != NodeId::NONE {
+        store.node(list).parent.get()
+    } else {
+        NodeId::NONE
+    };
+    let export_modifier = statement != NodeId::NONE
+        && has_syntactic_modifier(store.node(statement), ModifierFlags::EXPORT);
+    // Go: node.Type() == nil.
+    let type_annotation = match &n.data {
+        tsc_ast::NodeData::VariableDeclaration(d) => d.type_,
+        _ => None,
+    };
+    !export_modifier && type_annotation.is_none() && is_require_call(store, initializer, true)
+}
+
+/// Go: `func GetModuleSpecifierOfBareOrAccessedRequire(node) *Node`
+/// (ast/utilities.go:2936).
+fn get_module_specifier_of_bare_or_accessed_require(
+    store: &dyn NodeStore,
+    node: NodeId,
+) -> Option<NodeId> {
+    if is_variable_declaration_initialized_with_require_helper(store, node, false) {
+        let initializer = crate::ast_shims::initializer_of(store, node)?;
+        return call_first_argument(store, initializer);
+    }
+    if is_variable_declaration_initialized_with_require_helper(store, node, true) {
+        let initializer = crate::ast_shims::initializer_of(store, node)?;
+        let leftmost = get_leftmost_access_expression(store, initializer);
+        if is_require_call(store, leftmost, true) {
+            return call_first_argument(store, leftmost);
+        }
+    }
+    None
+}
+
+/// Go: `node.Arguments()[0]` on a require call.
+fn call_first_argument(store: &dyn NodeStore, call: NodeId) -> Option<NodeId> {
+    match &store.node(call).data {
+        tsc_ast::NodeData::CallExpression(call) => call
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments.nodes.first())
+            .copied(),
+        _ => None,
+    }
+}
+
+/// Go: `func GetLeftmostAccessExpression(expr) *Node` (ast/utilities.go:2973).
+fn get_leftmost_access_expression(store: &dyn NodeStore, expression: NodeId) -> NodeId {
+    let mut expression = expression;
+    while tsc_ast::is_access_expression(store.node(expression)) {
+        let next = crate::ast_shims::expression_of(store, expression);
+        match next {
+            Some(next) => expression = next,
+            None => break,
+        }
+    }
+    expression
+}
+
+/// Go: `func IsRequireCall(node, requireStringLiteralLikeArgument) bool` (ast)
+/// — the binder's ast_shims copy.
+fn is_require_call(store: &dyn NodeStore, node: NodeId, require_string_literal_like_argument: bool) -> bool {
+    binder_shims::is_require_call(store, node, require_string_literal_like_argument)
+}
+
+/// Go: `func (node *ImportAttributesNode) GetResolutionModeOverride(nil)`
+/// (ast/ast.go:2217) — the local copy of the compiler crate's port
+/// (`grammarErrorOnNode` is dropped exactly like there; the checker.go
+/// callers pass nil).
+fn get_resolution_mode_override(store: &dyn NodeStore, node: NodeId) -> (ResolutionMode, bool) {
+    if node == NodeId::NONE {
+        return (ResolutionModeNone, false);
+    }
+    let attributes = match &store.node(node).data {
+        tsc_ast::NodeData::ImportAttributes(attributes) => match &attributes.attributes {
+            Some(list) => list.nodes.as_ref(),
+            None => return (ResolutionModeNone, false),
+        },
+        _ => return (ResolutionModeNone, false),
+    };
+    let attribute = attributes.iter().copied().find(|&attribute| {
+        store.node(attribute).kind == Kind::ImportAttribute
+            && matches!(&store.node(attribute).data,
+                tsc_ast::NodeData::ImportAttribute(a) if tsc_ast::node_text(store, a.name) == "resolution-mode")
+    });
+    let Some(attribute) = attribute else {
+        return (ResolutionModeNone, false);
+    };
+    let value = match &store.node(attribute).data {
+        tsc_ast::NodeData::ImportAttribute(a) => a.value,
+        _ => return (ResolutionModeNone, false),
+    };
+    if !tsc_ast::utilities::is_string_literal_like(store.node(value)) {
+        return (ResolutionModeNone, false);
+    }
+    let text = tsc_ast::node_text(store, value);
+    // Go: the grammarErrorOnNode arm is unreachable (nil callback).
+    if text == "import" {
+        (ResolutionModeESM, true)
+    } else if text == "require" {
+        (ResolutionModeCommonJS, true)
+    } else {
+        (ResolutionModeNone, false)
+    }
+}
+
+/// Go: `func importSyntaxAffectsModuleResolution(options) bool`
+/// (compiler/fileloader.go:1069).
+fn import_syntax_affects_module_resolution(options: &CompilerOptions) -> bool {
+    let module_resolution = options.get_module_resolution_kind();
+    (ModuleResolutionKind::Node16 <= module_resolution
+        && module_resolution <= ModuleResolutionKind::NodeNext)
+        || options.get_resolve_package_json_exports()
+        || options.get_resolve_package_json_imports()
+}
+
+/// Go: `func getEmitSyntaxForUsageLocationWorker(fileName, meta, usage, options)`
+/// (compiler/fileloader.go:1075).
+fn get_emit_syntax_for_usage_location_worker(
+    store: &dyn NodeStore,
+    usage: NodeId,
+    file_name: &str,
+    meta: &tsc_ast::SourceFileMetaData,
+    options: &CompilerOptions,
+) -> ResolutionMode {
+    let parent = store.node(usage).parent.get();
+    // Go: IsRequireCall(usage.Parent, false) || IsExternalModuleReference(
+    // usage.Parent) && IsImportEqualsDeclaration(usage.Parent.Parent).
+    if parent != NodeId::NONE
+        && (is_require_call(store, parent, false)
+            || (tsc_ast::is_external_module_reference(store.node(parent))
+                && store.node(parent).parent.get() != NodeId::NONE
+                && tsc_ast::is_import_equals_declaration(
+                    store.node(store.node(parent).parent.get()),
+                )))
+    {
+        return ResolutionModeCommonJS;
+    }
+    // Go: fileEmitMode := GetEmitModuleFormatOfFileWorker(...) — the
+    // implied-for-emit worker with the emit-module-kind fallback
+    // (ast/utilities.go:2645).
+    let file_emit_mode = {
+        let implied = get_implied_node_format_for_emit_worker(
+            file_name,
+            options.get_emit_module_kind(),
+            meta,
+        );
+        if implied != ModuleKind::None {
+            implied
+        } else {
+            options.get_emit_module_kind()
+        }
+    };
+    emit_syntax_tail(file_emit_mode, store, parent, options)
+}
+
+/// Go: getEmitSyntaxForUsageLocationWorker's import-call + module-kind tail
+/// (fileloader.go:1083-1100). `usage` itself is already reduced to its
+/// parent here (Go's WalkUpParenthesizedExpressions(usage.Parent) start).
+fn emit_syntax_tail(
+    file_emit_mode: ModuleKind,
+    store: &dyn NodeStore,
+    parent: NodeId,
+    options: &CompilerOptions,
+) -> ResolutionMode {
+    if parent != NodeId::NONE {
+        // Go: `if call := WalkUpParenthesizedExpressions(usage.Parent);
+        // IsImportCall(call)`.
+        let call = crate::ast_shims::walk_up_parenthesized_expressions(store, parent)
+            .unwrap_or(parent);
+        if crate::resolvecall::is_import_call(store, call) {
+            if is_source_phase_import_call(store, call) {
+                return ResolutionModeESM;
+            }
+            // Go: ShouldTransformImportCall(fileName, options, fileEmitMode).
+            let module_kind = options.get_emit_module_kind();
+            let should_transform = if (ModuleKind::Node16 <= module_kind
+                && module_kind <= ModuleKind::NodeNext)
+                || module_kind == ModuleKind::Preserve
+            {
+                false
+            } else {
+                file_emit_mode < ModuleKind::ES2015
+            };
+            if should_transform {
+                return ResolutionModeCommonJS;
+            }
+            return ResolutionModeESM;
+        }
+    }
+    if file_emit_mode == ModuleKind::CommonJS {
+        ResolutionModeCommonJS
+    } else if file_emit_mode.is_non_node_esm() || file_emit_mode == ModuleKind::Preserve {
+        ResolutionModeESM
+    } else {
+        ResolutionModeNone
+    }
+}
+
+/// Go: `func ast.GetImpliedNodeFormatForEmitWorker(fileName, emitModuleKind,
+/// sourceFileMetaData)` (ast/utilities.go:2653) — the local copy of the
+/// compiler crate's port (checker cannot depend on tsc-compiler).
+fn get_implied_node_format_for_emit_worker(
+    file_name: &str,
+    emit_module_kind: ModuleKind,
+    source_file_meta_data: &tsc_ast::SourceFileMetaData,
+) -> ResolutionMode {
+    if ModuleKind::Node16 <= emit_module_kind && emit_module_kind <= ModuleKind::NodeNext {
+        return source_file_meta_data.implied_node_format;
+    }
+    if source_file_meta_data.implied_node_format == ResolutionModeCommonJS
+        && (source_file_meta_data.package_json_type == "commonjs"
+            || tsc_tspath::file_extension_is_one_of(
+                file_name,
+                &[tsc_tspath::EXTENSION_CJS, tsc_tspath::EXTENSION_CTS],
+            ))
+    {
+        return ResolutionModeCommonJS;
+    }
+    if source_file_meta_data.implied_node_format == ResolutionModeESM
+        && (source_file_meta_data.package_json_type == "module"
+            || tsc_tspath::file_extension_is_one_of(
+                file_name,
+                &[tsc_tspath::EXTENSION_MJS, tsc_tspath::EXTENSION_MTS],
+            ))
+    {
+        return ResolutionModeESM;
+    }
+    ResolutionModeNone
+}
+
+/// Go: `func IsSourcePhaseImportCall(node) bool` (ast) — the local copy
+/// (the compiler crate's ast_shims port; `import source` meta property).
+fn is_source_phase_import_call(store: &dyn NodeStore, node: NodeId) -> bool {
+    if store.node(node).kind != Kind::CallExpression {
+        return false;
+    }
+    match &store.node(node).data {
+        tsc_ast::NodeData::CallExpression(call) => {
+            let n = store.node(call.expression);
+            n.kind == Kind::MetaProperty
+                && matches!(&n.data, tsc_ast::NodeData::MetaProperty(meta)
+                    if meta.keyword_token == Kind::ImportKeyword
+                        && tsc_ast::node_text(store, meta.name) == "source")
+        }
+        _ => false,
+    }
 }

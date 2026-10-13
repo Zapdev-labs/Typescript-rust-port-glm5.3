@@ -201,6 +201,37 @@ pub trait Program {
     fn get_jsx_runtime_import_specifier(&self, _file: NodeId) -> Option<String> {
         None
     }
+    /// Go: the importing source file's `FileName()` (checker.go:15508's
+    /// `ast.GetSourceFileOfNode(location).FileName()` — the
+    /// suggested-extension directory resolution) — the per-file name the
+    /// mode derivation reads. PORT (FCS tranche 6): added with
+    /// `resolveExternalModule`'s module-not-found diagnostic ladder (the
+    /// TS2732 json arm + the TS2834/2835 extensionless-ESM arms); the
+    /// permissive default mirrors "no program metadata" (the compiler
+    /// Program keeps the default until the program merge; the check twin's
+    /// CheckerUnitProgram carries the real answer).
+    fn source_file_name(&self, _file: NodeId) -> String {
+        String::new()
+    }
+    /// Go: `p.sourceFileMetaDatas[sourceFile.PathKey()]` (program.go:1781 —
+    /// the per-file SourceFileMetaData the resolution-mode derivation
+    /// reads). Same FCS-tranche-6 seam as `source_file_name`.
+    fn source_file_meta_data(
+        &self,
+        _file: NodeId,
+    ) -> tsc_ast::SourceFileMetaData {
+        tsc_ast::SourceFileMetaData {
+            package_json_type: String::new(),
+            package_json_directory: Default::default(),
+            implied_node_format: tsc_core::compileroptions::ResolutionModeNone,
+        }
+    }
+    /// Go: `Program.FileExists(path)` (the host-FS read
+    /// `getSuggestedImportExtension` probes — checker.go:15838). Same
+    /// FCS-tranche-6 seam; the twin answer is "the unit file exists".
+    fn file_exists(&self, _path: &str) -> bool {
+        false
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

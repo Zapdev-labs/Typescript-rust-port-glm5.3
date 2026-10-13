@@ -2410,8 +2410,103 @@ impl Checker {
     /// signature); Go's JS IIFE arm is W2/W4-bannered there.
     ///
     /// TODO(port M6 S9): `getContextualThisParameterType(fn)` — permissive None.
+    /// Go: `func (c *Checker) getContextualThisParameterType(fn) *Type`
+    /// (checker.go:12260). REAL as of FCS tranche 6 — the W-era permissive
+    /// None made every object-literal method's `this` an implicit any under
+    /// noImplicitThis (the 218 rust-extra TS2683s:
+    /// thisTypeInObjectLiterals2/thisTypeInFunctions2, the salsa
+    /// typeFromPrototypeAssignment family, the jsdocTemplateTag family).
     pub(crate) fn get_contextual_this_parameter_type(&mut self, fn_: NodeId) -> Option<TypeId> {
-        let _ = fn_;
+        let store = self.store();
+        if tsc_ast::is_arrow_function(store.node(fn_)) {
+            return None;
+        }
+        // Go: the context-sensitive arm — the contextual signature's
+        // thisParameter type.
+        if self.is_context_sensitive_function_or_object_literal_method(fn_) {
+            let contextual_signature = self.get_contextual_signature(fn_);
+            if let Some(contextual_signature) = contextual_signature
+                && let Some(this_parameter) =
+                    crate::relater::sig(self, contextual_signature).this_parameter
+            {
+                return Some(self.get_type_of_symbol(this_parameter));
+            }
+        }
+        let in_js = tsc_ast::utilities::is_in_js_file(self.store().node(fn_));
+        if self.no_implicit_this || in_js {
+            // Go: the containing-object-literal arm — the contextual
+            // ThisType<T> probe, then the contextual type's non-nullable
+            // form, then the literal's own (widened) type.
+            let containing_literal = u::get_containing_object_literal(self.store(), fn_);
+            if let Some(containing_literal) = containing_literal {
+                // PORT(FCS tranche 6): getThisTypeOfObjectLiteralFromContextualType
+                // (checker.go:32595 — the getThisTypeFromContextualType mapType
+                // probe) rides the S7 ThisType-argument seam (permissive
+                // None); the corpus-dominant path is the arms below.
+                let contextual_type = self.get_apparent_type_of_contextual_type(
+                    containing_literal,
+                    crate::types::ContextFlags::NONE,
+                );
+                let this_type = match contextual_type {
+                    Some(contextual_type) => self.get_non_nullable_type(contextual_type),
+                    // Go: c.checkExpressionCached(containingLiteral).
+                    None => self.check_expression_cached(containing_literal),
+                };
+                // Go: return c.getWidenedType(thisType).
+                return Some(self.get_widened_type(this_type));
+            }
+            // Go: the `obj.xxx = function(...)` / `obj[xxx] = function(...)`
+            // assignment arm — the contextual type for 'this' is obj.
+            let raw_parent = self.store().node(fn_).parent.get();
+            if raw_parent != NodeId::NONE {
+                let parent = ast_shims::walk_up_parenthesized_expressions(self.store(), raw_parent)
+                    .unwrap_or(raw_parent);
+                if tsc_ast::utilities::is_assignment_expression(
+                    self.store(),
+                    parent,
+                    false, /*excludeCompoundAssignment*/
+                ) {
+                    // Go: parent.AsBinaryExpression().Left.
+                    let target = match &self.store().node(parent).data {
+                        tsc_ast::NodeData::BinaryExpression(binary) => Some(binary.left),
+                        _ => None,
+                    }?;
+                    if tsc_ast::is_access_expression(self.store().node(target)) {
+                        let expression = crate::ast_shims::expression_of(self.store(), target);
+                        if let Some(expression) = expression {
+                            // Go: don't contextually type `this` as `exports`
+                            // in `exports.Point = function(x, y) {...}` (JS
+                            // CommonJS module.exports).
+                            if in_js && tsc_ast::is_identifier(self.store().node(expression)) {
+                                // Go: sourceFile.CommonJSModuleIndicator != nil &&
+                                // getResolvedSymbol(expression).Flags&ModuleExports != 0.
+                                let source_file = self.get_source_file_node_of(parent);
+                                let is_module_exports = self
+                                    .store()
+                                    .node(source_file)
+                                    .as_source_file()
+                                    .is_some_and(|f| f.common_js_module_indicator.get().is_some())
+                                    && self
+                                        .get_resolved_symbol(expression)
+                                        .is_some_and(|symbol| {
+                                            self.program
+                                                .symbol(symbol)
+                                                .flags
+                                                .intersects(SymbolFlags::MODULE_EXPORTS)
+                                        });
+                                if is_module_exports {
+                                    return None;
+                                }
+                            }
+                            // Go: c.getWidenedType(c.checkExpressionCached(expression)).
+                            let checked = self.check_expression_cached(expression);
+                            let widened = self.get_widened_type(checked);
+                            return Some(widened);
+                        }
+                    }
+                }
+            }
+        }
         None
     }
 

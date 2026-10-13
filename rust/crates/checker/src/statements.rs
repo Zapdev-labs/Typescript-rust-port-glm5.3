@@ -1952,9 +1952,18 @@ if candidates.is_empty() {
     /// Go: `func (c *Checker) isTypeEqualityComparableTo(source, target) bool`
     /// (checker.go:13105) — `isTypeComparableTo` in both directions; the
     /// relation runs through relater's Comparable relation directly.
+    /// Go: `func (c *Checker) isTypeEqualityComparableTo(source, target) bool`
+    /// (checker.go:13105) — `(target.flags&TypeFlagsNullable) != 0 ||
+    /// isTypeComparableTo(source, target)`.
+    ///
+    /// PORT(FCS tranche 6): REAL now — the W-era approximation
+    /// (`check_type_comparable_to` both directions) over-reported "no
+    /// overlap" on every nullable-target comparison (the 397 rust-extra
+    /// TS2367s: comparisonOperatorWithOneOperandIsNull/Undefined and the
+    /// comparisonOperatorWithSubtypeObject* family).
     pub(crate) fn is_type_equality_comparable_to(&mut self, source: TypeId, target: TypeId) -> bool {
-        self.check_type_comparable_to(source, target, None, None)
-            && self.check_type_comparable_to(target, source, None, None)
+        self.type_(target).flags.intersects(TypeFlags::NULLABLE)
+            || self.is_type_comparable_to(source, target)
     }
 
     /// Go: `func (c *Checker) getResolvedSymbolOrNil(node) *ast.Symbol`
@@ -11423,7 +11432,9 @@ pub(crate) fn is_import_declaration_or_js_import_declaration(
 
 /// Go: `ast.IsExclusivelyTypeOnlyImportOrExport(node)` — the type-only walk
 /// (the compiler-crate twin isn't visible to the checker).
-fn is_exclusively_type_only_import_or_export(store: &dyn NodeStore, node: NodeId) -> bool {
+// FCS tranche 6: pub(crate) — resolveExternalModule's mode derivation
+// (Go getModeForUsageLocation's type-only arm) reads it.
+pub(crate) fn is_exclusively_type_only_import_or_export(store: &dyn NodeStore, node: NodeId) -> bool {
     match store.node(node).kind {
         Kind::ImportDeclaration => store
             .node(node)

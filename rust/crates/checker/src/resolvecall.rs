@@ -2624,7 +2624,17 @@ pub(crate) fn is_import_call(store: &dyn NodeStore, node: NodeId) -> bool {
     match crate::ast_shims::expression_of(store, node) {
         Some(expression) => {
             let n = store.node(expression);
-            n.kind == Kind::ImportKeyword || is_identifier(n) && tsc_ast::node_text(store, expression) == "import"
+            // Go (ast/utilities.go:2145): `e.Kind == KindImportKeyword ||
+            // IsImportPhaseMetaProperty(e)` — the import.defer /
+            // import.source meta-property calls. PORT(FCS tranche 6): the
+            // phase-meta-property arm was missing, so the importSource/
+            // importDefer families' dynamic-import calls never reached
+            // checkImportCallExpression's Promise funnel (76 rust-missing
+            // TS2711s). The identifier-"import" arm below is the port's
+            // existing synthesized-node shape (kept).
+            n.kind == Kind::ImportKeyword
+                || (is_identifier(n) && tsc_ast::node_text(store, expression) == "import")
+                || crate::grammarchecks::is_import_phase_meta_property(store, expression)
         }
         None => false,
     }

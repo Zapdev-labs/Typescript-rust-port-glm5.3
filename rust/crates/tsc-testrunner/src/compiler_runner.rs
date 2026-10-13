@@ -196,6 +196,26 @@ impl Program for CheckerUnitProgram {
     fn source_file_implied_node_format(&self, _file: tsc_ast::NodeId) -> ModuleKind {
         tsc_compiler::ast_shims::get_implied_node_format_for_file(&self.name, "")
     }
+    // ── The FCS-tranche-6 module-resolution-mode seams (Go: file.FileName(),
+    // p.sourceFileMetaDatas[...] and program.FileExists — the per-unit twin's
+    // answers: the name and meta the adapter already computes for the
+    // module-format seams; the map-FS twin holds only the unit, so
+    // FileExists is exact-name equality). ──
+    fn source_file_name(&self, _file: tsc_ast::NodeId) -> String {
+        self.name.as_string().to_string()
+    }
+    fn source_file_meta_data(&self, _file: tsc_ast::NodeId) -> tsc_ast::SourceFileMetaData {
+        let implied_node_format =
+            tsc_compiler::ast_shims::get_implied_node_format_for_file(&self.name, "");
+        tsc_ast::SourceFileMetaData {
+            package_json_type: String::new(),
+            package_json_directory: Default::default(),
+            implied_node_format,
+        }
+    }
+    fn file_exists(&self, path: &str) -> bool {
+        path == self.name.as_string()
+    }
 }
 
 /// The unit's semantic diagnostics — Go program.go `GetSemanticDiagnostics`'s
@@ -219,10 +239,19 @@ fn semantic_diagnostics_of_unit(
     // spans of the BOM'd await_unary cases). The UTF-16 arm of decodeBytes
     // is unreachable here: content is a Rust &str (already valid UTF-8).
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
-    let script_kind = match tsc_compiler::ensure_script_kind_from_file_name(&RootedFilePath::from(name)) {
-        // Go's checker skips JSON sources — the caller filters .json units;
-        // Unknown-forced-TS mirrors GetScriptKindFromFileName's harness rule.
-        ScriptKind::JSON => return Vec::new(),
+    // PORT(FCS tranche 6): Go's check twin (go-driver conformance.go
+    // confSemanticDiagnosticsOfUnit) switches on core.GetScriptKindFromFileName
+    // and returns nil for ScriptKindJSON AND ScriptKindUnknown — extensionless
+    // and unsupported-extension units (bundlerImportTsExtensions' /project/e
+    // and /project/e.txt) are never checked, so the machinery TS2318s
+    // (getGlobalType reportErrors) and garbage semantic errors never fire for
+    // them. The seam previously used ensure_script_kind_from_file_name
+    // (Unknown forced to TS) and checked those units — 532 rust-extra TS2318s
+    // on the corpus. Units that survive the switch have a real script kind by
+    // construction, so the parse below sees the identical kind Go's
+    // per-unit program would.
+    let script_kind = match tsc_compiler::get_script_kind_from_file_name(&RootedFilePath::from(name)) {
+        ScriptKind::JSON | ScriptKind::Unknown => return Vec::new(),
         kind => kind,
     };
     let mut source_file = parse_source_file(Default::default(), content, script_kind);

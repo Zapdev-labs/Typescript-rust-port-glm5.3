@@ -3344,7 +3344,14 @@ impl Checker {
             let mut first_tag: Option<NodeId> = None;
             let file_data = self.store().node(file).as_source_file().expect("file");
             file_data.for_each_child(&mut |child| {
-                !find_first_jsx_tag(self.store(), child, &mut first_tag)
+                // PORT(FCS, 2026-10-18): the visitor answers `true` to STOP the
+                // walk (Go's visit returns true once firstJSXTagInFile is set).
+                // The prior `!` inversion stopped the walk on the first
+                // child subtree WITHOUT a JSX tag — files whose first
+                // statement isn't JSX found no canonical error tag, and the
+                // react-jsx/jsxdev runtime resolution then passed NONE down
+                // resolveExternalModule (the 13-record panic family).
+                find_first_jsx_tag(self.store(), child, &mut first_tag)
             });
             if let Some(tag) = first_tag {
                 self.jsx_element_links.get(file).first_jsx_tag_in_file = Some(tag);
