@@ -108,6 +108,16 @@ struct CheckerUnitProgram {
     bind: BindResult,
     binder_symbol_count: u32,
     checker_symbols: Vec<Symbol>,
+    /// The per-unit resolution twin's answers (FCS tranche 7): the unit's
+    /// entry of the 1-file map-FS program's resolvedModules (Go-driver
+    /// conformance.go confSemanticDiagnosticsOfUnit's twin program — the
+    /// file loader resolved every import of the unit against the unit-only
+    /// FS; node16 .js→.ts substitution resolves "./index.js" to the unit
+    /// itself).
+    resolutions: tsc_module::ModeAwareCache<Option<std::sync::Arc<tsc_module::ResolvedModule>>>,
+    /// Go: program.SourceFileMayBeEmitted(unit, false) — the twin program's
+    /// own computation (the rewriteRelativeImportExtensions arm reads it).
+    may_be_emitted: bool,
 }
 
 impl Program for CheckerUnitProgram {
@@ -216,6 +226,50 @@ impl Program for CheckerUnitProgram {
     fn file_exists(&self, path: &str) -> bool {
         path == self.name.as_string()
     }
+    // ── The FCS-tranche-7 resolved-module seams (Go: program.GetResolvedModule /
+    // GetSourceFileForResolvedModule / SourceFileMayBeEmitted — the per-unit
+    // twin program's exact answers; see semantic_diagnostics_of_unit). ──
+    fn get_resolved_module(
+        &self,
+        file: tsc_ast::NodeId,
+        module_reference: &str,
+        mode: tsc_core::compileroptions::ResolutionMode,
+    ) -> Option<std::sync::Arc<tsc_module::ResolvedModule>> {
+        if file != self.source_file.as_node_id() {
+            return None;
+        }
+        // Go: `if resolved, ok := resolutions[ModeAwareCacheKey{...}]; ok {
+        // return resolved }` — nil on miss. The loader always stores
+        // `Some` (a recorded failure is Go's `&module.ResolvedModule{}`),
+        // so the flattened Option only misses on a cache miss.
+        self.resolutions
+            .get(&tsc_module::ModeAwareCacheKey {
+                name: module_reference.to_string(),
+                mode,
+            })
+            .cloned()
+            .flatten()
+    }
+    fn get_source_file_for_resolved_module(
+        &self,
+        resolved: &tsc_module::ResolvedModule,
+    ) -> Option<tsc_ast::NodeId> {
+        // Go: p.getSourceFileWithRedirect(resolvedFileName, resolvedPath) —
+        // the map-FS twin holds only the unit, so every successful
+        // resolution resolves to it (name equality is the twin's answer).
+        if resolved.resolved_file_name == self.name {
+            Some(self.source_file.as_node_id())
+        } else {
+            None
+        }
+    }
+    fn source_file_may_be_emitted(&self, file: tsc_ast::NodeId) -> bool {
+        if file == self.source_file.as_node_id() {
+            self.may_be_emitted
+        } else {
+            false
+        }
+    }
 }
 
 /// The unit's semantic diagnostics — Go program.go `GetSemanticDiagnostics`'s
@@ -228,6 +282,7 @@ fn semantic_diagnostics_of_unit(
     name: &str,
     content: &str,
     options: &CompilerOptions,
+    parsed: &tsc_tsoptions::parsedcommandline::ParsedCommandLine,
 ) -> Vec<tsc_ast::Diagnostic> {
     // PORT (M6 W3 t7): the Go check twin (go-bench conformance's
     // confSemanticDiagnosticsOfUnit) builds a map-FS program, and the vfs
@@ -254,6 +309,59 @@ fn semantic_diagnostics_of_unit(
         ScriptKind::JSON | ScriptKind::Unknown => return Vec::new(),
         kind => kind,
     };
+    // PORT(FCS tranche 7): Go's check twin (go-driver conformance.go
+    // confSemanticDiagnosticsOfUnit) builds a 1-file map-FS program — the
+    // REAL file loader/module resolver runs against the unit-only FS (the
+    // map holds only the unit; the default-library path is "/" — the
+    // no-libs sentinel), filling program.resolvedModules with the unit's
+    // resolution answers: node16 .js→.ts (and .mjs→.mts) extension
+    // substitution resolves "./index.js" to the unit itself; CJS
+    // directory/index resolution answers require("./") and
+    // require("./index"). The Rust seam hands those answers to the checker
+    // through the Program trait's FCS-tranche-7 resolved-module surface —
+    // mirroring the Go twin's construction exactly (the case's parsed
+    // config with the file list swapped for the unit; no bind —
+    // ModuleAugmentations is parse-set, parser/references.go, and the
+    // loader reads no bind data).
+    let unit_entries = [(name.to_string(), content.to_string())];
+    let unit_fs = tsc_bundled::wrap_fs(tsc_vfs::vfstest::from_map(
+        unit_entries,
+        CaseSensitivity::CaseSensitive,
+    ));
+    let unit_host = new_compiler_host(
+        Arc::<dyn Fs>::clone(&unit_fs),
+        rooted_directory_path_from_normalized("/"),
+        nil_extended_config_cache(),
+        None,
+    );
+    let unit_parsed = parsed.with_file_names(vec![RootedFilePath::from(name)]);
+    let unit_program = new_program(ProgramOptions {
+        config: ProgramConfig {
+            config: std::sync::Arc::new(unit_parsed),
+            ..Default::default()
+        },
+        hosts: ProgramHosts {
+            host: Some(unit_host),
+        },
+        factories: ProgramFactories::default(),
+    });
+    // Go: `files := program.GetSourceFiles(); if len(files) == 0 { return
+    // nil }` — the belt to the same braces (a real script kind by the
+    // switch above always yields the unit). The unit's resolutions entry +
+    // SourceFileMayBeEmitted are the twin reads the checker seam needs.
+    let Some(unit_file) = unit_program
+        .get_source_files()
+        .iter()
+        .find(|file| file.file_name().as_string() == name)
+    else {
+        return Vec::new();
+    };
+    let resolutions = unit_program
+        .get_resolved_modules()
+        .get(unit_file.path_key())
+        .cloned()
+        .unwrap_or_default();
+    let may_be_emitted = unit_program.source_file_may_be_emitted(unit_file, false);
     let mut source_file = parse_source_file(Default::default(), content, script_kind);
     let Some(bind) = bind_source_file(&mut source_file) else {
         return Vec::new();
@@ -267,6 +375,8 @@ fn semantic_diagnostics_of_unit(
         bind,
         binder_symbol_count,
         checker_symbols: Vec::new(),
+        resolutions,
+        may_be_emitted,
     }));
     // Go's exported GetDiagnostics (checker.go:14222+14232) computes
     // checkUnused from the noUnused* options — the regular (non-suggestion)
@@ -775,6 +885,10 @@ fn run_configuration_pipeline(
     // program was built from (Go: the checker reads
     // `program.CompilerOptions()`; the parsed copy predates the Arc move).
     let checker_options = parsed.compiler_options.options.clone();
+    // PORT(FCS tranche 7): the per-unit resolution twins read the case's
+    // parsed config (Go's confSemanticDiagnosticsOfUnit passes it through
+    // WithFileNames) — keep the Arc alongside the program's own.
+    let parsed_arc = Arc::new(parsed);
     let host = new_compiler_host(
         Arc::<dyn Fs>::clone(&fs),
         tsc_bundled::lib_path(),
@@ -783,7 +897,7 @@ fn run_configuration_pipeline(
     );
     let mut program = new_program(ProgramOptions {
         config: ProgramConfig {
-            config: Arc::new(parsed),
+            config: Arc::clone(&parsed_arc),
             ..Default::default()
         },
         hosts: ProgramHosts { host: Some(host) },
@@ -869,7 +983,7 @@ fn run_configuration_pipeline(
             if ext == ".json" || ext == ".tsbuildinfo" {
                 continue;
             }
-            let diags = semantic_diagnostics_of_unit(&rooted_names[index], &unit.content, &checker_options);
+            let diags = semantic_diagnostics_of_unit(&rooted_names[index], &unit.content, &checker_options, &parsed_arc);
             if !diags.is_empty() {
                 let text = unit.content.clone();
                 for d in diags {
@@ -1188,10 +1302,20 @@ mod tests {
     #[test]
     fn w3t7_check_seam_strips_utf8_bom() {
         let content = "\u{feff}async function bar1() {\n    delete await 42;\n}\n";
+        // PORT(FCS tranche 7): the seam reads the case's parsed config for the
+        // per-unit resolution twin — the test's config carries the rooted base
+        // directory the twin's module resolver requires (the runner's real
+        // configs parse from the case's tsconfig).
+        let parsed = tsc_tsoptions::parsedcommandline::ParsedCommandLine::new(
+            RootedFilePath::default(),
+            src_folder(),
+            CaseSensitivity::CaseSensitive,
+        );
         let diags = semantic_diagnostics_of_unit(
             "/.src/bomprobe.ts",
             content,
             &CompilerOptions::default(),
+            &parsed,
         );
         let d = diags
             .iter()

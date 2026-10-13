@@ -2482,3 +2482,23 @@ STOP, i.e. on found). Plain-sweep census after the fix: divergent 1,880
 pins); clippy 0; all 300-slice gates green fresh on the rig. Next tranche's
 top families: the per-unit resolveModuleName seam (root of remaining TS2307
 246/TS2318), the widened-literal layer, TS7053/TS2300/TS2345/TS2564/TS2571.
+
+## Full-corpus sweep tranche 7 landed (2026-10-19, RIG-VALIDATED) — the resolveModuleName seam; divergent 1,880 -> 1,804
+
+The top family: the per-unit resolveModuleName seam. Go's per-unit check twin
+builds a 1-file map-FS program and runs the REAL file loader/module resolver
+against it (node16 .js->.ts self-substitution, CJS directory/index
+resolution), filling resolvedModules. The Rust seam never resolved — every
+self-import hit the module-not-found ladder. Now ported Go-exactly: Program
+trait get_resolved_module/get_source_file_for_resolved_module/source_file_
+may_be_emitted; resolveExternalModule's resolved-module half (checker.go:
+15508-15746: resolution-diagnostic gate, TS2305/5097/2306 arms, node16 mode
+mismatch, untyped-module 2666/7016, AlternateResult chain); the runner builds
+the same 1-file twin program and threads the cache. Plus the import.source
+tail (Go's AbstractModuleSource short-circuit at 8523, ImportCallOptions,
+assert/with attributes) — 24 records to identical, zero moved away from Go.
+PLAIN-sweep census: divergent 1,804 (1,555 count / 249 hash), identical
+5,763/7,567; both drivers 0/3,826/3,741/0; panics 0. 43 suites (2 fcs7 pin
+suites); clippy 0; all 300-slice gates green fresh. TS2318 extra 436->16,
+TS2307 189->57. Next: the widened-literal layer (getWidenedType), then
+TS7053/TS2345/TS2564/TS2300/TS2571 by census size.

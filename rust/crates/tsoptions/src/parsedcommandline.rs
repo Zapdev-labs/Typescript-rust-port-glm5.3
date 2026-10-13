@@ -125,6 +125,20 @@ impl ParsedCommandLine {
         &self.file_names
     }
 
+    /// Go: `func (p *ParsedCommandLine) WithFileNames(fileNames []tspath.RootedFilePath) *ParsedCommandLine`
+    /// (parsedcommandline.go) — a copy of the parsed config with the file
+    /// list swapped (the config identity — ConfigFile/Errors/base — is
+    /// preserved; Go shares the rest shallowly, the port clones). PORT(FCS
+    /// tranche 7): the per-unit check twin (Go-driver conformance.go's
+    /// confSemanticDiagnosticsOfUnit) builds its 1-file program through
+    /// this.
+    pub fn with_file_names(&self, file_names: Vec<RootedFilePath>) -> ParsedCommandLine {
+        ParsedCommandLine {
+            file_names,
+            ..self.clone()
+        }
+    }
+
     /// Go: `func (c *ParsedCommandLine) ConfigName() tspath.RootedFilePath` —
     /// the config source file's name ("" without a config file).
     pub fn config_name(&self) -> RootedFilePath {

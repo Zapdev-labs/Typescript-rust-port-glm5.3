@@ -232,6 +232,45 @@ pub trait Program {
     fn file_exists(&self, _path: &str) -> bool {
         false
     }
+    /// Go: `program.GetResolvedModule(file, moduleReference, mode)`
+    /// (program.go:644 — the file loader's mode-aware resolution cache,
+    /// `p.resolvedModules[file.PathKey()]`). The checker's
+    /// `resolveExternalModule` reads it (checker.go:15511). PORT (FCS
+    /// tranche 7): Go's nil-return (cache miss) is the permissive default;
+    /// a recorded FAILED resolution is Go's non-nil `&module.ResolvedModule{}`
+    /// — the twin hands back `Some(Arc::default())` for those, so
+    /// `is_resolved(None-as-miss)` distinguishes the two exactly like Go.
+    /// The loader stores one entry per module NAME + mode (the mode the
+    /// loader derived from the usage site — the checker derives the same
+    /// mode through `get_mode_for_usage_location`).
+    fn get_resolved_module(
+        &self,
+        _file: NodeId,
+        _module_reference: &str,
+        _mode: tsc_core::compileroptions::ResolutionMode,
+    ) -> Option<std::sync::Arc<tsc_module::ResolvedModule>> {
+        None
+    }
+    /// Go: `program.GetSourceFileForResolvedModule(resolved)`
+    /// (program.go:2098 — `getSourceFileWithRedirect(resolvedFileName,
+    /// resolvedPath)`). The checker reads `sourceFile.Symbol`, the file's
+    /// default resolution mode and `SourceFileMayBeEmitted` on the result;
+    /// the trait hands back the program's NODE id for the file. Same
+    /// FCS-tranche-7 seam (permissive None mirrors Go's nil file — the
+    /// "File '0' is not a module" tail never fires then).
+    fn get_source_file_for_resolved_module(
+        &self,
+        _resolved: &tsc_module::ResolvedModule,
+    ) -> Option<NodeId> {
+        None
+    }
+    /// Go: `program.SourceFileMayBeEmitted(sourceFile, false)` (the
+    /// rewriteRelativeImportExtensions arm — checker.go:15650). Same
+    /// FCS-tranche-7 seam; the twin answer is the per-unit twin program's
+    /// own computation.
+    fn source_file_may_be_emitted(&self, _file: NodeId) -> bool {
+        false
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

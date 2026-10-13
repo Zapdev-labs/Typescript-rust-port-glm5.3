@@ -2338,12 +2338,67 @@ impl Checker {
                 &[type_string],
             );
         }
-        let import_attributes_type: Option<TypeId> = None;
+        // Go (checker.go:8510-8521): the options argument — the global
+        // ImportCallOptions assignability probe (reportErrors — the
+        // machinery 2318 in the lib-less twin), the `assert` property probe,
+        // then the "with" import-attributes type. PORT(FCS tranche 7) —
+        // REAL now (was the permissive skip).
+        let mut import_attributes_type: Option<TypeId> = None;
         if let Some(options_type) = options_type {
-            // TODO(port M6 S7): getGlobalImportCallOptionsTypeChecked +
-            // getTypeOfPropertyOfType ride the global-classes surface;
-            // permissive skip of the options checks.
-            let _ = options_type;
+            let import_call_options_type = self.get_global_import_call_options_type_checked();
+            if import_call_options_type != self.empty_object_type() {
+                // Go: checkTypeAssignableTo(optionsType, getNullableType(
+                // importCallOptionsType, TypeFlagsUndefined), args[1], nil).
+                let nullable_options =
+                    self.get_nullable_type(import_call_options_type, TypeFlags::UNDEFINED);
+                self.check_type_assignable_to(
+                    options_type,
+                    nullable_options,
+                    Some(args[1]),
+                    None,
+                );
+            }
+            if tsc_ast::is_object_literal_expression(self.store().node(args[1])) {
+                // Go: the `assert` property of the options object literal —
+                // the import-assertions deprecation error.
+                if let tsc_ast::NodeData::ObjectLiteralExpression(literal) =
+                    &self.store().node(args[1]).data
+                {
+                    if let Some(properties) = &literal.properties {
+                        for &prop in properties.nodes.iter() {
+                            // Go: IsPropertyAssignment(prop) && IsIdentifier(prop.Name()) &&
+                            // prop.Name().Text() == "assert".
+                            if let tsc_ast::NodeData::PropertyAssignment(assignment) =
+                                &self.store().node(prop).data
+                            {
+                                let name = assignment.name;
+                                if tsc_ast::is_identifier(self.store().node(name))
+                                    && tsc_ast::node_text(self.store(), name) == "assert"
+                                {
+                                    self.error(
+                                        name,
+                                        &diag::IMPORT_ASSERTIONS_HAVE_BEEN_REPLACED_BY_IMPORT_ATTRIBUTES_USE_WITH_INSTEAD_OF_ASSERT,
+                                        &[],
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Go: importAttributesType = c.getTypeOfPropertyOfType(optionsType, "with").
+            import_attributes_type =
+                self.get_type_of_property_of_type(options_type, "with");
+        }
+        // Go (checker.go:8523-8525): `if ast.IsSourcePhaseImportCall(node) {
+        // return c.createPromiseReturnType(node, c.getGlobalAbstractModuleSourceType()) }`
+        // — the import.source call resolves NOTHING (no TS2307) and the
+        // promised type is the global AbstractModuleSource (reportErrors —
+        // the machinery 2318). PORT(FCS tranche 7).
+        if crate::resolution::is_source_phase_import_call(self.store(), node) {
+            let abstract_module_source = self.get_global_abstract_module_source_type();
+            return self.create_promise_return_type(node, abstract_module_source);
         }
         // resolveExternalModuleName will return undefined if the
         // moduleReferenceExpression is not a string literal

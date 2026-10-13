@@ -13,6 +13,7 @@ tsc-checker = { path = "../checker" } # W3 check stage: the semantic-diagnostics
 tsc-compiler = { path = "../compiler" }
 tsc-core = { path = "../core" }
 tsc-diagnostics = { path = "../diagnostics" }
+tsc-module = { path = "../module" } # FCS tranche 7: the per-unit resolution twin's ModeAwareCache/ResolvedModule types
 tsc-parser = { path = "../parser" } # W3 check stage: the per-file parse feeding the checker seam
 tsc-scanner = { path = "../scanner" }
 tsc-testutil = { path = "../tsc-testutil" }
