@@ -1,0 +1,61 @@
+rust/crates/tsoptions/src/tsconfigparsing.rs
+  s_1cd5e9c246d4bf::t_761b42dfd72cda 2656-2661,2663-2664
+  s_1cd5e9c246d4bf::t_72964715e7e272 1273,1276-1279
+  s_1cd5e9c246d4bf::t_b72b4189540b50 1266-1272,1274-1275,1283-1284
+  s_1cd5e9c246d4bf::t_f6ef2b16ea244f 2568-2571
+  s_1cd5e9c246d4bf::t_e71d8fa6bf6633 2147-2150
+  s_1cd5e9c246d4bf::t_03a525cd3e743d 2168-2170,2176-2205,2207-2226
+  s_1cd5e9c246d4bf::t_2d6dbf77702999 1122-1126
+  s_1cd5e9c246d4bf::t_ab352104d95702 2238-2239
+  s_1cd5e9c246d4bf::t_f8c81c3a82c938 2271,2285,2289-2292,2295-2296,2298,2300-2301
+  s_1cd5e9c246d4bf::t_11a5dfcfa47ad3 2421-2425,2429,2438-2440,2460-2463,2473-2477,2484
+  s_1cd5e9c246d4bf::t_a5cbed65a4be86 2441-2454
+  s_1cd5e9c246d4bf::t_8938f5818c2215 2293-2294,2297,2299
+  s_1cd5e9c246d4bf::t_7cdc87a53c9149 2102-2146,2151-2167,2171-2175,2206,2227-2237,2240-2247,2253
+  s_1cd5e9c246d4bf::t_19a4a17bf7d98b 2323-2330,2335,2338-2351,2354-2356,2365-2367,2378,2382,2384,2394-2399,2402-2407
+rust/crates/checker/src/utilities.rs
+  s_1cd5e9c246d4bf::t_d14a75f6b157ec 1614-1634
+  s_1cd5e9c246d4bf::t_56fff5ae987f95 1635-1654
+rust/crates/tsoptions/src/commandlineparser.rs
+  s_1cd5e9c246d4bf::t_f239734eed3ef3 638-643,647-648,658,663,669-670,674-675,690-691
+  s_1cd5e9c246d4bf::t_edcad2066c48b4 622
+  s_1cd5e9c246d4bf::t_e58c1ab3292169 574
+  s_1cd5e9c246d4bf::t_d206704f96faf6 376
+  s_1cd5e9c246d4bf::t_0a796de214f5ef 592-597
+  s_1cd5e9c246d4bf::t_6a4f1ad1d807ac 8-12
+  s_1cd5e9c246d4bf::t_c750392d7e7828 336-337,341-342
+rust/crates/checker/src/members.rs
+  s_1cd5e9c246d4bf::t_0ac9643ed852d5 1832-1841,1845-1850
+rust/crates/checker/tests/fcs5_effective_property_names.rs
+  s_1cd5e9c246d4bf::t_9914e6c94408f1 1-185
+rust/crates/checker/src/ast_shims.rs
+  s_1cd5e9c246d4bf::t_b56cf6bf802f70 421-431
+rust/crates/checker/src/typeofsymbol.rs
+  s_1cd5e9c246d4bf::t_59987c6b154c1b 4357-4358,4361-4370,4376-4379
+  s_1cd5e9c246d4bf::t_9e24d0bcfd925d 2888-2891
+  s_1cd5e9c246d4bf::t_ed40d3c1677ba7 4371-4375
+rust/crates/checker/src/flow.rs
+  s_1cd5e9c246d4bf::t_2c0bbc890a22eb 4779-4781,4785
+  s_1cd5e9c246d4bf::t_eeeb9256c1871a 4770-4773
+rust/crates/checker/src/resolvecall.rs
+  s_1cd5e9c246d4bf::t_e1d2a71c898f62 2302-2308
+  s_1cd5e9c246d4bf::t_2cbdfa53b0100c 2359-2366
+rust/crates/tsc-testrunner/tests/fcs5_count_diff_families.rs
+  s_1cd5e9c246d4bf::t_b3074f36325e91 1-115,117-130,132-145,147-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c270e195444dc2d3117cb6a0f1b18a3b8a9b0f56",
+  "prompts": {},
+  "sessions": {
+    "s_1cd5e9c246d4bf": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "db1ac2e3-2a64-4b3e-bc8a-c3f78975467f",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
