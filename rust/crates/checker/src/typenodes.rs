@@ -194,7 +194,7 @@ fn is_statement(store: &dyn tsc_ast::NodeStore, node: NodeId) -> bool {
 
 /// Go: `node.Elements()` for TupleTypeNode (the local form the slice uses;
 /// statements.rs's members_of owns the member-list payloads).
-fn elements_of(store: &dyn tsc_ast::NodeStore, node: NodeId) -> Vec<NodeId> {
+pub(crate) fn elements_of(store: &dyn tsc_ast::NodeStore, node: NodeId) -> Vec<NodeId> {
     store
         .node(node)
         .as_tuple_type_node()
@@ -679,7 +679,9 @@ pub(crate) fn get_element_type_of_slice_of_tuple_type(
         .and_then(|target| c.type_(target).as_tuple_type().map(|d| d.element_infos.clone()))
         .unwrap_or_default();
     if index < length {
-        let type_arguments = crate::relater::get_type_arguments(c, t);
+        // PORT(FCS tranche 3): Go's resolving getTypeArguments (relater.rs's
+        // resolve_type_arguments) guarantees arity-matched arguments.
+        let type_arguments = crate::relater::resolve_type_arguments(c, t);
         let mut element_types = Vec::new();
         for i in index..length {
             let mut e = type_arguments[i];
@@ -2079,7 +2081,10 @@ impl Checker {
     /// Go: `func (c *Checker) getElementTypes(t) []*Type` (checker.go:23990) —
     /// REAL body (replaces the W2 permissive reader in inference.rs).
     pub(crate) fn get_element_types(&mut self, t: TypeId) -> Vec<TypeId> {
-        let type_arguments = crate::relater::get_type_arguments(self, t);
+        // PORT(FCS tranche 3): Go's getTypeArguments resolves deferred
+        // references (relater.rs's resolve_type_arguments) — the resolving
+        // form is what guarantees len(args) >= arity for the slice below.
+        let type_arguments = crate::relater::resolve_type_arguments(self, t);
         let arity = crate::relater::get_type_reference_arity(self, t) as usize;
         if type_arguments.len() == arity {
             return type_arguments;

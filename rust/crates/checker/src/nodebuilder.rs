@@ -957,8 +957,12 @@ fn own_precedence(c: &mut Checker, ctx: &NbCtx, t: TypeId) -> TP {
         // their constituent; multi-constituent unions/unions-as-unions pick
         // their own precedence.
         if flags.intersects(TypeFlags::UNION) {
-            if ty.as_union_type().is_some_and(|u| u.origin.is_some()) {
-                return own_precedence(c, ctx, ty.target().unwrap_or(t));
+            // PORT(FCS tranche 3): Go renders a union with an origin through
+            // the ORIGIN type (the ttn union arm below swaps t for
+            // u.origin); the old `ty.target()` read panicked — a union has
+            // no Target (Go's Type.Target() panics on the union kind too).
+            if let Some(origin) = ty.as_union_type().and_then(|ut| ut.origin) {
+                return own_precedence(c, ctx, origin);
             }
             return TP::Union;
         }
@@ -1314,6 +1318,13 @@ fn ttn_object_and_late_arms(
             t = origin;
         }
     }
+    // PORT(FCS tranche 3): Go re-reads t.flags AFTER the origin swap
+    // (nodebuilderimpl.go:3595-3599 — `t = t.AsUnionType().origin` then the
+    // fresh `t.flags&(Union|Intersection)` probe). The origin is usually NOT
+    // a union (that's the point of the swap), so the stale flags made the
+    // as_union_type expect below panic (exhaustiveSwitchStatements1's
+    // enum-origin unions).
+    let flags = c.type_(t).flags;
     if flags.intersects(TypeFlags::UNION | TypeFlags::INTERSECTION) {
         let types: Vec<TypeId> = if flags.intersects(TypeFlags::UNION) {
             let ut = c.type_(t).as_union_type().expect("checked UNION");
@@ -1606,7 +1617,7 @@ fn visit_and_transform_type(
     let is_array_or_tuple = crate::relater::is_array_or_tuple_type(c, t);
     if is_array_or_tuple {
         // Deferred and regular references share a cycle identity.
-        let args = crate::relater::get_type_arguments(c, t);
+        let args = crate::relater::resolve_type_arguments(c, t);
         if let Some(target) = c.type_(t).target() {
             type_id = c.create_type_reference(target, args);
         }
@@ -1682,7 +1693,7 @@ fn create_cyclic_structure_placeholder(ctx: &mut NbCtx) -> String {
 
 /// Go: `arrayOrTupleTypeToNode` (nodebuilderimpl.go:3086-3158).
 fn array_or_tuple_type_to_node(c: &mut Checker, ctx: &mut NbCtx, t: TypeId) -> Option<String> {
-    let type_arguments = crate::relater::get_type_arguments(c, t);
+    let type_arguments = crate::relater::resolve_type_arguments(c, t);
     let target = c.type_(t).target();
     if Some(target) == c.global_array_type.map(Some) || Some(target) == c.global_readonly_array_type.map(Some) {
         let target = target?;
@@ -1728,11 +1739,20 @@ fn array_or_tuple_type_to_node(c: &mut Checker, ctx: &mut NbCtx, t: TypeId) -> O
         .type_(target)
         .as_tuple_type()
         .is_some_and(|tt| tt.readonly);
+    // PORT(FCS tranche 3): Go's `if tupleConstituentNodes != nil { ... }`
+    // (nodebuilderimpl.go:3125) — a nil mapToTypeNodes result (an empty
+    // type-argument slice: the arity-0 empty tuple target whose sole
+    // resolvedTypeArgument is the synthesized thisType) FALLS THROUGH to
+    // the empty-tuple epilogue below instead of returning nil. The old
+    // `map_to_type_nodes(...)?` propagated the None into the
+    // "should always get typenode" panics (arrayLiterals3/contextually-
+    // TypedIife's `[]` tuples).
     if !type_arguments.is_empty() {
         let arity = crate::relater::get_type_reference_arity(c, t);
-        let tuple_constituents =
-            map_to_type_nodes(c, ctx, &type_arguments[..arity as usize], false, TP::LOWEST)?;
-        let mut nodes: Vec<String> = tuple_constituents;
+        if let Some(tuple_constituents) =
+            map_to_type_nodes(c, ctx, &type_arguments[..arity as usize], false, TP::LOWEST)
+        {
+            let mut nodes: Vec<String> = tuple_constituents;
         let element_infos: Vec<TupleElementInfo> = c
             .type_(target)
             .as_tuple_type()
@@ -1784,7 +1804,10 @@ fn array_or_tuple_type_to_node(c: &mut Checker, ctx: &mut NbCtx, t: TypeId) -> O
             return Some(format!("readonly [{joined}]"));
         }
         return Some(format!("[{joined}]"));
+        }
     }
+    // Go: the fall-through epilogue (encounteredError/AllowEmptyTuple —
+    // IgnoreErrors always carries AllowEmptyTuple on the diagnostics path).
     if ctx.encountered_error || ctx.flags & nbf::ALLOW_EMPTY_TUPLE != 0 {
         if readonly {
             return Some("readonly []".to_string());
@@ -1797,7 +1820,7 @@ fn array_or_tuple_type_to_node(c: &mut Checker, ctx: &mut NbCtx, t: TypeId) -> O
 
 /// Go: `typeReferenceToTypeNode` (nodebuilderimpl.go:3160-3232).
 fn type_reference_to_type_node(c: &mut Checker, ctx: &mut NbCtx, t: TypeId) -> Option<String> {
-    let type_arguments = crate::relater::get_type_arguments(c, t);
+    let type_arguments = crate::relater::resolve_type_arguments(c, t);
     // Go: the WriteClassExpressionAsTypeLiteral branch is emit-only (flag
     // off for diagnostics).
     let target = c.type_(t).target()?;
@@ -2794,7 +2817,24 @@ fn index_info_to_index_signature_declaration(
         })
         .map(|n| scanner_util::utilities::declaration_name_to_string(c.store(), Some(n)))
         .unwrap_or_else(|| "x".to_string());
-    let indexer_type_node = ttn_outside_extends(c, ctx, info_data.key_type?)?;
+    // PORT(FCS tranche 3): Go's `indexerTypeNode := b.typeToTypeNode(
+    // indexInfo.keyType)` (nodebuilderimpl.go:2213) — typeToTypeNode's nil
+    // arm (nodebuilderimpl.go:3363) renders `any` under
+    // AllowEmptyUnionOrIntersection (always set by IgnoreErrors on the
+    // diagnostics path) instead of failing. The old `key_type?` propagated
+    // None into the "should always get typenode" panics (keyofAndForIn's
+    // mapped-type index infos).
+    let indexer_type_node = match info_data.key_type {
+        Some(kt) => ttn_outside_extends(c, ctx, kt)?,
+        None => {
+            if ctx.flags & nbf::ALLOW_EMPTY_UNION_OR_INTERSECTION == 0 {
+                ctx.encountered_error = true;
+                return None;
+            }
+            ctx.approximate_length += 3;
+            "any".to_string()
+        }
+    };
     let value_node = match info_data.value_type {
         None => {
             if ctx.flags & nbf::ALLOW_EMPTY_INDEX_INFO_TYPE == 0 {
@@ -2838,9 +2878,22 @@ fn create_mapped_type_node_from_type(
         .and_then(|d| c.store().node(d).as_mapped_type_node().map(|m| m.question_token))
         .flatten()
         .map(|tok| c.store().node(tok).kind);
+    // PORT(FCS tranche 3): Go's `mapped.declaration.NameType != nil`
+    // (nodebuilderimpl.go:1584) — the old `.map(|m| m.name_type).is_some()`
+    // kept the OUTER Option, so has_name_type_node was true for EVERY
+    // mapped type with a declaration node; the nameless `{ [P in keyof T]:
+    // X }` then took the name-type arm and getNameTypeFromMappedType's nil
+    // answer (Go: declaration.NameType == nil → nil) propagated None into
+    // the "should always get typenode" panics (keyofAndForIn/mappedType
+    // Errors). The and_then flatten restores Go's NameType gate.
     let has_name_type_node = mapped
         .declaration
-        .and_then(|d| c.store().node(d).as_mapped_type_node().map(|m| m.name_type))
+        .and_then(|d| {
+            c.store()
+                .node(d)
+                .as_mapped_type_node()
+                .and_then(|m| m.name_type)
+        })
         .is_some();
 
     let mut template_type = crate::relater::get_template_type_from_mapped_type(c, t);
@@ -3238,17 +3291,19 @@ fn get_expanded_parameters(c: &mut Checker, signature: SignatureId) -> Vec<Symbo
     let rest_index = sig_params.len() - 1;
     let rest_symbol = sig_params[rest_index];
     let rest_type = c.get_type_of_symbol(rest_symbol);
-    // Only a tuple-typed rest parameter expands.
-    let target = c.type_(rest_type).target();
-    let Some(target) = target else {
-        return sig_params;
-    };
-    if !c.type_(target).object_flags.intersects(ObjectFlags::TUPLE) {
+    // PORT(FCS tranche 3): Go's gate is `if isTupleType(restType)`
+    // (nodebuilderimpl.go:2063) — Target() is only read inside the
+    // tuple-typed branch. The old unguarded `c.type_(rest_type).target()`
+    // panicked for every non-reference rest type (dependentDestructured
+    // Variables' non-tuple rest parameters; Type.Target panics on
+    // non-object kinds in Go too).
+    if !c.is_tuple_type(rest_type) {
         return sig_params;
     }
+    let target = c.type_(rest_type).target().expect("is_tuple_type gates the target read");
     let mut params = sig_params;
     // expandSignatureParametersWithTupleMembers
-    let element_types = crate::relater::get_type_arguments(c, rest_type);
+    let element_types = crate::relater::resolve_type_arguments(c, rest_type);
     let element_infos: Vec<TupleElementInfo> = c
         .type_(target)
         .as_tuple_type()

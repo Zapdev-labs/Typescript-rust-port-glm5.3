@@ -244,7 +244,9 @@ impl Checker {
             .expect("InterfaceType data")
             .all_type_parameters
             .clone();
-        let type_arguments = crate::relater::get_type_arguments(self, t);
+        // Go: getTypeArguments resolves deferred references here (relater.rs's
+        // resolve_type_arguments — PORT note there).
+        let type_arguments = crate::relater::resolve_type_arguments(self, t);
         let mut padded_type_arguments = type_arguments.clone();
         if type_arguments.len() + 1 == type_parameters.len() {
             padded_type_arguments.push(t);
@@ -682,7 +684,7 @@ impl Checker {
         let outer_type_parameters = d.outer_type_parameters().to_vec();
         if !outer_type_parameters.is_empty() {
             let last = outer_type_parameters.len() - 1;
-            let type_arguments = crate::relater::get_type_arguments(self, t);
+            let type_arguments = crate::relater::resolve_type_arguments(self, t);
             let Some(argument_symbol) = type_arguments.get(last).and_then(|&t| self.type_(t).symbol) else {
                 return false;
             };
@@ -758,7 +760,7 @@ impl Checker {
     ) -> TypeId {
         if self.type_(t).object_flags.intersects(ObjectFlags::REFERENCE) {
             let target = self.type_(t).target().expect("TypeReference target");
-            let type_arguments = crate::relater::get_type_arguments(self, t);
+            let type_arguments = crate::relater::resolve_type_arguments(self, t);
             let type_parameter_count = self
                 .type_(target)
                 .as_interface_type()
@@ -1907,7 +1909,7 @@ impl Checker {
                 }
             }
         } else if crate::relater::is_array_or_tuple_type(self, t) {
-            for s in crate::relater::get_type_arguments(self, t) {
+            for s in crate::relater::resolve_type_arguments(self, t) {
                 error_reported = self.report_widening_errors_in_type(s) || error_reported;
             }
         } else if crate::relater::is_object_literal_type(self, t) {

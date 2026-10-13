@@ -1792,19 +1792,28 @@ pub(crate) fn create_marker_type(c: &mut Checker, symbol: SymbolId, source: Type
     if c.type_(t).flags.intersects(TypeFlags::ANY) && c.type_(t).as_intrinsic_type().is_some_and(|d| d.intrinsic_name == "error") {
         return t;
     }
+    // PORT(FCS tranche 3): the type-alias arm now runs Go's REAL body —
+    // `result = c.getTypeAliasInstantiation(symbol, c.instantiateTypes(
+    // c.typeAliasLinks.Get(symbol).typeParameters, mapper), nil)`
+    // (relater.go:1454). The old placeholder called createTypeReference on
+    // the alias's declared type, which for object/function/mapped alias
+    // bodies is ANONYMOUS-typed — a reference Go never constructs
+    // (createTypeReferenceEx panics on non-Interface targets), and whose
+    // member resolution then hit the "InterfaceType data" panics
+    // (covariantCallbacks/Bivar, conditionalTypes1, varianceAnnotations).
     let result = if c.program_symbol(symbol).flags.intersects(SymbolFlags::TYPE_ALIAS) {
         let type_parameters = c.type_alias_links.get(symbol).type_parameters.clone();
         let instantiated = instantiate_types(c, type_parameters, mapper);
-        // TODO(port M6 S7): the type-alias instantiation (W4 alias
-        // machinery); the target reference stands in.
-        let _ = symbol;
-        c.create_type_reference(t, instantiated)
+        c.get_type_alias_instantiation(symbol, instantiated, None)
     } else {
+        // Go: `t.AsInterfaceType().TypeParameters()` (panics on the wrong
+        // variant, exactly like the port's expect).
         let type_parameters = c
             .type_(t)
             .as_interface_type()
-            .map(|i| i.type_parameters().to_vec())
-            .unwrap_or_default();
+            .expect("InterfaceType data")
+            .type_parameters()
+            .to_vec();
         let instantiated = instantiate_types(c, type_parameters, mapper);
         c.create_type_reference(t, instantiated)
     };
@@ -5698,8 +5707,8 @@ impl Relater {
                     }
                     return Ternary::False;
                 }
-                let source_type_arguments = get_type_arguments(c, source);
-                let target_type_arguments = get_type_arguments(c, target);
+                let source_type_arguments = resolve_type_arguments(c, source);
+                let target_type_arguments = resolve_type_arguments(c, target);
                 let target_start_count = get_start_element_count(c, target, ElementFlags::NON_REST);
                 let target_end_count = get_end_element_count(c, target, ElementFlags::NON_REST);
                 let mut can_exclude_discriminants = !excluded_properties.is_empty();
@@ -8856,6 +8865,129 @@ pub(crate) fn type_reference_target_opt(c: &Checker, t: TypeId) -> Option<TypeId
 
 /// Go: `func (c *Checker) getTypeArguments(t) []*Type` — reads the resolved
 /// type arguments (the deferred form falls back to the node's).
+/// Go: `func (c *Checker) getTypeArguments(t *Type) []*Type` (checker.go:22352)
+/// — the RESOLVING form. PORT(FCS tranche 3): deferred type references
+/// (node-carrying references created by createDeferredTypeReference) carry an
+/// empty resolvedTypeArguments until first queried; Go's getTypeArguments
+/// resolves them here (computing the arguments from the node, instantiating
+/// through the reference's mapper, with errorType repeats on circularity).
+/// The port's read-only `get_type_arguments` below answers such references
+/// with an empty list — resolveTypeReferenceMembers handed that to
+/// newTypeMapper, producing a sources/targets length mismatch that panicked
+/// in the array mapper's Map (mapper.rs:156) when an instantiated symbol's
+/// type was later mapped. Call sites with a `&mut Checker` use this form;
+/// the `&Checker` read sites are gated off deferred references
+/// (isNonDeferredTypeReference and friends) and keep the reader.
+pub(crate) fn resolve_type_arguments(c: &mut Checker, t: TypeId) -> Vec<TypeId> {
+    let (has_args, node, mapper) = match c.type_(t).as_type_reference() {
+        Some(d) => (!d.resolved_type_arguments.is_empty(), d.node, d.base.mapper),
+        None => return Vec::new(),
+    };
+    // PORT: Go tests `d.resolvedTypeArguments == nil`. The port's Vec has no
+    // nil state — a non-deferred zero-arity reference (empty args, no node)
+    // resolves to the empty list in Go as well (a nil node computes no
+    // arguments), so only node-carrying deferred references take the
+    // resolution path below.
+    if has_args || node.is_none() {
+        return c
+            .type_(t)
+            .as_type_reference()
+            .expect("checked above")
+            .resolved_type_arguments
+            .clone();
+    }
+    let node = node.expect("deferred reference carries a node");
+    let target = c.type_(t).target().expect("TypeReference target");
+    let type_parameter_count = c
+        .type_(target)
+        .as_interface_type()
+        .map(|n| n.type_parameters().len())
+        .unwrap_or(0);
+    if !c.push_type_resolution(
+        crate::checker::TypeSystemEntity::Type(t),
+        crate::checker::TypeSystemPropertyName::ResolvedTypeArguments,
+    ) {
+        // Go: the resolution is already in flight — errorType repeats.
+        return vec![c.error_type(); type_parameter_count];
+    }
+    let kind = c.store().node(node).kind;
+    let type_arguments: Vec<TypeId> = match kind {
+        Kind::TypeReference => {
+            // Go: `append(n.OuterTypeParameters(), c.getEffectiveTypeArguments(
+            // node, n.LocalTypeParameters())...)`.
+            let (outer, local) = {
+                let n = c
+                    .type_(target)
+                    .as_interface_type()
+                    .expect("interface-typed target");
+                (
+                    n.outer_type_parameters().to_vec(),
+                    n.local_type_parameters().to_vec(),
+                )
+            };
+            let mut args = outer;
+            args.extend(c.get_effective_type_arguments(node, &local));
+            args
+        }
+        Kind::ArrayType => {
+            let element_type = c
+                .store()
+                .node(node)
+                .as_array_type_node()
+                .expect("ArrayTypeNode data")
+                .element_type;
+            vec![c.get_type_from_type_node(element_type)]
+        }
+        Kind::TupleType => {
+            let elements = crate::typenodes::elements_of(c.store(), node);
+            elements
+                .iter()
+                .map(|&e| c.get_type_from_type_node(e))
+                .collect()
+        }
+        _ => panic!("Unhandled case in getTypeArguments"),
+    };
+    if c.pop_type_resolution() {
+        if c
+            .type_(t)
+            .as_type_reference()
+            .expect("checked above")
+            .resolved_type_arguments
+            .is_empty()
+        {
+            let instantiated = c.instantiate_types(&type_arguments, mapper);
+            if let crate::types::TypeData::TypeReference(d) = &mut c.type_mut(t).data {
+                d.resolved_type_arguments = instantiated;
+            }
+        }
+    } else {
+        // Go: circularity — errorType repeats plus the diagnostics.
+        let resolved = vec![c.error_type(); type_parameter_count];
+        if let crate::types::TypeData::TypeReference(d) = &mut c.type_mut(t).data {
+            d.resolved_type_arguments = resolved.clone();
+        }
+        if let Some(target_symbol) = c.type_(target).symbol {
+            let name = symbol_to_string(c, target_symbol);
+            c.error(
+                node,
+                &msg::TYPE_ARGUMENTS_FOR_0_CIRCULARLY_REFERENCE_THEMSELVES,
+                &[name],
+            );
+        } else {
+            c.error(
+                node,
+                &msg::TUPLE_TYPE_ARGUMENTS_CIRCULARLY_REFERENCE_THEMSELVES,
+                &[],
+            );
+        }
+    }
+    c.type_(t)
+        .as_type_reference()
+        .expect("checked above")
+        .resolved_type_arguments
+        .clone()
+}
+
 pub(crate) fn get_type_arguments(c: &Checker, t: TypeId) -> Vec<TypeId> {
     c.type_(t)
         .as_type_reference()
@@ -9305,7 +9437,7 @@ impl Checker {
     /// (checker.go:24039) — REAL (M6 S5).
     pub(crate) fn get_element_type_of_array_type(&mut self, t: TypeId) -> Option<TypeId> {
         if self.is_array_type(t) {
-            return get_type_arguments(self, t).first().copied();
+            return resolve_type_arguments(self, t).first().copied();
         }
         None
     }

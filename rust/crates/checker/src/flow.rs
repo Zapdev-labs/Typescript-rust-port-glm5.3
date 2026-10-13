@@ -3658,7 +3658,10 @@ impl Checker {
             }
         }
         let parent = self.store().node(container).parent.get();
-        if parent != container && crate::statements::is_class_like(self.store(), parent) {
+        // Go: `container.Parent != nil && ast.IsClassLike(container.Parent)`
+        // (flow.go:2223) — the nil-parent guard (a top-level script `this`
+        // hands a NONE parent to isClassLike, whose store read panics).
+        if parent != NodeId::NONE && crate::statements::is_class_like(self.store(), parent) {
             let symbol = self.get_symbol_of_declaration(parent)?;
             if binder_shims::has_static_modifier(self.store().node(container)) {
                 return Some(self.get_type_of_symbol(symbol));

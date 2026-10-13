@@ -292,8 +292,8 @@ impl Clone for Node {
 /// Go: `func (n *Node) Text() string` (ast.go) — the text of a text-bearing
 /// node whose text is a single stored string. Go's `Text()` additionally
 /// concatenates for `KindJsxNamespacedName` and the four JSDoc comment kinds;
-/// those allocate and are TODO(port) with the full Text surface (nothing in
-/// the M2 surface reads them; Go panics on other kinds and so does this).
+/// those allocate and live in [`node_text_owned`] (Go panics on other kinds
+/// and so does this).
 pub fn node_text(store: &dyn NodeStore, node: NodeId) -> &str {
     let n = store.node(node);
     match &n.data {
@@ -313,6 +313,31 @@ pub fn node_text(store: &dyn NodeStore, node: NodeId) -> &str {
         NodeData::TemplateTail(d) => &d.text,
         NodeData::RegularExpressionLiteral(d) => &d.text,
         _ => panic!("Unhandled case in Node.Text: {}", n.kind_string()),
+    }
+}
+
+/// Go: `func (n *Node) Text() string` — the ALLOCATING arms of Go's `Text()`
+/// (ast.go:273): `KindJsxNamespacedName` (namespace + ":" + name) and the
+/// four JSDoc comment kinds (joined text parts). The borrow-returning
+/// [`node_text`] covers the single-stored-string arms; call sites whose node
+/// may be a namespaced JSX name or a JSDoc comment node must use this
+/// Go-exact owned form (FCS, 2026-10-14: checkGrammarJsxElement's attribute
+/// name can be a JsxNamespacedName — the panic census's ast lib.rs:315
+/// family).
+pub fn node_text_owned(store: &dyn NodeStore, node: NodeId) -> String {
+    let n = store.node(node);
+    match &n.data {
+        NodeData::JsxNamespacedName(d) => {
+            // Go: n.AsJsxNamespacedName().Namespace.Text() + ":" + name.Text()
+            let namespace = d.namespace;
+            let name = d.name;
+            format!("{}:{}", node_text(store, namespace), node_text(store, name))
+        }
+        NodeData::JSDocText(d) => d.text.join(""),
+        NodeData::JSDocLink(d) => d.text.join(""),
+        NodeData::JSDocLinkCode(d) => d.text.join(""),
+        NodeData::JSDocLinkPlain(d) => d.text.join(""),
+        _ => node_text(store, node).to_string(),
     }
 }
 

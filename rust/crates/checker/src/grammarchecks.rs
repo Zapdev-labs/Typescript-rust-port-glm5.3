@@ -5018,7 +5018,10 @@ impl Checker {
                     .expect("JsxAttribute data");
                 (attr.name, attr.initializer)
             };
-            let text_of_name = tsc_ast::node_text(self.store(), name).to_string();
+            // PORT(FCS, 2026-10-14): Go's name.Text() allocates for
+            // KindJsxNamespacedName ("ns:name"); use the owned Go-exact form
+            // (grammarchecks.go:1149).
+            let text_of_name = tsc_ast::node_text_owned(self.store(), name);
             if seen.contains(&text_of_name) {
                 return self.grammar_error_on_node(
                     name,

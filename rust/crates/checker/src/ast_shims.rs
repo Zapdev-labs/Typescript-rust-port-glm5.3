@@ -456,7 +456,15 @@ pub fn type_of_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
         tsc_ast::NodeData::VariableDeclaration(d) => d.type_,
         tsc_ast::NodeData::ParameterDeclaration(d) => d.type_,
         tsc_ast::NodeData::PropertyDeclaration(d) => d.type_,
-        tsc_ast::NodeData::PropertySignatureDeclaration(d) => Some(d.type_),
+        // PORT(FCS tranche 3): the plain-NodeId `type_` fields (Go *Node
+        // pointers) carry NodeId::NONE when the annotation is absent — Go's
+        // `Node.Type()` returns nil there, so the Some() arms filter the
+        // sentinel (e.g. the shorthand `[Symbol.iterator]: { x; }`
+        // PropertySignature: checkSourceElement(Some(NONE)) was panicking
+        // via checkVariableLikeDeclaration).
+        tsc_ast::NodeData::PropertySignatureDeclaration(d) => {
+            (d.type_ != NodeId::NONE).then_some(d.type_)
+        }
         tsc_ast::NodeData::FunctionDeclaration(d) => d.type_,
         tsc_ast::NodeData::FunctionExpression(d) => d.type_,
         tsc_ast::NodeData::ArrowFunction(d) => d.type_,
@@ -464,11 +472,11 @@ pub fn type_of_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
         tsc_ast::NodeData::MethodSignatureDeclaration(d) => d.type_,
         tsc_ast::NodeData::GetAccessorDeclaration(d) => d.type_,
         tsc_ast::NodeData::SetAccessorDeclaration(d) => d.type_,
-        tsc_ast::NodeData::TypeAliasDeclaration(d) => Some(d.type_),
+        tsc_ast::NodeData::TypeAliasDeclaration(d) => (d.type_ != NodeId::NONE).then_some(d.type_),
         tsc_ast::NodeData::CallSignatureDeclaration(d) => d.type_,
         tsc_ast::NodeData::ConstructSignatureDeclaration(d) => d.type_,
         tsc_ast::NodeData::IndexSignatureDeclaration(d) => d.type_,
-        tsc_ast::NodeData::JSDocTypeExpression(d) => Some(d.type_),
+        tsc_ast::NodeData::JSDocTypeExpression(d) => (d.type_ != NodeId::NONE).then_some(d.type_),
         // Go: Node.Type()'s default arm — `funcLike := n.FunctionLikeData();
         // return funcLike.Type` (ast.go:679-681). The W4 nodebuilder's
         // serializeReturnTypeForSignature reaches these via
@@ -481,9 +489,11 @@ pub fn type_of_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
         tsc_ast::NodeData::ConstructorTypeNode(d) => d.type_,
         // Go: `node.Type() on the assertion family (checker.go's
         // checkAssertion/checkSatisfiesExpression call sites).
-        tsc_ast::NodeData::TypeAssertion(d) => Some(d.type_),
-        tsc_ast::NodeData::AsExpression(d) => Some(d.type_),
-        tsc_ast::NodeData::SatisfiesExpression(d) => Some(d.type_),
+        // (Same PORT(FCS tranche 3) sentinel filter as the declaration
+        // arms above — these types are also plain-NodeId fields.)
+        tsc_ast::NodeData::TypeAssertion(d) => (d.type_ != NodeId::NONE).then_some(d.type_),
+        tsc_ast::NodeData::AsExpression(d) => (d.type_ != NodeId::NONE).then_some(d.type_),
+        tsc_ast::NodeData::SatisfiesExpression(d) => (d.type_ != NodeId::NONE).then_some(d.type_),
         _ => None,
     }
 }

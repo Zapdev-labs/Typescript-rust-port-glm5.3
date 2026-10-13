@@ -2619,7 +2619,7 @@ impl Checker {
             || self.is_reference_to_type(t, iterable_iterator_type)
             || self.is_reference_to_type(t, generator_type)
         {
-            let type_arguments = relater::get_type_arguments(self, t);
+            let type_arguments = relater::resolve_type_arguments(self, t);
             if type_arguments.len() >= 3 {
                 return self.get_resolved_iteration_types(
                     r,
@@ -2635,7 +2635,7 @@ impl Checker {
         // this arm matches no type (the empty vec contains nothing).
         let builtin_iterator_types = self.get_global_builtin_iterator_types(r);
         if self.is_reference_to_some_type(t, builtin_iterator_types) {
-            let type_arguments = relater::get_type_arguments(self, t);
+            let type_arguments = relater::resolve_type_arguments(self, t);
             if !type_arguments.is_empty() {
                 let builtin_return = self.get_builtin_iterator_return_type();
                 let unknown_type = self.unknown_type();
@@ -2854,7 +2854,7 @@ impl Checker {
             || self.is_reference_to_type(t, iterable_iterator_type)
             || self.is_reference_to_type(t, generator_type)
         {
-            let type_arguments = relater::get_type_arguments(self, t);
+            let type_arguments = relater::resolve_type_arguments(self, t);
             if type_arguments.len() >= 3 {
                 return self.get_resolved_iteration_types(
                     r,
@@ -2867,7 +2867,7 @@ impl Checker {
         }
         let builtin_iterator_types = self.get_global_builtin_iterator_types(r);
         if self.is_reference_to_some_type(t, builtin_iterator_types) {
-            let type_arguments = relater::get_type_arguments(self, t);
+            let type_arguments = relater::resolve_type_arguments(self, t);
             if !type_arguments.is_empty() {
                 let builtin_return = self.get_builtin_iterator_return_type();
                 let unknown_type = self.unknown_type();
@@ -10069,10 +10069,20 @@ impl Checker {
         // TODO(port M6 S6): resolveAlias — the alias target walk; the
         // permissive typeofsymbol body answers unknownSymbol (no namespace),
         // so the shadow gate rests.
+        // Go: `symbol.Flags&ast.SymbolFlagsNamespaceModule != 0 && symbol.Flags&ast.SymbolFlagsAlias != 0`
+        // (checker.go:5935) — BOTH flags are required; the port's
+        // `.union().intersects()` (either flag) routed plain namespace-module
+        // symbols (no alias declaration) into resolveAlias, which panics on
+        // the missing declaration (PORT note: Go's checker.go:16663 panics
+        // identically — Go just never reaches it from here).
         if self
             .program_symbol(symbol)
             .flags
-            .intersects(SymbolFlags::NAMESPACE_MODULE.union(SymbolFlags::ALIAS))
+            .intersects(SymbolFlags::NAMESPACE_MODULE)
+            && self
+                .program_symbol(symbol)
+                .flags
+                .intersects(SymbolFlags::ALIAS)
         {
             let target = self.resolve_alias(symbol);
             if self.program_symbol(target).flags.intersects(SymbolFlags::NAMESPACE)

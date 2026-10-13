@@ -1108,6 +1108,7 @@ impl Checker {
                         let real_source = self.create_tuple_type(&child_types);
                         let children = self.generate_jsx_children(
                             containing_element,
+                            parent,
                             children_prop_name.clone(),
                             children_target_type,
                         );
@@ -1210,6 +1211,15 @@ impl Checker {
     fn generate_jsx_children(
         &mut self,
         node: NodeId,
+        // PORT(FCS tranche 3): Go passes the lazily-invoked
+        // getInvalidTextDiagnostic factory, which closes over the ORIGINAL
+        // elaborateJsxComponents `node.Parent` (the JsxOpeningElement whose
+        // TagName the "don't accept text" message reads, jsx.go:333). The
+        // port materializes the tag-name node instead — it must be the
+        // ORIGINAL opening element, not `node.parent` (the containing
+        // element's parent, which is not an opening element — the expect
+        // in the JsxText arm panicked on it).
+        opening_element: NodeId,
         children_prop_name: String,
         children_target_type: crate::types::TypeId,
     ) -> Vec<JsxElaborationElement> {
@@ -1224,7 +1234,7 @@ impl Checker {
                 name_type,
                 children_prop_name.clone(),
                 children_target_type,
-                self.store().node(node).parent.get(),
+                opening_element,
             );
             if e.error_node.is_some() {
                 result.push(e);

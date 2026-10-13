@@ -2197,6 +2197,26 @@ pub(crate) fn payload_symbol(node: &Node) -> Option<SymbolId> {
         NodeData::FunctionTypeNode(d) => d.symbol,
         NodeData::ConstructorTypeNode(d) => d.symbol,
         NodeData::SourceFile(d) => d.symbol,
+        // PORT(FCS tranche 3): the binder's set_node_symbol list
+        // (binder/node_data.rs's `symbol_of` dispatch) symbolizes every one
+        // of these via bindAnonymousDeclaration/declareSymbol — Go's
+        // `decl.Symbol()` reads them uniformly (Node.Symbol()); the port's
+        // omission of BinaryExpression made lateBindMember's
+        // "The member is expected to have a symbol" assert fire on JS expando
+        // assignments (`obj[k] = v` — binder.go:1061's dynamic-name arm sets
+        // the node symbol before the checker's late-binding walk reads it).
+        NodeData::BinaryExpression(d) => d.symbol,
+        NodeData::CallExpression(d) => d.symbol,
+        NodeData::ObjectLiteralExpression(d) => d.symbol,
+        NodeData::SpreadAssignment(d) => d.symbol,
+        NodeData::NoSubstitutionTemplateLiteral(d) => d.symbol,
+        NodeData::MissingDeclaration(d) => d.symbol,
+        NodeData::NotEmittedTypeElement(d) => d.symbol,
+        NodeData::SemicolonClassElement(d) => d.symbol,
+        NodeData::JsxAttributes(d) => d.symbol,
+        NodeData::JsxAttribute(d) => d.symbol,
+        NodeData::JsxSpreadAttribute(d) => d.symbol,
+        NodeData::JSDocTypeLiteral(d) => d.symbol,
         _ => None,
     }
 }
@@ -3867,7 +3887,7 @@ impl Checker {
             result = Some(crate::relater::get_intersection_type(self, widened));
         } else if crate::relater::is_array_or_tuple_type(self, t) {
             let target = self.type_(t).target();
-            let type_arguments = crate::relater::get_type_arguments(self, t);
+            let type_arguments = crate::relater::resolve_type_arguments(self, t);
             let mut widened: Vec<TypeId> = Vec::with_capacity(type_arguments.len());
             for member in type_arguments {
                 widened.push(self.get_widened_type(member));
@@ -5433,13 +5453,21 @@ impl Checker {
                 }
                 if u::is_constant_variable(self, symbol) {
                     let declaration = self.program.symbol(symbol).value_declaration;
+                    // Go: `declaration != nil && ast.IsVariableDeclaration(
+                    // declaration) && declaration.Type() == nil && ...`
+                    // (checker.go:24581) — the kind guard precedes the
+                    // VariableDeclaration payload read.
                     let has_declaration = declaration.is_some_and(|d| {
-                        let vd = self
-                            .store()
-                            .node(d)
-                            .as_variable_declaration()
-                            .expect("VariableDeclaration data");
-                        vd.type_.is_none() && vd.initializer.is_some()
+                        let n = self.store().node(d);
+                        n.kind == Kind::VariableDeclaration
+                            && n.as_variable_declaration()
+                                .expect("VariableDeclaration data")
+                                .type_
+                                .is_none()
+                            && n.as_variable_declaration()
+                                .expect("VariableDeclaration data")
+                                .initializer
+                                .is_some()
                     });
                     let guard_ok = has_declaration && {
                         let d = declaration.expect("checked by has_declaration");

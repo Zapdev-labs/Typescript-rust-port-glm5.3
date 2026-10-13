@@ -807,8 +807,8 @@ impl Checker {
 
     /// Go: `func (c *Checker) inferFromReferenceTypeArguments(n, source, target)`.
     fn infer_from_reference_type_arguments(&mut self, n: &mut InferenceState, source: TypeId, target: TypeId) {
-        let source_types = get_type_arguments(self, source);
-        let target_types = get_type_arguments(self, target);
+        let source_types = crate::relater::resolve_type_arguments(self, source);
+        let target_types = crate::relater::resolve_type_arguments(self, target);
         let reference_target = type_reference_target(self, source);
         let variances = self.get_variances(reference_target);
         self.infer_from_type_arguments(n, source_types, target_types, variances);
@@ -1388,13 +1388,13 @@ impl Checker {
             if crate::relater::is_tuple_type(self, target) {
                 let source_arity = crate::relater::get_type_reference_arity(self, source);
                 let target_arity = crate::relater::get_type_reference_arity(self, target);
-                let element_types = get_type_arguments(self, target);
+                let element_types = crate::relater::resolve_type_arguments(self, target);
                 let element_infos = tuple_element_infos(self, target);
                 let source_is_tuple = crate::relater::is_tuple_type(self, source);
                 // When source and target are tuple types with the same structure (fixed, variadic, and rest are matched
                 // to the same kind in each position), simply infer between the element types. (Go comment, verbatim.)
                 if source_is_tuple && self.is_tuple_type_structure_matching(source, target) {
-                    let source_args = get_type_arguments(self, source);
+                    let source_args = crate::relater::resolve_type_arguments(self, source);
                     for i in 0..target_arity as usize {
                         self.infer_from_types(n, source_args[i], element_types[i]);
                     }
@@ -1412,7 +1412,7 @@ impl Checker {
                 }
                 // Infer between starting fixed elements. (Go comment, verbatim.)
                 {
-                    let source_args = get_type_arguments(self, source);
+                    let source_args = crate::relater::resolve_type_arguments(self, source);
                     for i in 0..start_length {
                         self.infer_from_types(n, source_args[i], element_types[i]);
                     }
@@ -1422,7 +1422,7 @@ impl Checker {
                         && tuple_type_element_flags(self, source, start_length).intersects(ElementFlags::REST)
                 {
                     // Single rest element remains in source, infer from that to every element in target (Go comment, verbatim.)
-                    let source_args = get_type_arguments(self, source);
+                    let source_args = crate::relater::resolve_type_arguments(self, source);
                     let rest_type = source_args[start_length];
                     for i in start_length..target_arity as usize - end_length {
                         let mut t = rest_type;
@@ -1503,7 +1503,7 @@ impl Checker {
                                         - crate::relater::get_end_element_count(self, target, ElementFlags::FIXED);
                                     let start_index = end_index - implied_arity;
                                     if start_index >= start_length {
-                                        let source_args = get_type_arguments(self, source);
+                                        let source_args = crate::relater::resolve_type_arguments(self, source);
                                         let slice_types: Vec<TypeId> = source_args[start_index..end_index].to_vec();
                                         let slice_infos: Vec<crate::types::TupleElementInfo> =
                                             tuple_element_infos(self, source)[start_index..end_index].to_vec();
@@ -1547,7 +1547,7 @@ impl Checker {
                 }
                 // Infer between ending fixed elements (Go comment, verbatim.)
                 {
-                    let source_args = get_type_arguments(self, source);
+                    let source_args = crate::relater::resolve_type_arguments(self, source);
                     for i in 0..end_length {
                         self.infer_from_types(
                             n,
@@ -1606,7 +1606,12 @@ impl Checker {
             let target_signatures = get_signatures_of_type(self, target, kind);
             let target_len = target_signatures.len();
             for (i, &target_signature) in target_signatures.iter().enumerate() {
-                let source_index = source_len.saturating_sub(target_len) + i;
+                // PORT(FCS tranche 3): Go's `max(sourceLen-targetLen+i, 0)`
+                // (inference.go:858) clamps EACH index at 0 — the port's
+                // `saturating_sub(target_len) + i` under-clamped when
+                // sourceLen < targetLen (index i itself exceeded the source).
+                let source_index =
+                    (source_len as isize - target_len as isize + i as isize).max(0) as usize;
                 let base = self.get_base_signature(source_signatures[source_index]);
                 let erased = get_erased_signature(self, target_signature);
                 self.infer_from_signature(n, base, erased);
@@ -2922,7 +2927,7 @@ fn could_contain_type_variables_helper(c: &mut Checker, t: TypeId) -> bool {
         && c.type_(t).flags.intersects(TypeFlags::OBJECT)
         && !is_non_generic_top_level_type(c, t)
     {
-        let type_arguments = get_type_arguments(c, t);
+        let type_arguments = crate::relater::resolve_type_arguments(c, t);
         let reference_arm = object_flags.intersects(ObjectFlags::REFERENCE)
             && (c.type_(t).as_type_reference().is_some_and(|r| r.node.is_some())
                 || type_arguments

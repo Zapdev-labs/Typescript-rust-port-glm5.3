@@ -634,9 +634,9 @@ impl Checker {
     /// Go: `func (c *Checker) GetTypeArguments(t *Type) []*Type` →
     /// `c.getTypeArguments(t)` (checker.go — S7/S8).
     pub fn get_type_arguments(&mut self, t: TypeId) -> Vec<TypeId> {
-        // TODO(port M6 S7/S8): the type-argument resolution.
-        let _ = t;
-        Vec::new()
+        // PORT(FCS tranche 3): Go's getTypeArguments is the RESOLVING form
+        // (checker.go:22352) — relater.rs's resolve_type_arguments.
+        crate::relater::resolve_type_arguments(self, t)
     }
 
     /// Go: `func (c *Checker) GetIndexInfoOfType(t *Type, keyType *Type) *IndexInfo`

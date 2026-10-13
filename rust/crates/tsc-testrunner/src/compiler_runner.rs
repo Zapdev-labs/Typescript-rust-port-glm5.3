@@ -846,7 +846,21 @@ fn run_configuration_pipeline(
             if !diags.is_empty() {
                 let text = unit.content.clone();
                 for d in diags {
-                    owned.push((rooted_names[index].clone(), text.clone(), d));
+                    // PORT(FCS, 2026-10-14): Go's fileless diagnostics
+                    // (NewCompilerDiagnostic — UndefinedTextRange {-1,-1},
+                    // nil File) are GLOBALS: the baseline renders them in
+                    // the global-error block with no location
+                    // (error_baseline.go's `error.File() == nil` arm). The
+                    // per-unit seam lumps them in with the unit's
+                    // diagnostics, which rendered a bogus "file(1,0):"
+                    // location — and, once spans went Go-exact (-1,-1),
+                    // panicked the baseline's column slice. pos < 0 is
+                    // exactly Go's nil-File shape here.
+                    if d.pos() >= 0 {
+                        owned.push((rooted_names[index].clone(), text.clone(), d));
+                    } else {
+                        owned.push((String::new(), String::new(), d));
+                    }
                 }
             }
         }

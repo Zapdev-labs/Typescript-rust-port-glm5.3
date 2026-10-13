@@ -4427,7 +4427,12 @@ impl Checker {
             }
         }
         let parent = self.store().node(container).parent.get();
-        if crate::statements::is_class_like(self.store(), parent) {
+        // PORT(FCS tranche 3): Go's `if container.Parent != nil &&
+        // ast.IsClassLike(container.Parent)` (checker.go:12405) — the
+        // SourceFile container's parent is Go nil (NodeId::NONE), and
+        // is_class_like would hand NONE to store().node (the top-level
+        // `this` of a script).
+        if parent != NodeId::NONE && crate::statements::is_class_like(self.store(), parent) {
             let symbol = self.get_symbol_of_declaration(parent)?;
             if tsc_binder::ast_shims::is_static(self.store().node(container)) {
                 return Some(self.get_type_of_symbol(symbol));
@@ -6990,7 +6995,10 @@ impl Checker {
     /// Go: `func (c *Checker) checkDeprecatedProperty(name, contextualType)` (checker.go:13616).
     pub(crate) fn check_deprecated_property(&mut self, name: NodeId, contextual_type: Option<TypeId>) {
         let Some(contextual_type) = contextual_type else { return };
-        let text = tsc_ast::node_text(self.store(), name).to_string();
+        // PORT(FCS, 2026-10-14): Go's name.Text() allocates for
+        // KindJsxNamespacedName ("ns:name", checker.go:13616) — use the
+        // owned Go-exact form.
+        let text = tsc_ast::node_text_owned(self.store(), name);
         let prop = relater::get_property_of_type(self, contextual_type, &text);
         let Some(prop) = prop else { return };
         if self.program_symbol(prop).declarations.is_empty() {

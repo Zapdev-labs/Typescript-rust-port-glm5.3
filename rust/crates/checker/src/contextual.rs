@@ -961,31 +961,34 @@ impl Checker {
                     .intersects(tsc_ast::functionflags::FunctionFlags::GENERATOR);
                 let is_async =
                     function_flags.intersects(tsc_ast::functionflags::FunctionFlags::ASYNC);
-                if is_generator || is_async {
-                    let mut filtered = Vec::new();
-                    for t in self.type_(return_type).types().to_vec() {
-                        let flags = self.type_(t).flags;
-                        if flags.intersects(
+                // PORT(FCS tranche 3): Go's two c.filterType arms
+                // (checker.go:30228/30233) — filterType distributes over
+                // unions and answers the predicate for a top-level
+                // constituent; the port's hand-rolled `Type.Types` read
+                // panicked on non-union return types (types.rs:1574).
+                if is_generator {
+                    return Some(self.filter_type_mut(return_type, |c, t| {
+                        let flags = c.type_(t).flags;
+                        flags.intersects(
                             TypeFlags::ANY_OR_UNKNOWN
                                 | TypeFlags::VOID
                                 | TypeFlags::INSTANTIABLE_NON_PRIMITIVE,
-                        ) || (is_generator
-                            && self.check_generator_instantiation_assignability_to_return_type(
-                                t,
-                                function_flags,
-                                None, /*errorNode*/
-                            ))
-                            || (is_async && self.get_awaited_type_of_promise(t).is_some())
-                        {
-                            filtered.push(t);
-                        }
-                    }
-                    return Some(self.get_union_type_ex(
-                        filtered,
-                        crate::todo_shapes::UnionReduction::None,
-                        None,
-                        None,
-                    ));
+                        ) || c.check_generator_instantiation_assignability_to_return_type(
+                            t,
+                            function_flags,
+                            None, /*errorNode*/
+                        )
+                    }));
+                }
+                if is_async {
+                    return Some(self.filter_type_mut(return_type, |c, t| {
+                        let flags = c.type_(t).flags;
+                        flags.intersects(
+                            TypeFlags::ANY_OR_UNKNOWN
+                                | TypeFlags::VOID
+                                | TypeFlags::INSTANTIABLE_NON_PRIMITIVE,
+                        ) || c.get_awaited_type_of_promise(t).is_some()
+                    }));
                 }
                 return Some(return_type);
             }
@@ -1785,7 +1788,7 @@ impl Checker {
                 // arithmetic wave; the fixed-constituent answer below is the
                 // common no-spread case.
                 if first_spread_index < 0 || (index as i32) < first_spread_index {
-                    if let Some(element) = crate::relater::get_type_arguments(c, t).get(index) {
+                    if let Some(element) = crate::relater::resolve_type_arguments(c, t).get(index) {
                         return crate::relater::remove_missing_type(c, *element, false);
                     }
                 }

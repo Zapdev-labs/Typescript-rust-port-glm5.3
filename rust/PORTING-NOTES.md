@@ -2396,3 +2396,24 @@ typenode 19, InterfaceType data 15, Type.Target 11, mapper OOB 10,
 resolveAlias export= 7, ...). Worker resumed after a mid-tranche
 cutoff; nodebuilder/relater in-flight edits verified compiling + 19
 suites green before resume.
+
+## Full-corpus sweep tranche 3 landed (2026-10-15) — panics 191 -> 26, divergent 2,423 -> 2,143
+
+Seventeen worker fixes (FCS-noted) cleared every in-scope backtrace family:
+the type_of_node NodeId::NONE sentinel leak (51+2), the try_get_this_type_at
+nil-parent guard (32), the nodebuilder typenode ladder, InterfaceType data,
+Type.Target/Types arms, mapper/inference/relater OOB clamps per Go's
+indexing, resolveAlias export=, the jsx elaboration families, late_bind_
+member, evaluate_entity, get_type_of_dotted_name, and the typenodes range
+clamp. Orchestrator fixes for the out-of-scope stragglers: node_text_owned
+(Go's ALLOCATING Text() arms — KindJsxNamespacedName "ns:name" + the four
+JSDoc comment kinds; wired into check_grammar_jsx_element + check_
+deprecated_property) and the runner's global-diagnostic pairing (Go's
+fileless NewCompilerDiagnostic goes to the baseline's GLOBAL block with
+no location; the per-unit seam was attaching them to the unit file and,
+once spans went Go-exact {-1,-1}, panicking the column slice). Full-corpus
+twin (rig, fresh): Rust 0/3,852/3,715/26 vs Go 0/3,826/3,741/0; divergent
+2,143 (26 verdict / 1,828 count / 289 hash-only), identical 5,424/7,567.
+20 suites + the fcs3 pin suite green; clippy 0; all 300-slice gates green
+(fixture x3, bind 143/163/78/0, CHECK ZERO divergence, program 15/15) on
+the rig. All heavy validation now runs on the rig per user directive.
