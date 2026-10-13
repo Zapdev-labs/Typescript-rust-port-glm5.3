@@ -1989,7 +1989,6 @@ impl Checker {
                             index_type,
                             access_flags,
                             Some(element),
-                            None,
                         )
                         .unwrap_or_else(|| self.error_type());
                     let mut assigned_type = element_type;
@@ -3003,18 +3002,26 @@ impl Checker {
         }
     }
 
-    /// Go: `func (c *Checker) getIndexedAccessTypeOrUndefined(t, key, keyNode, accessNode) *Type`
-    /// (checker.go:29480 region). TODO(port M6 S7): the generic-index gate;
-    /// the S7 relater indexed-access seam answers for the concrete shape.
+    /// Go: `func (c *Checker) getIndexedAccessTypeOrUndefined(objectType, indexType, accessFlags, accessNode, alias) *Type`
+    /// (checker.go:27469). PORT (FCS tranche 8): routes to the REAL S10
+    /// resolver (index.rs's get_indexed_access_type_or_undefined_impl) —
+    /// was the S7 stub (`get_indexed_access_type` answered, access
+    /// flags/nodes ignored), which skipped Go's getPropertyTypeForIndexType
+    /// ladder entirely: the TS7053/2739 noImplicitAny error chain, the
+    /// deferred generic-index gate, and the union-index walk never ran for
+    /// check-stage element accesses (the corpus's TS7053-missing family).
+    /// The port's former 5th-param `key_node` is REMOVED — Go's signature
+    /// has one node (accessNode); the call sites pass Go's accessNode (the
+    /// element-access expression, or the binding element that stands in for
+    /// Go's synthetic-expression access node).
     pub(crate) fn get_indexed_access_type_or_undefined(
         &mut self,
         t: TypeId,
         key: TypeId,
-        _access_flags: crate::types::AccessFlags,
-        _key_node: Option<NodeId>,
-        _access_node: Option<NodeId>,
+        access_flags: crate::types::AccessFlags,
+        access_node: Option<NodeId>,
     ) -> Option<TypeId> {
-        Some(self.get_indexed_access_type(t, key))
+        self.get_indexed_access_type_or_undefined_impl(t, key, access_flags, access_node, None)
     }
 
     /// Go: `func (c *Checker) markPropertyAsReferenced(prop, nodeForCheckWriteOnly, isSelfTypeAccess)`
@@ -5084,7 +5091,6 @@ impl Checker {
                 object_type,
                 effective_index_type,
                 access_flags,
-                Some(index_expression),
                 Some(node),
             )
             .unwrap_or_else(|| self.error_type());
@@ -5462,7 +5468,6 @@ impl Checker {
                             *e,
                             self.number_type(),
                             crate::types::AccessFlags::NONE,
-                            None,
                             None,
                         )
                         .unwrap_or_else(|| self.any_type());
@@ -6624,15 +6629,37 @@ impl Checker {
         let node_symbol_clone = node_symbol;
         macro_rules! create_object_literal_type {
             ($c:expr) => {{
-                let _ = offset;
-                // TODO(port M6 S7/S10): getObjectLiteralIndexInfo — the
-                // computed-property index infos; the S7/S10 read seams are
-                // empty at this depth, so the literal carries none.
-                let _ = (
-                    has_computed_string_property,
-                    has_computed_number_property,
-                    has_computed_symbol_property,
-                );
+                // PORT (FCS tranche 8): Go checker.go:13439-13450 — the
+                // computed-property index infos (getObjectLiteralIndexInfo).
+                // An object literal with a computed string/number/symbol
+                // property carries a synthetic index signature whose value
+                // type is the union of the segment's computed property types
+                // (e.g. `{ [Symbol.foo]: 0 }` indexes as `number` through
+                // the string index info — the corpus's TS7053-missing
+                // family root cause). Was an S7/S10 TODO (no index infos).
+                let mut index_infos: Vec<crate::types::IndexInfoId> = Vec::new();
+                let is_readonly = in_const_context;
+                if has_computed_string_property {
+                    let key_type = $c.string_type();
+                    let props: Vec<SymbolId> =
+                        properties_array[offset..].to_vec();
+                    index_infos
+                        .push($c.get_object_literal_index_info(is_readonly, &props, key_type));
+                }
+                if has_computed_number_property {
+                    let key_type = $c.number_type();
+                    let props: Vec<SymbolId> =
+                        properties_array[offset..].to_vec();
+                    index_infos
+                        .push($c.get_object_literal_index_info(is_readonly, &props, key_type));
+                }
+                if has_computed_symbol_property {
+                    let key_type = $c.es_symbol_type();
+                    let props: Vec<SymbolId> =
+                        properties_array[offset..].to_vec();
+                    index_infos
+                        .push($c.get_object_literal_index_info(is_readonly, &props, key_type));
+                }
                 let mut members = tsc_ast::SymbolTable::new();
                 for (k, &v) in properties_table.entries() {
                     members.set(k.clone(), v);
@@ -6642,6 +6669,17 @@ impl Checker {
                     members,
                     object_flags | ObjectFlags::OBJECT_LITERAL | ObjectFlags::CONTAINS_OBJECT_OR_ARRAY_LITERAL,
                 );
+                // Go's newAnonymousType carries the synthesized index infos
+                // (checker.go:13447); the port writes them after the
+                // members-resolved construction (the same StructuredType
+                // slot set_structured_type_members fills).
+                if !index_infos.is_empty() {
+                    let data = $c
+                        .type_mut(result)
+                        .as_structured_type_mut()
+                        .expect("StructuredType data");
+                    data.index_infos = index_infos;
+                }
                 if contextual_type.is_none() && in_js {
                     $c.type_mut(result).object_flags |= ObjectFlags::JS_LITERAL;
                 }
@@ -6776,9 +6814,39 @@ impl Checker {
                     let name = self.program_symbol(prop).name.clone();
                     table.set(name, prop);
                 }
-                // TODO(port M6 S6/S9): addIntraExpressionInferenceSite for
-                // context-sensitive property/method initializers — the
-                // inference-context readers are permissive at this depth.
+                // PORT (FCS tranche 8): Go checker.go:13515-13528 — the
+                // intra-expression inference site for context-sensitive
+                // property/method initializers (the site list
+                // inferFromIntraExpressionSites walks after the argument
+                // pass; needed for nested object-literal inference like
+                // defineProps' PropDescMap). Was an S6/S9 TODO (never
+                // added).
+                if contextual_type.is_some()
+                    && check_mode.intersects(CheckMode::INFERENTIAL)
+                    && !check_mode.intersects(CheckMode::SKIP_CONTEXT_SENSITIVE)
+                    && matches!(member_decl_kind, Kind::PropertyAssignment | Kind::MethodDeclaration)
+                    && self.is_context_sensitive(member_decl)
+                {
+                    // In CheckMode.Inferential we should always have an
+                    // inference context (Go comment). PORT: the port's
+                    // inference-context registration seam can miss the
+                    // object-literal node at this depth — the site is
+                    // skipped then (Go's nil-context behavior; addSite on
+                    // a nil context is a no-op in Go's callers).
+                    if let Some(inference_context) = self.get_inference_context(node) {
+                        let mut inference_node = member_decl;
+                        if member_decl_kind == Kind::PropertyAssignment {
+                            inference_node =
+                                crate::ast_shims::initializer_of(self.store(), member_decl)
+                                    .unwrap_or(member_decl);
+                        }
+                        self.add_intra_expression_inference_site(
+                            inference_context,
+                            inference_node,
+                            t,
+                        );
+                    }
+                }
             } else if self.store().node(member_decl).kind == Kind::SpreadAssignment {
                 if !properties_array.is_empty() {
                     let segment = create_object_literal_type!(self);

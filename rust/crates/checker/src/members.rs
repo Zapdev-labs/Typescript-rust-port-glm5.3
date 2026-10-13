@@ -1049,10 +1049,12 @@ impl Checker {
         index_infos
     }
 
-    #[allow(dead_code)] // S8 surface — the later-wave consumers land with M6
     /// Go: `func (c *Checker) getObjectLiteralIndexInfo(isReadonly, properties, keyType) *IndexInfo`
-    /// (checker.go:20156).
-    fn get_object_literal_index_info(
+    /// (checker.go:20156). PORT (FCS tranche 8): pub(crate) —
+    /// checkObjectLiteral's createObjectLiteralType closure (expressions.rs)
+    /// now synthesizes the computed-property index infos through it (was
+    /// dead code behind the S8 banner).
+    pub(crate) fn get_object_literal_index_info(
         &mut self,
         is_readonly: bool,
         properties: &[SymbolId],
@@ -1684,11 +1686,66 @@ impl Checker {
                     crate::typeofsymbol::WideningKind::GeneratorNext,
                 );
             }
-            // TODO(port M6 S9): the contextual-signature literal-widening
-            // refinement (getWidenedLiteralLikeTypeForContextual*IfNeeded
-            // over getContextualSignatureForFunctionLikeDeclaration) — the
-            // S9 contextual wave owns the chain; the plain widening below is
-            // Go's no-context answer.
+            // PORT (FCS tranche 8): Go checker.go:20615-20633 — the
+            // contextual-signature literal-widening refinement. When any of
+            // the aggregated types is a unit type, a contextual signature may
+            // preserve the literal (isLiteralOfContextualType); with no
+            // contextual signature the fresh literal widens to its base
+            // primitive (e.g. get(): "hi" widens to string). Was an S9 TODO.
+            let rt_unit = return_type.is_some_and(|t| crate::relater::is_unit_type(self, t));
+            let yt_unit = yield_type.is_some_and(|t| crate::relater::is_unit_type(self, t));
+            let nt_unit = next_type.is_some_and(|t| crate::relater::is_unit_type(self, t));
+            if rt_unit || yt_unit || nt_unit {
+                let contextual_signature = self
+                    .get_contextual_signature_for_function_like_declaration(fn_node);
+                let mut contextual_type: Option<TypeId> = None;
+                match contextual_signature {
+                    None => {} // No contextual type
+                    Some(cs) => {
+                        // PORT: Go's switch evaluates getSignatureFromDeclaration
+                        // lazily (only when a contextual signature exists) —
+                        // mirrored with the nested if.
+                        if Some(cs) == self.get_signature_from_declaration(fn_node) {
+                            if !is_generator {
+                                contextual_type = return_type;
+                            }
+                        } else {
+                            let cs_return = self.get_return_type_of_signature(cs);
+                            contextual_type = self.instantiate_contextual_type(
+                                Some(cs_return),
+                                fn_node,
+                                crate::types::ContextFlags::NONE,
+                            );
+                        }
+                    }
+                }
+                if is_generator {
+                    yield_type = self.get_widened_literal_like_type_for_contextual_iteration_type_if_needed(
+                        yield_type,
+                        contextual_type,
+                        crate::statements::IterationTypeKind::Yield,
+                        is_async,
+                    );
+                    return_type = self.get_widened_literal_like_type_for_contextual_iteration_type_if_needed(
+                        return_type,
+                        contextual_type,
+                        crate::statements::IterationTypeKind::Return,
+                        is_async,
+                    );
+                    next_type = self.get_widened_literal_like_type_for_contextual_iteration_type_if_needed(
+                        next_type,
+                        contextual_type,
+                        crate::statements::IterationTypeKind::Next,
+                        is_async,
+                    );
+                } else {
+                    return_type = self.get_widened_literal_like_type_for_contextual_return_type_if_needed(
+                        return_type,
+                        contextual_type,
+                        is_async,
+                    );
+                }
+            }
             if let Some(yt) = yield_type {
                 yield_type = Some(self.get_widened_type(yt));
             }
@@ -1822,6 +1879,65 @@ impl Checker {
             });
         }
         (yield_types, next_types)
+    }
+
+    /// Go: `func (c *Checker) getWidenedLiteralLikeTypeForContextualReturnTypeIfNeeded(t, contextualSignatureReturnType, isAsync) *Type`
+    /// (checker.go:20811) — PORT (FCS tranche 8); the Go body, verbatim
+    /// structure. A unit-type return widens to its base primitive unless the
+    /// contextual signature's return type makes it a literal context.
+    pub(crate) fn get_widened_literal_like_type_for_contextual_return_type_if_needed(
+        &mut self,
+        mut t: Option<TypeId>,
+        contextual_signature_return_type: Option<TypeId>,
+        is_async: bool,
+    ) -> Option<TypeId> {
+        if let Some(inner) = t
+            && crate::relater::is_unit_type(self, inner)
+        {
+            let contextual_type: Option<TypeId> = match contextual_signature_return_type {
+                None => None, // No contextual type
+                Some(rt) => {
+                    if is_async {
+                        let mut error_type_out: Option<TypeId> = None;
+                        self.get_promised_type_of_promise_ex(rt, None, &mut error_type_out)
+                    } else {
+                        Some(rt)
+                    }
+                }
+            };
+            t = Some(
+                self.get_widened_literal_like_type_for_contextual_type(inner, contextual_type),
+            );
+        }
+        t
+    }
+
+    /// Go: `func (c *Checker) getWidenedLiteralLikeTypeForContextualIterationTypeIfNeeded(t, contextualSignatureReturnType, kind, isAsyncGenerator) *Type`
+    /// (checker.go:20827) — PORT (FCS tranche 8); the Go body, verbatim
+    /// structure.
+    pub(crate) fn get_widened_literal_like_type_for_contextual_iteration_type_if_needed(
+        &mut self,
+        mut t: Option<TypeId>,
+        contextual_signature_return_type: Option<TypeId>,
+        kind: crate::statements::IterationTypeKind,
+        is_async_generator: bool,
+    ) -> Option<TypeId> {
+        if let Some(inner) = t
+            && crate::relater::is_unit_type(self, inner)
+        {
+            let contextual_type: Option<TypeId> = match contextual_signature_return_type {
+                None => None,
+                Some(rt) => self.get_iteration_type_of_generator_function_return_type(
+                    kind,
+                    rt,
+                    is_async_generator,
+                ),
+            };
+            t = Some(
+                self.get_widened_literal_like_type_for_contextual_type(inner, contextual_type),
+            );
+        }
+        t
     }
 
     /// Go: `func (c *Checker) createPromiseReturnType(fn, promisedType) *Type` (checker.go:20737).

@@ -1371,7 +1371,6 @@ impl Checker {
                 name_type,
                 crate::types::AccessFlags::NONE,
                 None,
-                None,
             );
             let Some(source_prop_type) = source_prop_type else {
                 continue;

@@ -1179,8 +1179,15 @@ impl Checker {
         context_flags: ContextFlags,
     ) -> Option<TypeId> {
         let contextual_type = if binder_shims::is_object_literal_method(self.store(), node) {
-            let element_parent = self.store().node(node).parent.get();
-            self.get_contextual_type_for_object_literal_element(element_parent, context_flags)
+            // PORT (FCS tranche 8): Go checker.go:31238 passes the method
+            // NODE itself to getContextualTypeForObjectLiteralMethod (which
+            // then looks the property up in the PARENT object literal's
+            // contextual type). The port previously passed the parent, so
+            // object literal methods never received a contextual type —
+            // their parameters fell back to implicit-any (the TS7006
+            // extras on thisTypeInObjectLiterals2) and getters kept
+            // unwidened literal return types.
+            self.get_contextual_type_for_object_literal_method(node, context_flags)
         } else {
             self.get_contextual_type(node, context_flags)
         };
@@ -1767,6 +1774,30 @@ impl Checker {
             .into();
         }
         None
+    }
+
+    /// Go: `func (c *Checker) getContextualTypeForObjectLiteralMethod(node *ast.Node, contextFlags ContextFlags) *Type`
+    /// (checker.go:30513) — PORT (FCS tranche 8): the in-with-statement guard
+    /// then the element lookup (the Go body, verbatim). In an object literal
+    /// contextually typed by a type T, the contextual type of a method
+    /// declaration is the type of the matching property in T (Go's doc
+    /// comment on getContextualTypeForObjectLiteralElement).
+    pub(crate) fn get_contextual_type_for_object_literal_method(
+        &mut self,
+        node: NodeId,
+        context_flags: ContextFlags,
+    ) -> Option<TypeId> {
+        if self
+            .store()
+            .node(node)
+            .flags
+            .intersects(tsc_ast::NodeFlags::IN_WITH_STATEMENT)
+        {
+            // We cannot answer semantic questions within a with block, do
+            // not proceed any further (Go's comment).
+            return None;
+        }
+        self.get_contextual_type_for_object_literal_element(node, context_flags)
     }
 
     /// Go: `func (c *Checker) getContextualTypeForElementExpression(t *Type, index, length, firstSpreadIndex, lastSpreadIndex int) *Type`

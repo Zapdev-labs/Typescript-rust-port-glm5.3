@@ -7845,7 +7845,6 @@ impl Checker {
             name_type,
             crate::types::AccessFlags::NONE,
             None,
-            None,
         );
         let Some(source_prop_type) = source_prop_type else {
             // Don't elaborate on indexes on generic variables (Go comment).
@@ -8019,7 +8018,6 @@ impl Checker {
             name_type,
             crate::types::AccessFlags::NONE,
             None,
-            None,
         );
         if idx.is_some() {
             return idx;
@@ -8037,7 +8035,6 @@ impl Checker {
                     best,
                     name_type,
                     crate::types::AccessFlags::NONE,
-                    None,
                     None,
                 );
             }

@@ -2502,3 +2502,21 @@ PLAIN-sweep census: divergent 1,804 (1,555 count / 249 hash), identical
 suites); clippy 0; all 300-slice gates green fresh. TS2318 extra 436->16,
 TS2307 189->57. Next: the widened-literal layer (getWidenedType), then
 TS7053/TS2345/TS2564/TS2300/TS2571 by census size.
+
+## Full-corpus sweep tranche 8 landed (2026-10-20, RIG-VALIDATED) — widened-literal layer; divergent 1,804 -> 1,688
+
+Five Go-exact fixes: the object-literal-method contextual seam (the branch
+passed the PARENT node, not the method node — Go checker.go:31238/30513 —
+killing the TS7006 family), the widened-literal return layer (get_return_
+type_from_body skipped Go's isUnitType contextual-signature block where
+fresh "hi" widens to string — the 2339-arg diffs + TS2571 extras), the real
+intra-expression inference body (inference.go:1317-1331), the indexed-access
+stub routed to index.rs's real S10 resolver (TS7053 missing 314->49), and
+the computed-property index-info synthesis in check_object_literal
+(checker.go:13439-13452 + 13515-13528 — the fcs7 handoff's predicted gap).
+PLAIN-sweep census: divergent 1,688 (1,461 count / 227 hash), identical
+5,879/7,567; both drivers 0/3,826/3,741/0; panics 0; verdict-diff 0.
+44 suites (fcs8 pin suite, 7 pins); clippy 0; all 300-slice gates green
+fresh on the rig. Honest residuals: TS2532 +12 (flow-narrowing now visible
+under correct contextual typing), TS2345 +7, TS7053 stragglers. Next by
+census: TS2345 (213 extra/59 missing), TS2564 (154), TS2300 (125), TS2532.

@@ -2320,11 +2320,31 @@ impl Checker {
             &mut self.inference_contexts[n.0 as usize].intra_expression_inference_sites,
         );
         for site in sites {
-            // TODO(port M6 W3): getContextualType /
-            // getContextualTypeForObjectLiteralMethod — the contextual-typing
-            // seam (ContextFlagsNoConstraints); permissive: no contextual
-            // type, so no inference for the site.
-            let _ = site;
+            // PORT (FCS tranche 8): Go inference.go:1317-1331 — the real
+            // contextual seam. Object literal method sites take
+            // getContextualTypeForObjectLiteralMethod; everything else takes
+            // getContextualType; both with ContextFlagsNoConstraints. Was a
+            // permissive no-op (the W3 stub) that starved nested-parameter
+            // inference (the thisTypeInObjectLiterals2 p12 unknown-vs-Point
+            // divergence family).
+            let contextual_type = if self.store().node(site.node).kind == Kind::MethodDeclaration
+            {
+                self.get_contextual_type_for_object_literal_method(
+                    site.node,
+                    crate::types::ContextFlags::NO_CONSTRAINTS,
+                )
+            } else {
+                self.get_contextual_type(site.node, crate::types::ContextFlags::NO_CONSTRAINTS)
+            };
+            if let Some(contextual_type) = contextual_type {
+                self.infer_types(
+                    n,
+                    site.t,
+                    contextual_type,
+                    InferencePriority::NONE,
+                    false, /*contravariant*/
+                );
+            }
         }
     }
 
