@@ -1,0 +1,62 @@
+rust/crates/tsc-testrunner/src/compiler_runner.rs
+  s_f083dd763d3ceb::t_4c7cc7e1fba460 229-272
+  s_f083dd763d3ceb::t_8cf4bec335aa92 888-891,900
+  s_f083dd763d3ceb::t_8e3e5e2a43ca73 111-120
+  s_f083dd763d3ceb::t_e09f81f87a369d 986
+  s_f083dd763d3ceb::t_7d2c521a544565 1306-1308
+  s_f083dd763d3ceb::t_36c3b0c09047df 1305,1318
+  s_f083dd763d3ceb::t_c57ce65a95af7a 1309-1313
+  s_f083dd763d3ceb::t_77163379ae6825 285
+  s_f083dd763d3ceb::t_f81ab2f1b7332c 312-364,378-379
+rust/crates/checker/src/resolution.rs
+  s_f083dd763d3ceb::t_3d5fbb8da0c35c 5360-5362,5368
+  s_f083dd763d3ceb::t_044d9bdaa6109d 5464
+  s_f083dd763d3ceb::t_0ac92c8d070eed 5060-5062,5065
+  s_f083dd763d3ceb::t_8bf61c92bf7b51 5276
+  s_f083dd763d3ceb::t_a4a3df4e1ef9f1 5567-5570
+  s_f083dd763d3ceb::t_e291bcb3429567 6632-6633,6637
+  s_f083dd763d3ceb::t_206d0f277f3ad2 3044
+  s_f083dd763d3ceb::t_1bddad66543296 3031-3043,3045-3052
+  s_f083dd763d3ceb::t_485f142ed68d46 5479-5566,5571-5612,5614-5616,5618-5647,5649-5656,5658-5664,5666-5689
+  s_f083dd763d3ceb::t_1b854e28ea0fa5 4989-4994,4999-5000,5006-5007,5030-5059,5063-5064,5066-5275,5277-5289,5292-5293,5295-5349,5357-5359,5363-5367,5369-5392,5394-5398,5401-5405,5407-5418,5421-5422,5424-5463,5465,5467-5468,5470-5472
+  s_f083dd763d3ceb::t_2ca185cf53346e 6680
+  s_f083dd763d3ceb::t_f9e990b0e29e9c 6582-6584
+  s_f083dd763d3ceb::t_ce451d173ee115 6599-6608,6613,6616-6631,6634-6636,6638-6641,6644-6645,6647-6666,6670,6677,6679,6681-6788
+  s_f083dd763d3ceb::t_c2c4da32f2b29a 5613,5617
+  s_f083dd763d3ceb::t_cf70c438fda3fc 6609-6612,6614-6615
+rust/crates/checker/src/checker.rs
+  s_f083dd763d3ceb::t_2d56599331c6b9 235-273
+rust/crates/tsc-testrunner/tests/fcs7_resolved_module_seam.rs
+  s_f083dd763d3ceb::t_ee57c60a4b3136 139
+  s_f083dd763d3ceb::t_5eaad4e99974d2 1-138,140-142
+rust/crates/checker/src/resolvecall.rs
+  s_f083dd763d3ceb::t_bc78a3faea50b1 2341-2346,2348-2368,2373,2378-2382,2384-2399
+  s_f083dd763d3ceb::t_f1eff6f5a724fb 2369-2372,2374-2377,2383
+  s_f083dd763d3ceb::t_9d660f837f83bb 2400-2401
+rust/crates/checker/Cargo.toml
+  s_f083dd763d3ceb::t_f5c83a7e191abf 18
+rust/crates/tsc-testrunner/Cargo.toml
+  s_f083dd763d3ceb::t_2ee9a817c04684 16
+rust/crates/checker/tests/fcs7_resolved_module_seam.rs
+  s_f083dd763d3ceb::t_2638000a2bc443 141-143,145-146
+  s_f083dd763d3ceb::t_5bc590bf4501e6 101,106-109,111-113,115-116
+  s_f083dd763d3ceb::t_6a4b61a82391b4 1-100,102-105,110,114,117-140,144,147-215,217-241,243-298
+rust/crates/tsoptions/src/parsedcommandline.rs
+  s_f083dd763d3ceb::t_ed12dce7a7a189 128-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9516afe73caf98160d36e632d78766a232979ec6",
+  "prompts": {},
+  "sessions": {
+    "s_f083dd763d3ceb": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "e748f486-8de7-4dbe-be1c-79cda85f47f8",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
