@@ -2885,7 +2885,10 @@ impl Checker {
             return self.get_regular_type_of_literal_type(t);
         }
         let property_name = ast_shims::get_property_name_for_property_name_node(self.store(), name);
-        if property_name != "__missing" {
+        // PORT(FCS tranche 5): Go compares against ast.InternalSymbolNameMissing
+        // ("\u{FE}missing"); the literal "__missing" never matched the real
+        // sentinel (dead in practice — the computed-name arm returns above).
+        if property_name != tsc_ast::INTERNAL_SYMBOL_NAME_MISSING {
             return self.get_string_literal_type(&property_name);
         }
         // Go: IsExpression(name) → checkExpression — identifiers inside
@@ -4351,15 +4354,29 @@ impl Checker {
         if self.store().node(node).kind == Kind::ComputedPropertyName {
             // This is cached so `getTypeOfExpression` isn't constantly
             // reinvoked for every property name lookup
-            if let (Some(has_name), Some(name)) = {
-                let links = self.computed_name_links.get(node);
-                (links.has_name, if links.has_name == Some(true) { Some(links.name.clone()) } else { None })
-            } {
+            if let Some(has_name) = self.computed_name_links.get(node).has_name {
+                let name = self.computed_name_links.get(node).name.clone();
                 return (name, has_name);
             }
-            // TODO(port M6 S4): tryGetNameFromType(getTypeOfExpression(...))
-            // — the computed-name type read; permissive (missing, false).
-            return (String::new(), false);
+            // PORT(FCS tranche 5): Go checker.go:19126 —
+            // `tryGetNameFromType(getTypeOfExpression(node.Expression()))`;
+            // REAL (was the S4-era permissive stub returning missing/false).
+            let expression = self
+                .store()
+                .node(node)
+                .as_computed_property_name()
+                .expect("ComputedPropertyName data")
+                .expression;
+            let t = self.get_type_of_expression(expression);
+            // Go's `(name, exists)` pair is the Option payload split out.
+            let (name, exists) = match u::try_get_name_from_type(self.type_(t)) {
+                Some(name) => (name, true),
+                None => (String::new(), false),
+            };
+            let links = self.computed_name_links.get(node);
+            links.name = name.clone();
+            links.has_name = Some(exists);
+            return (name, exists);
         }
         (String::new(), false)
     }

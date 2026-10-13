@@ -1119,10 +1119,11 @@ pub fn parse_json_config_file_content(
 /// and NOT through `errors`).
 ///
 /// PORT (notifier residual): Go's route parses the per-key options through
-/// `parseOwnConfigOfJsonSourceFile`'s notifier (positioned unknown-option
-/// diagnostics, element-typed option values); the port keeps the shared
-/// worker's `convertOptionsFromJson` arm for both routes this wave — the
-/// option diagnostics degrade to the fileless form with the zero range
+/// `parseOwnConfigOfJsonSourceFile`'s notifier; the port emulates it on the
+/// shared worker with `CompilerOptionsDiagSites` (FCS tranche 5) — the
+/// value-conversion diagnostics (TS5024/TS6046/...) and the unknown-option
+/// diagnostics anchor at the config property assignments exactly like the
+/// notifier; the notifier's element-typed value conversion stays deferred
 /// (PORTING-NOTES).
 #[allow(clippy::too_many_arguments)]
 pub fn parse_json_source_file_config_file_content(
@@ -1262,13 +1263,25 @@ fn parse_json_config_file_content_worker(
 
     // compilerOptions
     if let Some(compiler_options_value) = raw_config.get("compilerOptions") {
-        let (parsed, conversion_errors) =
-            convert_options_from_json_worker(compiler_options_value.clone(), base_path);
+        // PORT(FCS tranche 5): the config-file route threads the config AST
+        // (Go: parseOwnConfigOfJsonSourceFile's notifier) — the option
+        // conversion diagnostics (TS5024/TS6046/...) carry the property
+        // assignment's INITIALIZER loc natively; the fileless worker route
+        // stays for the json route. The value tree comes from
+        // convert_config_file_to_object's AST walk, so per-key sites pair
+        // with the value entries 1:1.
+        let (parsed, conversion_errors) = if let Some(config) = &source_file {
+            let guard = config.lock_source_file();
+            let sites = CompilerOptionsDiagSites::new(&guard);
+            convert_options_from_json_worker(compiler_options_value.clone(), base_path, Some(&sites))
+        } else {
+            convert_options_from_json_worker(compiler_options_value.clone(), base_path, None)
+        };
         // PORT (file pairing): Go's route-positioned option diagnostics
         // (the notifier residual — see parse_json_source_file_config_file_
         // content's PORT note) pair with the config file here so the
-        // conformance render keeps the file identity; the positions stay
-        // the zero range until that wave.
+        // conformance render keeps the file identity; the positions are
+        // REAL now (see OptionDiagSite).
         for diagnostic in conversion_errors {
             errors.push_for_file(diagnostic, Some(config_file_name.clone()));
         }
@@ -2086,11 +2099,158 @@ fn normalize_non_list_option_value(
     value
 }
 
+/// Go: the `propertyAssignment *ast.PropertyAssignment, valueExpression
+/// *ast.Expression, sourceFile *ast.SourceFile` convertJsonOption param
+/// triple — `None` everywhere = Go's nil (the command-line and cached
+/// extends routes).
+///
+/// PORT(FCS tranche 5): REAL now (the M4 form dropped the AST params) —
+/// the config-file route threads the parsed config AST so the option
+/// conversion diagnostics (TS5024 `Compiler_option_0_requires_a_value_of_
+/// type_1`, TS6046 `Argument_for_0_option_must_be_colon_1`, ...) carry the
+/// failing property assignment's INITIALIZER loc natively, exactly like
+/// Go's `onPropertySet` → `convertJsonOption(option, value, basePath,
+/// propertyAssignment, propertyAssignment.Initializer, sourceFile)`.
+#[derive(Clone, Copy)]
+pub(crate) struct OptionDiagSite<'a> {
+    source_file: Option<&'a tsc_ast::SourceFile>,
+    property_assignment: Option<tsc_ast::NodeId>,
+    value_expression: Option<tsc_ast::NodeId>,
+}
+
+impl<'a> OptionDiagSite<'a> {
+    /// Go's nil triple.
+    pub(crate) const NONE: OptionDiagSite<'static> = OptionDiagSite {
+        source_file: None,
+        property_assignment: None,
+        value_expression: None,
+    };
+
+    /// Go: `propertyAssignment.Initializer` (the config AST guarantees
+    /// PropertyAssignment payloads on the walk).
+    fn initializer_of(store: &dyn tsc_ast::NodeStore, property_assignment: tsc_ast::NodeId) -> Option<tsc_ast::NodeId> {
+        store
+            .node(property_assignment)
+            .as_property_assignment()
+            .map(|d| d.initializer)
+    }
+
+    /// Go: `valueExpression.Elements()[index]` (convertJsonOptionOfListType
+    /// re-anchors each list element at the array literal's matching element).
+    fn element_expression(
+        &self,
+        store: &dyn tsc_ast::NodeStore,
+        index: usize,
+    ) -> Option<tsc_ast::NodeId> {
+        let expression = self.value_expression?;
+        match &store.node(expression).data {
+            tsc_ast::NodeData::ArrayLiteralExpression(array) => array
+                .elements
+                .as_ref()
+                .and_then(|elements| elements.nodes.get(index).copied()),
+            _ => None,
+        }
+    }
+}
+
+/// The per-key `OptionDiagSite`s for one config file's `compilerOptions`
+/// object: each option key maps to its PropertyAssignment node in the
+/// config AST (last occurrence wins, matching the value tree's OrderedMap
+/// insert — Go's notifier walks each duplicate; the corpus has unique keys).
+pub(crate) struct CompilerOptionsDiagSites<'a> {
+    source_file: &'a tsc_ast::SourceFile,
+    assignments: rustc_hash::FxHashMap<String, tsc_ast::NodeId>,
+}
+
+impl<'a> CompilerOptionsDiagSites<'a> {
+    pub(crate) fn new(source_file: &'a tsc_ast::SourceFile) -> Self {
+        let mut assignments = rustc_hash::FxHashMap::default();
+        // Go: tsconfigToSourceFile's root object literal → the
+        // `compilerOptions` PropertyAssignment → its initializer object
+        // literal's PropertyAssignments (Go's onPropertySet walk).
+        let root_expression = source_file
+            .payload()
+            .statements
+            .as_ref()
+            .and_then(|statements| statements.nodes.first())
+            .and_then(|first| crate::ast_shims::expression_of(source_file, *first));
+        let compiler_options_initializer = root_expression
+            .filter(|&root| tsc_ast::is_object_literal_expression(source_file.node(root)))
+            .and_then(|root| {
+                let properties = source_file
+                    .node(root)
+                    .as_object_literal_expression()
+                    .expect("IsObjectLiteralExpression checked")
+                    .properties
+                    .clone()
+                    .unwrap_or_default();
+                properties
+                    .nodes
+                    .iter()
+                    .find(|property| {
+                        let property_node = source_file.node(**property);
+                        tsc_ast::is_property_assignment(property_node)
+                            && property_node.name().is_some_and(|name| {
+                                crate::ast_shims::try_get_text_of_property_name(
+                                    source_file,
+                                    name,
+                                ) == Some("compilerOptions".to_string())
+                            })
+                    })
+                    .and_then(|compiler_options| {
+                        OptionDiagSite::initializer_of(source_file, *compiler_options)
+                    })
+            });
+        if let Some(initializer) = compiler_options_initializer
+            && tsc_ast::is_object_literal_expression(source_file.node(initializer))
+        {
+            let properties = source_file
+                .node(initializer)
+                .as_object_literal_expression()
+                .expect("IsObjectLiteralExpression checked")
+                .properties
+                .clone()
+                .unwrap_or_default();
+            for property in properties.nodes.iter() {
+                let property_node = source_file.node(*property);
+                if !tsc_ast::is_property_assignment(property_node) {
+                    continue;
+                }
+                if let Some(key) = property_node.name().and_then(|name| {
+                    crate::ast_shims::try_get_text_of_property_name(source_file, name)
+                }) {
+                    // Last occurrence wins (the value tree's OrderedMap
+                    // insert shape; Go's notifier walks each duplicate).
+                    assignments.insert(key, *property);
+                }
+            }
+        }
+        CompilerOptionsDiagSites {
+            source_file,
+            assignments,
+        }
+    }
+
+    /// Go: the per-key site — `convertJsonOption(option, value, basePath,
+    /// propertyAssignment, propertyAssignment.Initializer, sourceFile)`.
+    pub(crate) fn site(&self, key: &str) -> OptionDiagSite<'a> {
+        let property_assignment = self.assignments.get(key).copied();
+        let value_expression = property_assignment
+            .and_then(|property| OptionDiagSite::initializer_of(self.source_file, property));
+        OptionDiagSite {
+            source_file: Some(self.source_file),
+            property_assignment,
+            value_expression,
+        }
+    }
+}
+
 /// Go: `func convertJsonOptionOfListType(option, values, basePath, ...) ([]any, []*ast.Diagnostic)`.
 fn convert_json_option_of_list_type(
     option: &'static CommandLineOption,
     values: &CompilerOptionsValue,
     base_path: &RootedDirectoryPath,
+    site: OptionDiagSite<'_>,
 ) -> (CompilerOptionsValue, Vec<tsc_ast::Diagnostic>) {
     let mut errors: Vec<tsc_ast::Diagnostic> = Vec::new();
     let element = option.elements().expect("list option without element");
@@ -2108,6 +2268,7 @@ fn convert_json_option_of_list_type(
         &list,
         base_path,
         option.list_preserve_falsy_values,
+        site,
         &mut errors,
     );
     (converted, errors)
@@ -2121,11 +2282,23 @@ fn convert_json_option_of_list_values(
     list: &[CompilerOptionsValue],
     base_path: &RootedDirectoryPath,
     list_preserve_falsy_values: bool,
+    site: OptionDiagSite<'_>,
     errors: &mut Vec<tsc_ast::Diagnostic>,
 ) -> CompilerOptionsValue {
     let mut mapped_values: Vec<CompilerOptionsValue> = Vec::with_capacity(list.len());
-    for value in list {
-        let (result, element_errors) = convert_json_option(element, value, base_path);
+    for (index, value) in list.iter().enumerate() {
+        // Go: `if valueExpression != nil { expression =
+        // valueExpression.Elements()[index] }` — each list element's
+        // diagnostics anchor at the array literal's matching element.
+        let element_site = match site.source_file {
+            Some(source_file) => OptionDiagSite {
+                source_file: Some(source_file),
+                property_assignment: site.property_assignment,
+                value_expression: site.element_expression(source_file, index),
+            },
+            None => OptionDiagSite::NONE,
+        };
+        let (result, element_errors) = convert_json_option(element, value, base_path, element_site);
         mapped_values.push(result);
         errors.extend(element_errors);
     }
@@ -2147,17 +2320,40 @@ fn is_falsy_value(value: &CompilerOptionsValue) -> bool {
     }
 }
 
-/// Go: `func convertJsonOption(opt, value, basePath, propertyAssignment, valueExpression, sourceFile) (any, []*ast.Diagnostic)` —
-/// the M4 subset (no AST nodes; see module PORT notes).
+/// Go: `func convertJsonOption(opt, value, basePath, propertyAssignment, valueExpression, sourceFile) (any, []*ast.Diagnostic)`.
+///
+/// PORT(FCS tranche 5): the `propertyAssignment`/`valueExpression`/
+/// `sourceFile` triple is REAL now (the M4 subset dropped the AST params);
+/// each diagnostic anchors exactly where Go's does — the
+/// command-line-only option at the property assignment's NAME, the type
+/// mismatch (5024) and enum (6046) at the property assignment's
+/// INITIALIZER (`valueExpression`).
 fn convert_json_option(
     opt: &'static CommandLineOption,
     value: &CompilerOptionsValue,
     base_path: &RootedDirectoryPath,
+    site: OptionDiagSite<'_>,
 ) -> (CompilerOptionsValue, Vec<tsc_ast::Diagnostic>) {
     if opt.is_command_line_only {
+        // Go: `nodeValue = propertyAssignment.Name()`; the compiler
+        // diagnostic only when BOTH sourceFile and nodeValue are nil.
+        let node_value = site
+            .property_assignment
+            .and_then(|property| site.source_file?.node(property).name());
+        if site.source_file.is_none() && node_value.is_none() {
+            return (
+                CompilerOptionsValue::Null,
+                vec![new_compiler_diagnostic(
+                    &tsc_diagnostics::OPTION_0_CAN_ONLY_BE_SPECIFIED_ON_COMMAND_LINE,
+                    &[opt.name.to_string()],
+                )],
+            );
+        }
         return (
             CompilerOptionsValue::Null,
-            vec![new_compiler_diagnostic(
+            vec![crate::errors::create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
+                site.source_file,
+                node_value,
                 &tsc_diagnostics::OPTION_0_CAN_ONLY_BE_SPECIFIED_ON_COMMAND_LINE,
                 &[opt.name.to_string()],
             )],
@@ -2166,7 +2362,9 @@ fn convert_json_option(
     if !is_compiler_options_value(opt, value) {
         return (
             CompilerOptionsValue::Null,
-            vec![new_compiler_diagnostic(
+            vec![crate::errors::create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
+                site.source_file,
+                site.value_expression,
                 &tsc_diagnostics::COMPILER_OPTION_0_REQUIRES_A_VALUE_OF_TYPE_1,
                 &[
                     opt.name.to_string(),
@@ -2177,13 +2375,13 @@ fn convert_json_option(
     }
     match opt.kind {
         crate::commandlineoption::CommandLineOptionKind::List => {
-            convert_json_option_of_list_type(opt, value, base_path)
+            convert_json_option_of_list_type(opt, value, base_path, site)
         }
         crate::commandlineoption::CommandLineOptionKind::ListOrElement => {
             if matches!(value, CompilerOptionsValue::Array(_) | CompilerOptionsValue::StrArray(_)) {
-                convert_json_option_of_list_type(opt, value, base_path)
+                convert_json_option_of_list_type(opt, value, base_path, site)
             } else {
-                convert_json_option(opt.elements().expect("element"), value, base_path)
+                convert_json_option(opt.elements().expect("element"), value, base_path, site)
             }
         }
         crate::commandlineoption::CommandLineOptionKind::Enum => {
@@ -2193,11 +2391,20 @@ fn convert_json_option(
             let CompilerOptionsValue::Str(s) = value else {
                 return (CompilerOptionsValue::Null, Vec::new());
             };
-            crate::commandlineparser::convert_json_option_of_enum_type(opt, s)
+            crate::commandlineparser::convert_json_option_of_enum_type(
+                opt,
+                s,
+                site.value_expression,
+                site.source_file,
+            )
         }
         _ => {
-            let (validated, errors) =
-                crate::commandlineparser::validate_json_option_value(opt, value.clone());
+            let (validated, errors) = crate::commandlineparser::validate_json_option_value(
+                opt,
+                value.clone(),
+                site.value_expression,
+                site.source_file,
+            );
             if !errors.is_empty() {
                 return (CompilerOptionsValue::Null, errors);
             }
@@ -2211,9 +2418,15 @@ fn convert_json_option(
 
 /// Go: `func convertOptionsFromJson[O optionParser](optionsNameMap, jsonOptions, basePath, result) (O, []*ast.Diagnostic)` —
 /// the parsedCompilerOptions instantiation the parse worker uses.
+///
+/// PORT(FCS tranche 5): `sites` carries the config AST's compilerOptions
+/// property assignments (the config-file route); `None` = Go's nil
+/// sourceFile (the command-line / cached-extends routes — fileless
+/// diagnostics).
 fn convert_options_from_json_worker(
     json_options: CompilerOptionsValue,
     base_path: &RootedDirectoryPath,
+    sites: Option<&CompilerOptionsDiagSites<'_>>,
 ) -> (ParsedCompilerOptions, Vec<tsc_ast::Diagnostic>) {
     let mut parsed = ParsedCompilerOptions::new(CompilerOptions::default());
     let mut errors = Vec::new();
@@ -2222,14 +2435,32 @@ fn convert_options_from_json_worker(
     };
     let options_name_map = command_line_compiler_options_map();
     for (key, value) in map.entries() {
-        let Some(option) = options_name_map.get(key) else {
+        // Go: onPropertySet's convertJsonOption call — the site anchors the
+        // option's diagnostics at the config property assignment.
+        let site = sites.map(|sites| sites.site(key)).unwrap_or(OptionDiagSite::NONE);
+        let looked_up = options_name_map.get(key);
+        // Go: the config-file route (convertObjectLiteralExpressionToJson's
+        // notifier lookup) NILS case-insensitive matches —
+        // `if option != nil && option.Name != keyText { option = nil }` —
+        // so they land in the unknown-option arm (the did-you-mean
+        // suggestion positioned at the property NAME, exactly the arm
+        // below); the fileless worker route keeps Go's separate
+        // did-you-mean arm.
+        let option = if sites.is_some() {
+            looked_up.filter(|option| option.name == key.as_str())
+        } else {
+            looked_up
+        };
+        let Some(option) = option else {
             errors.push(crate::errors::create_unknown_option_error(
                 key,
                 ParsedCompilerOptions::unknown_option_diagnostic()
                     .expect("compiler options parser diagnostic"),
                 "",
-                None,
-                None,
+                site.source_file,
+                site.property_assignment.and_then(|property| site
+                    .source_file
+                    .and_then(|source_file| source_file.node(property).name())),
                 None,
                 ParsedCompilerOptions::unknown_did_you_mean_diagnostic(),
                 Some(options_name_map),
@@ -2239,14 +2470,18 @@ fn convert_options_from_json_worker(
         if option.name != key.as_str() {
             // Case-insensitive match found but exact case doesn't match —
             // provide the "did you mean" suggestion (Go: skips the option).
-            errors.push(new_compiler_diagnostic(
+            errors.push(crate::errors::create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
+                site.source_file,
+                site.property_assignment.and_then(|property| site
+                    .source_file
+                    .and_then(|source_file| source_file.node(property).name())),
                 ParsedCompilerOptions::unknown_did_you_mean_diagnostic()
                     .expect("compiler options did-you-mean diagnostic"),
                 &[key.clone(), option.name.to_string()],
             ));
             continue;
         }
-        let (converted, conversion_errors) = convert_json_option(option, value, base_path);
+        let (converted, conversion_errors) = convert_json_option(option, value, base_path, site);
         errors.extend(conversion_errors);
         parsed.parse_option(key, &converted);
     }
@@ -2330,6 +2565,10 @@ fn read_extended_config(
                 .cloned()
                 .unwrap_or(CompilerOptionsValue::Null),
             &resolved.directory(),
+            // PORT(FCS tranche 5): the cache seam stores the raw map only
+            // (Go caches the parsed command line with its config AST) —
+            // no AST nodes available; the fileless worker route.
+            None,
         );
         for diagnostic in cache_errors {
             errors.push_for_file(diagnostic, Some(resolved.clone()));
@@ -2414,8 +2653,15 @@ fn read_extended_config(
 
     // Then the extended config's own compilerOptions on top.
     if let Some(compiler_options_value) = map.get("compilerOptions") {
+        // PORT(FCS tranche 5): the extended config's own AST threads too
+        // (Go: ParseExtendedConfig → parseOwnConfigOfJsonSourceFile with
+        // the EXTENDED file's sourceFile — its option diagnostics carry
+        // positions in the extended file).
+        let guard = extended_config_file.lock_source_file();
+        let sites = CompilerOptionsDiagSites::new(&guard);
         let (own, conversion_errors) =
-            convert_options_from_json_worker(compiler_options_value.clone(), &extended_base);
+            convert_options_from_json_worker(compiler_options_value.clone(), &extended_base, Some(&sites));
+        drop(guard);
         for diagnostic in conversion_errors {
             errors.push_for_file(diagnostic, Some(resolved.clone()));
         }

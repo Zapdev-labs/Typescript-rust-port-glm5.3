@@ -2299,10 +2299,13 @@ impl Checker {
         if args.is_empty() {
             // No call arguments exist, so there are no child expressions to
             // check.
-            // TODO(port M6 S7): createPromiseReturnType (the Promise<>
-            // wrapper) rides the S7 type-construction family; anyType is
-            // the composed answer until then.
-            return self.any_type();
+            // PORT(FCS tranche 5): Go funnels EVERY exit through
+            // createPromiseReturnType (checker.go:8486) — the ES5/no-lib
+            // Promise diagnostics (TS2711/TS2731, the 824-record census
+            // family) ride it; the promised type stays anyType until the
+            // S7 synthetic-default wave (Go's own no-module arm passes
+            // anyType here too).
+            return self.create_promise_return_type(node, self.any_type());
         }
         let specifier = args[0];
         let specifier_type = self.check_expression_cached(specifier);
@@ -2353,10 +2356,14 @@ impl Checker {
         if module_symbol.is_some() {
             // TODO(port M6 S7): the synthetic-default Promise<> wrapper
             // (getTypeWithSyntheticDefaultOnly/...ImportType) rides the S7
-            // type-construction family; anyType composes until then.
-            return self.any_type();
+            // type-construction family. PORT(FCS tranche 5): the
+            // createPromiseReturnType funnel is REAL now (the TS2711/TS2731
+            // Promise diagnostics + the Promise<any> wrapper replace the
+            // bare anyType); the promised type stays anyType until the S7
+            // wave.
+            return self.create_promise_return_type(node, self.any_type());
         }
-        self.any_type()
+        self.create_promise_return_type(node, self.any_type())
     }
 
     // ────────────────────────────────────────────────────────────────────────

@@ -1829,19 +1829,25 @@ impl Checker {
         let promise_type = self.create_promise_type(promised_type);
         let unknown_type = self.unknown_type();
         if promise_type == unknown_type {
-            self.error(
-                fn_node,
-                &diag::AN_ASYNC_FUNCTION_OR_METHOD_MUST_RETURN_A_PROMISE_MAKE_SURE_YOU_HAVE_A_DECLARATION_FOR_PROMISE_OR_INCLUDE_ES2015_IN_YOUR_LIB_OPTION,
-                &[],
-            );
+            // PORT(FCS tranche 5): Go's `core.IfElse(ast.IsImportCall(fn),
+            // ...)` — the import-call form (TS2711, the 824-record
+            // node/dynamicImport/importSource census family) was missing;
+            // the port always reported the async-function form.
+            let message = if crate::resolvecall::is_import_call(self.store(), fn_node) {
+                &diag::A_DYNAMIC_IMPORT_CALL_RETURNS_A_PROMISE_MAKE_SURE_YOU_HAVE_A_DECLARATION_FOR_PROMISE_OR_INCLUDE_ES2015_IN_YOUR_LIB_OPTION
+            } else {
+                &diag::AN_ASYNC_FUNCTION_OR_METHOD_MUST_RETURN_A_PROMISE_MAKE_SURE_YOU_HAVE_A_DECLARATION_FOR_PROMISE_OR_INCLUDE_ES2015_IN_YOUR_LIB_OPTION
+            };
+            self.error(fn_node, message, &[]);
             return self.error_type();
         }
         if self.get_global_promise_constructor_symbol_or_nil().is_none() {
-            self.error(
-                fn_node,
-                &diag::AN_ASYNC_FUNCTION_OR_METHOD_IN_ES5_REQUIRES_THE_PROMISE_CONSTRUCTOR_MAKE_SURE_YOU_HAVE_A_DECLARATION_FOR_THE_PROMISE_CONSTRUCTOR_OR_INCLUDE_ES2015_IN_YOUR_LIB_OPTION,
-                &[],
-            );
+            let message = if crate::resolvecall::is_import_call(self.store(), fn_node) {
+                &diag::A_DYNAMIC_IMPORT_CALL_IN_ES5_REQUIRES_THE_PROMISE_CONSTRUCTOR_MAKE_SURE_YOU_HAVE_A_DECLARATION_FOR_THE_PROMISE_CONSTRUCTOR_OR_INCLUDE_ES2015_IN_YOUR_LIB_OPTION
+            } else {
+                &diag::AN_ASYNC_FUNCTION_OR_METHOD_IN_ES5_REQUIRES_THE_PROMISE_CONSTRUCTOR_MAKE_SURE_YOU_HAVE_A_DECLARATION_FOR_THE_PROMISE_CONSTRUCTOR_OR_INCLUDE_ES2015_IN_YOUR_LIB_OPTION
+            };
+            self.error(fn_node, message, &[]);
         }
         promise_type
     }

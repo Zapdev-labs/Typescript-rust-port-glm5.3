@@ -5,10 +5,11 @@
 //     (commandlineoption.rs). List results (`[]any` of validated strings in
 //     Go) surface as `StrArray`.
 //   - `validateJsonOptionValue`/`convertJsonOptionOfEnumType` live in Go's
-//     tsconfigparsing.go; they are re-homed here (next to their only M4
-//     caller) with the `node`/`sourceFile` params dropped — the command-line
-//     path never has AST nodes, and the AST-config path is future work (see
-//     tsconfigparsing.rs PORT notes).
+//     tsconfigparsing.go; they are re-homed here (next to their command-line
+//     caller). The AST params are REAL as of the FCS tranche-5 config-node
+//     wave (the command-line path passes `None, None` = Go's nil; the
+//     config-file route threads the parsed config AST — see
+//     tsconfigparsing.rs's `OptionDiagSite`).
 //   - `locale.Parse` (Go: internal/locale) has a Rust counterpart in the
 //     `tsc-locale` crate; the locale extra-validation arm uses it directly.
 
@@ -332,9 +333,13 @@ impl<'a> CommandLineParser<'a> {
                         }
                     }
                     CommandLineOptionKind::String => {
+                        // Go: `validateJsonOptionValue(opt, ..., nil, nil)`
+                        // — the command-line path never has AST nodes.
                         let (value, new_errors) = validate_json_option_value(
                             opt,
                             CompilerOptionsValue::Str(args[i].clone()),
+                            None,
+                            None,
                         );
                         if new_errors.is_empty() {
                             if let Some(value) = value {
@@ -368,7 +373,7 @@ impl<'a> CommandLineParser<'a> {
                             .trim_matches(tsc_stringutil::is_white_space_like)
                             .to_string();
                         let (value, new_errors) =
-                            convert_json_option_of_enum_type(opt, &trimmed);
+                            convert_json_option_of_enum_type(opt, &trimmed, None, None);
                         self.options.set(opt.name.to_string(), value);
                         self.errors.extend(new_errors);
                         i += 1;
@@ -566,7 +571,7 @@ pub fn parse_list_type_option(
     }
     if opt.kind == CommandLineOptionKind::ListOrElement && !value.contains(',') {
         let (val, err) =
-            validate_json_option_value(opt, CompilerOptionsValue::Str(value.to_string()));
+            validate_json_option_value(opt, CompilerOptionsValue::Str(value.to_string()), None, None);
         if !err.is_empty() {
             return (CompilerOptionsValue::StrArray(Vec::new()), err);
         }
@@ -584,8 +589,12 @@ pub fn parse_list_type_option(
         CommandLineOptionKind::String => {
             let mut elements: Vec<String> = Vec::new();
             for v in &values {
-                let (val, err) =
-                    validate_json_option_value(element, CompilerOptionsValue::Str((*v).to_string()));
+                let (val, err) = validate_json_option_value(
+                    element,
+                    CompilerOptionsValue::Str((*v).to_string()),
+                    None,
+                    None,
+                );
                 if let CompilerOptionsValue::Str(s) = val.unwrap_or(CompilerOptionsValue::Null) {
                     if err.is_empty() && !s.is_empty() {
                         elements.push(s);
@@ -610,7 +619,7 @@ pub fn parse_list_type_option(
                 let trimmed: String = v
                     .trim_matches(tsc_stringutil::is_white_space_like)
                     .to_string();
-                let (val, err) = convert_json_option_of_enum_type(element, &trimmed);
+                let (val, err) = convert_json_option_of_enum_type(element, &trimmed, None, None);
                 if let CompilerOptionsValue::Str(s) = val {
                     if err.is_empty() && !s.is_empty() {
                         result.push(s);
@@ -626,10 +635,17 @@ pub fn parse_list_type_option(
 
 /// Go: `func convertJsonOptionOfEnumType(opt, value, valueExpression, sourceFile) (any, []*ast.Diagnostic)`.
 ///
-/// PORT: the AST params are dropped (command-line path only in this wave).
+/// PORT(FCS tranche 5): the `valueExpression`/`sourceFile` params are REAL
+/// now (Go tsconfigparsing.go's shape — the command-line path passes nil,
+/// nil, and every command-line caller here passes `None, None`); the
+/// invalid-enum diagnostic anchors at the config property assignment's
+/// INITIALIZER node like Go's `createDiagnosticForInvalidEnumType(opt,
+/// sourceFile, valueExpression)`.
 pub fn convert_json_option_of_enum_type(
     opt: &'static CommandLineOption,
     value: &str,
+    value_expression: Option<tsc_ast::NodeId>,
+    source_file: Option<&tsc_ast::SourceFile>,
 ) -> (CompilerOptionsValue, Vec<Diagnostic>) {
     if value.is_empty() {
         return (CompilerOptionsValue::Null, Vec::new());
@@ -639,21 +655,24 @@ pub fn convert_json_option_of_enum_type(
         return (CompilerOptionsValue::Null, Vec::new());
     };
     if let Some(val) = type_map.get(&key) {
-        let (value, errors) = validate_json_option_value(opt, val.clone());
+        let (value, errors) = validate_json_option_value(opt, val.clone(), value_expression, source_file);
         return (value.unwrap_or(CompilerOptionsValue::Null), errors);
     }
     (
         CompilerOptionsValue::Null,
-        vec![create_diagnostic_for_invalid_enum_type(opt, None, None)],
+        vec![create_diagnostic_for_invalid_enum_type(opt, source_file, value_expression)],
     )
 }
 
 /// Go: `func validateJsonOptionValue(opt, val, valueExpression, sourceFile) (any, []*ast.Diagnostic)`.
 ///
-/// PORT: the AST params are dropped (command-line path only in this wave).
+/// PORT(FCS tranche 5): the `valueExpression`/`sourceFile` params are REAL
+/// now (Go's shape; the command-line path passes nil, nil).
 pub fn validate_json_option_value(
     opt: &'static CommandLineOption,
     val: CompilerOptionsValue,
+    value_expression: Option<tsc_ast::NodeId>,
+    source_file: Option<&tsc_ast::SourceFile>,
 ) -> (Option<CompilerOptionsValue>, Vec<Diagnostic>) {
     if val.is_null() {
         return (None, Vec::new());
@@ -668,8 +687,8 @@ pub fn validate_json_option_value(
             };
             if !tsc_locale::parse(locale_str).1 {
                 errors.push(create_diagnostic_for_node_in_source_file_or_compiler_diagnostic(
-                    None,
-                    None,
+                    source_file,
+                    value_expression,
                     &tsc_diagnostics::LOCALE_MUST_BE_AN_IETF_BCP_47_LANGUAGE_TAG_EXAMPLES_COLON_0_1,
                     &["en".to_string(), "ja-jp".to_string()],
                 ));

@@ -418,7 +418,17 @@ pub fn get_property_name_for_property_name_node(store: &dyn NodeStore, name: Nod
                 }
                 text
             } else {
-                String::new()
+                // PORT(FCS tranche 5): Go's ast/utilities.go returns
+                // `InternalSymbolNameMissing` ("\u{FE}missing") here, NOT the
+                // empty string — the S-era shim returned `String::new()`,
+                // which `getEffectivePropertyNameForPropertyNameNode`'s
+                // `name != INTERNAL_SYMBOL_NAME_MISSING` gate read as a REAL
+                // (empty) property name: every non-literal-like computed name
+                // then collided on the "" key in
+                // `checkGrammarObjectLiteralExpression`'s seen map, emitting
+                // the phantom Duplicate_identifier_2300 family
+                // (computedPropertyNames10/11/12... object-literal methods).
+                tsc_ast::INTERNAL_SYMBOL_NAME_MISSING.to_string()
             }
         }
         _ => panic!(

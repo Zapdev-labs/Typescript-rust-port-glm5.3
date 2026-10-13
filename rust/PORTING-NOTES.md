@@ -2440,3 +2440,23 @@ property_names pins); clippy 0; all 300-slice gates green on the rig, fresh.
 Next: the 2300 Duplicate_identifier family (binder flags probe — binder
 crate may need opening), the S7/S10 object-literal index-info gap, the
 proper tsoptions upstream fix, and the per-dir count-diff census.
+
+## Full-corpus sweep tranche 5 landed (2026-10-17, RIG-VALIDATED) — divergent 2,095 -> 1,963
+
+Three families: (1) the 2300 Duplicate_identifier family root-caused to
+get_property_name_for_property_name_node returning "" where Go returns
+the InternalSymbolNameMissing sentinel — every non-literal computed name
+collided on the "" key; plus the real try_get_name_from_type
+(checker.go:19126/19128 + computed_name_links caching) and AnyToString
+rendering in flow.go:1782's shape (binder hypothesis disproven, flags
+match Go). (2) tsoptions upstream: validate_json_option_value/convert_
+json_option_of_enum_type now carry Go's (valueExpression, sourceFile)
+triple via OptionDiagSite — 5024/6046 anchor at the initializer natively;
+the tranche-4 runner workaround now no-ops (kept as a safety net).
+(3) the TS2711 dynamic-import family: check_import_call_expression now
+funnels every exit through createPromiseReturnType (checker.go:8486)
+with Go's IfElse message split — 824 missing -> 76. Count-diff census
+banked: rust-extra TS2318 532 / TS2307 522 / TS2367 397 / TS2683 218;
+rust-missing TS2711 76 / TS7053 314 / TS2834 300 / TS2300 125. Both
+drivers 0/3,826/3,741/0; 39 test-result-ok lines; clippy 0; all
+300-slice gates green fresh on the rig.

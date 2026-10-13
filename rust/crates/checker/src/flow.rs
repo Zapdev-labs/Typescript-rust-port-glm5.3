@@ -4767,16 +4767,22 @@ fn is_evolving_array_type_list(c: &Checker, types: &[TypeId]) -> bool {
     has_evolving_array_type
 }
 
-/// Go: `func tryGetNameFromType(t) (string, bool)` (flow.go:1782).
+/// Go: `func tryGetNameFromType(t) (string, bool)` (flow.go:1782; note the
+/// checker.go:19128 method twin used by
+/// getEffectivePropertyNameForPropertyNameNode has RAW literal payloads —
+/// this one renders through AnyToString).
 fn try_get_name_from_type(t: &crate::types::Type) -> Option<String> {
     if t.flags.intersects(TypeFlags::UNIQUE_ESSYMBOL) {
         return t.as_unique_essymbol_type().map(|s| s.name.clone());
     }
     if t.flags.intersects(TypeFlags::STRING_OR_NUMBER_LITERAL) {
+        // PORT(FCS tranche 5): Go renders the literal payload through
+        // evaluator.AnyToString (RAW — no quote wrapping); the port used the
+        // quoting `value_to_string`, diverging on string-literal names.
         return t
             .as_literal_type()
             .and_then(|l| l.value.as_ref())
-            .map(crate::utilities::value_to_string);
+            .map(crate::utilities::any_to_string);
     }
     None
 }

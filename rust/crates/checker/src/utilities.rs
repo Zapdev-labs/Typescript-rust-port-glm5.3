@@ -1611,6 +1611,47 @@ pub fn is_type_usable_as_property_name(t: &Type) -> bool {
     t.flags.intersects(TypeFlags::STRING_OR_NUMBER_LITERAL_OR_UNIQUE)
 }
 
+/// Go: `func AnyToString(v any) string` (evaluator/evaluator.go) — the RAW
+/// string/number/bool/bigint rendering (no quote wrapping; the quoted twin
+/// is `value_to_string`). flow.go's free `tryGetNameFromType` renders
+/// through this (PORT(FCS tranche 5): flow.rs used the quoting
+/// `value_to_string`, diverging from Go for string-literal names).
+pub(crate) fn any_to_string(value: &LiteralValue) -> String {
+    match value {
+        LiteralValue::String(s) => s.clone(),
+        LiteralValue::Number(n) => n.string(),
+        LiteralValue::Boolean(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        LiteralValue::BigInt(n) => n.to_string(),
+        LiteralValue::None => String::new(),
+    }
+}
+
+/// Go: `func (c *Checker) tryGetNameFromType(t *Type) (string, bool)`
+/// (checker.go:19128) — the checker twin of flow.go's free
+/// `tryGetNameFromType`: the literal arms return the RAW payload via
+/// getStringLiteralValue/getNumberLiteralValue (the flow.go twin renders
+/// through evaluator.AnyToString). Backs
+/// getEffectivePropertyNameForPropertyNameNode (PORT(FCS tranche 5): REAL —
+/// was the S4-era permissive missing/false stub).
+pub(crate) fn try_get_name_from_type(t: &Type) -> Option<String> {
+    if t.flags.intersects(TypeFlags::UNIQUE_ESSYMBOL) {
+        return t.as_unique_essymbol_type().map(|s| s.name.clone());
+    }
+    if t.flags.intersects(TypeFlags::STRING_LITERAL) {
+        return Some(literal_string(t).to_string());
+    }
+    if t.flags.intersects(TypeFlags::NUMBER_LITERAL) {
+        return Some(literal_number(t).string());
+    }
+    None
+}
+
 /// Go: `func getPropertyNameFromType(t *Type) string` — gets the symbolic name
 /// for a member from its type.
 pub fn get_property_name_from_type(t: &Type) -> String {
