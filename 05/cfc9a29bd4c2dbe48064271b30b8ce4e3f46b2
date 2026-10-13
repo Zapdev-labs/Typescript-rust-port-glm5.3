@@ -1,0 +1,39 @@
+rust/crates/checker/src/statements.rs
+  s_35db949d000b22::t_0dd997003d54ed 6718
+  s_35db949d000b22::t_a76bf1c926775b 7683-7687,7694,7700-7702
+  s_35db949d000b22::t_14fbde4ef80800 9370-9377
+  s_35db949d000b22::t_6f54f5ac61d3c8 7679-7682,7690-7691,7713-7721
+  s_35db949d000b22::t_e1184cff15be47 6698
+  s_35db949d000b22::t_28832b0e6397fb 6647-6658
+  s_35db949d000b22::t_f04ff249331b14 9397-9481,9483-9485,9487-9492
+  s_35db949d000b22::t_3b052fa2c17ebb 6715
+  s_35db949d000b22::t_d92affe8769444 6701
+  s_35db949d000b22::t_26af559017dda7 9482,9486
+  s_35db949d000b22::t_15f3031cfd65f9 9378-9379
+  s_35db949d000b22::t_f601a3bd3bd678 9497-9507
+rust/crates/checker/tests/fcs9_definite_assignment_pins.rs
+  s_35db949d000b22::t_51389427ed5d22 1-69,71-183
+  s_35db949d000b22::t_d0485d5dbf16ec 70
+rust/crates/checker/tests/fcs9_inference_covariant_seam.rs
+  s_35db949d000b22::t_2b2c76e88b3659 1-209
+rust/crates/checker/tests/fcs9_duplicate_member_pins.rs
+  s_35db949d000b22::t_5503a79ab2071d 1-159
+rust/crates/checker/src/inference.rs
+  s_35db949d000b22::t_c55f85a13245f0 2391-2405,2407,2410-2415,2417-2444,2448,2452-2453
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "05cfc9a29bd4c2dbe48064271b30b8ce4e3f46b2",
+  "prompts": {},
+  "sessions": {
+    "s_35db949d000b22": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "976b6691-4598-4561-960d-4b891d757dec",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
