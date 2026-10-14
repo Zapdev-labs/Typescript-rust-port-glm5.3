@@ -269,8 +269,9 @@ pub(crate) fn get_branch_label_antecedents(
 
 impl Checker {
     /// Go: `func (c *Checker) getFlowTypeOfReference(reference, declaredType) *Type`
-    /// (flow.go:77).
-    #[allow(dead_code)] // The checkIdentifier caller loop lands with the W3 check-stage runner wiring.
+    /// (flow.go:77). PORT (FCS tranche 12): live callers — tryGetThisTypeAtEx
+    /// (checker.go:12401/12412) and getFlowTypeOfAccessExpression-adjacent
+    /// reference paths; the former dead_code allow is retired.
     pub(crate) fn get_flow_type_of_reference(&mut self, reference: NodeId, declared_type: TypeId) -> TypeId {
         self.get_flow_type_of_reference_ex(reference, declared_type, declared_type, NodeId(0), None)
     }

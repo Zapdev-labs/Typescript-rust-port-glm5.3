@@ -2583,9 +2583,13 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) reportCannotInvokePossiblyNullOrUndefinedError(node, facts)`
-    /// (checker.go:7588) — the call-target arm of the non-null reporter
+    /// (checker.go:10119) — the call-target arm of the non-null reporter
     /// family (spine's reportObjectPossiblyNullOrUndefinedError is the
-    /// reference arm).
+    /// reference arm). PORT (FCS tranche 12): Go emits the
+    /// `Cannot_invoke_an_object_which_is_possibly_{null|undefined|null_or_undefined}`
+    /// messages (TS2725/2722/2723) — NOT the generic
+    /// Object_is_possibly_undefined (2532) family; the wrong-message stub
+    /// was the logicalAssignment5 TS2532-extra root.
     pub(crate) fn report_cannot_invoke_possibly_null_or_undefined_error(
         &mut self,
         node: NodeId,
@@ -2594,11 +2598,11 @@ impl Checker {
         if facts.intersects(crate::relater::TypeFacts::IS_UNDEFINED)
             && facts.intersects(crate::relater::TypeFacts::IS_NULL)
         {
-            self.error(node, &diag::OBJECT_IS_POSSIBLY_NULL_OR_UNDEFINED, &[]);
+            self.error(node, &diag::CANNOT_INVOKE_AN_OBJECT_WHICH_IS_POSSIBLY_NULL_OR_UNDEFINED, &[]);
         } else if facts.intersects(crate::relater::TypeFacts::IS_UNDEFINED) {
-            self.error(node, &diag::OBJECT_IS_POSSIBLY_UNDEFINED, &[]);
+            self.error(node, &diag::CANNOT_INVOKE_AN_OBJECT_WHICH_IS_POSSIBLY_UNDEFINED, &[]);
         } else {
-            self.error(node, &diag::OBJECT_IS_POSSIBLY_NULL, &[]);
+            self.error(node, &diag::CANNOT_INVOKE_AN_OBJECT_WHICH_IS_POSSIBLY_NULL, &[]);
         }
     }
 }

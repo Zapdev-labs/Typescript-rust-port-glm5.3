@@ -3473,10 +3473,15 @@ impl Checker {
                 }
             }
         }
-        // TODO(port M6 W3): getFlowTypeOfReferenceEx — the flow-node walk; the
-        // permissive seam returns the declared (narrowable) type, Go's answer
-        // when the reference carries no flow node.
-        let flow_type = prop_type;
+        // PORT (FCS tranche 12): the real flow-node walk (checker.go:11651:
+        // `flowType := c.getFlowTypeOfReferenceEx(node, propType,
+        // c.addOptionalityEx(propType, false, assumeUninitialized), nil, nil)`)
+        // — replaces the permissive declared-type seam. Go's nil flowContainer
+        // is the port's NodeId(0) sentinel (see get_flow_type_of_reference_ex).
+        let flow_type = {
+            let initial_type = self.add_optionality_ex(prop_type, false /*isProperty*/, assume_uninitialized);
+            self.get_flow_type_of_reference_ex(node, prop_type, initial_type, NodeId(0), None)
+        };
         if assume_uninitialized
             && !self.contains_undefined_type(prop_type)
             && self.contains_undefined_type(flow_type)
@@ -4431,9 +4436,11 @@ impl Checker {
                     None => self.get_contextual_this_parameter_type(container),
                 };
                 if let Some(this_type) = this_type {
-                    // TODO(port M6 W3): getFlowTypeOfReference — the flow
-                    // walk; permissive declared type.
-                    return Some(this_type);
+                    // PORT (FCS tranche 12): Go wraps the signature's this-type
+                    // with getFlowTypeOfReference (checker.go:12401) — the flow
+                    // walk narrows a `this` reference (e.g. after `if (this)`
+                    // guards); replaces the permissive declared-type seam.
+                    return Some(self.get_flow_type_of_reference(node, this_type));
                 }
             }
         }
@@ -4445,18 +4452,30 @@ impl Checker {
         // `this` of a script).
         if parent != NodeId::NONE && crate::statements::is_class_like(self.store(), parent) {
             let symbol = self.get_symbol_of_declaration(parent)?;
+            // PORT (FCS tranche 12): Go wraps BOTH the static
+            // (getTypeOfSymbol) and instance (declared thisType) arms with
+            // getFlowTypeOfReference(node, t) (checker.go:12408-12412) —
+            // the real flow walk replaces the permissive declared-type seam.
             if tsc_binder::ast_shims::is_static(self.store().node(container)) {
-                return Some(self.get_type_of_symbol(symbol));
+                let t = self.get_type_of_symbol(symbol);
+                return Some(self.get_flow_type_of_reference(node, t));
             }
             // Go: `t = c.getDeclaredTypeOfSymbol(symbol).AsInterfaceType().thisType`
             // (checker.go:12405) — REAL as of W3T6: the declared class/interface
             // type's thisType is constructed by getDeclaredTypeOfClassOrInterface
             // (every class always gets one). Go wraps with
-            // getFlowTypeOfReference(node, t); the flow walk is the port's
+            // getFlowTypeOfReference(node, t) (checker.go:12412) —
+            // PORT (FCS tranche 12): the real flow walk replaces the
             // permissive-declared-type seam (same PORT note as the
             // function-like arm above).
             let declared = self.get_declared_type_of_symbol(symbol);
-            return self.type_(declared).as_interface_type().expect("InterfaceType data").this_type;
+            let this_type = self
+                .type_(declared)
+                .as_interface_type()
+                .expect("InterfaceType data")
+                .this_type
+                .expect("class-like declared type carries thisType (Go: checker.go:12405 non-nil)");
+            return Some(self.get_flow_type_of_reference(node, this_type));
         }
         if self.store().node(container).kind == Kind::SourceFile {
             // look up in the source file's locals or exports

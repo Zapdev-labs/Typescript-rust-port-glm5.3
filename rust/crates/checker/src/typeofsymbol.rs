@@ -86,6 +86,7 @@ use tsc_diagnostics::{
     PARAMETER_0_IMPLICITLY_HAS_AN_1_TYPE,
     PARAMETER_0_IMPLICITLY_HAS_AN_1_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE,
     PROPERTY_0_IMPLICITLY_HAS_TYPE_ANY_BECAUSE_ITS_GET_ACCESSOR_LACKS_A_RETURN_TYPE_ANNOTATION,
+    PROPERTY_0_IMPLICITLY_HAS_TYPE_ANY_BECAUSE_ITS_SET_ACCESSOR_LACKS_A_PARAMETER_TYPE_ANNOTATION,
     REST_PARAMETER_0_IMPLICITLY_HAS_AN_ANY_TYPE,
     REST_PARAMETER_0_IMPLICITLY_HAS_AN_ANY_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE,
     REST_TYPES_MAY_ONLY_BE_CREATED_FROM_OBJECT_TYPES,
@@ -4255,15 +4256,41 @@ impl Checker {
                 }
             }
             if t.is_none() {
-                if setter.is_some() {
-                    // TODO(port M6 S3): the private-within-ambient gate +
-                    // the noImplicitAny suggestion forms.
-                } else if getter.is_some() {
-                        let symbol_name2 = self.symbol_to_string(symbol);
-                    self.error(
-                        getter.expect("checked"),
+                // PORT (FCS tranche 12): Go checker.go:18944-18952 — the
+                // implicit-any ladder for accessors (errorOrSuggestion over
+                // noImplicitAny, gated by isPrivateWithinAmbient):
+                // setter → 7032, getter → 7033, auto-accessor → 7008.
+                // Was the TODO stub (no 7032) + an ungated 7033.
+                let no_implicit_any = self.no_implicit_any;
+                if let Some(setter) = setter
+                    && !crate::statements::is_private_within_ambient(self.store(), setter)
+                {
+                    let symbol_name = self.symbol_to_string(symbol);
+                    self.error_or_suggestion(
+                        no_implicit_any,
+                        setter,
+                        &PROPERTY_0_IMPLICITLY_HAS_TYPE_ANY_BECAUSE_ITS_SET_ACCESSOR_LACKS_A_PARAMETER_TYPE_ANNOTATION,
+                        &[symbol_name],
+                    );
+                } else if let Some(getter) = getter
+                    && !crate::statements::is_private_within_ambient(self.store(), getter)
+                {
+                    let symbol_name = self.symbol_to_string(symbol);
+                    self.error_or_suggestion(
+                        no_implicit_any,
+                        getter,
                         &PROPERTY_0_IMPLICITLY_HAS_TYPE_ANY_BECAUSE_ITS_GET_ACCESSOR_LACKS_A_RETURN_TYPE_ANNOTATION,
-                        &[symbol_name2],
+                        &[symbol_name],
+                    );
+                } else if let Some(accessor) = accessor
+                    && !crate::statements::is_private_within_ambient(self.store(), accessor)
+                {
+                    let symbol_name = self.symbol_to_string(symbol);
+                    self.error_or_suggestion(
+                        no_implicit_any,
+                        accessor,
+                        &MEMBER_0_IMPLICITLY_HAS_AN_1_TYPE,
+                        &[symbol_name, "any".to_string()],
                     );
                 }
                 t = Some(self.any_type());

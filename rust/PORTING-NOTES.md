@@ -2602,3 +2602,23 @@ all 300-slice gates green fresh. Honest caveat: the worker's earlier probe
 battery claiming the whole TS2532 family fixed was FAULTY (self-corrected
 in the continuation) — the remaining root is this-property flow narrowing
 (if (this.z && dz) doesn't narrow the later this.z).
+
+## Full-corpus sweep tranche 12 landed (2026-10-23, RIG-VALIDATED) — the TS2532 family ELIMINATED; divergent 1,482 -> 1,455
+
+The fcs11 diagnosis was right in location, but the root was more basic:
+get_flow_type_of_access_expression was a permissive seam (prop_type passed
+through, TODO M6 W3) — NO property access in the corpus ever ran the flow
+walk. Four Go-exact fixes: the real flow call (checker.go:11651); this-type
+answers wrapped in getFlowTypeOfReference in both class arms (12401-12412);
+report_cannot_invoke... real (Go emits TS2722/2721/2723, not 2531/2532/2533 —
+the logicalAssignment5 root); and get_type_of_accessors' implicit-any ladder
+(18944-18952: setter 7032 / getter 7033 / auto 7008 with the isPrivateWithin-
+Ambient gate). Census: TS2532 45->0 (family gone), TS18046 28->19, TS18048
+28->15, TS2339 172->140, TS2322 123->106. PLAIN-sweep census: divergent 1,455
+(1,242 count / 213 hash), identical 6,112/7,567; both drivers 0/3,826/
+3,741/0; panics 0. 50 suites (fcs12 pins); clippy 0; all 300-slice gates
+green fresh. Honest: TS7032 0->12 extras on esDecorators accessor records —
+a PRE-EXISTING per-case noImplicitAny options seam (already divergent
+pre-fix with same-position 7006s); the TS7006-family lead (47 extras) is
+the next tranche's likely root, alongside TS2339 (140/130), TS2345 (132),
+TS2322 (106), TS2699 (84), TS2556 (66).
