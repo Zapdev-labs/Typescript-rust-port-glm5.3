@@ -2377,14 +2377,22 @@ impl Checker {
             } else {
                 None
             };
-            let within_bounds = match &target_tuple {
+            // PORT note (FCS tranche 18): Go's gate (relater.go:1803) is the
+            // disjunction `!isTupleType(restType) || combinedFlags&Variable
+            // != 0 || index < fixedLength` — i.e. for a rest TUPLE with a
+            // variadic element the indexed access runs for EVERY index (the
+            // earlier `within_bounds` restatement inverted the disjunction
+            // into `!Variable || index < fixedLength`, dropping positions at
+            // or past fixedLength in variadic tuples and leaving contextual
+            // parameters implicitly any (restTuplesFromContextualTypes).
+            let indexed_access = match &target_tuple {
                 Some(tuple) => {
-                    !tuple.combined_flags.intersects(ElementFlags::VARIABLE)
+                    tuple.combined_flags.intersects(ElementFlags::VARIABLE)
                         || (index as i32) < tuple.fixed_length
                 }
                 None => true,
             };
-            if within_bounds {
+            if indexed_access {
                 let index_literal = self.get_number_literal_type(tsc_jsnum::Number(index as f64));
                 return Some(self.get_indexed_access_type(rest_type, index_literal));
             }
@@ -9529,11 +9537,33 @@ impl Checker {
     // superseded by uniontypes.rs's real constructor (same signature).
 
     /// Go: `func (c *Checker) sliceTupleType(t, index, endSkipCount) *Type`.
-    pub(crate) fn slice_tuple_type(&mut self, t: TypeId, _index: usize, _end_skip_count: usize) -> TypeId {
-        // PORT: no direct Go home — Go slices tuples inline at the spread
-        // call sites (tuple-types.go's element-info slicing); permissive
-        // identity until that spread/destructuring wave.
-        t
+    pub(crate) fn slice_tuple_type(&mut self, t: TypeId, index: usize, end_skip_count: usize) -> TypeId {
+        // PORT note (FCS tranche 18): Go relater.go:1912 — the REAL body
+        // replaces the permissive identity seam. The identity made
+        // getEffectiveRestType hand out the UNSLICED rest tuple, so contextual
+        // rest parameters doubled their fixed elements (restTuplesFrom
+        // ContextualTypes' f1/f2/f3 arrows) and the inference.rs spread sites
+        // carried full tuples where Go slices them.
+        let target = self.type_(t).target().expect("tuple reference has a target");
+        let (fixed_length, element_infos) = {
+            let d = self.type_(target).as_tuple_type().expect("TupleType data");
+            (d.fixed_length, d.element_infos.to_vec())
+        };
+        let end_index = get_type_reference_arity(self, t) - (end_skip_count as i32).max(0);
+        if (index as i32) > fixed_length {
+            // Go: getRestArrayTypeOfTupleType — the rest element as an array.
+            if let Some(rest_type) = crate::typenodes::get_rest_type_of_tuple_type(self, t) {
+                return self.create_array_type(rest_type);
+            }
+            return self.create_tuple_type(&[]);
+        }
+        if (index as i32) >= end_index {
+            return self.create_tuple_type(&[]);
+        }
+        let type_arguments = resolve_type_arguments(self, t);
+        let elements = type_arguments[index..end_index as usize].to_vec();
+        let infos = element_infos[index..end_index as usize].to_vec();
+        self.create_tuple_type_ex(&elements, &infos, false)
     }
 
     /// Go: `func (c *Checker) isGenericType(t) bool` (checker.go:25486) —

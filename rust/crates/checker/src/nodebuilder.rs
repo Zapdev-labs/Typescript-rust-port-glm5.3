@@ -3396,22 +3396,45 @@ fn get_expanded_parameters(c: &mut Checker, signature: SignatureId) -> Vec<Symbo
         .as_tuple_type()
         .map(|tt| tt.element_infos.to_vec())
         .unwrap_or_default();
+    // PORT note (FCS tranche 18): element names come from Go's
+    // getUniqAssociatedNamesFromTupleType (nodebuilderimpl.go:2017) —
+    // getTupleElementLabel(info, restSymbol, i) for EVERY element (labeled or
+    // not; the rest symbol's parameter declaration is the label source, e.g.
+    // `...args` -> args_0, args_1, ...args), followed by the duplicate-suffix
+    // pass. The former port hard-coded "arg" for unlabeled elements.
+    let mut names: Vec<String> = element_infos
+        .iter()
+        .enumerate()
+        .map(|(i, info)| c.get_tuple_element_label(info.clone(), Some(rest_symbol), i))
+        .collect();
+    if !names.is_empty() {
+        let mut duplicates: Vec<usize> = Vec::new();
+        let mut unique_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (i, name) in names.iter().enumerate() {
+            if !unique_names.insert(name.clone()) {
+                duplicates.push(i);
+            }
+        }
+        let mut counters: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
+        for &i in &duplicates {
+            let mut counter = *counters.get(&names[i]).unwrap_or(&1);
+            let base = names[i].clone();
+            loop {
+                let candidate = format!("{base}_{counter}");
+                if unique_names.contains(&candidate) {
+                    counter += 1;
+                    continue;
+                }
+                unique_names.insert(candidate.clone());
+                names[i] = candidate;
+                break;
+            }
+            counters.insert(names[i].clone(), counter + 1);
+        }
+    }
     let mut rest_params: Vec<SymbolId> = Vec::new();
     for (i, &t) in element_types.iter().enumerate() {
-        let name = element_infos
-            .get(i)
-            .and_then(|e| e.labeled_declaration)
-            .map(|l| {
-                c.get_tuple_element_label(
-                    TupleElementInfo {
-                        flags: element_infos[i].flags,
-                        labeled_declaration: Some(l),
-                    },
-                    None,
-                    i,
-                )
-            })
-            .unwrap_or_else(|| "arg".to_string());
+        let name = names.get(i).cloned().unwrap_or_else(|| "arg".to_string());
         let flags = element_infos.get(i).map(|e| e.flags).unwrap_or(ElementFlags::NONE);
         let check_flags = if flags.intersects(ElementFlags::VARIABLE) {
             CheckFlags::REST_PARAMETER

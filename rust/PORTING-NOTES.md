@@ -2734,3 +2734,25 @@ sub-shape B (ternary/comma arrows, 7006+2347 vs 2345). PLAIN-sweep
 census: divergent 1,341 (1,121 count / 220 hash), identical 6,226/7,567;
 newly-divergent 0, newly-identical 4. 55 suites (fcs17 pins); clippy 0;
 all 300-slice gates green fresh.
+
+## Sweep micro-tranche 18 landed (2026-10-29, RIG-VALIDATED) — the rest-tuple family COLLAPSED; divergent 1,341 -> 1,326
+
+Four Go-exact port gaps behind restTuplesFromContextualTypes (42 -> 18 ==
+Go, same shape_hash — fully identical): (1) get_effective_call_arguments'
+spread-of-TUPLE expansion was an explicit TODO (Go checker.go:30615:
+synthetic per-element args, REST->createArrayType, VARIABLE->isSpread,
+labeledDeclaration->tuple_name_source) — unexpanded spreads made every
+fixed-arity call fall to the TS2556 fallback: TS2556 66 -> 0 corpus-wide.
+(2) try_get_type_at_position inverted Go's ORed gate (relater.go:1803:
+!isTuple || Variable || index<fixedLength — the port dropped rest-tail
+positions, leaving contextual ...string[]-tail params implicitly any).
+(3) get_expanded_parameters hard-coded "arg" instead of Go's
+getUniqAssociatedNamesFromTupleType (nodebuilderimpl.go:2017: args_0/
+args_1/...args + Go's duplicate-suffix counter quirk). (4) slice_tuple_
+type was an IDENTITY STUB (minimal probe caught doubled fixed elements) —
+ported relater.go:1912 (rest-array/empty-tuple/sliced arms). Sibling
+checked honestly: parenthesizedContexualTyping2 sub-shape B does NOT
+share the root (byte-identical pre/post) — distinct family, next queue.
+PLAIN-sweep census: divergent 1,326 (1,106 count / 220 hash), identical
+6,241/7,567; newly-divergent 0, newly-identical 15. 56 suites (fcs18
+pins); clippy 0; all 300-slice gates green fresh.

@@ -40,7 +40,7 @@ use tsc_binder::node_data as binder_node_data;
 
 use crate::checker::CheckMode;
 use crate::relater::RelationKind;
-use crate::types::{SignatureFlags, SignatureId, TypeFlags, TypeId};
+use crate::types::{ElementFlags, SignatureFlags, SignatureId, TypeFlags, TypeId};
 use crate::utilities as u;
 use crate::Checker;
 
@@ -2549,15 +2549,90 @@ impl Checker {
             _ => {
                 let args = binder_node_data::arguments_of(self.store(), node).to_vec();
                 let spread_index = get_spread_argument_index(self.store(), &args);
-                if spread_index >= 0 {
-                    // TODO(port M6 S8): Create synthetic arguments from
-                    // spreads of tuple types; the tuple element walk rides
-                    // the S8 structured-type members. The spread argument
-                    // passes through unexpanded until then.
-                    args
-                } else {
-                    args
+                if spread_index < 0 {
+                    return args;
                 }
+                // PORT note (FCS tranche 18): Go checker.go:30615 —
+                // "Create synthetic arguments from spreads of tuple types."
+                // When a spread argument's type IS a tuple, each element
+                // becomes a synthetic per-element argument (rest elements
+                // become arrays; variadic elements carry isSpread so nested
+                // arity/spread logic keeps seeing a rest tail). The former
+                // port passed the spread through unexpanded, so the arity
+                // ladder saw argCount 1 against fixed-arity candidates and
+                // every such call fell to the TS2556 spread-arity fallback.
+                let spread_index = spread_index as usize;
+                let mut effective_args: Vec<NodeId> = Vec::with_capacity(args.len());
+                effective_args.extend_from_slice(&args[..spread_index]);
+                for arg in &args[spread_index..] {
+                    let mut spread_type: Option<TypeId> = None;
+                    if self.store().node(*arg).kind == Kind::SpreadElement {
+                        let expression = crate::ast_shims::expression_of(self.store(), *arg)
+                            .expect("spread element has an expression");
+                        // Go: checkExpressionCached, or checkExpression when
+                        // a flow loop is in progress (spread expressions
+                        // never have a contextual type).
+                        if self.flow_loop_stack.is_empty() {
+                            spread_type = Some(self.check_expression_cached(expression));
+                        } else {
+                            spread_type = Some(self.check_expression(expression));
+                        }
+                    }
+                    let tuple_elements = spread_type.filter(|&t| self.is_tuple_type(t)).map(|t| {
+                        let element_types = self.get_element_types(t);
+                        let target = self
+                            .type_(t)
+                            .as_type_reference()
+                            .expect("tuple is a type reference")
+                            .base
+                            .target
+                            .expect("tuple has a target");
+                        let element_infos = self
+                            .type_(target)
+                            .as_tuple_type()
+                            .expect("TupleType data")
+                            .element_infos
+                            .to_vec();
+                        (element_types, element_infos)
+                    });
+                    let Some((element_types, element_infos)) = tuple_elements else {
+                        effective_args.push(*arg);
+                        continue;
+                    };
+                    for (i, element_type) in element_types.iter().enumerate() {
+                        let flags = element_infos
+                            .get(i)
+                            .map(|e| e.flags)
+                            .unwrap_or(ElementFlags::NONE);
+                        // If the tuple element is a rest element, the
+                        // synthetic argument's type is an array of it.
+                        let synthetic_type = if flags.intersects(ElementFlags::REST) {
+                            self.create_array_type(*element_type)
+                        } else {
+                            *element_type
+                        };
+                        let synthetic = tsc_ast::Node {
+                            kind: Kind::SyntheticExpression,
+                            flags: tsc_ast::NodeFlags::NONE,
+                            loc: self.store().node(*arg).loc,
+                            id: std::cell::Cell::new(0),
+                            parent: std::cell::Cell::new(NodeId::NONE),
+                            data: tsc_ast::NodeData::SyntheticExpression(Box::new(
+                                tsc_ast::SyntheticExpression {
+                                    type_: std::sync::Arc::new(synthetic_type),
+                                    is_spread: flags.intersects(ElementFlags::VARIABLE),
+                                    tuple_name_source: element_infos
+                                        .get(i)
+                                        .and_then(|e| e.labeled_declaration),
+                                },
+                            )),
+                        };
+                        let new_arg = self.program.node_store_mut().alloc(synthetic);
+                        self.program.node_store_mut().node_mut(new_arg).parent.set(*arg);
+                        effective_args.push(new_arg);
+                    }
+                }
+                effective_args
             }
         }
     }
