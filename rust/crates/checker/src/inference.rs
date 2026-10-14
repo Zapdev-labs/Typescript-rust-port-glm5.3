@@ -333,7 +333,7 @@ pub struct ReverseMappedTypeKey {
 /// dropped — the pool is `Checker::free_inference_states` (a value stack).
 pub(crate) struct InferenceState {
     /// Go: `inferences []*InferenceInfo` (shared with the context).
-    inferences: InferenceContextId,
+    pub(crate) inferences: InferenceContextId,
     /// Go: `originalSource *Type`.
     original_source: TypeId,
     /// Go: `originalTarget *Type`.
@@ -446,6 +446,22 @@ impl Checker {
     fn put_inference_state(&mut self, mut n: InferenceState) {
         n.clear_for_pool();
         self.free_inference_states.push(n);
+    }
+    /// PORT(FCS tranche 10): relater.rs's instantiateSignatureInContextOf
+    /// needs a state bound to a context for the applyToParameterTypes /
+    /// applyToReturnTypes fn-pointer callbacks (Go's callbacks close over
+    /// `context.inferences`; a Rust fn pointer cannot). The state pool and
+    /// the field are module-private, so the binding rides these wrappers.
+    pub(crate) fn get_inference_state_for_context(
+        &mut self,
+        context: InferenceContextId,
+    ) -> InferenceState {
+        let mut n = self.get_inference_state();
+        n.inferences = context;
+        n
+    }
+    pub(crate) fn put_inference_state_for_context(&mut self, n: InferenceState) {
+        self.put_inference_state(n);
     }
 
     /// Go: `func (c *Checker) inferTypes(inferences, originalSource, originalTarget, priority, contravariant)`.
@@ -1654,7 +1670,7 @@ impl Checker {
     /// cannot capture it, so the state is an explicit parameter (the one
     /// signature divergence; the two call shapes in inferFromSignature pass
     /// the same state through).
-    fn apply_to_parameter_types(
+    pub(crate) fn apply_to_parameter_types(
         &mut self,
         n: &mut InferenceState,
         source: crate::types::SignatureId,
@@ -1698,7 +1714,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) applyToReturnTypes(source, target, callback)`.
-    fn apply_to_return_types(
+    pub(crate) fn apply_to_return_types(
         &mut self,
         n: &mut InferenceState,
         source: crate::types::SignatureId,

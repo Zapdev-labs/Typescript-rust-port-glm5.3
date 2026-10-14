@@ -1940,7 +1940,13 @@ impl Checker {
             && sig(self, source).type_parameters != sig(self, target).type_parameters
         {
             target = self.get_canonical_signature(target);
-            source = self.instantiate_signature_in_context_of(source, target, compare_types);
+            source = self.instantiate_signature_in_context_of(
+                source,
+                target,
+                compare_types,
+                relater.as_deref_mut(),
+                intersection_state,
+            );
         }
         let source_count = self.get_parameter_count(source);
         let source_rest_type = self.get_non_array_rest_type(source);
@@ -9517,15 +9523,75 @@ impl Checker {
     // REAL body (members.rs) replaced the S6 identity seam; resolves there
     // on this shared Checker type.
 
-    /// Go: `func (c *Checker) instantiateSignatureInContextOf(source, target, compareTypes) *Signature`.
+    /// Go: `func (c *Checker) instantiateSignatureInContextOf(signature, contextualSignature, inferenceContext, compareTypes) *Signature`
+    /// (checker.go:19813) — section 3.8.5 in the TypeScript spec: infer the
+    /// generic signature's type arguments from the contextual signature,
+    /// then instantiate. This is the seam the whole assignmentCompat
+    /// call/construct-signature family rides (TS2322 extras: `a = b` where
+    /// b is generic — Go instantiates b in context of a before comparing).
+    ///
+    /// PORT(FCS tranche 10): replaced the M6 S6 identity stub with the real
+    /// body. Two shape notes:
+    /// - Go's only caller (compareSignaturesRelated, relater.go) passes
+    ///   `inferenceContext == nil`, so the nonFixing/mapper arm (and its
+    ///   `instantiateSignature(contextualSignature, mapper)`) is dead code
+    ///   here — the port keeps the single live path
+    ///   (`sourceSignature == contextualSignature`).
+    /// - Go threads the `compareTypes` closure into newInferenceContext; the
+    ///   port's InferenceComparer carries the same information (Assignables
+    ///   = the method comparer, Relater = the active relater's relation —
+    ///   see inference.rs's PORT note). `relater`/`intersection_state` are
+    ///   threaded from compare_signatures_related exactly as the Go closure
+    ///   captured them.
     pub(crate) fn instantiate_signature_in_context_of(
         &mut self,
         source: crate::types::SignatureId,
-        _target: crate::types::SignatureId,
-        _compare_types: TypeComparerKind,
+        contextual_signature: crate::types::SignatureId,
+        compare_types: TypeComparerKind,
+        relater: Option<&mut Relater>,
+        _intersection_state: IntersectionState,
     ) -> crate::types::SignatureId {
-        // TODO(port M6 S6): the type-parameter fixing instantiator.
-        source
+        let comparer = match compare_types {
+            // Go: `c.compareTypesAssignable` (the method comparer —
+            // compareSignaturesRelated's relater==None shape).
+            TypeComparerKind::Assignable => crate::inference::InferenceComparer::Assignable,
+            // Go: the relater closures — the relation the creating relater
+            // carried. Without a relater the only fixed comparers that can
+            // arrive here are the checker-level identical/subtype methods;
+            // map them onto the closest relation (compareSignaturesRelated
+            // threads the relater for the Simple/Worker kinds).
+            other => crate::inference::InferenceComparer::Relater(match (other, relater) {
+                (_, Some(r)) => r.relation,
+                (TypeComparerKind::Identical, None) => RelationKind::Identity,
+                (TypeComparerKind::SubtypeOf, None) => RelationKind::Subtype,
+                _ => RelationKind::Assignable,
+            }),
+        };
+        let type_parameters = self.get_type_parameters_for_mapper(source);
+        let context = self.new_inference_context(
+            &type_parameters,
+            Some(source),
+            crate::inference::InferenceFlags::NONE,
+            comparer,
+        );
+        // Go: inferTypes is invoked per pair with the context's inferences;
+        // the port's InferenceState carries the context id so the fn-pointer
+        // callbacks (which cannot capture) can reach it.
+        let mut n = self.get_inference_state_for_context(context);
+        n.inferences = context;
+        self.apply_to_parameter_types(&mut n, contextual_signature, source, |c, n, s, t| {
+            c.infer_types(n.inferences, s, t, crate::inference::InferencePriority::NONE, false);
+        });
+        // Go: `if inferenceContext == nil { applyToReturnTypes(...) }` —
+        // always live at this caller.
+        self.apply_to_return_types(&mut n, contextual_signature, source, |c, n, s, t| {
+            c.infer_types(n.inferences, s, t, crate::inference::InferencePriority::RETURN_TYPE, false);
+        });
+        self.put_inference_state_for_context(n);
+        let type_arguments = self.get_inferred_types(context);
+        // Go: `ast.IsInJSFile(contextualSignature.declaration)` — the JS-file
+        // probe rides the W1/js seam (see resolvecall.rs's note); false here.
+        self.get_signature_instantiation(source, &type_arguments, false, &[])
     }
 
     /// Go: the IndexInfo payload readers (the `index_infos` arena accessors).

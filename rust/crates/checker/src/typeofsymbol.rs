@@ -3233,13 +3233,29 @@ impl Checker {
                     t = self.create_array_type(element_type);
                 } else if self.is_array_like_type(parent_type) {
                     let index_type = self.get_number_literal_type(tsc_jsnum::Number(index as f64));
-                    let declared_type = crate::relater::get_indexed_access_type_or_undefined_writing(
-                        self,
-                        parent_type,
-                        index_type,
-                        access_flags.intersects(AccessFlags::NO_INDEX_SIGNATURES),
-                    )
-                    .unwrap_or_else(|| self.error_type());
+                    // PORT(FCS tranche 10): Go checker.go:18195-18197 —
+                    // getIndexedAccessTypeOrUndefined with the SYNTHETIC
+                    // expression (createSyntheticExpression(element, ...),
+                    // loc = the binding element) as the access node. The
+                    // former `_writing` stub passed NO node, so the
+                    // missing-property error ladder at the tail of
+                    // getPropertyTypeForIndexType (checker.go:27724-27731,
+                    // "Property '<i>' does not exist on type '<T>'") never
+                    // ran for binding-pattern elements — the corpus's
+                    // missing-TS2339 destructuring family (Go reports at
+                    // each element under the no-libs corpus seam, where
+                    // anyReadonlyArrayType resolves permissively and every
+                    // non-nullable parentType is "array-like"). The binding
+                    // element node stands in for Go's synthetic expression:
+                    // identical Loc (error span) and Kind != BigIntLiteral.
+                    let declared_type = self
+                        .get_indexed_access_type_or_undefined(
+                            parent_type,
+                            index_type,
+                            access_flags,
+                            Some(declaration),
+                        )
+                        .unwrap_or_else(|| self.error_type());
                     t = self.get_flow_type_of_destructuring(declaration, declared_type);
                 } else {
                     t = element_type;

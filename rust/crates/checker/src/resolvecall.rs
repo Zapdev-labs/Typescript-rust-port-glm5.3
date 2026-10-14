@@ -2520,7 +2520,7 @@ impl Checker {
     /// the old local stub's `eraseTypeParameters: bool` third parameter was
     /// the S7-era shape; Go's real parameter is `isJavaScript`, and the
     /// call sites already pass Go's `false` literal.
-    fn get_signature_instantiation(
+    pub(crate) fn get_signature_instantiation(
         &mut self,
         signature: SignatureId,
         type_arguments: &[TypeId],
@@ -2569,7 +2569,7 @@ impl Checker {
     #[allow(dead_code)] // S8 surface — the later-wave consumers land with M6
     /// Go: `func (c *Checker) getTypeParametersForMapper(sig) []*Type` —
     /// S8's REAL body (members.rs) replaced the S7 twin.
-    fn get_type_parameters_for_mapper(&mut self, signature: SignatureId) -> Vec<TypeId> {
+    pub(crate) fn get_type_parameters_for_mapper(&mut self, signature: SignatureId) -> Vec<TypeId> {
         self.get_type_parameters_for_mapper_for_members(signature)
     }
 

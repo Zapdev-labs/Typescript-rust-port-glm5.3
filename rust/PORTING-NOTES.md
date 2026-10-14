@@ -2540,3 +2540,41 @@ len(declarations)>1 gate (missing 125 -> 18). PLAIN-sweep census: divergent
 0/3,826/3,741/0; panics 0. 47 suites (3 fcs9 pin suites); clippy 0; all
 300-slice gates green fresh. Next by census: TS2322 (187/174), TS2339
 (156/316), TS2345 residuals, TS2300 computed-name statics seam, TS2532 61.
+
+## Full-corpus sweep tranche 10 landed (RIG-VALIDATED) — divergent 1,574 -> 1,503
+
+Four families: (1) import.meta — check_import_meta_property's W3 stub
+returned errorType; Go answers getGlobalImportMetaType (checker.go:11029,
+the spine resolver) so the property checks fire (48 missing TS2339s +
+the 1343 gate runs AFTER the resolver — property checks still fire below
+ES2020). (2) es6/destructuring (113 missing TS2339s) — two stacked roots:
+check_array_literal's inTupleContext read is_array_like_type where Go
+reads isTupleLikeType (checker.go:8218 — under the no-libs seam EVERY
+non-nullable contextual type is "array-like", so IIFE `[1]` arguments
+built fresh tuples instead of Array<number> = the {} fallback), and
+get_binding_element_type_from_parent_type's indexed access used the
+node-less _writing stub instead of the full resolver with the binding
+element as the access node (Go checker.go:18195's synthetic expression)
+so the Property-does-not-exist ladder never ran. (3) TS2322 call/
+construct/generic-signature family (30+ records across the whole
+assignmentCompat directory) — instantiate_signature_in_context_of was
+the M6 S6 identity stub; now the real Go checker.go:19813 body
+(newInferenceContext over the source's type params, applyToParameterTypes/
+applyToReturnTypes inference from the canonical target, getSignatureInstantiation
+with the inferred types), with compare_types/relater/intersection_state
+threaded from compare_signatures_related into the InferenceComparer.
+(4) plumbing for (3): apply_to_parameter_types/apply_to_return_types/
+InferenceState.inferences/get_signature_instantiation/get_type_parameters_
+for_mapper widened to pub(crate) + pub(crate) inference-state-for-context
+wrappers (Go's callbacks close over context.inferences; Rust fn pointers
+can't capture). PLAIN-sweep census: divergent 1,503 (1,276 count / 227
+hash), identical 6,064/7,567; panics 0. 48 suites (fcs10 pin suite, 5
+pins); clippy 0; all 300-slice gates green fresh. Honest residuals: 3
+newly-divergent importMetaNarrowing records expose the declare-global
+augmentation seam (Rust's binder does not merge `declare global`
+interfaces into the global scope, so the ImportMeta resolver reports
+2318 where Go resolves foo) — the moduleExportAlias/prototype/globalThis
+TS2339 families, TS2532 flow-narrowing 61, TS2345 residuals, TS2300
+computed-name statics 12, TS2564 residual 7, and the 2322 optional-param
+elaboration string seam (assignmentCompatWithCallSignaturesWithRestParameters,
+26 diff lines, positions identical) remain for tranche 11.

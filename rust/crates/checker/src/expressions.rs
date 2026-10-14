@@ -2371,10 +2371,14 @@ impl Checker {
             .expect("MetaProperty data")
             .name;
         if tsc_ast::node_text(self.store(), name) == "meta" {
-            // TODO(port M6 S7/S6): getGlobalImportMetaType (the synthesized
-            // `typeof import.meta` interface); errorType until the S7
-            // anonymous-type construction + the S6 module seam land.
-            return self.error_type();
+            // PORT(FCS tranche 10): Go checker.go:11029-11031 — the type of
+            // `import.meta` is the global `ImportMeta` interface resolved
+            // through the standard global-type resolver spine (spine.rs
+            // `get_global_import_meta_type`, reportErrors=true like Go's
+            // getGlobalTypeResolver("ImportMeta", 0, true)). Previously a W3
+            // stub returned errorType, swallowing the TS2339 property checks
+            // against the effective ImportMeta shape.
+            return self.get_global_import_meta_type();
         }
         self.error_type()
     }
@@ -5360,7 +5364,19 @@ impl Checker {
                     vec![contextual_type]
                 };
                 constituents.iter().any(|&t| {
-                    relater::is_array_like_type(self, t)
+                    // PORT(FCS tranche 10): Go checker.go:8218 uses
+                    // `c.isTupleLikeType(t)` — NOT isArrayLikeType. The
+                    // former port read is_array_like_type, which under the
+                    // no-libs corpus seam (anyReadonlyArrayType resolving
+                    // permissively — every non-nullable type is
+                    // "array-like") made EVERY contextual type
+                    // tuple-contextual: `f([1])` with an `any` parameter
+                    // context built the fresh tuple `[number]` where Go
+                    // builds Array<number> (createArrayType — the
+                    // missing-global Array fallback gives `{}`), diverging
+                    // the whole IIFE/destructuring contextual-parameter
+                    // chain (the missing-TS2339 binding-element family).
+                    relater::is_tuple_like_type(self, t)
                         || (relater::is_generic_mapped_type(self, t) && {
                             // Go: t.AsMappedType().nameType == nil &&
                             // getHomomorphicTypeVariable(...) != nil — the S7
