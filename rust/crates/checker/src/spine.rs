@@ -1867,6 +1867,13 @@ impl Checker {
         self.check_expression_ex(node, CheckMode::CHECK_MODE_NORMAL)
     }
 
+    /// Go: `func (c *Checker) getRegularTypeOfObjectLiteral(t) *Type`
+    /// (checker.go:28693) — REAL (FCS tranche 16; the body is relater.rs's
+    /// Go-exact port, mirrored here on Checker like Go's exported method).
+    pub fn get_regular_type_of_object_literal(&mut self, t: TypeId) -> TypeId {
+        crate::relater::get_regular_type_of_object_literal(self, t)
+    }
+
     /// Go: `func (c *Checker) checkExpressionCached(node *ast.Node) *Type` (checker.go:7770).
     pub fn check_expression_cached(&mut self, node: NodeId) -> TypeId {
         self.check_expression_cached_ex(node, CheckMode::CHECK_MODE_NORMAL)

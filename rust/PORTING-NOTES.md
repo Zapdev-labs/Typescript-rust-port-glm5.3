@@ -2687,3 +2687,26 @@ divergent 1,346 (1,128 count / 218 hash), identical 6,221/7,567; both
 drivers 0/3,826/3,741/0; panics 0. 53 suites (fcs15 pins); clippy 0; all
 300-slice gates green fresh. NEW CADENCE: single-family micro-tranches,
 one commit each.
+
+## Sweep micro-tranche 16 landed (2026-10-27, RIG-VALIDATED) — object-literal regularization real; lead honestly DISPROVEN; divergent 1,346 -> 1,345
+
+get_regular_type_of_object_literal was an identity function (the symbol-
+flags guard could never fire); Go's real body ported (checker.go:28693 +
+transformTypeOfMembers 28710: OBJECT_LITERAL+FRESH_LITERAL guard, the
+CachedTypeKindRegularObjectLiteral cache, the recursive member walk with
+createSymbolWithType rebinds, the anonymous type carrying members/
+signatures/index-infos). HONEST VERDICT: the tranche-15 "+45 TS2345" lead
+did NOT collapse — a six-case both-driver probe showed all pre-existing
+divergences byte-identical pre/post; intraExpressionInferences was already
+divergent pre-tranche-15. The port is live and Go-shaped (instrumented
+check: regular types carry ANYFN members). Net effect: -1 record
+(contextualTypeWithUnionTypeMembers — the union-target arm now regularizes
+the fresh literal source per relater.go:2909). The REAL residual root,
+diagnosed for the next micro-tranche: the final pass relates the fully-
+contextualized argument against the UNINSTANTIATED candidate signature
+(target shows bare A/T) — the inference second-pass / signature-
+instantiation wiring, shared with the restTuples args_0/args_1 seam.
+PLAIN-sweep census: divergent 1,345 (1,126 count / 219 hash), identical
+6,222/7,567; both drivers 0/3,826/3,741/0; panics 0; newly-divergent 0.
+54 suites (fcs16 pins); clippy 0; all 300-slice gates green fresh.
+(Cargo.lock: stale-lock regen adding the tranche-7 tsc-module entries.)

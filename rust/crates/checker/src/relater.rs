@@ -8558,12 +8558,73 @@ pub(crate) fn get_apparent_type(c: &mut Checker, t: TypeId) -> TypeId {
     c.get_apparent_type_impl(t)
 }
 
-/// Go: `func (c *Checker) getRegularTypeOfObjectLiteral(t) *Type`.
+/// Go: `func (c *Checker) getRegularTypeOfObjectLiteral(t) *Type`
+/// (checker.go:28693).
+///
+/// PORT (FCS tranche 16): was the S7 seam — a symbol-flags guard plus
+/// delegation to `get_regular_type_of_literal_type`, which returns object
+/// literal types UNCHANGED (their flags are `TypeFlags::OBJECT`, never
+/// Freshable/Union), so the "regular" type kept the FreshLiteral flag and
+/// the as-checked member types. Go builds a NEW anonymous type: the
+/// FreshLiteral flag stripped, every property type recursively regularized
+/// (nested fresh object literal members collapse to their regular forms;
+/// skip-context-sensitive-pass `anyFunctionType` member types pass through
+/// verbatim — the vacuous wildcard assignability the inferential first
+/// pass relies on), and the resolved call/construct signatures + index
+/// infos carried over. Guard, cache key, construction order and the
+/// flags/objectFlags propagation mirror Go exactly.
 pub(crate) fn get_regular_type_of_object_literal(c: &mut Checker, t: TypeId) -> TypeId {
-    if c.type_(t).symbol.is_some_and(|s| c.program_symbol(s).flags.intersects(SymbolFlags::OBJECT_LITERAL)) {
-        return c.get_regular_type_of_literal_type(t);
+    let object_flags = c.type_(t).object_flags;
+    if !(object_flags.intersects(ObjectFlags::OBJECT_LITERAL)
+        && object_flags.intersects(ObjectFlags::FRESH_LITERAL))
+    {
+        return t;
     }
-    t
+    if let Some(cached) = c.cached_types_get(crate::todo_shapes::CachedTypeKind::RegularObjectLiteral, t) {
+        return cached;
+    }
+    let resolved = resolve_structured_type_members(c, t);
+    let members = transform_type_of_members(c, t);
+    let symbol = c.type_(t).symbol;
+    // Go: `newAnonymousType(t.symbol, members, resolved.CallSignatures(),
+    // resolved.ConstructSignatures(), resolved.indexInfos)` —
+    // `newObjectType(ObjectFlagsAnonymous, symbol)` + the
+    // setStructuredTypeMembers writer.
+    let regular = c.new_object_type(ObjectFlags::ANONYMOUS, symbol);
+    let call_signature_count = resolved.call_signature_count as usize;
+    let call_signatures = resolved.signatures[..call_signature_count].to_vec();
+    let construct_signatures = resolved.signatures[call_signature_count..].to_vec();
+    c.set_structured_type_members(regular, members, call_signatures, construct_signatures, resolved.index_infos);
+    // Go: `regular.flags = resolved.flags;
+    // regular.objectFlags |= resolved.objectFlags & ^ObjectFlagsFreshLiteral`
+    // (resolved is t's StructuredType — the flags/objectFlags of t itself).
+    let resolved_flags = c.type_(t).flags;
+    let resolved_object_flags = c.type_(t).object_flags & !ObjectFlags::FRESH_LITERAL;
+    c.type_mut(regular).flags = resolved_flags;
+    c.type_mut(regular).object_flags |= resolved_object_flags;
+    c.cached_types_set(crate::todo_shapes::CachedTypeKind::RegularObjectLiteral, t, Some(regular));
+    regular
+}
+
+/// Go: `func (c *Checker) transformTypeOfMembers(t, f) ast.SymbolTable`
+/// (checker.go:28710) — `f` is `getRegularTypeOfObjectLiteral` (the only
+/// instantiation, so it is inlined here Go-exactly: `updated != original`
+/// rebinds the property symbol via `createSymbolWithType`).
+fn transform_type_of_members(c: &mut Checker, t: TypeId) -> tsc_ast::SymbolTable {
+    let properties = get_properties_of_object_type(c, t);
+    let mut members = tsc_ast::SymbolTable::new();
+    for property in properties {
+        let original = get_type_of_symbol(c, property);
+        let updated = get_regular_type_of_object_literal(c, original);
+        let property = if updated != original {
+            c.create_symbol_with_type(property, Some(updated))
+        } else {
+            property
+        };
+        let name = crate::statements::symbol_name(c, property);
+        members.set(name, property);
+    }
+    members
 }
 
 /// Go: `func (c *Checker) getUnionType(types) *Type` — delegates to the REAL
