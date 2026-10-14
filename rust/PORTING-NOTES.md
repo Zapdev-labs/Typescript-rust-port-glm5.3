@@ -2756,3 +2756,26 @@ share the root (byte-identical pre/post) — distinct family, next queue.
 PLAIN-sweep census: divergent 1,326 (1,106 count / 220 hash), identical
 6,241/7,567; newly-divergent 0, newly-identical 15. 56 suites (fcs18
 pins); clippy 0; all 300-slice gates green fresh.
+
+## Sweep micro-tranche 19 landed (2026-10-30, RIG-VALIDATED) — parenthesizedContexualTyping2 COLLAPSED; divergent 1,326 -> 1,284
+
+Root: Go's addImplementationSuccessElaboration (checker.go:9917) re-runs
+chooseOverload on the overload IMPLEMENTATION signature after a failed-
+overload report; its rest arm's getSpreadArgumentType (9536) re-checks
+rest args with anyType context, leaving rest-position arrows NON-
+contextually typed (Go emits 7006+2347 there). Rust gaps: the S8 seam in
+is_signature_applicable's rest arm (rest compared to ITSELF), no
+add_implementation_success_elaboration at all, S4-stubbed elaborateArrow-
+Function/elaborateObjectLiteral, and missing elaborateError recursion
+arms. Regression caught mid-tranche: the SAME S8 seam in infer_type_
+arguments' rest arm (infer_types(rest_type, rest_type) -> Go 9716's
+spread-type inference) — fixing it collapsed genericRestParameters1 too.
+One fcs3 pin honestly updated (it asserted a spurious 2345; Go reports
+2769). A latent jsx panic (JsxAttribute guard order vs Go jsx.go:272)
+fixed. Target now rust 50 == go 50 DIAG-IDENTICAL. TS7006 missing 13->4.
+PLAIN-sweep census: divergent 1,284 (1,090 count / 194 hash), identical
+6,283/7,567; newly-divergent 0, newly-identical 42 (constAssertions,
+typeSatisfaction x4, tagged-template/destructuring cases). 57 suites
+(fcs19 pins); clippy 0; all 300-slice gates green fresh. Honest residual:
+9 rust-extra 7006s inside 4 variadic-tuple records — the variadic-tuple S8
+seam is the next candidate family.

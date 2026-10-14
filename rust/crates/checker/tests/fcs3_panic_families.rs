@@ -113,8 +113,12 @@ fn fcs3_deferred_tuple_reference_arguments_resolve() {
 /// typeRelationships/typeInference/genericCallWithOverloadedConstructorTypedArguments.ts
 /// shape: two-construct-signature source vs three-signature target —
 /// sourceLen < targetLen indexes past the source list pre-fix (4 census
-/// cases). PIN: the check COMPLETES with the expected-signature error
-/// reported (Go's baseline reports 2345 on the null argument).
+/// cases). PIN: the check COMPLETES with the overload failure reported.
+/// FCS tranche 19 update: the pre-fcs19 pin asserted a spurious 2345 that
+/// Rust's old report path emitted; Go's report path reports
+/// TS2769 "No overload matches this call" here (verified against the go
+/// driver on this exact snippet), and the fcs19 Go-exact
+/// report_call_resolution_errors port now produces the same 2769.
 #[test]
 fn fcs3_infer_from_signatures_clamps_each_index() {
     let (mut c, file) = check_file(
@@ -122,7 +126,7 @@ fn fcs3_infer_from_signatures_clamps_each_index() {
     );
     let codes = diag_codes(&mut c, file);
     assert!(
-        codes.contains(&2345),
+        codes.contains(&2769),
         "the null argument misses both constructor signatures (got {codes:?})"
     );
 }

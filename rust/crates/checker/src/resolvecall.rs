@@ -1418,42 +1418,52 @@ impl Checker {
             }
         }
         if let Some(rest_type) = rest_type {
-            if arg_count < args.len() {
-                // TODO(port M6 S8): getSpreadArgumentType builds the
-                // tuple/union rest argument type; the seam composes the rest
-                // type itself, which the assignability check below compares
-                // structurally (the tuple expansion lands with S8's
-                // structured members).
-                let spread_type = rest_type;
-                let rest_arg_count = args.len() - arg_count;
-                let error_node = if report_errors {
-                    match rest_arg_count {
-                        0 => Some(node),
-                        1 => Some(self.get_effective_check_node(args[arg_count])),
-                        _ => {
-                            // Go synthesizes a spread node spanning the
-                            // arguments; the first argument carries the error.
-                            Some(args[arg_count])
-                        }
+            // Go: `spreadType := c.getSpreadArgumentType(args, argCount,
+            // len(args), restType, nil, checkMode)` (checker.go:9536).
+            // PORT (FCS tranche 19): the S8 seam — comparing the rest type
+            // to itself — is replaced with the real spread-argument typing.
+            // getSpreadArgumentType contextually re-checks every
+            // rest-position argument (checkExpressionWithContextualType with
+            // the indexed rest type), which is the eager pass that gives
+            // rest-position arrows of failed calls their non-contextual
+            // parameter types (Go's TS7006+TS2347 family on
+            // parenthesizedContexualTyping2).
+            let spread_type = self.get_spread_argument_type(
+                args,
+                arg_count,
+                args.len(),
+                rest_type,
+                None, /*context*/
+                check_mode,
+            );
+            let rest_arg_count = args.len() - arg_count;
+            let error_node = if report_errors {
+                match rest_arg_count {
+                    0 => Some(node),
+                    1 => Some(self.get_effective_check_node(args[arg_count])),
+                    _ => {
+                        // Go synthesizes a spread node spanning the
+                        // arguments; the first argument carries the error.
+                        Some(args[arg_count])
                     }
-                } else {
-                    None
-                };
-                // Go: the rest-type spread check — diagnosticOutput passes
-                // straight through (same W3T7 fix as the argument loop).
-                // This is the final use, but as_deref_mut keeps the
-                // call-shape uniform with the loop's reborrows.
-                #[allow(clippy::needless_option_as_deref)]
-                if !self.check_type_related_to_ex(
-                    spread_type,
-                    rest_type,
-                    relation,
-                    error_node,
-                    Some(head_message),
-                    diagnostic_output.as_deref_mut(),
-                ) {
-                    return false;
                 }
+            } else {
+                None
+            };
+            // Go: the rest-type spread check — diagnosticOutput passes
+            // straight through (same W3T7 fix as the argument loop).
+            // This is the final use, but as_deref_mut keeps the
+            // call-shape uniform with the loop's reborrows.
+            #[allow(clippy::needless_option_as_deref)]
+            if !self.check_type_related_to_ex(
+                spread_type,
+                rest_type,
+                relation,
+                error_node,
+                Some(head_message),
+                diagnostic_output.as_deref_mut(),
+            ) {
+                return false;
             }
         }
         true
@@ -1599,17 +1609,29 @@ impl Checker {
             }
         }
         if let Some(rest_type) = rest_type.filter(|&t| self.could_contain_type_variables(t)) {
-            // TODO(port M6 S8): getSpreadArgumentType builds the rest
-            // argument tuple; the seam composes the rest type itself.
-            if arg_count < args.len() {
-                self.infer_types(
-                    context,
-                    rest_type,
-                    rest_type,
-                    crate::inference::InferencePriority::NONE,
-                    false,
-                );
-            }
+            // Go: `spreadType := c.getSpreadArgumentType(args, argCount,
+            // len(args), restType, context, checkMode); inferTypes(...,
+            // spreadType, restType, ...)` (checker.go:9716). PORT (FCS
+            // tranche 19): the S8 seam — inferring the rest type from
+            // ITSELF, which never fixed the rest type parameter — is
+            // replaced with the real spread-argument tuple, so
+            // `f<T extends unknown[]>(...args: T)` infers T from the
+            // spread/expansion argument shapes exactly like Go.
+            let spread_type = self.get_spread_argument_type(
+                args,
+                arg_count,
+                args.len(),
+                rest_type,
+                Some(context),
+                check_mode,
+            );
+            self.infer_types(
+                context,
+                spread_type,
+                rest_type,
+                crate::inference::InferencePriority::NONE,
+                false,
+            );
         }
         self.get_inferred_types(context)
     }
@@ -1801,7 +1823,6 @@ impl Checker {
         signatures: &[SignatureId],
         head_message: Option<&'static Message>,
     ) {
-        let _ = head_message;
         if !s.candidates_for_argument_error.is_empty() {
             let last = s.candidates_for_argument_error[s.candidates_for_argument_error.len() - 1];
             let mut diags: Vec<tsc_ast::Diagnostic> = Vec::new();
@@ -1814,7 +1835,32 @@ impl Checker {
                 true,
                 Some(&mut diags),
             );
-            for diagnostic in diags {
+            for mut diagnostic in diags {
+                if s.candidates_for_argument_error.len() > 1 {
+                    diagnostic = Self::new_diagnostic_chain(
+                        diagnostic,
+                        &diag::THE_LAST_OVERLOAD_GAVE_THE_FOLLOWING_ERROR,
+                    );
+                    diagnostic =
+                        Self::new_diagnostic_chain(diagnostic, &diag::NO_OVERLOAD_MATCHES_THIS_CALL);
+                }
+                if let Some(head_message) = head_message {
+                    diagnostic = Self::new_diagnostic_chain(diagnostic, head_message);
+                }
+                if self.signatures[last.0 as usize].declaration.is_some()
+                    && s.candidates_for_argument_error.len() > 1
+                {
+                    let declaration = self.signatures[last.0 as usize].declaration;
+                    if let Some(declaration) = declaration {
+                        diagnostic.add_related_info(u::new_diagnostic_for_node(
+                            self.store(),
+                            declaration,
+                            &diag::THE_LAST_OVERLOAD_IS_DECLARED_HERE,
+                            Vec::new(),
+                        ));
+                    }
+                }
+                self.add_implementation_success_elaboration(s, last, &mut diagnostic);
                 self.add_diagnostic(diagnostic);
             }
         } else if let Some(candidate) = s.candidate_for_argument_arity_error {
@@ -1841,6 +1887,98 @@ impl Checker {
                 let diagnostic =
                     self.get_argument_arity_error(node, &signatures_with_correct_type_argument_arity, &s.args);
                 self.add_diagnostic(diagnostic);
+            }
+        }
+    }
+
+    /// Go: `func NewDiagnosticChain(chain *ast.Diagnostic, message *diagnostics.Message, args ...any) *ast.Diagnostic`
+    /// (ast/diagnostic.go:232) — the outer message wraps the existing
+    /// diagnostic (which becomes the message chain) and inherits its file,
+    /// location, and related information.
+    fn new_diagnostic_chain(
+        chain: tsc_ast::Diagnostic,
+        message: &'static Message,
+    ) -> tsc_ast::Diagnostic {
+        let file = chain.file();
+        let loc = chain.loc();
+        let mut result = tsc_ast::Diagnostic::new(
+            file,
+            loc,
+            message.code(),
+            message.category(),
+            "" /*source*/,
+            Some(message),
+            "" /*messageText*/,
+            message.key(),
+            Vec::new(),
+        );
+        let related = chain.related_information().to_vec();
+        result.add_message_chain(chain);
+        for info in related {
+            result.add_related_info(info);
+        }
+        result
+    }
+
+    /// Go: `func (c *Checker) addImplementationSuccessElaboration(s *CallState, failed *Signature, diagnostic *ast.Diagnostic)`
+    /// (checker.go:9917). PORT (FCS tranche 19): re-runs chooseOverload on
+    /// the overload implementation signature; when the call would succeed
+    /// against it, the failing diagnostic gains the TS2793 related info.
+    /// The re-run is also Go's eager pass that contextually re-checks
+    /// rest-position arguments against the implementation's rest type (the
+    /// anyType-context pass that leaves failed-call arrows with
+    /// non-contextual parameter types — the parenthesizedContexualTyping2
+    /// TS7006+TS2347 family).
+    fn add_implementation_success_elaboration(
+        &mut self,
+        s: &CallState,
+        failed: SignatureId,
+        diagnostic: &mut tsc_ast::Diagnostic,
+    ) {
+        let declaration = self.signatures[failed.0 as usize].declaration;
+        let Some(declaration) = declaration else { return };
+        let Some(symbol) = self.get_symbol_of_declaration_merged(declaration) else {
+            return;
+        };
+        let declarations = self.program.symbol(symbol).declarations.clone();
+        if declarations.len() > 1 {
+            let implementation = declarations.iter().copied().find(|&d| {
+                binder_shims::is_function_like_declaration(self.store().node(d))
+                    && crate::statements::function_body_of(self.store(), d)
+                        .is_some_and(|b| {
+                            tsc_ast::utilities::node_is_present(self.store().node(b))
+                        })
+            });
+            let Some(implementation) = implementation else { return };
+            let Some(candidate) = self.get_signature_from_declaration(implementation) else {
+                return;
+            };
+            let mut local_state = CallState {
+                node: s.node,
+                type_arguments: s.type_arguments.clone(),
+                args: s.args.clone(),
+                candidates: vec![candidate],
+                arg_check_mode: s.arg_check_mode,
+                is_single_non_generic_candidate: self.signatures[candidate.0 as usize]
+                    .type_parameters
+                    .is_empty(),
+                signature_help_trailing_comma: s.signature_help_trailing_comma,
+                recursive_resolution: s.recursive_resolution,
+                candidates_for_argument_error: Vec::new(),
+                candidate_for_argument_arity_error: None,
+                candidate_for_type_argument_error: None,
+            };
+            if self
+                .choose_overload(&mut local_state, RelationKind::Assignable)
+                .is_some()
+            {
+                let related = u::new_diagnostic_for_node(
+                    self.store(),
+                    implementation,
+                    &diag::THE_CALL_WOULD_HAVE_SUCCEEDED_AGAINST_THIS_IMPLEMENTATION_BUT_IMPLEMENTATION_SIGNATURES_OF_OVERLOADS_ARE_NOT_EXTERNALLY_VISIBLE,
+                    Vec::new(),
+                );
+                diagnostic.add_related_info(related);
             }
         }
     }

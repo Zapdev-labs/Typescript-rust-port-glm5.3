@@ -849,6 +849,17 @@ impl Checker {
         let properties = jsx_properties_of(self.store(), node);
         let mut discriminant_properties: Vec<NodeId> = Vec::new();
         for p in properties {
+            // Go (jsx.go:272): `symbol := p.Symbol(); if symbol == nil ||
+            // !ast.IsJsxAttribute(p) { return false }` — the kind guard runs
+            // BEFORE the JsxAttribute data is read, so a JsxSpreadAttribute
+            // property in the list is simply skipped. PORT (FCS tranche 19):
+            // the expect() previously ran BEFORE the kind check, so the
+            // newly-live rest-argument contextual pass (getSpreadArgumentType
+            // checking a spread JSX-attributes argument) panicked on the
+            // spread attribute's node data.
+            if self.store().node(p).kind != Kind::JsxAttribute {
+                continue;
+            }
             let Some(symbol) = self
                 .store()
                 .node(p)
@@ -858,9 +869,6 @@ impl Checker {
             else {
                 continue;
             };
-            if self.store().node(p).kind != Kind::JsxAttribute {
-                continue;
-            }
             let initializer = self.store().node(p).as_jsx_attribute().expect("data").initializer;
             let possibly_discriminant = match initializer {
                 None => true,

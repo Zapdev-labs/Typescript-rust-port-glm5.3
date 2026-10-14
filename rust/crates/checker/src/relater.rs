@@ -7703,14 +7703,46 @@ impl Checker {
                 if kind == Kind::AsExpression && !ast_is_const_assertion(self, node) {
                     return false;
                 }
-                // TODO(port M6 S4/S5): node.Expression() accessors — the
-                // recursion into the inner expression needs the flow wave's
-                // expression accessor seam.
-                return false;
+                // Go: `return c.elaborateError(node.Expression(), ...)` —
+                // the parenthesized/as/jsx recursion. PORT (FCS tranche 19):
+                // the S4 seam is replaced with the real expression accessor.
+                let Some(expression) = crate::ast_shims::expression_of(self.store(), node)
+                else {
+                    return false;
+                };
+                return self.elaborate_error(
+                    Some(expression),
+                    source,
+                    target,
+                    relation,
+                    head_message,
+                    diagnostic_output,
+                );
             }
             Kind::BinaryExpression => {
-                // TODO(port M6 S4): the '=' / ',' operator recursion.
-                return false;
+                // Go: the '=' / ',' operator recursion into the right
+                // operand. PORT (FCS tranche 19): the S4 seam is replaced
+                // with Go's exact disjunction.
+                let operator_kind = match &self.store().node(node).data {
+                    tsc_ast::NodeData::BinaryExpression(d) => {
+                        self.store().node(d.operator_token).kind
+                    }
+                    _ => return false,
+                };
+                if operator_kind == Kind::EqualsToken || operator_kind == Kind::CommaToken {
+                    let right = match &self.store().node(node).data {
+                        tsc_ast::NodeData::BinaryExpression(d) => d.right,
+                        _ => return false,
+                    };
+                    return self.elaborate_error(
+                        Some(right),
+                        source,
+                        target,
+                        relation,
+                        head_message,
+                        diagnostic_output,
+                    );
+                }
             }
             Kind::ObjectLiteralExpression => {
                 return self.elaborate_object_literal(node, source, target, relation, diagnostic_output);
@@ -7775,24 +7807,103 @@ impl Checker {
         false
     }
 
-    /// Go: `func (c *Checker) elaborateObjectLiteral(...) bool`.
+    /// Go: `func (c *Checker) elaborateObjectLiteral(node, source, target, relation, diagnosticOutput) bool`
+    /// (relater.go:496). PORT (FCS tranche 19): the S4 stub is replaced with
+    /// Go's exact property walk — each non-spread literal property is
+    /// elaborated through elaborateElement, which recurses into
+    /// elaborateError on the property's initializer (the arrow-function
+    /// elaboration for comma/ternary-bodied arrow properties).
     fn elaborate_object_literal(
         &mut self,
         node: NodeId,
         source: TypeId,
         target: TypeId,
         relation: RelationKind,
-        diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
+        mut diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
     ) -> bool {
         if self.type_(target).flags.intersects(TypeFlags::PRIMITIVE | TypeFlags::NEVER) {
             return false;
         }
-        // TODO(port M6 S4): the property walk (getLiteralTypeFromProperty of
-        // the declaration symbols, the per-Kind elaborateElement dispatch,
-        // the computed-name message). The object-literal members need the
-        // symbol-of-declaration seam from the flow wave.
-        let _ = (node, source, relation, diagnostic_output);
-        false
+        let mut reported_error = false;
+        let props: Vec<NodeId> = match &self.store().node(node).data {
+            tsc_ast::NodeData::ObjectLiteralExpression(d) => d
+                .properties
+                .as_ref()
+                .map(|l| l.nodes.to_vec())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        for prop in props {
+            if self.store().node(prop).kind == Kind::SpreadAssignment {
+                continue;
+            }
+            let Some(symbol) = self.get_symbol_of_declaration_merged(prop) else {
+                continue;
+            };
+            let Some(name_type) = get_literal_type_from_property(
+                self,
+                symbol,
+                TypeFlags::STRING_OR_NUMBER_LITERAL_OR_UNIQUE,
+                false,
+            ) else {
+                // Go: `if nameType == nil || nameType.flags&
+                // TypeFlagsNever != 0 { continue }`.
+                continue;
+            };
+            if self.type_(name_type).flags.intersects(TypeFlags::NEVER) {
+                continue;
+            }
+            let prop_kind = self.store().node(prop).kind;
+            match prop_kind {
+                Kind::SetAccessor
+                | Kind::GetAccessor
+                | Kind::MethodDeclaration
+                | Kind::ShorthandPropertyAssignment => {
+                    reported_error = self.elaborate_element(
+                        source,
+                        target,
+                        relation,
+                        elaborate_property_name_of(self.store(), prop),
+                        None, /*next*/
+                        name_type,
+                        None, /*errorMessage*/
+                        None, /*diagnosticFactory*/
+                        diagnostic_output.as_deref_mut(),
+                    ) || reported_error;
+                }
+                Kind::PropertyAssignment => {
+                    let message = match &self.store().node(prop).data {
+                        tsc_ast::NodeData::PropertyAssignment(d) => {
+                            if is_computed_non_literal_name_of(self.store(), d.name) {
+                                Some(
+                                    &msg::TYPE_OF_COMPUTED_PROPERTY_S_VALUE_IS_0_WHICH_IS_NOT_ASSIGNABLE_TO_TYPE_1,
+                                )
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    let initializer = match &self.store().node(prop).data {
+                        tsc_ast::NodeData::PropertyAssignment(d) => Some(d.initializer),
+                        _ => None,
+                    };
+                    reported_error = self.elaborate_element(
+                        source,
+                        target,
+                        relation,
+                        elaborate_property_name_of(self.store(), prop),
+                        initializer,
+                        name_type,
+                        message,
+                        None, /*diagnosticFactory*/
+                        diagnostic_output.as_deref_mut(),
+                    ) || reported_error;
+                }
+                _ => {}
+            }
+        }
+        reported_error
     }
 
     /// Go: `func (c *Checker) elaborateArrayLiteral(...) bool`.
@@ -7815,21 +7926,103 @@ impl Checker {
         false
     }
 
-    /// Go: `func (c *Checker) elaborateArrowFunction(...) bool`.
+    /// Go: `func (c *Checker) elaborateArrowFunction(node, source, target, relation, diagnosticOutput) bool`
+    /// (relater.go:639). PORT (FCS tranche 19): the S4 stub is replaced
+    /// with Go's exact body — the return-expression elaboration for
+    /// expression-bodied, untyped-parameter arrows (the
+    /// parenthesizedContexualTyping2 family: the 2322 on the comma body +
+    /// the TS6502 expected-type related info + the async Promise hint).
     fn elaborate_arrow_function(
         &mut self,
         node: NodeId,
         source: TypeId,
         target: TypeId,
         relation: RelationKind,
-        diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
+        mut diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
     ) -> bool {
-        // Don't elaborate blocks or functions with annotated parameter types
-        // (Go comment, verbatim).
-        // TODO(port M6 S4): the body/parameter accessors + getSingleCallSignature
-        // (S8) + createPromiseType — the arrow-function elaboration needs the
-        // flow wave.
-        let _ = (node, source, target, relation, diagnostic_output);
+        // Don't elaborate blocks or functions with annotated parameter
+        // types (Go comment, verbatim).
+        let body = crate::statements::function_body_of(self.store(), node);
+        if body.is_some_and(|b| self.store().node(b).kind == Kind::Block) {
+            return false;
+        }
+        let parameters = crate::ast_shims::parameters_of(self.store(), node);
+        if parameters
+            .iter()
+            .any(|&p| crate::ast_shims::type_of_node(self.store(), p).is_some())
+        {
+            return false;
+        }
+        let Some(source_sig) = self.get_single_call_signature(source) else {
+            return false;
+        };
+        let target_signatures = get_signatures_of_type(self, target, SignatureKind::Call);
+        if target_signatures.is_empty() {
+            return false;
+        }
+        let return_expression = body;
+        let source_return = get_return_type_of_signature(self, source_sig);
+        let target_returns: Vec<TypeId> = target_signatures
+            .iter()
+            .map(|&s| get_return_type_of_signature(self, s))
+            .collect();
+        let target_return = get_union_type(self, target_returns);
+        if self.check_type_related_to(source_return, target_return, relation, None /*errorNode*/)
+        {
+            return false;
+        }
+        if let Some(return_expression) = return_expression {
+            if self.elaborate_error(
+                Some(return_expression),
+                source_return,
+                target_return,
+                relation,
+                None, /*headMessage*/
+                diagnostic_output.as_deref_mut(),
+            ) {
+                return true;
+            }
+        }
+        let mut diags: Vec<tsc_ast::Diagnostic> = Vec::new();
+        self.check_type_related_to_ex(
+            source_return,
+            target_return,
+            relation,
+            return_expression,
+            None, /*headMessage*/
+            Some(&mut diags),
+        );
+        if !diags.is_empty() {
+            let mut diagnostic = diags[0].clone();
+            if let Some(symbol) = self.type_(target).symbol() {
+                let declarations = self.program.symbol(symbol).declarations.clone();
+                if let Some(&first_declaration) = declarations.first() {
+                    diagnostic.add_related_info(diagnostic_for_node(
+                        self,
+                        Some(first_declaration),
+                        &msg::THE_EXPECTED_TYPE_COMES_FROM_THE_RETURN_TYPE_OF_THIS_SIGNATURE,
+                        &[],
+                    ));
+                }
+            }
+            let function_flags = tsc_ast::functionflags::get_function_flags(self.store(), node);
+            if !function_flags.intersects(tsc_ast::functionflags::FunctionFlags::ASYNC)
+                && get_type_of_property_of_type(self, source_return, "then").is_none()
+            {
+                let promise_type = self.create_promise_type(source_return);
+                if self.check_type_related_to(promise_type, target_return, relation, None /*errorNode*/)
+                {
+                    diagnostic.add_related_info(diagnostic_for_node(
+                        self,
+                        Some(node),
+                        &msg::DID_YOU_MEAN_TO_MARK_THIS_FUNCTION_AS_ASYNC,
+                        &[],
+                    ));
+                }
+            }
+            report_diagnostic(self, Some(diagnostic), diagnostic_output);
+            return true;
+        }
         false
     }
 
@@ -8203,6 +8396,30 @@ pub(crate) fn is_applicable_index_type(c: &mut Checker, source: Option<TypeId>, 
 }
 
 /// Go: `func (c *Checker) getLiteralTypeFromProperty(prop, flags, checkOverflow) *Type`.
+/// Go: `prop.Name()` — the name node of an object-literal element (the
+/// property/accessor/method/shorthand members the elaboration walk covers).
+fn elaborate_property_name_of(store: &dyn tsc_ast::NodeStore, node: NodeId) -> Option<NodeId> {
+    Some(match &store.node(node).data {
+        tsc_ast::NodeData::PropertyAssignment(d) => d.name,
+        tsc_ast::NodeData::ShorthandPropertyAssignment(d) => d.name,
+        tsc_ast::NodeData::MethodDeclaration(d) => d.name,
+        tsc_ast::NodeData::GetAccessorDeclaration(d) => d.name,
+        tsc_ast::NodeData::SetAccessorDeclaration(d) => d.name,
+        _ => return None,
+    })
+}
+
+/// Go: `ast.IsComputedNonLiteralName(name)` (ast/utilities.go:2181).
+fn is_computed_non_literal_name_of(store: &dyn tsc_ast::NodeStore, name: NodeId) -> bool {
+    store.node(name).kind == Kind::ComputedPropertyName
+        && {
+            let tsc_ast::NodeData::ComputedPropertyName(d) = &store.node(name).data else {
+                return false;
+            };
+            !tsc_ast::utilities::is_string_or_numeric_literal_like(store.node(d.expression))
+        }
+}
+
 pub(crate) fn get_literal_type_from_property(c: &mut Checker, prop: SymbolId, flags: TypeFlags, check_overflow: bool) -> Option<TypeId> {
     c.get_literal_type_from_property_impl(prop, flags, check_overflow)
 }
