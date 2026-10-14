@@ -4034,7 +4034,7 @@ impl Checker {
             return;
         }
         // For a commonjs `const x = require`, validate the alias and exit
-        let symbol = self.get_symbol_of_declaration(node);
+        let symbol = self.get_symbol_of_declaration_merged(node);
         let Some(symbol) = symbol else { return };
         let flags = self.program.symbol(symbol).flags;
         if flags.intersects(SymbolFlags::ALIAS)
@@ -4299,7 +4299,7 @@ impl Checker {
         {
             return;
         }
-        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+        let Some(symbol) = self.get_symbol_of_declaration_merged(node) else {
             return;
         };
         let name = self.store().node(node).name();
@@ -4864,7 +4864,7 @@ impl Checker {
                     // If the symbol has a get accessor, we would already have
                     // reported an error on the getter.
                     if self.store().node(member).kind == Kind::SetAccessor {
-                        if let Some(symbol) = self.get_symbol_of_declaration(member) {
+                        if let Some(symbol) = self.get_symbol_of_declaration_merged(member) {
                             if self
                                 .program
                                 .symbol(symbol)
@@ -4875,7 +4875,7 @@ impl Checker {
                             }
                         }
                     }
-                    let Some(symbol) = self.get_symbol_of_declaration(member) else {
+                    let Some(symbol) = self.get_symbol_of_declaration_merged(member) else {
                         continue;
                     };
                     let has_private = crate::ast_shims::has_modifier(
@@ -5120,7 +5120,7 @@ impl Checker {
                 .iter()
                 .all(|&e| self.is_unreferenced_variable_declaration(e));
         }
-        if let Some(symbol) = self.get_symbol_of_declaration(node) {
+        if let Some(symbol) = self.get_symbol_of_declaration_merged(node) {
             if self
                 .symbol_reference_links
                 .get(symbol)
@@ -5238,7 +5238,7 @@ impl Checker {
     /// Go: `func (c *Checker) checkUnusedTypeParameters(node)` (checker.go:7490).
     pub(crate) fn check_unused_type_parameters(&mut self, node: NodeId) {
         // Go: allDeclarationsInSameSourceFile(getSymbolOfDeclaration(node)).
-        if let Some(symbol) = self.get_symbol_of_declaration(node) {
+        if let Some(symbol) = self.get_symbol_of_declaration_merged(node) {
             if !all_declarations_in_same_source_file(self.store(), symbol) {
                 return;
             }
@@ -5314,7 +5314,7 @@ impl Checker {
     /// Go: `func (c *Checker) checkUnusedRenamedBindingElements()` (checker.go:7518).
     pub(crate) fn check_unused_renamed_binding_elements(&mut self) {
         for node in std::mem::take(&mut self.renamed_binding_elements_in_types) {
-            let Some(symbol) = self.get_symbol_of_declaration(node) else {
+            let Some(symbol) = self.get_symbol_of_declaration_merged(node) else {
                 continue;
             };
             if self.symbol_reference_links.get(symbol).reference_kinds.is_empty() {
@@ -5359,7 +5359,7 @@ impl Checker {
         if symbol.is_none() {
             // Local symbol is undefined => this declaration is non-exported.
             // However, symbol might contain other declarations that are exported.
-            let Some(s) = self.get_symbol_of_declaration(node) else {
+            let Some(s) = self.get_symbol_of_declaration_merged(node) else {
                 return;
             };
             if self.program.symbol(s).export_symbol.is_none() {
@@ -5482,7 +5482,7 @@ impl Checker {
                 // should fall through, otherwise they export values.
                 if !u::is_entity_name_expression(self.store(), expression)
                     || self
-                        .get_symbol_of_declaration(node)
+                        .get_symbol_of_declaration_merged(node)
                         .is_none_or(|s| !self.program.symbol(s).flags.intersects(SymbolFlags::ALIAS))
                 {
                     return DeclarationSpaces::EXPORT_VALUE;
@@ -5759,7 +5759,7 @@ impl Checker {
         }
         self.check_source_element(d.constraint);
         self.check_source_element(d.default_type);
-        let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+        let symbol = self.get_symbol_of_declaration_merged(node).unwrap_or_default();
         let type_parameter = self.get_declared_type_of_type_parameter(symbol);
         // Resolve base constraint to reveal circularity errors
         relater::get_base_constraint_of_type(self, type_parameter);
@@ -5795,14 +5795,14 @@ impl Checker {
         {
             return;
         }
-        let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+        let symbol = self.get_symbol_of_declaration_merged(node).unwrap_or_default();
         let type_parameter = self.get_declared_type_of_type_parameter(symbol);
         let modifiers = relater::get_type_parameter_modifiers(self, type_parameter)
             & (ModifierFlags::IN.union(ModifierFlags::OUT));
         if modifiers.is_empty() {
             return;
         }
-        let parent_symbol = self.get_symbol_of_declaration(parent).unwrap_or_default();
+        let parent_symbol = self.get_symbol_of_declaration_merged(parent).unwrap_or_default();
         let parent_declared_type = self.get_declared_type_of_symbol(parent_symbol);
         let variance_alias_gate = (parent_kind == Kind::TypeAliasDeclaration
             || parent_kind == Kind::JSTypeAliasDeclaration)
@@ -6199,7 +6199,7 @@ impl Checker {
         }
         let body = function_body_of(self.store(), node);
         self.check_source_element(body);
-        let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+        let symbol = self.get_symbol_of_declaration_merged(node).unwrap_or_default();
         self.check_function_or_constructor_symbol(symbol);
         // exit early in the case of signature - super checks are not
         // relevant to them
@@ -6644,7 +6644,7 @@ impl Checker {
                 for param in crate::ast_shims::parameters_of(self.store(), member).to_vec() {
                     let parent = self.store().node(member);
                     let _ = parent;
-                    let param_symbol = self.get_symbol_of_declaration(param);
+                    let param_symbol = self.get_symbol_of_declaration_merged(param);
                     let param_name = param_symbol
                         .map(|s| self.program_symbol(s).name.clone());
                     if u::is_parameter_property_declaration(
@@ -6668,7 +6668,7 @@ impl Checker {
                     }
                 }
             } else {
-                let symbol = self.get_symbol_of_declaration(member);
+                let symbol = self.get_symbol_of_declaration_merged(member);
                 let is_static = has_static_modifier(self.store(), member);
                 // In non-ambient contexts, check that static members are not
                 // named 'prototype'.
@@ -6677,7 +6677,7 @@ impl Checker {
                         if self.program_symbol(symbol).name == "prototype" {
                             if let Some(name) = self.store().node(member).name() {
                                 let symbol_name = self.program_symbol(symbol).name.clone();
-                                let node_symbol = self.get_symbol_of_declaration(node);
+                                let node_symbol = self.get_symbol_of_declaration_merged(node);
                                 let node_symbol_name = node_symbol
                                     .map(|s| self.program_symbol(s).name.clone())
                                     .unwrap_or_default();
@@ -6784,7 +6784,7 @@ impl Checker {
                             .name()
                             .is_some_and(|n| is_binding_pattern(self.store(), n))
                     {
-                        if let Some(symbol) = self.get_symbol_of_declaration(param) {
+                        if let Some(symbol) = self.get_symbol_of_declaration_merged(param) {
                             if self.program_symbol(symbol).name == name {
                                 let symbol_name = self.program_symbol(symbol).name.clone();
                                 if let Some(pname) = self.store().node(param).name() {
@@ -6794,7 +6794,7 @@ impl Checker {
                         }
                     }
                 }
-            } else if let Some(symbol) = self.get_symbol_of_declaration(member) {
+            } else if let Some(symbol) = self.get_symbol_of_declaration_merged(member) {
                 if self.program_symbol(symbol).name == name
                     && (!check_static || is_static == is_static_modifier(self.store(), member))
                 {
@@ -6940,7 +6940,7 @@ impl Checker {
             .expect("InferTypeNode data")
             .type_parameter;
         self.check_source_element(Some(type_parameter_declaration_node));
-        if let Some(symbol) = self.get_symbol_of_declaration(type_parameter_declaration_node) {
+        if let Some(symbol) = self.get_symbol_of_declaration_merged(type_parameter_declaration_node) {
             let declarations = self.program_symbol(symbol).declarations.clone();
             if declarations.len() > 1 {
                 // TODO(port M6 S7): the declaredTypeLinks typeParametersChecked
@@ -7123,7 +7123,7 @@ impl Checker {
         if self.has_bindable_name(node) {
             // first we want to check the local symbol that contain this
             // declaration
-            let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+            let symbol = self.get_symbol_of_declaration_merged(node).unwrap_or_default();
             let local_symbol = local_symbol_of(self.store(), node).unwrap_or(symbol);
             // Since the javascript won't do semantic analysis like
             // typescript, ignore javascript function declarations so that
@@ -7849,7 +7849,7 @@ impl Checker {
         let type_parameters = type_parameters_of(self.store(), node);
         self.check_type_parameters(&type_parameters);
         self.check_exports_on_merged_declarations(node);
-        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+        let Some(symbol) = self.get_symbol_of_declaration_merged(node) else {
             return;
         };
         let class_type = self.get_declared_type_of_symbol(symbol);
@@ -8100,7 +8100,7 @@ impl Checker {
         if self.emit_standard_class_fields {
             return;
         }
-        let node_symbol_name = match self.get_symbol_of_declaration(node) {
+        let node_symbol_name = match self.get_symbol_of_declaration_merged(node) {
             Some(symbol) => crate::relater::symbol_to_string(self, symbol),
             None => String::new(),
         };
@@ -8314,7 +8314,7 @@ impl Checker {
             if has_static_modifier(self.store(), member) {
                 continue;
             }
-            if let Some(declared_prop) = self.get_symbol_of_declaration(member) {
+            if let Some(declared_prop) = self.get_symbol_of_declaration_merged(member) {
                 let prop_name = self.program_symbol(declared_prop).name.clone();
                 if prop_name == "__computed" {
                     // Go: InternalSymbolNameComputed.
@@ -8836,7 +8836,7 @@ impl Checker {
         type_with_this: TypeId,
         member: NodeId,
     ) {
-        let Some(symbol) = self.get_symbol_of_declaration(member) else {
+        let Some(symbol) = self.get_symbol_of_declaration_merged(member) else {
             return;
         };
         let member_has_override = u::has_override_modifier(self.store().node(member));
@@ -8872,7 +8872,7 @@ impl Checker {
         if self.store().node(member).name().is_none() || member_symbol.is_none() {
             return MemberOverrideStatus::None;
         }
-        let Some(class_symbol) = self.get_symbol_of_declaration(node) else {
+        let Some(class_symbol) = self.get_symbol_of_declaration_merged(node) else {
             return MemberOverrideStatus::None;
         };
         let t = self.get_declared_type_of_symbol(class_symbol);
@@ -9091,7 +9091,7 @@ impl Checker {
                     // REAL (M6 S10, checker.go:4910): the computed-name member
                     // arm — checkIndexConstraintForProperty with the name
                     // expression's type.
-                    if let Some(symbol) = crate::typeofsymbol::get_symbol_of_declaration(self, member) {
+                    if let Some(symbol) = self.get_symbol_of_declaration_merged(member) {
                         let name = tsc_binder::ast_shims::get_name_of_declaration(self.store(), member);
                         let expression = name.filter(|&n| self.store().node(n).kind == Kind::ComputedPropertyName)
                             .map(|n| self.store().node(n).as_computed_property_name().expect("ComputedPropertyName data").expression);
@@ -9269,7 +9269,7 @@ impl Checker {
     /// (checker.go:5020).
     pub(crate) fn check_class_or_interface_for_duplicate_index_signatures(&mut self, node: NodeId) {
         // Only check the type once
-        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+        let Some(symbol) = self.get_symbol_of_declaration_merged(node) else {
             return;
         };
         if !self.declared_type_links.get(symbol).index_signatures_checked {
@@ -9283,7 +9283,7 @@ impl Checker {
     pub(crate) fn check_type_for_duplicate_index_signatures(&mut self, node: NodeId) {
         // TypeScript 1.0 spec (April 2014): 3.7.4 / 8.5 — at most one
         // string and one numeric index signature.
-        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+        let Some(symbol) = self.get_symbol_of_declaration_merged(node) else {
             return;
         };
         let Some(index_symbol) =
@@ -9372,7 +9372,7 @@ impl Checker {
                     || prop_name_kind == Kind::PrivateIdentifier
                     || prop_name_kind == Kind::ComputedPropertyName
                 {
-                    let Some(symbol) = self.get_symbol_of_declaration(member) else {
+                    let Some(symbol) = self.get_symbol_of_declaration_merged(member) else {
                         continue;
                     };
                     let t = self.get_type_of_symbol(symbol);
@@ -9539,7 +9539,7 @@ impl Checker {
             self.check_type_name_is_reserved(name, &diag::INTERFACE_NAME_CANNOT_BE_0);
         }
         self.check_exports_on_merged_declarations(node);
-        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+        let Some(symbol) = self.get_symbol_of_declaration_merged(node) else {
             return;
         };
         self.check_type_parameter_lists_identical(symbol);
@@ -9715,7 +9715,7 @@ impl Checker {
         self.compute_enum_member_values(node);
         // Spec 2014 - Section 9.3: (see Go's comment block). Only perform
         // this check once per symbol.
-        let Some(enum_symbol) = self.get_symbol_of_declaration(node) else {
+        let Some(enum_symbol) = self.get_symbol_of_declaration_merged(node) else {
             return;
         };
         if !self.declared_type_links.get(enum_symbol).enum_checked {
@@ -9865,7 +9865,7 @@ impl Checker {
             }
         }
         self.check_exports_on_merged_declarations(node);
-        let Some(symbol) = self.get_symbol_of_declaration(node) else {
+        let Some(symbol) = self.get_symbol_of_declaration_merged(node) else {
             return;
         };
         // The following checks only apply on a non-ambient instantiated
@@ -10106,7 +10106,7 @@ impl Checker {
     /// Go: `func (c *Checker) checkExternalModuleExports(node)` (checker.go:5888).
     #[allow(dead_code)] // lands with the import/export batch wiring (Go 5420-5943)
     pub(crate) fn check_external_module_exports(&mut self, node: NodeId) {
-        let Some(module_symbol) = self.get_symbol_of_declaration(node) else {
+        let Some(module_symbol) = self.get_symbol_of_declaration_merged(node) else {
             return;
         };
         if !self.module_symbol_links.get(module_symbol).exports_checked {
@@ -10988,7 +10988,7 @@ impl Checker {
             // TODO(port M6 S?): markLinkedReferences (ReferenceHintExportImportEquals)
             // — the reference-marking seam; permissive no-op.
             if !tsc_ast::is_external_module_reference(self.store().node(module_reference)) {
-                let Some(symbol) = self.get_symbol_of_declaration(node) else {
+                let Some(symbol) = self.get_symbol_of_declaration_merged(node) else {
                     return;
                 };
                 let target = self.resolve_alias(symbol);
@@ -11705,7 +11705,7 @@ impl Checker {
     /// Go: `func (c *Checker) checkAliasSymbol(node)` (checker.go:6937) — the
     /// REAL body, replacing the S6 permissive no-op.
     pub(crate) fn check_alias_symbol(&mut self, node: NodeId) {
-        let Some(initial_symbol) = self.get_symbol_of_declaration(node) else {
+        let Some(initial_symbol) = self.get_symbol_of_declaration_merged(node) else {
             return;
         };
         let target = self.resolve_alias(initial_symbol);

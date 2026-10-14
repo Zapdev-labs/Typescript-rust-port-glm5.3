@@ -148,7 +148,7 @@ impl Checker {
                 Kind::SourceFile => {
                     if tsc_binder::ast_shims::is_external_module(self.store().file(loc.file_id())) {
                         // fallthrough to the module-declaration arm
-                        if let Some(module_symbol) = self.get_symbol_of_declaration(loc) {
+                        if let Some(module_symbol) = self.get_symbol_of_declaration_merged(loc) {
                             let exports = self.program_symbol(module_symbol).exports.clone();
                             self.copy_locally_visible_export_symbols_into(
                                 &mut symbols,
@@ -159,7 +159,7 @@ impl Checker {
                     }
                 }
                 Kind::ModuleDeclaration => {
-                    if let Some(module_symbol) = self.get_symbol_of_declaration(loc) {
+                    if let Some(module_symbol) = self.get_symbol_of_declaration_merged(loc) {
                         let exports = self.program_symbol(module_symbol).exports.clone();
                         self.copy_locally_visible_export_symbols_into(
                             &mut symbols,
@@ -169,7 +169,7 @@ impl Checker {
                     }
                 }
                 Kind::EnumDeclaration => {
-                    if let Some(enum_symbol) = self.get_symbol_of_declaration(loc) {
+                    if let Some(enum_symbol) = self.get_symbol_of_declaration_merged(loc) {
                         let exports = self.program_symbol(enum_symbol).exports.clone();
                         self.copy_symbols_into(
                             &mut symbols,
@@ -193,7 +193,7 @@ impl Checker {
                     // type parameter inside class expression similar to how we handle
                     // it in classDeclaration and interface Declaration.
                     if !is_static_symbol {
-                        if let Some(class_symbol) = self.get_symbol_of_declaration(loc) {
+                        if let Some(class_symbol) = self.get_symbol_of_declaration_merged(loc) {
                             let members = self.get_members_of_symbol_table(class_symbol);
                             self.copy_symbols_into(
                                 &mut symbols,
@@ -664,7 +664,7 @@ impl Checker {
                 saved_signatures.push((ancestor, resolved));
                 self.signature_node_links.get(ancestor).resolved_signature = None;
                 if is_function_expression_or_arrow_function_kind(self.store().node(ancestor).kind) {
-                    if let Some(symbol) = self.get_symbol_of_declaration(ancestor) {
+                    if let Some(symbol) = self.get_symbol_of_declaration_merged(ancestor) {
                         let resolved_type = self.value_symbol_links.get(symbol).resolved_type;
                         saved_types.push((symbol, resolved_type));
                         self.value_symbol_links.get(symbol).resolved_type = None;

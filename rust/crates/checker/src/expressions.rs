@@ -60,6 +60,7 @@ use tsc_diagnostics::{
     CANNOT_ASSIGN_TO_PRIVATE_METHOD_0_PRIVATE_METHODS_ARE_NOT_WRITABLE,
     CANNOT_USE_THIS_IN_A_STATIC_PROPERTY_INITIALIZER_OF_A_DECORATED_CLASS,
     CLASS_FIELD_0_DEFINED_BY_THE_PARENT_CLASS_IS_NOT_ACCESSIBLE_IN_THE_CHILD_CLASS_VIA_SUPER,
+    ELEMENT_IMPLICITLY_HAS_AN_ANY_TYPE_BECAUSE_TYPE_0_HAS_NO_INDEX_SIGNATURE,
     EXPONENTIATION_CANNOT_BE_PERFORMED_ON_BIGINT_VALUES_UNLESS_THE_TARGET_OPTION_IS_SET_TO_ES2016_OR_LATER,
     LEFT_SIDE_OF_COMMA_OPERATOR_IS_UNUSED_AND_HAS_NO_SIDE_EFFECTS,
     META_PROPERTY_0_IS_ONLY_ALLOWED_IN_THE_BODY_OF_A_FUNCTION_DECLARATION_FUNCTION_EXPRESSION_OR_CONSTRUCTOR,
@@ -2336,9 +2337,9 @@ impl Checker {
         };
         let symbol = if self.store().node(container).kind == Kind::Constructor {
             let parent = self.store().node(container).parent.get();
-            self.get_symbol_of_declaration(parent)
+            self.get_symbol_of_declaration_merged(parent)
         } else {
-            self.get_symbol_of_declaration(container)
+            self.get_symbol_of_declaration_merged(container)
         };
         match symbol {
             Some(symbol) => self.get_type_of_symbol(symbol),
@@ -3343,8 +3344,36 @@ impl Checker {
                     if !is_unchecked_js && u::is_js_literal_type(self, left_type) {
                         return self.any_type();
                     }
-                    // Go: the globalThis-exports arm — the S6 module seam keeps it
-                    // dormant (the exports lookup answers None).
+                    // Go: the globalThis arm (checker.go:11573) —
+                    // PORT(FCS tranche 14): REAL (was dormant — the exports
+                    // lookup answered None before the globals↔exports
+                    // aliasing landed in spine.rs). A block-scoped export
+                    // reports the plain property-does-not-exist; otherwise
+                    // the no-index-signature implicit-any (gated by
+                    // noImplicitAny); anyType either way.
+                    if self.type_(left_type).symbol == self.global_this_symbol {
+                        let global_symbol = self
+                            .global_this_symbol
+                            .and_then(|g| self.program_symbol(g).exports.get(&right_text).copied());
+                        if global_symbol.is_some_and(|s| {
+                            self.program_symbol(s).flags.intersects(SymbolFlags::BLOCK_SCOPED)
+                        }) {
+                            let left_string = self.type_to_string(left_type);
+                            self.error(
+                                right,
+                                &PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1,
+                                &[right_text.clone(), left_string],
+                            );
+                        } else if self.no_implicit_any {
+                            let left_string = self.type_to_string(left_type);
+                            self.error(
+                                right,
+                                &ELEMENT_IMPLICITLY_HAS_AN_ANY_TYPE_BECAUSE_TYPE_0_HAS_NO_INDEX_SIGNATURE,
+                                &[left_string],
+                            );
+                        }
+                        return self.any_type();
+                    }
                     if !right_text.is_empty() && !self.check_and_report_error_for_extending_interface(node) {
                         let containing = if u::is_this_type_parameter(self.type_(left_type)) {
                             apparent_type
@@ -3844,7 +3873,7 @@ impl Checker {
         let mut enclosing_class: Option<TypeId> = None;
         let mut container = u::get_containing_class(self.store(), location);
         while let Some(current) = container {
-            let symbol = self.get_symbol_of_declaration(current);
+            let symbol = self.get_symbol_of_declaration_merged(current);
             if let Some(symbol) = symbol {
                 let class = self.get_declared_type_of_symbol(symbol);
                 if self.is_class_derived_from_declaring_classes(class, prop, writing) {
@@ -4451,7 +4480,7 @@ impl Checker {
         // is_class_like would hand NONE to store().node (the top-level
         // `this` of a script).
         if parent != NodeId::NONE && crate::statements::is_class_like(self.store(), parent) {
-            let symbol = self.get_symbol_of_declaration(parent)?;
+            let symbol = self.get_symbol_of_declaration_merged(parent)?;
             // PORT (FCS tranche 12): Go wraps BOTH the static
             // (getTypeOfSymbol) and instance (declared thisType) arms with
             // getFlowTypeOfReference(node, t) (checker.go:12408-12412) —
@@ -4747,7 +4776,7 @@ impl Checker {
             }
             return self.null_widening_type();
         }
-        let class_symbol = match self.get_symbol_of_declaration(class_like_declaration) {
+        let class_symbol = match self.get_symbol_of_declaration_merged(class_like_declaration) {
             Some(s) => s,
             // PORT: Go asserts the class-like has a symbol; a binder-less
             // node answers Go's errorType shape.
@@ -4811,7 +4840,7 @@ impl Checker {
 
     /// Go: `func (c *Checker) classDeclarationExtendsNull(classDecl) bool` (checker.go:12519).
     pub(crate) fn class_declaration_extends_null(&mut self, class_decl: NodeId) -> bool {
-        let class_symbol = match self.get_symbol_of_declaration(class_decl) {
+        let class_symbol = match self.get_symbol_of_declaration_merged(class_decl) {
             Some(s) => s,
             None => return false,
         };
@@ -5195,7 +5224,7 @@ impl Checker {
                         )
                     });
                 if !variable.is_none() && !is_binding_pattern {
-                    return self.get_symbol_of_declaration(variable);
+                    return self.get_symbol_of_declaration_merged(variable);
                 }
             }
         } else if let Some(initializer) = initializer
@@ -6729,7 +6758,7 @@ impl Checker {
             }};
         }
         for member_decl in property_nodes.iter().copied() {
-            let mut member = self.get_symbol_of_declaration(member_decl);
+            let mut member = self.get_symbol_of_declaration_merged(member_decl);
             let mut computed_name_type: Option<TypeId> = None;
             let member_name_node = self.store().node(member_decl).name();
             if let Some(name) = member_name_node
@@ -7676,7 +7705,7 @@ impl Checker {
         // parameter/return typing + checkSignatureDeclaration run exactly
         // where Go runs them (was the S9 seam's CONTEXT_CHECKED-only stub).
         self.contextually_check_function_expression_or_object_literal_method(node, check_mode);
-        let symbol = self.get_symbol_of_declaration(node)
+        let symbol = self.get_symbol_of_declaration_merged(node)
             .expect("function expression has a symbol");
         self.get_type_of_symbol(symbol)
     }
@@ -7686,7 +7715,7 @@ impl Checker {
         self.check_class_like_declaration(node);
         self.check_node_deferred(node);
         self.check_class_expression_external_helpers(node);
-        let symbol = self.get_symbol_of_declaration(node)
+        let symbol = self.get_symbol_of_declaration_merged(node)
             .expect("class expression has a symbol");
         self.get_type_of_symbol(symbol)
     }

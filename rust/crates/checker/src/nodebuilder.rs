@@ -2205,6 +2205,12 @@ fn get_type_alias_for_type_literal(c: &Checker, t: TypeId) -> Option<SymbolId> {
         node = parent_node(store.node(node))?;
     }
     if store.node(node).kind == Kind::TypeAliasDeclaration {
+        // Go: `c.getSymbolOfDeclaration(node)` (nodebuilderimpl.go:2855 —
+        // merged+late-bound). PORT(FCS tranche 14): the merged twin needs
+        // &mut Checker through the whole nodebuilder context chain; the
+        // late-bound/merged distinction is nil for a TypeAliasDeclaration
+        // (never a class member with a computed name), so the raw carrier
+        // is the same answer here.
         return crate::typeofsymbol::get_symbol_of_declaration(c, node);
     }
     None

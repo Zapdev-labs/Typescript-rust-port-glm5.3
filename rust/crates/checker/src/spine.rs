@@ -2692,7 +2692,7 @@ impl Checker {
                 for (name, symbol) in global_exports {
                     let _ = file_symbol;
                     if self.globals.get(&name).is_none() {
-                        self.globals.set(name, symbol);
+                        self.globals_set(name, symbol);
                     }
                 }
             }
@@ -2779,6 +2779,21 @@ impl Checker {
         }
     }
 
+    /// Go: `c.globalThisSymbol.Exports = c.globals` (checker.go:974) — ONE
+    /// map aliased between the checker field and the symbol's exports; every
+    /// write through either name is visible through the other (the
+    /// `typeof globalThis` member lookups and the checker.go:11573/27679
+    /// globalThis-exports probes read it). The port's `SymbolTable` is a
+    /// value type, so every post-init write to `globals` mirrors into the
+    /// globalThis symbol's exports here. PORT(FCS tranche 14): REAL —
+    /// retires the checker.rs init "aliasing divergence" TODO(port M6).
+    fn globals_set(&mut self, name: String, symbol: SymbolId) {
+        self.globals.set(name.clone(), symbol);
+        if let Some(global_this) = self.global_this_symbol {
+            self.program.symbol_mut(global_this).exports.set(name, symbol);
+        }
+    }
+
     /// Go: `func (c *Checker) mergeGlobalSymbol(symbol *ast.Symbol)` (checker.go:1467).
     fn merge_global_symbol(&mut self, symbol: SymbolId) {
         let name = self.program.symbol(symbol).name.clone();
@@ -2792,7 +2807,7 @@ impl Checker {
             }
             None => self.get_merged_symbol(symbol),
         };
-        self.globals.set(name, merged);
+        self.globals_set(name, merged);
     }
 
     /// Go: `func (c *Checker) mergeSymbolTable(target, source, unidirectional, mergedParent)`
@@ -2814,7 +2829,7 @@ impl Checker {
                 Some(target) => self.merge_symbol(target, source_symbol, unidirectional),
                 None => self.get_merged_symbol(source_symbol),
             };
-            self.globals.set(name, merged);
+            self.globals_set(name, merged);
         }
     }
 
@@ -3023,7 +3038,7 @@ impl Checker {
             }
             None => {
                 let undefined_symbol = self.undefined_symbol();
-                self.globals.set(name, undefined_symbol);
+                self.globals_set(name, undefined_symbol);
             }
         }
     }
@@ -3043,7 +3058,7 @@ impl Checker {
                 let name = self.program.symbol(module_symbol).name.clone();
                 if self.globals.get(&name).is_some() {
                     let merged = self.get_merged_symbol(module_symbol);
-                    self.globals.set(name, merged);
+                    self.globals_set(name, merged);
                 }
             }
         }

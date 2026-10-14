@@ -2491,10 +2491,27 @@ impl Checker {
         }
     }
 
-    /// Go: `func (c *Checker) getSymbolOfDeclaration(node) *ast.Symbol` (checker.go:14669)
+    /// Go: `func (c *Checker) getSymbolOfDeclaration(node) *ast.Symbol` (checker.go:14659)
     /// — the merged+late-bound composition. PORT: Go's name collides with the
     /// exports.rs public twin (GetSymbolOfDeclaration); the internal body is
     /// named `..._merged` (the landed call sites keep their carrier).
+    ///
+    /// PORT(FCS tranche 14 — the merged-symbol sweep): Go has ONE
+    /// `getSymbolOfDeclaration` (merged+late-bound at every call site), but
+    /// also reads the raw `node.Symbol()` payload inline in many bodies.
+    /// The per-site audit (Go twin body: `getSymbolOfDeclaration(` method
+    /// call vs `.Symbol()` raw read) flipped ~60 Rust sites to this merged
+    /// twin (checker.go citations per site: checkClassLikeDeclaration,
+    /// checkObjectTypeForDuplicateDeclarations, checkAliasSymbol 6938,
+    /// getSignatureFromDeclaration's accessor arm 20288, isSomeSymbol
+    /// Assigned 32025, getSymbolsInScope 87/89/104,
+    /// getReturnTypeFromAnnotation 20471, checkUnusedClassMembers 7324,
+    /// and the rest of the audit table); sites where Go reads raw
+    /// `.Symbol()` (getSignatureFromDeclaration's param symbols 20260/20269,
+    /// checkParameter, createUnionOrIntersectionProperty,
+    /// markPropertyAsReferenced, getTypeFromTypeLiteral..., the
+    /// typeofsymbol.rs worker's file-symbol read, etc.) deliberately keep
+    /// the raw carrier — mirror Go, not a blanket swap.
     pub(crate) fn get_symbol_of_declaration_merged(&mut self, node: NodeId) -> Option<SymbolId> {
         let symbol = crate::typeofsymbol::get_symbol_of_declaration(self, node)?;
         let late_bound = self.get_late_bound_symbol(symbol);
@@ -3033,7 +3050,7 @@ impl Checker {
             // the global AbstractModuleSource (reportErrors — the machinery
             // 2318 in the lib-less twin). PORT(FCS tranche 7) — REAL now
             // (was the permissive None seam).
-            let alias = self.get_symbol_of_declaration(node)?;
+            let alias = self.get_symbol_of_declaration_merged(node)?;
             if self.alias_symbol_links.get(alias).immediate_target.is_some() {
                 return self.alias_symbol_links.get(alias).immediate_target;
             }

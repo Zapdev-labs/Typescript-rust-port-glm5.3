@@ -2691,7 +2691,7 @@ impl Checker {
                 if target_kind == Kind::VariableDeclaration || target_kind == Kind::BindingElement {
                     if let Some(source_symbol) = source_symbol {
                         let exported = self.get_export_symbol_of_value_symbol_if_exported(source_symbol);
-                        return self.get_symbol_of_declaration(target) == Some(exported);
+                        return self.get_symbol_of_declaration_merged(target) == Some(exported);
                     }
                 }
                 false
@@ -3663,7 +3663,7 @@ impl Checker {
         // (flow.go:2223) — the nil-parent guard (a top-level script `this`
         // hands a NONE parent to isClassLike, whose store read panics).
         if parent != NodeId::NONE && crate::statements::is_class_like(self.store(), parent) {
-            let symbol = self.get_symbol_of_declaration(parent)?;
+            let symbol = self.get_symbol_of_declaration_merged(parent)?;
             if binder_shims::has_static_modifier(self.store().node(container)) {
                 return Some(self.get_type_of_symbol(symbol));
             }
@@ -4333,7 +4333,7 @@ impl Checker {
     /// Go: isSomeSymbolAssigned — the flow-side probe isConstantReference uses
     /// (Go checker.go's each declared symbol of the declaration).
     fn is_some_symbol_assigned(&mut self, declaration: NodeId) -> bool {
-        match self.get_symbol_of_declaration(declaration) {
+        match self.get_symbol_of_declaration_merged(declaration) {
             Some(symbol) => self.is_symbol_assigned(symbol),
             None => false,
         }

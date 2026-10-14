@@ -596,7 +596,7 @@ impl Checker {
             // type might still be in-progress and that would cause spurious
             // circularities (Go's comment).
             if let Some(parent_type) = self.get_contextual_type(parent, context_flags) {
-                if self.type_(parent_type).symbol() != self.get_symbol_of_declaration(parent) {
+                if self.type_(parent_type).symbol() != self.get_symbol_of_declaration_merged(parent) {
                     let name = name_of_node(self.store(), declaration)?;
                     let name_type = self.get_literal_type_from_property_name(name);
                     let property_name =
@@ -2242,7 +2242,7 @@ impl Checker {
             {
                 self.node_links.get(node).flags |=
                     crate::types::NodeCheckFlags::CONTEXT_CHECKED;
-                let symbol = crate::typeofsymbol::get_symbol_of_declaration(self, node)
+                let symbol = self.get_symbol_of_declaration_merged(node)
                     .expect("function expression has a symbol");
                 let symbol_type = self.get_type_of_symbol(symbol);
                 let signature = self
@@ -2590,7 +2590,7 @@ impl Checker {
                 );
                 if self.store().node(name).kind == Kind::Identifier {
                     if let Some(symbol) =
-                        crate::typeofsymbol::get_symbol_of_declaration(self, element)
+                        self.get_symbol_of_declaration_merged(element)
                     {
                         self.value_symbol_links.get(symbol).resolved_type = Some(t);
                     }

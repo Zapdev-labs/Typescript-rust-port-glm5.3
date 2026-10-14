@@ -1137,7 +1137,7 @@ impl Checker {
                         || body.is_some_and(|b| u::is_node_descendant_of(self.store(), node, b));
                     if !is_static && in_constructor_body {
                         let symbol = self
-                            .get_symbol_of_declaration(parent)
+                            .get_symbol_of_declaration_merged(parent)
                             .expect("class/interface declaration symbol");
                         let declared = self.get_declared_type_of_class_or_interface(symbol);
                         let this_type = self
@@ -2295,7 +2295,7 @@ impl Checker {
             host = self.store().node(host).parent.get();
         }
         if u::is_type_alias(self.store().node(host)) {
-            return Some(self.get_symbol_of_declaration(host).expect("alias declaration symbol"));
+            return Some(self.get_symbol_of_declaration_merged(host).expect("alias declaration symbol"));
         }
         None
     }
@@ -3162,7 +3162,7 @@ impl Checker {
                 .expect("InferTypeNode data")
                 .type_parameter;
             let symbol = self
-                .get_symbol_of_declaration(type_parameter)
+                .get_symbol_of_declaration_merged(type_parameter)
                 .expect("infer type-parameter symbol");
             let t = self.get_declared_type_of_type_parameter(symbol);
             self.type_node_links.get(node).resolved_type = Some(t);

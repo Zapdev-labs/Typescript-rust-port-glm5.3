@@ -805,25 +805,30 @@ impl Checker {
                             return Some(self.get_union_type(&type_list));
                         }
                     }
+                    // Go: `objectType.symbol == c.globalThisSymbol &&
+                    // hasPropName && Exports[propName] != nil && BlockScoped`
+                    // (checker.go:27679) — the whole conjunction gates the
+                    // 2339; a globalThis access that fails any leg falls to
+                    // the noImplicitAny index-expression ladder. PORT(FCS
+                    // tranche 14): the former nesting made a non-block-scoped
+                    // globalThis hit terminal (skipping the ladder Go takes).
                     let is_global_this = self
                         .type_(object_type)
                         .symbol
                         .is_some_and(|s| Some(s) == self.global_this_symbol);
-                    if is_global_this && has_prop_name {
-                        let export_symbol = self
-                            .global_this_symbol
-                            .and_then(|s| self.program_symbol(s).exports.get(&prop_name).copied());
-                        let blocked = export_symbol.is_some_and(|s| {
-                            self.program_symbol(s).flags.intersects(SymbolFlags::BLOCK_SCOPED)
-                        });
-                        if blocked {
-                            let type_string = self.type_to_string(object_type);
-                            self.error(
-                                access_expression,
-                                &PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1,
-                                &[prop_name.clone(), type_string],
-                            );
-                        }
+                    let export_symbol = self
+                        .global_this_symbol
+                        .and_then(|s| self.program_symbol(s).exports.get(&prop_name).copied());
+                    let blocked = export_symbol.is_some_and(|s| {
+                        self.program_symbol(s).flags.intersects(SymbolFlags::BLOCK_SCOPED)
+                    });
+                    if is_global_this && has_prop_name && blocked {
+                        let type_string = self.type_to_string(object_type);
+                        self.error(
+                            access_expression,
+                            &PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1,
+                            &[prop_name.clone(), type_string],
+                        );
                     } else if self.no_implicit_any
                         && !access_flags.intersects(AccessFlags::SUPPRESS_NO_IMPLICIT_ANY_ERROR)
                     {

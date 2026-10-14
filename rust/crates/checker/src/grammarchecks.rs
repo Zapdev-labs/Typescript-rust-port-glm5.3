@@ -3016,7 +3016,7 @@ impl Checker {
                 } else if self.legacy_decorators
                     && matches!(self.store().node(node).kind, Kind::GetAccessor | Kind::SetAccessor)
                 {
-                    let symbol = crate::typeofsymbol::get_symbol_of_declaration(self, node);
+                    let symbol = self.get_symbol_of_declaration_merged(node);
                     let declarations = symbol
                         .map(|s| self.program_symbol(s).declarations.to_vec())
                         .unwrap_or_default();

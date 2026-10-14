@@ -849,16 +849,28 @@ impl Checker {
                     ))
                 }
                 Kind::PropertyAssignment => {
-                    // TODO(port M6 S4): checkPropertyAssignment(declaration, CheckModeNormal).
-                    Some(self.error_type())
+                    // Go checker.go:16998: checkPropertyAssignment(declaration,
+                    // CheckModeNormal). PORT(FCS tranche 14): REAL (was the
+                    // S4 errorType stub — the contextualTypedSpecialAssignment
+                    // JS `obj.a = f` property-assignment worker family).
+                    Some(self.check_property_assignment(declaration, CheckMode::CHECK_MODE_NORMAL))
                 }
                 Kind::ShorthandPropertyAssignment => {
-                    // TODO(port M6 S4): checkShorthandPropertyAssignment(declaration, true, CheckModeNormal).
-                    Some(self.error_type())
+                    // Go checker.go:17000: checkShorthandPropertyAssignment(
+                    // declaration, true, CheckModeNormal). PORT(FCS tranche 14):
+                    // REAL (was the S4 errorType stub).
+                    Some(self.check_shorthand_property_assignment(
+                        declaration,
+                        true, /*inDestructuringPattern*/
+                        CheckMode::CHECK_MODE_NORMAL,
+                    ))
                 }
                 Kind::MethodDeclaration => {
-                    // TODO(port M6 S4): checkObjectLiteralMethod(declaration, CheckModeNormal).
-                    Some(self.error_type())
+                    // Go checker.go:17002: checkObjectLiteralMethod(declaration,
+                    // CheckModeNormal). PORT(FCS tranche 14): REAL (was the S4
+                    // errorType stub — the computedPropertyNamesContextualType
+                    // `["" + 0](y)` method-parameter family).
+                    Some(self.check_object_literal_method(declaration, CheckMode::CHECK_MODE_NORMAL))
                 }
                 Kind::ExportAssignment => {
                     if ast_shims::type_of_node(self.store(), declaration).is_some() {
@@ -3115,7 +3127,7 @@ impl Checker {
         if check_mode == CheckMode::CHECK_MODE_NORMAL {
             // We can use a cached resolved type if no optionality was
             // included in that type.
-            if let Some(symbol) = get_symbol_of_declaration(self, node) {
+            if let Some(symbol) = self.get_symbol_of_declaration_merged(node) {
                 let resolved_type = self.value_symbol_links.get(symbol).resolved_type;
                 if let Some(resolved_type) = resolved_type {
                     if !(self.strict_null_checks && u::is_optional_declaration(self.store(), node)) {
@@ -4885,7 +4897,7 @@ impl Checker {
                             .as_mapped_type_node()
                             .expect("MappedTypeNode data")
                             .type_parameter;
-                        let symbol = self.get_symbol_of_declaration(type_parameter)
+                        let symbol = self.get_symbol_of_declaration_merged(type_parameter)
                             .expect("MappedTypeNode type-parameter symbol");
                         outer_type_parameters
                             .push(self.get_declared_type_of_type_parameter(symbol));
@@ -4909,7 +4921,7 @@ impl Checker {
                         && matches!(kind, Kind::ClassDeclaration | Kind::ClassExpression | Kind::InterfaceDeclaration)
                     {
                         let symbol = self
-                            .get_symbol_of_declaration(node)
+                            .get_symbol_of_declaration_merged(node)
                             .expect("class/interface declaration symbol");
                         let declared =
                             self.get_declared_type_of_class_or_interface(symbol);
@@ -4976,7 +4988,7 @@ impl Checker {
         let mut type_parameters = type_parameters;
         for declaration in declarations {
             let symbol = self
-                .get_symbol_of_declaration(*declaration)
+                .get_symbol_of_declaration_merged(*declaration)
                 .expect("type-parameter declaration symbol");
             let t = self.get_declared_type_of_type_parameter(symbol);
             if !type_parameters.contains(&t) {
@@ -5093,7 +5105,7 @@ impl Checker {
                 for member in tsc_binder::node_data::members_of(self.store(), declaration).to_vec() {
                     if !binder_shims::has_dynamic_name(self.store(), member) {
                         let member_symbol = self
-                            .get_symbol_of_declaration(member)
+                            .get_symbol_of_declaration_merged(member)
                             .expect("enum member symbol");
                         let value = self.get_enum_member_value(member);
                         let member_type = match value.value {

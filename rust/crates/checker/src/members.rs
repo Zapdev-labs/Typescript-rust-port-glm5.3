@@ -1342,7 +1342,7 @@ impl Checker {
             } else {
                 Kind::GetAccessor
             };
-            let own_symbol = crate::typeofsymbol::get_symbol_of_declaration(self, declaration);
+            let own_symbol = self.get_symbol_of_declaration_merged(declaration);
             if let Some(own_symbol) = own_symbol {
                 let other = self
                     .program_symbol(own_symbol)
@@ -1557,7 +1557,7 @@ impl Checker {
         if self.store().node(declaration).kind == Kind::GetAccessor
             && self.has_bindable_name(declaration)
         {
-            let own_symbol = crate::typeofsymbol::get_symbol_of_declaration(self, declaration)?;
+            let own_symbol = self.get_symbol_of_declaration_merged(declaration)?;
             let setter = self
                 .program_symbol(own_symbol)
                 .declarations
@@ -3579,7 +3579,7 @@ impl Checker {
             .as_mapped_type_node()
             .expect("MappedTypeNode data")
             .type_parameter;
-        let symbol = crate::typeofsymbol::get_symbol_of_declaration(self, type_parameter)
+        let symbol = self.get_symbol_of_declaration_merged(type_parameter)
             .expect("MappedTypeNode type-parameter symbol");
         let declared = self.get_declared_type_of_type_parameter(symbol);
         if let Some(d) = self.type_mut(t).as_mapped_type_mut() {

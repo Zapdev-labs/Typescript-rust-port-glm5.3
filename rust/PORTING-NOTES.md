@@ -2645,3 +2645,22 @@ gates green fresh. Next: TS2339 sub-shapes (globalThis expando, strict-
 BindCallApply, intrinsic-method both-ways), residual TS7006 contextual
 worker stubs (typeofsymbol.rs:837-848), the blanket merged-symbol swap
 over ~80 raw get_symbol_of_declaration sites.
+
+## Full-corpus sweep tranche 14 landed (2026-10-25, RIG-VALIDATED) — divergent 1,418 -> 1,393
+
+Three families: (1) the globalThis expando family — Go's globals is ONE map
+aliased into globalThisSymbol.Exports (checker.go:974; Rust's SymbolTable is
+a value type) — new globals_set mirrors all 5 post-init writes; plus the
+property-access arm ported real (11573-11584: block-scoped -> 2339, else
+noImplicitAny -> 7017) and the element-access 4-leg conjunction flattened
+(27679). TS2339 extra 142->86. (2) The typeofsymbol worker stubs made real
+(PropertyAssignment/Shorthand/MethodDeclaration arms — byte-identical on
+the full corpus; the residual TS7006 36 is the deeper computed-name-method
+contextual-signature seam + JS expando-assignment params). (3) The merged-
+symbol sweep: per-site audit of all 106 raw Rust sites — ~60 swapped to
+merged+late-bound per Go's own bodies, ~19 deliberately kept raw (Go reads
+node.Symbol() inline); TS2699 missing 12->0. PLAIN-sweep census: divergent
+1,393 (1,182 count / 211 hash), identical 6,174/7,567; both drivers
+0/3,826/3,741/0; panics 0; newly-divergent 0. 52 suites (fcs14 pins);
+clippy 0; all 300-slice gates green fresh. Next by census: TS2345 (131),
+TS2322 (103/173), TS2699 (96 extra), TS2556 (66), TS2339 missing 127.
