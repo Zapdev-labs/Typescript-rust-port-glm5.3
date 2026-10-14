@@ -754,7 +754,17 @@ impl Checker {
         }
         if self.store().node(decl).kind == Kind::Parameter {
             let parent = self.store().node(decl).parent.get();
-            return self.is_context_sensitive(parent);
+            // PORT (FCS tranche 13): Go checker.go:16959 calls
+            // isContextSensitiveFunctionOrObjectLiteralMethod (the narrowed
+            // predicate — only function expressions, arrow functions, and
+            // object-literal methods can be context-sensitive), NOT the
+            // broad isContextSensitive. The port previously used the broad
+            // form, so plain function-declaration and class-method
+            // parameters were treated as context-sensitive and their
+            // implicit-any TS7006 reports were suppressed (the missing-7006
+            // family: `function f(x)` reported nothing where Go reports
+            // TS7006 "Parameter 'x' implicitly has an 'any' type").
+            return self.is_context_sensitive_function_or_object_literal_method(parent);
         }
         false
     }
@@ -2398,11 +2408,20 @@ impl Checker {
         None
     }
 
-    /// Go: `func (c *Checker) hasBindableName(node *ast.Node) bool`.
+    /// Go: `func (c *Checker) hasBindableName(node *ast.Node) bool`
+    /// (checker.go:20345): `!HasDynamicName(node) || hasLateBindableName(node)`.
+    ///
+    /// PORT (FCS tranche 13): was the S4 stub (`!hasDynamicName` only), so
+    /// dynamically-named declarations with a late-bindable name (`get [m]()`
+    /// / `set [m](v)` where m has a string-literal type) answered false —
+    /// the set-accessor parameter arm then skipped the paired-getter type
+    /// resolution and reported a spurious TS7006 on the setter's parameter
+    /// (the esDecorators-classDeclaration-accessors records). The
+    /// hasLateBindableName half (the computed name's literal-type check)
+    /// is now REAL (resolution.rs's S6 body).
     pub(crate) fn has_bindable_name(&mut self, node: NodeId) -> bool {
-        // TODO(port M6 S4/S6): the hasLateBindableName half (the computed
-        // name's literal-type check); the early-bound half is real.
         !binder_shims::has_dynamic_name(self.store(), node)
+            || self.has_late_bindable_name(node)
     }
 
     /// TODO(port M6 S9): `getParameterTypeOfFullSignature(fn, parameter)` —
@@ -2715,7 +2734,19 @@ impl Checker {
             // have symbols
             let fn_ = self.store().node(declaration).parent.get();
             if self.store().node(fn_).kind == Kind::SetAccessor && self.has_bindable_name(fn_) {
-                let parent_symbol = get_symbol_of_declaration(self, fn_);
+                // PORT (FCS tranche 13): Go checker.go:17106 uses the
+                // CHECKER's getSymbolOfDeclaration — the merged+late-bound
+                // composition (checker.go:14659). For a dynamically-named
+                // accessor (`get [m]()` / `set [m](v)` with a const of a
+                // literal type) the binder creates separate "__computed"
+                // symbols per accessor, and the late-bound resolution merges
+                // them by their resolved property name, so the getter is
+                // found and the setter parameter carries the getter's type
+                // (the rust-extra 7032+7006 pairs on the esDecorators
+                // classDeclaration-accessors records; the port previously
+                // read the raw per-declaration symbol, which never finds
+                // the paired getter).
+                let parent_symbol = self.get_symbol_of_declaration_merged(fn_);
                 let getter = parent_symbol.and_then(|s| {
                     find_declaration_of_kind(self, &self.program.symbol(s).declarations, Kind::GetAccessor)
                 });
@@ -2737,10 +2768,12 @@ impl Checker {
                         }
                     }
                     if let Some(getter_signature) = getter_signature {
-                        // TODO(port M6 S8): getReturnTypeOfSignature — the
-                        // resolved-return read; permissive errorType.
-                        let _ = getter_signature;
-                        return Some(self.error_type());
+                        // Go: `return c.getReturnTypeOfSignature(getterSignature)`
+                        // (checker.go:17120) — the REAL resolved-return read
+                        // (members.rs's S8 body); was the permissive
+                        // errorType stub, so a paired-dynamic-name setter
+                        // parameter silently got the error type.
+                        return Some(self.get_return_type_of_signature(getter_signature));
                     }
                 }
             }

@@ -4601,6 +4601,18 @@ impl Checker {
         );
         let member_symbol =
             crate::typeofsymbol::payload_symbol(self.store().node(member));
+        // PORT (FCS tranche 13): Go checker.go:16484 —
+        // `c.lateBoundLinks.Get(member.Symbol()).lateSymbol = symbol`, the
+        // raw-per-declaration "__computed" symbol → late-merged member
+        // mapping that getLateBoundSymbol (checker.go:14694) reads. The
+        // port previously never wrote it, so getSymbolOfDeclaration's
+        // merged+late-bound composition resolved dynamically-named accessors
+        // to their lone per-declaration symbols — paired `get [m]` /
+        // `set [m](v)` never merged (the rust-extra 7032+7006 pairs on the
+        // esDecorators classDeclaration-accessors records).
+        if let Some(member_symbol) = member_symbol {
+            self.late_bound_links.get(member_symbol).late_symbol = Some(symbol);
+        }
         let member_flags = member_symbol
             .map(|s| self.program_symbol(s).flags)
             .unwrap_or(SymbolFlags::NONE);

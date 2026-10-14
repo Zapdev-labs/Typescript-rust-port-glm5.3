@@ -338,14 +338,21 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) isContextSensitiveFunctionOrObjectLiteralMethod(fn *ast.Node) bool`
-    /// (checker.go:30047).
+    /// (checker.go:30044).
+    ///
+    /// PORT (FCS tranche 13): Go's body is `(IsFunctionExpressionOrArrowFunction(fn) ||
+    /// IsObjectLiteralMethod(fn)) && c.isContextSensitiveFunctionLikeDeclaration(fn)` — the port
+    /// previously carried only the disjunction, so plain function-declaration and class-method
+    /// parameters (which Go never treats as context-sensitive through this predicate) could be
+    /// misclassified; the conjunction restores the Go-exact answer.
     pub(crate) fn is_context_sensitive_function_or_object_literal_method(
         &mut self,
         fn_node: NodeId,
     ) -> bool {
         let store = self.store();
-        binder_shims::is_object_literal_method(store, fn_node)
-            || binder_shims::is_function_expression_or_arrow_function(store.node(fn_node))
+        let is_candidate = binder_shims::is_object_literal_method(store, fn_node)
+            || binder_shims::is_function_expression_or_arrow_function(store.node(fn_node));
+        is_candidate && self.is_context_sensitive_function_like_declaration(fn_node)
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -1727,12 +1734,15 @@ impl Checker {
             // For a (non-symbol) computed property, there is no reason to
             // look up the name in the type. It will just be "__computed",
             // which does not appear in any SymbolTable (Go's comment).
-            let symbol = self.get_symbol_of_declaration(element)?;
+            // PORT (FCS tranche 13): Go checker.go:30491-30492 uses the
+            // merged+late-bound getSymbolOfDeclaration (the late-bound
+            // member resolves the dynamic name AND carries the nameType)
+            // and threads the symbol's nameType through
+            // getTypeOfPropertyOfContextualTypeEx.
+            let symbol = self.get_symbol_of_declaration_merged(element)?;
             let name = crate::statements::symbol_name(self, symbol);
-            // PORT: Go threads the declaration symbol's nameType through
-            // getTypeOfPropertyOfContextualTypeEx; the nameType-based
-            // refinement rides the S10 contextual-property family.
-            return self.get_type_of_property_of_contextual_type_impl(t, &name);
+            let name_type = self.value_symbol_links.get(symbol).name_type;
+            return self.get_type_of_property_of_contextual_type_ex(t, &name, name_type);
         }
         if binder_shims::has_dynamic_name(self.store(), element) {
             // Go: for a dynamic name, look the computed property's
@@ -1761,17 +1771,26 @@ impl Checker {
             // We avoid calling getApplicableIndexInfo here because it
             // performs potentially expensive intersection reduction (Go's
             // comment).
-            return crate::typenodes::map_type(
-                self,
-                t,
-                |c, t| {
-                    let index_infos = c.get_index_infos_of_structured_type_impl(t);
-                    c.find_applicable_index_info(&index_infos, name_type)
-                        .map(|info| c.index_info_value_type(info))
-                        .unwrap_or_else(|| c.unknown_type())
-                },
-            )
-            .into();
+            // PORT (FCS tranche 13): Go checker.go:30497 maps with mapTypeEx
+            // whose f returns nil for constituents with no applicable index
+            // info — the nil constituents are DROPPED (mapTypeEx's
+            // len(mapped)==0 → nil arm). The port previously answered
+            // unknown_type() for the no-index-info constituents, so a union
+            // context (`IWithNoStringIndexSignature | IWithStringIndex...`)
+            // poisoned the contextual type with `unknown` and the
+            // contextually typed parameters fell to implicit any (the
+            // TS7006 extras on contextualTypeWithUnionTypeIndexSignatures /
+            // computedPropertyNamesContextualType / indexSignatures1).
+            return self
+                .map_type_ex(
+                    t,
+                    &mut |c: &mut Checker, t: TypeId| {
+                        let index_infos = c.get_index_infos_of_structured_type_impl(t);
+                        c.find_applicable_index_info(&index_infos, name_type)
+                            .map(|info| c.index_info_value_type(info))
+                    },
+                    true, /*noReductions*/
+                );
         }
         None
     }
@@ -1987,63 +2006,202 @@ impl Checker {
     /// intersection constituent walk's mapped-type substitution
     /// (getIndexedMappedTypeSubstitutedTypeOfContextualType) rides the S10
     /// mapped-type family.
+    /// Go: `func (c *Checker) getTypeOfPropertyOfContextualType(t, name) *Type`
+    /// (checker.go:31100) — the nil-nameType entry.
     pub(crate) fn get_type_of_property_of_contextual_type_impl(
         &mut self,
         t: TypeId,
         name: &str,
     ) -> Option<TypeId> {
-        let flags = self.type_(t).flags;
-        if !flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
-            return self.get_type_of_property_of_type_impl(t, name);
-        }
-        if flags.intersects(TypeFlags::INTERSECTION) {
-            // Go walks the constituents' concrete properties and index
-            // infos; the plain per-constituent lookup below is the common
-            // case.
-            let constituents = self.type_(t).types().to_vec();
-            for constituent in constituents {
-                if let Some(property_type) =
-                    self.get_type_of_property_of_type_impl(constituent, name)
-                {
-                    return Some(property_type);
+        self.get_type_of_property_of_contextual_type_ex(t, name, None)
+    }
+
+    /// Go: `func (c *Checker) getTypeOfPropertyOfContextualTypeEx(t, name, nameType) *Type`
+    /// (checker.go:31104).
+    ///
+    /// PORT (FCS tranche 13): was the simplified union/intersection seam
+    /// (per-constituent get_type_of_property_of_type_impl, no index-info
+    /// fallback), so contextually typed object-literal members whose
+    /// context only carries an INDEX SIGNATURE (the `var x:
+    /// IWithNoStringIndexSignature | IWithStringIndexSignature1 = { z: a
+    /// => a }` family) never received a contextual type — their parameters
+    /// fell to implicit any (the TS7006 extras on
+    /// contextualTypeWithUnionTypeIndexSignatures /
+    /// computedPropertyNamesContextualType / indexSignatures1). The body is
+    /// now Go's mapTypeEx shape: the intersection arm's
+    /// ignoreIndexInfos/indexInfoCandidates ladder, the per-constituent
+    /// concrete-property → getTypeFromIndexInfosOfContextualType fallback,
+    /// and nil constituents dropped by mapTypeEx (noReductions=true).
+    ///
+    /// PORT (S10 TODO): Go's generic-mapped-type arms
+    /// (`isGenericMappedType(t) && getMappedTypeNameTypeKind(t) !=
+    /// MappedTypeNameTypeKindRemapping` → getIndexedMappedTypeSubstituted
+    /// TypeOfContextualType, checker.go:31114/31142) ride the mapped-type
+    /// contextual wave; the port falls through to the concrete-property +
+    /// index-info ladder for mapped constituents (the pre-existing
+    /// behavior).
+    pub(crate) fn get_type_of_property_of_contextual_type_ex(
+        &mut self,
+        t: TypeId,
+        name: &str,
+        name_type: Option<TypeId>,
+    ) -> Option<TypeId> {
+        self.map_type_ex(
+            t,
+            &mut |c: &mut Checker, t: TypeId| {
+                let flags = c.type_(t).flags;
+                if flags.intersects(TypeFlags::INTERSECTION) {
+                    let mut types: Vec<TypeId> = Vec::new();
+                    let mut index_info_candidates: Vec<TypeId> = Vec::new();
+                    let mut ignore_index_infos = false;
+                    for constituent in c.type_(t).types().to_vec() {
+                        if !c.type_(constituent).flags.intersects(TypeFlags::OBJECT) {
+                            continue;
+                        }
+                        let property_type =
+                            c.get_type_of_concrete_property_of_contextual_type(constituent, name);
+                        match property_type {
+                            Some(property_type) => {
+                                ignore_index_infos = true;
+                                index_info_candidates.clear();
+                                types = c
+                                    .append_contextual_property_type_constituent(
+                                        types,
+                                        Some(property_type),
+                                    );
+                            }
+                            None => {
+                                if !ignore_index_infos {
+                                    index_info_candidates.push(constituent);
+                                }
+                            }
+                        }
+                    }
+                    for candidate in index_info_candidates {
+                        let index_info_type = c.get_type_from_index_infos_of_contextual_type(
+                            candidate,
+                            name,
+                            name_type,
+                        );
+                        types = c
+                            .append_contextual_property_type_constituent(types, index_info_type);
+                    }
+                    if types.is_empty() {
+                        return None;
+                    }
+                    if types.len() == 1 {
+                        return Some(types[0]);
+                    }
+                    return Some(c.get_intersection_type(&types));
                 }
-            }
-            return None;
-        }
-        // Union: map the property lookup over the constituents, keeping the
-        // union of hits (Go's mapTypeEx shape).
-        let constituents = self.type_(t).types().to_vec();
-        let mut hits = Vec::new();
-        for constituent in constituents {
-            if let Some(property_type) =
-                self.get_type_of_property_of_type_impl(constituent, name)
-            {
-                hits.push(property_type);
-            }
-        }
-        if hits.is_empty() {
-            return None;
-        }
-        Some(self.get_union_type_ex(
-            hits,
-            crate::todo_shapes::UnionReduction::None,
-            None,
-            None,
-        ))
+                if !flags.intersects(TypeFlags::OBJECT) {
+                    return None;
+                }
+                let result = c.get_type_of_concrete_property_of_contextual_type(t, name);
+                if result.is_some() {
+                    return result;
+                }
+                c.get_type_from_index_infos_of_contextual_type(t, name, name_type)
+            },
+            true, /*noReductions*/
+        )
     }
 
     /// Go: `func (c *Checker) getTypeOfConcretePropertyOfContextualType(t *Type, name string) *Type`
-    /// (checker.go — the concrete-object arm used by the intersection walk).
-    #[allow(dead_code)] // the intersection refinement caller is S10's
+    /// (checker.go:31187) — REAL body (replaces the dead S10 stub):
+    /// getPropertyOfType, the circular-mapped-property gate, then
+    /// removeMissingType(getTypeOfSymbol(prop), prop optional).
     fn get_type_of_concrete_property_of_contextual_type(
         &mut self,
         t: TypeId,
         name: &str,
     ) -> Option<TypeId> {
-        if !self.type_(t).flags.intersects(TypeFlags::OBJECT) {
+        let prop = self.get_property_of_type(t, name)?;
+        if self.is_circular_mapped_property(prop) {
             return None;
         }
-        self.get_type_of_property_of_type_impl(t, name)
+        let is_optional = self
+            .program_symbol(prop)
+            .flags
+            .intersects(SymbolFlags::OPTIONAL);
+        let property_type = self.get_type_of_symbol(prop);
+        Some(self.remove_missing_type(property_type, is_optional))
+    }
+
+    /// Go: `func (c *Checker) getTypeFromIndexInfosOfContextualType(t, name, nameType) *Type`
+    /// (checker.go:31195).
+    fn get_type_from_index_infos_of_contextual_type(
+        &mut self,
+        t: TypeId,
+        name: &str,
+        name_type: Option<TypeId>,
+    ) -> Option<TypeId> {
+        if self.is_tuple_type(t)
+            && crate::utilities::is_numeric_literal_name(name)
+            && name
+                .parse::<f64>()
+                .map(|value| value >= 0.0)
+                .unwrap_or(false)
+        {
+            let fixed_length = self
+                .type_(t)
+                .target()
+                .and_then(|target| self.type_(target).as_tuple_type())
+                .map(|d| d.fixed_length)
+                .unwrap_or(0) as usize;
+            if let Some(rest_type) = crate::typenodes::get_element_type_of_slice_of_tuple_type(
+                self, t, fixed_length, 0, false, true,
+            ) {
+                return Some(rest_type);
+            }
+        }
+        let name_type = match name_type {
+            Some(name_type) => name_type,
+            None => self.get_string_literal_type(name),
+        };
+        let index_infos = self.get_index_infos_of_structured_type_impl(t);
+        self.find_applicable_index_info(&index_infos, name_type)
+            .map(|info| self.index_info_value_type(info))
+    }
+
+    /// Go: `func (c *Checker) appendContextualPropertyTypeConstituent(types, t) []*Type`
+    /// (checker.go:31220) — any doesn't provide any contextual information
+    /// but could spoil the overall result by nullifying contextual
+    /// information provided by other intersection constituents so it gets
+    /// replaced with `unknown` as `T & unknown` is just `T` (Go's comment).
+    fn append_contextual_property_type_constituent(
+        &mut self,
+        mut types: Vec<TypeId>,
+        t: Option<TypeId>,
+    ) -> Vec<TypeId> {
+        let Some(t) = t else {
+            return types;
+        };
+        if self.type_(t).flags.intersects(TypeFlags::ANY) {
+            types.push(self.unknown_type());
+            return types;
+        }
+        types.push(t);
+        types
+    }
+
+    /// Go: `func (c *Checker) isCircularMappedProperty(symbol *ast.Symbol) bool`
+    /// (checker.go:31211).
+    fn is_circular_mapped_property(&mut self, symbol: tsc_ast::SymbolId) -> bool {
+        if self
+            .program_symbol(symbol)
+            .check_flags
+            .intersects(tsc_ast::CheckFlags::MAPPED)
+        {
+            return self.value_symbol_links.get(symbol).resolved_type.is_none()
+                && self
+                    .find_resolution_cycle_start_index(
+                        &crate::checker::TypeSystemEntity::Symbol(symbol),
+                        crate::checker::TypeSystemPropertyName::Type,
+                    )
+                    .is_some();
+        }
+        false
     }
 
     // ────────────────────────────────────────────────────────────────────────

@@ -1252,7 +1252,10 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) findResolutionCycleStartIndex(target, propertyName) int`.
-    fn find_resolution_cycle_start_index(
+    /// PORT (FCS tranche 13): pub(crate) for
+    /// contextual.rs's isCircularMappedProperty (Go checker.go:31211 reads
+    /// findResolutionCycleStartIndex cross-file too).
+    pub(crate) fn find_resolution_cycle_start_index(
         &mut self,
         target: &TypeSystemEntity,
         property_name: TypeSystemPropertyName,

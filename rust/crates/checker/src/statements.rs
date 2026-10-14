@@ -6338,7 +6338,11 @@ impl Checker {
             // TypeScript 1.0 spec (April 2014): 8.4.3
             // Accessors for the same member name must specify the same
             // accessibility.
-            let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+            // PORT (FCS tranche 13): Go checker.go:3007 uses the checker's
+            // getSymbolOfDeclaration — the merged+late-bound composition —
+            // so dynamically-named accessor pairs (get/set [m]) resolve
+            // through the late-bound member symbol and merge.
+            let symbol = self.get_symbol_of_declaration_merged(node).unwrap_or_default();
             let getter = get_declaration_of_kind(self.store(), self.program_symbol(symbol), Kind::GetAccessor);
             let setter = get_declaration_of_kind(self.store(), self.program_symbol(symbol), Kind::SetAccessor);
             if let (Some(getter), Some(setter)) = (getter, setter) {
@@ -6370,7 +6374,12 @@ impl Checker {
                 }
             }
         }
-        let symbol = self.get_symbol_of_declaration(node).unwrap_or_default();
+        // PORT (FCS tranche 13): Go checker.go:3034
+        // `c.getTypeOfAccessors(c.getSymbolOfDeclaration(node))` — the
+        // merged+late-bound symbol (dynamically-named accessor pairs merge
+        // through the late-bound member, so the paired getter is found and
+        // the 7032 lone-setter ladder stays silent exactly like Go).
+        let symbol = self.get_symbol_of_declaration_merged(node).unwrap_or_default();
         let return_type = self.get_type_of_accessors(symbol);
         if self.store().node(node).kind == Kind::GetAccessor {
             self.check_all_code_paths_in_non_void_function_return_or_throw(node, Some(return_type));

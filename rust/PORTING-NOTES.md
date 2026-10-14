@@ -2622,3 +2622,26 @@ a PRE-EXISTING per-case noImplicitAny options seam (already divergent
 pre-fix with same-position 7006s); the TS7006-family lead (47 extras) is
 the next tranche's likely root, alongside TS2339 (140/130), TS2345 (132),
 TS2322 (106), TS2699 (84), TS2556 (66).
+
+## Full-corpus sweep tranche 13 landed (2026-10-24, RIG-VALIDATED) — divergent 1,455 -> 1,418
+
+The fcs12 options-seam theory was DISPROVED (an 8-case probe battery
+showed both twins resolve per-case options identically — Rust's
+GetStrictOptionValue quirk matches Go compileroptions.go:122 byte-same).
+The real roots: six checker fixes — isParameterOfContextSensitiveSignature
+used the broad helper (Go checker.go:16959 narrows to isContextSensitive-
+FunctionOrObjectLiteralMethod, itself missing the 30044 conjunction — the
+missing-TS7006 family); addDeclarationToLateBoundSymbol missed Go 16484's
+lateSymbol write (paired dynamic accessors never merged — TS7032 12->0);
+hasBindableName was a !hasDynamicName stub (Go 20345's late-bindable half);
+the set-accessor parameter arm read raw symbols instead of merged+late-
+bound; the object-literal index arm poisoned with unknownType instead of
+Go's nil-dropping mapTypeEx; and getTypeOfPropertyOfContextualTypeEx got
+its REAL body (checker.go:31104: the index-info fallback ladder). PLAIN-
+sweep census: divergent 1,418 (1,199 count / 219 hash), identical
+6,149/7,567; both drivers 0/3,826/3,741/0; panics 0. TS7006 missing
+61->13 / extra 47->36. 51 suites (fcs13 pins); clippy 0; all 300-slice
+gates green fresh. Next: TS2339 sub-shapes (globalThis expando, strict-
+BindCallApply, intrinsic-method both-ways), residual TS7006 contextual
+worker stubs (typeofsymbol.rs:837-848), the blanket merged-symbol swap
+over ~80 raw get_symbol_of_declaration sites.
