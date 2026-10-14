@@ -1533,17 +1533,28 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) symbolValueDeclarationIsContextSensitive(symbol) bool`.
-    #[allow(dead_code)] // TODO(port M6 W2): Go-mirrored; callers land with inference.rs
-pub(crate) fn symbol_value_declaration_is_context_sensitive(
+    /// Go: `func (c *Checker) symbolValueDeclarationIsContextSensitive(symbol) bool`
+    /// (relater.go:1296) — `symbol != nil && symbol.ValueDeclaration != nil &&
+    /// ast.IsExpression(symbol.ValueDeclaration) && !c.isContextSensitive(...)`.
+    /// PORT(FCS tranche 11): the body previously returned the RAW
+    /// isContextSensitive result (inverted, no IsExpression gate), so
+    /// getTypeNamesForErrorDisplay always took the no-enclosing
+    /// typeToString arm for arrow/function-expression symbols — losing
+    /// Go's enclosingDeclaration, which the nodebuilder's
+    /// serializeTypeForDeclaration annotation-reuse arm needs to render
+    /// `x?: number` (not `x?: number | undefined`) for optional
+    /// parameters in the 2322/assignmentCompatWithRestParameters family.
+    pub(crate) fn symbol_value_declaration_is_context_sensitive(
         &mut self,
         symbol: Option<SymbolId>,
     ) -> bool {
-        // Go: `c.isContextSensitive(symbol.ValueDeclaration)` — the REAL
-        // isContextSensitive scan (contextual.rs, checker.go:31405).
         match symbol
             .and_then(|s| self.program_symbol(s).value_declaration)
         {
-            Some(declaration) => self.is_context_sensitive_impl(declaration),
+            Some(declaration) => {
+                tsc_ast::utilities::is_expression(self.store().node(declaration))
+                    && !self.is_context_sensitive_impl(declaration)
+            }
             None => false,
         }
     }
@@ -7598,8 +7609,8 @@ fn is_valid_type_for_template_literal_placeholder(
     }
     if c.type_(source).flags.intersects(TypeFlags::STRING_LITERAL) {
         let value = get_string_literal_value(c, source);
-        return (c.type_(target).flags.intersects(TypeFlags::NUMBER) && is_valid_number_string(&value, false))
-            || (c.type_(target).flags.intersects(TypeFlags::BIGINT) && is_valid_big_int_string(&value, false))
+        return (c.type_(target).flags.intersects(TypeFlags::NUMBER) && u::is_valid_number_string(&value, false))
+            || (c.type_(target).flags.intersects(TypeFlags::BIGINT) && u::is_valid_big_int_string(&value, false))
             || (c.type_(target).flags.intersects(TypeFlags::BOOLEAN_LITERAL | TypeFlags::NULLABLE)
                 && c.type_(target).as_intrinsic_type().is_some_and(|d| d.intrinsic_name == value))
             || (c.type_(target).flags.intersects(TypeFlags::STRING_MAPPING)
@@ -9341,18 +9352,15 @@ fn decode_js_string_rune(s: &str) -> usize {
     tsc_stringutil::decode_js_string_rune(s.as_bytes()).1
 }
 
-/// Go: `isValidNumberString(value, roundTripOnly)` — jsnum seam.
-fn is_valid_number_string(_value: &str, _round_trip_only: bool) -> bool {
-    // TODO(port M6 W4/jsnum): the number-string round-trip validator.
-    false
-}
-
-/// Go: `isValidBigIntString(value, roundTripOnly)`.
-fn is_valid_big_int_string(_value: &str, _round_trip_only: bool) -> bool {
-    // TODO(port M6 W4/jsnum): the big-int-string validator.
-    false
-}
-
+/// Go: `isValidNumberString(value, roundTripOnly)` / `isValidBigIntString(value,
+/// roundTripOnly)` — PORT(FCS tranche 11): the placeholder-validation arms in
+/// is_valid_type_for_template_literal_placeholder previously resolved to the
+/// M6 W4 identity stubs below (always false), which made every numeric-string
+/// literal (`"1"`) fail `${number}` and `${bigint}` template-pattern checks
+/// (the TS2345 templateLiteralTypesPatterns family). The REAL Go-parity
+/// validators live in utilities.rs (jsnum + scanner-driven); the local stubs
+/// were removed so the call sites bind to those.
+///
 /// Go: `func (c *Checker) compareProperties(sourceProp, targetProp, compareTypes) Ternary`
 /// (checker.go's property-identity fastpath + comparer).
 pub(crate) fn compare_properties(c: &mut Checker, source_prop: SymbolId, target_prop: SymbolId, kind: TypeComparerKind, relater: Option<&mut Relater>) -> Ternary {

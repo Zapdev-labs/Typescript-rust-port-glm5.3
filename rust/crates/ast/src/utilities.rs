@@ -342,6 +342,45 @@ pub fn is_left_hand_side_expression(node: &Node) -> bool {
     is_left_hand_side_expression_kind(node.kind)
 }
 
+/// Go: `func isUnaryExpressionKind(kind Kind) bool` (ast/utilities.go:418).
+fn is_unary_expression_kind(kind: crate::Kind) -> bool {
+    matches!(
+        kind,
+        crate::Kind::PrefixUnaryExpression
+            | crate::Kind::PostfixUnaryExpression
+            | crate::Kind::DeleteExpression
+            | crate::Kind::TypeOfExpression
+            | crate::Kind::VoidExpression
+            | crate::Kind::AwaitExpression
+            | crate::Kind::TypeAssertionExpression
+    ) || is_left_hand_side_expression_kind(kind)
+}
+
+/// Go: `func isExpressionKind(kind Kind) bool` (ast/utilities.go:434).
+fn is_expression_kind(kind: crate::Kind) -> bool {
+    matches!(
+        kind,
+        crate::Kind::ConditionalExpression
+            | crate::Kind::YieldExpression
+            | crate::Kind::ArrowFunction
+            | crate::Kind::BinaryExpression
+            | crate::Kind::SpreadElement
+            | crate::Kind::AsExpression
+            | crate::Kind::OmittedExpression
+            | crate::Kind::PartiallyEmittedExpression
+            | crate::Kind::SatisfiesExpression
+    ) || is_unary_expression_kind(kind)
+}
+
+/// Go: `func IsExpression(node *Node) bool` (ast/utilities.go:451) —
+/// `isExpressionKind(SkipPartiallyEmittedExpressions(node).Kind)`.
+/// PORT(FCS tranche 11): same &Node shape as
+/// [`is_left_hand_side_expression`]; PartiallyEmittedExpression is in
+/// isExpressionKind's own list, so the skip is a no-op for the wrapper.
+pub fn is_expression(node: &Node) -> bool {
+    is_expression_kind(node.kind)
+}
+
 /// Go: `func IsAssignmentExpression(node *Node, excludeCompoundAssignment bool) bool`.
 pub fn is_assignment_expression(
     store: &dyn crate::NodeStore,

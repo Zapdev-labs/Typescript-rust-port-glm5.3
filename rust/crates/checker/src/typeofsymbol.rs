@@ -2308,13 +2308,20 @@ impl Checker {
         t
     }
 
-    // TODO(port M6 S7/S10: removeMissingType’s real body + getNonUndefinedType’s
-    // callers): the bannered permissive/stub bodies below are forward-landed;
-    // their consumers arrive with those waves.
-    #[allow(dead_code)]
-    /// Go: `func (c *Checker) removeOptionalTypeMarker(t *Type) *Type` —
-    /// TODO(port M6 S7); identity.
+    /// Go: `func (c *Checker) removeOptionalTypeMarker(t *Type) *Type`
+    /// (checker.go:29605 — checker.go:29593's getOptionalExpressionType
+    /// consumes it for optional-chain expressions). PORT(FCS tranche 11):
+    /// REAL body (was the S7 identity stub) — under strictNullChecks Go
+    /// removes the `optionalType` intrinsic instance that
+    /// `addOptionalTypeMarker` (members.rs) / the IS_INNER_CALL_CHAIN
+    /// return-type path (members.rs getReturnTypeOfSignature) unions in;
+    /// removeType matches it by CompareTypes id in the sorted constituent
+    /// list, so the add-side MUST union in `optional_type()` (it does).
     pub(crate) fn remove_optional_type_marker(&mut self, t: TypeId) -> TypeId {
+        if self.strict_null_checks {
+            let optional_type = self.optional_type();
+            return self.remove_type(t, optional_type);
+        }
         t
     }
 

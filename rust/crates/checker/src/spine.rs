@@ -61,17 +61,21 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use tsc_ast::{
     NodeData,
+    ast_generated::is_module_declaration,
     is_await_expression, is_binary_expression, is_call_expression, is_identifier,
     is_jsx_attributes, is_new_expression, is_qualified_name, Kind, NodeId, NodeStore, SymbolFlags,
-    SymbolId,
+    SymbolId, SymbolTable,
 };
 use tsc_ast::nodeflags::NodeFlags as NF;
 use tsc_binder::ast_shims as binder_shims;
 use tsc_core::text::{TextPos, TextRange};
 use tsc_core::tristate::Tristate;
 use tsc_diagnostics::{
-    Category, Message, CANNOT_FIND_GLOBAL_TYPE_0, CANNOT_FIND_GLOBAL_VALUE_0,
-    DECLARATION_NAME_CONFLICTS_WITH_BUILT_IN_GLOBAL_IDENTIFIER_0,
+    Category, Message, CANNOT_AUGMENT_MODULE_0_WITH_VALUE_EXPORTS_BECAUSE_IT_RESOLVES_TO_A_NON_MODULE_ENTITY,
+    CANNOT_FIND_GLOBAL_TYPE_0, CANNOT_FIND_GLOBAL_VALUE_0,
+    CANNOT_REDECLARE_BLOCK_SCOPED_VARIABLE_0, DECLARATION_NAME_CONFLICTS_WITH_BUILT_IN_GLOBAL_IDENTIFIER_0,
+    DUPLICATE_IDENTIFIER_0,
+    ENUM_DECLARATIONS_CAN_ONLY_MERGE_WITH_NAMESPACE_OR_OTHER_ENUM_DECLARATIONS,
     GLOBAL_TYPE_0_MUST_BE_A_CLASS_OR_INTERFACE_TYPE, GLOBAL_TYPE_0_MUST_HAVE_1_TYPE_PARAMETER_S,
     OBJECT_IS_OF_TYPE_UNKNOWN, OBJECT_IS_POSSIBLY_NULL, OBJECT_IS_POSSIBLY_NULL_OR_UNDEFINED,
     OBJECT_IS_POSSIBLY_UNDEFINED, THE_VALUE_0_CANNOT_BE_USED_HERE, UNREACHABLE_CODE_DETECTED,
@@ -132,6 +136,21 @@ struct FileDiagnostic {
 /// Go: `func getDiagnosticPath(d *Diagnostic) string`.
 fn get_diagnostic_path(d: &FileDiagnostic) -> &str {
     d.file_name.as_deref().unwrap_or("")
+}
+
+/// Go: `func isAssignmentDeclaration(decl *ast.Node) bool` (binder.go:4120)
+/// — inlined for mergeSymbol's SetValueDeclaration gate (the binder-crate
+/// twin is module-private).
+fn is_assignment_declaration(store: &dyn NodeStore, decl: NodeId) -> bool {
+    tsc_ast::is_binary_expression(store.node(decl))
+        || binder_shims::is_access_expression(store.node(decl))
+        || tsc_ast::is_identifier(store.node(decl))
+        || tsc_ast::is_call_expression(store.node(decl))
+}
+
+/// Go: `func isEffectiveModuleDeclaration(node *ast.Node) bool` (binder.go:4128).
+fn is_effective_module_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
+    is_module_declaration(store.node(node)) || tsc_ast::is_identifier(store.node(node))
 }
 
 /// Go: `func getDiagnosticMessageIdentity(diagnostic *Diagnostic) string`.
@@ -2766,14 +2785,220 @@ impl Checker {
         let global_symbol = self.globals.get(&name).copied();
         let merged = match global_symbol {
             Some(global) => {
-                // TODO(port M6 S6): mergeSymbol(global, symbol, false) —
-                // the merged-symbol machinery. Permissive first-in-wins (the
-                // merge result's declarations/exports fold when S6 lands).
-                global
+                // Go: `c.globals[name] = c.mergeSymbol(globalSymbol, symbol, false)`
+                // (checker.go:1417) — REAL as of FCS tranche 11 (was the
+                // permissive first-in-wins stub; the S6 TODO).
+                self.merge_symbol(global, symbol, false /*unidirectional*/)
             }
             None => self.get_merged_symbol(symbol),
         };
         self.globals.set(name, merged);
+    }
+
+    /// Go: `func (c *Checker) mergeSymbolTable(target, source, unidirectional, mergedParent)`
+    /// (checker.go:14380) — the global-table arm (`c.globals` is a checker
+    /// field, not a Go `SymbolTable` reference, so the two entry shapes
+    /// split into this and [`Checker::merge_symbol_table_of_symbol`]).
+    /// PORT(FCS tranche 11): REAL (was the mergeModuleAugmentation TODO) —
+    /// `declare global { ... }` merges its exports into the global scope so
+    /// getGlobalType("ImportMeta") and friends resolve augmentations
+    /// (checker.go:1449's call site; the importMetaNarrowing family).
+    fn merge_symbol_table_globals(&mut self, source: &SymbolTable, unidirectional: bool) {
+        let entries: Vec<(String, SymbolId)> = source
+            .entries()
+            .map(|(name, symbol)| (name.clone(), *symbol))
+            .collect();
+        for (name, source_symbol) in entries {
+            let target_symbol = self.globals.get(&name).copied();
+            let merged = match target_symbol {
+                Some(target) => self.merge_symbol(target, source_symbol, unidirectional),
+                None => self.get_merged_symbol(source_symbol),
+            };
+            self.globals.set(name, merged);
+        }
+    }
+
+    /// Go: `mergeSymbolTable`'s symbol-table arm — merge `source` into the
+    /// `members` (Go: `ast.GetSymbolTable(&target.Members)`) or `exports`
+    /// table of `target_symbol`. Go's `mergedParent` parent fixup: a merged
+    /// (transient clone) target symbol re-parents to the merged parent that
+    /// initiated the merge; source-only keeps its own parent.
+    fn merge_symbol_table_of_symbol(
+        &mut self,
+        target_symbol: SymbolId,
+        source: &SymbolTable,
+        unidirectional: bool,
+        merged_parent: Option<SymbolId>,
+        into_members: bool,
+    ) {
+        let entries: Vec<(String, SymbolId)> = source
+            .entries()
+            .map(|(name, symbol)| (name.clone(), *symbol))
+            .collect();
+        for (name, source_symbol) in entries {
+            let target_entry = if into_members {
+                self.program_symbol(target_symbol).members.get(&name).copied()
+            } else {
+                self.program_symbol(target_symbol).exports.get(&name).copied()
+            };
+            let merged = match target_entry {
+                Some(target) => self.merge_symbol(target, source_symbol, unidirectional),
+                None => self.get_merged_symbol(source_symbol),
+            };
+            if let (Some(merged_parent), Some(_)) = (merged_parent, target_entry) {
+                // Go: `if merged.Flags&SymbolFlagsTransient != 0 { merged.Parent = mergedParent }`.
+                if self.program_symbol(merged).flags.intersects(SymbolFlags::TRANSIENT) {
+                    self.program_symbol_mut(merged).parent = Some(merged_parent);
+                }
+            }
+            if into_members {
+                self.program_symbol_mut(target_symbol).members.set(name, merged);
+            } else {
+                self.program_symbol_mut(target_symbol).exports.set(name, merged);
+            }
+        }
+    }
+
+    /// Go: `func (c *Checker) mergeSymbol(target, source, unidirectional) *ast.Symbol`
+    /// (checker.go:14417). If target is transient it is mutated in place;
+    /// otherwise the merge works on a transient clone (cloneSymbol) and
+    /// returns it.
+    fn merge_symbol(&mut self, mut target: SymbolId, source: SymbolId, unidirectional: bool) -> SymbolId {
+        let source_flags = self.program.symbol(source).flags;
+        let target_flags = self.program.symbol(target).flags;
+        let excluded = crate::resolution::get_excluded_symbol_flags(source_flags);
+        if !target_flags.intersects(excluded)
+            || (source_flags | target_flags).intersects(SymbolFlags::ASSIGNMENT)
+        {
+            // This can happen when an export assigned namespace exports
+            // something also erroneously exported at the top level (Go comment).
+            if source == target {
+                return target;
+            }
+            if !target_flags.intersects(SymbolFlags::TRANSIENT) {
+                let resolved_target = self.resolve_symbol(target);
+                if Some(resolved_target) == self.unknown_symbol {
+                    return source;
+                }
+                let resolved_flags = self.program.symbol(resolved_target).flags;
+                if !resolved_flags.intersects(crate::resolution::get_excluded_symbol_flags(source_flags))
+                    || (source_flags | resolved_flags).intersects(SymbolFlags::ASSIGNMENT)
+                {
+                    target = self.clone_symbol(resolved_target);
+                } else {
+                    self.report_merge_symbol_error(target, source);
+                    return source;
+                }
+            }
+            // Javascript static-property-assignment declarations always merge,
+            // even though they are also values (Go comment, verbatim).
+            if source_flags.intersects(SymbolFlags::VALUE_MODULE)
+                && self.program.symbol(target).flags.intersects(SymbolFlags::VALUE_MODULE)
+                && self.program.symbol(target).flags.intersects(SymbolFlags::CONST_ENUM_ONLY_MODULE)
+                && !source_flags.intersects(SymbolFlags::CONST_ENUM_ONLY_MODULE)
+            {
+                // reset flag when merging instantiated module into value module
+                // that has only const enums
+                self.program_symbol_mut(target).flags &= !SymbolFlags::CONST_ENUM_ONLY_MODULE;
+            }
+            let mut source_flags = source_flags;
+            if !self.program.symbol(target).flags.intersects(SymbolFlags::CONST_ENUM_ONLY_MODULE) {
+                source_flags &= !SymbolFlags::CONST_ENUM_ONLY_MODULE;
+            }
+            self.program_symbol_mut(target).flags |= source_flags;
+            if let Some(value_declaration) = self.program.symbol(source).value_declaration {
+                // Go: `binder.SetValueDeclaration(target, source.ValueDeclaration)`
+                // — the binder helper inlined over program symbols
+                // (binder.go:4101): non-assignment declarations take
+                // precedence over assignment declarations, non-namespace
+                // over namespace.
+                let replace = {
+                    let target_value = self.program.symbol(target).value_declaration;
+                    match target_value {
+                        None => true,
+                        Some(tv) => {
+                            let tv_is_assign = is_assignment_declaration(self.store(), tv);
+                            let nv_is_assign = is_assignment_declaration(self.store(), value_declaration);
+                            tv_is_assign && !nv_is_assign
+                                || self.store().node(tv).kind != self.store().node(value_declaration).kind
+                                    && is_effective_module_declaration(self.store(), tv)
+                        }
+                    }
+                };
+                if replace {
+                    self.program_symbol_mut(target).value_declaration = Some(value_declaration);
+                }
+            }
+            let source_declarations = self.program.symbol(source).declarations.clone();
+            self.program_symbol_mut(target).declarations.extend(source_declarations);
+            let source_members = self.program.symbol(source).members.clone();
+            if !source_members.is_empty() {
+                self.merge_symbol_table_of_symbol(target, &source_members, unidirectional, None, true /*into_members*/);
+            }
+            let source_exports = self.program.symbol(source).exports.clone();
+            if !source_exports.is_empty() {
+                self.merge_symbol_table_of_symbol(target, &source_exports, unidirectional, Some(target), false /*into_members*/);
+            }
+            if !unidirectional {
+                self.record_merged_symbol(target, source);
+            }
+        } else if target_flags.intersects(SymbolFlags::NAMESPACE_MODULE) {
+            // Do not report an error when merging `var globalThis` with the
+            // built-in `globalThis` (Go comment, verbatim).
+            if Some(target) != self.global_this_symbol {
+                let name_of = crate::nodebuilder::symbol_to_string(self, target);
+                let first_decl = self
+                    .program
+                    .symbol(source)
+                    .declarations
+                    .first()
+                    .copied();
+                if let Some(first_decl) = first_decl {
+                    let name_node = binder_shims::get_name_of_declaration(self.store(), first_decl);
+                    if let Some(name_node) = name_node {
+                        self.error(
+                            name_node,
+                            &CANNOT_AUGMENT_MODULE_0_WITH_VALUE_EXPORTS_BECAUSE_IT_RESOLVES_TO_A_NON_MODULE_ENTITY,
+                            &[name_of],
+                        );
+                    }
+                }
+            }
+        } else {
+            self.report_merge_symbol_error(target, source);
+        }
+        target
+    }
+
+    /// Go: `func (c *Checker) reportMergeSymbolError(target, source)`
+    /// (checker.go:14469). PORT(FCS tranche 11): the message ladder is
+    /// Go-exact; the related-information chains
+    /// (addDuplicateDeclarationError's "'X' was also declared here" and
+    /// "and here" follow-ons) are the W4 related-info seam — the plain
+    /// message is emitted per declaration instead.
+    fn report_merge_symbol_error(&mut self, target: SymbolId, source: SymbolId) {
+        let target_flags = self.program.symbol(target).flags;
+        let source_flags = self.program.symbol(source).flags;
+        let is_either_enum = target_flags.intersects(SymbolFlags::ENUM)
+            || source_flags.intersects(SymbolFlags::ENUM);
+        let is_either_block_scoped = target_flags
+            .intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE)
+            || source_flags.intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE);
+        let message: &'static Message = if is_either_enum {
+            &ENUM_DECLARATIONS_CAN_ONLY_MERGE_WITH_NAMESPACE_OR_OTHER_ENUM_DECLARATIONS
+        } else if is_either_block_scoped {
+            &CANNOT_REDECLARE_BLOCK_SCOPED_VARIABLE_0
+        } else {
+            &DUPLICATE_IDENTIFIER_0
+        };
+        let symbol_name = crate::nodebuilder::symbol_to_string(self, source);
+        for (this, other) in [(source, target), (target, source)] {
+            let declarations = self.program.symbol(this).declarations.clone();
+            for node in declarations {
+                self.error(node, message, std::slice::from_ref(&symbol_name));
+            }
+            let _ = other;
+        }
     }
 
     /// Go: `func (c *Checker) addUndefinedToGlobalsOrErrorOnRedeclaration()`
@@ -2852,8 +3077,12 @@ impl Checker {
             return;
         }
         if binder_shims::is_global_scope_augmentation(self.store().node(module_node)) {
-            // TODO(port M6 S6): mergeSymbolTable(c.globals, moduleSymbol.Exports, false, nil).
-            let _ = module_symbol;
+            // Go: `c.mergeSymbolTable(c.globals, moduleAugmentation.Symbol.Exports, false, nil)`
+            // (checker.go:1449) — REAL as of FCS tranche 11 (was the S6
+            // TODO): `declare global { ... }` exports merge into the global
+            // symbol table before global types finalize.
+            let exports = self.program.symbol(module_symbol).exports.clone();
+            self.merge_symbol_table_globals(&exports, false /*unidirectional*/);
         } else {
             // find a module that about to be augmented; do not validate names
             // of augmentations that are defined in ambient context.

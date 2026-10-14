@@ -2578,3 +2578,27 @@ TS2339 families, TS2532 flow-narrowing 61, TS2345 residuals, TS2300
 computed-name statics 12, TS2564 residual 7, and the 2322 optional-param
 elaboration string seam (assignmentCompatWithCallSignaturesWithRestParameters,
 26 diff lines, positions identical) remain for tranche 11.
+
+## Full-corpus sweep tranche 11 landed (2026-10-22, RIG-VALIDATED) — divergent 1,503 -> 1,482
+
+Four families: (1) removeOptionalTypeMarker real (the optional-call-chain
+root of the TS2532 o3.b?.().c family — partial, 45 extras remain with the
+this-flow-narrowing root diagnosed in the continuation). (2) The template-
+literal pattern validators: local always-false stubs is_valid_number_string/
+is_valid_big_int_string were SHADOWING the real utilities.rs twins — the
+${number}/${bigint} TS2345 family (21x) + large collateral (es6/destructuring
+28x, variadicTuples, restTuples). (3) The TS2322 optional-param elaboration
+seam: symbol_value_declaration_is_context_sensitive was inverted (missing
+Go's IsExpression && !isContextSensitive gate) + serialize_type_for_
+declaration's annotation-reuse arm renders the written annotation slice
+(x?: number, not x?: number | undefined). (4) The declare-global binder seam:
+Go's mergeSymbolTable/mergeSymbol/reportMergeSymbolError (checker.go:
+14380-14474) ported in full into spine.rs — collapsed the whole runway
+probe list (moduleExportAlias 20, typeFromPrototypeAssignment 14,
+globalThis 18, staticPropertyNameConflicts, umd-augmentation, ...). PLAIN-
+sweep census: divergent 1,482 (1,259 count / 223 hash), identical 6,085;
+both drivers 0/3,826/3,741/0; panics 0. 49 suites (fcs11 pins); clippy 0;
+all 300-slice gates green fresh. Honest caveat: the worker's earlier probe
+battery claiming the whole TS2532 family fixed was FAULTY (self-corrected
+in the continuation) — the remaining root is this-property flow narrowing
+(if (this.z && dz) doesn't narrow the later this.z).

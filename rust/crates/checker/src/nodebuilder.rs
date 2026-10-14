@@ -2584,8 +2584,23 @@ fn add_property_to_element_list(
         create_elided_information_placeholder(ctx)
     } else {
         let _ = property_is_reverse_mapped; // reverseMappedStack — declaration-emit only
-        serialize_type_for_declaration(c, ctx, property_type, Some(property_symbol))
-            .unwrap_or_else(|| "any".to_string())
+        let property_declaration = c
+            .program_symbol(property_symbol)
+            .value_declaration
+            .filter(|&d| {
+                matches!(
+                    c.store().node(d).kind,
+                    Kind::PropertyDeclaration | Kind::PropertySignature | Kind::JSDocPropertyTag
+                )
+            });
+        serialize_type_for_declaration(
+            c,
+            ctx,
+            property_type,
+            Some(property_symbol),
+            property_declaration,
+        )
+        .unwrap_or_else(|| "any".to_string())
     };
 
     let modifiers = if crate::relater::is_readonly_symbol(c, property_symbol) {
@@ -2622,22 +2637,82 @@ fn has_accessor_keyword(c: &Checker, declaration: NodeId) -> bool {
         .is_some_and(|m| m.nodes.iter().any(|&n| store.node(n).kind == Kind::AccessorKeyword))
 }
 
-/// Go: `serializeTypeForDeclaration(declaration, t, symbol, tryReuse)`
-/// (nodebuilderimpl.go:2253) — the diagnostics shape: declaration == nil is
-/// filled from symbol.ValueDeclaration; the pseudo-checker reuse arm is
-/// gated on enclosingDeclaration != nil AND the declaration not being
-/// synthesized — under the W4 seam (pseudotypenodebuilder.go unported) the
-/// port always renders structurally (Go's own fallback), preserving the
-/// AddUndefined / unique-symbol flag arms.
+/// Go: `serializeTypeForDeclaration` (nodebuilderimpl.go:2253) — the
+/// diagnostics shape. PORT(FCS tranche 11): the annotation-reuse arm.
+/// Go re-renders the declaration's written annotation when the
+/// pseudochecker's structural equivalence against `t` holds: for optional
+/// parameters/properties the resolved symbol type carries the
+/// `addOptionalityEx` `| undefined`, while Go's printed declaration keeps
+/// the annotation text (`x?: number`, NOT `x?: number | undefined` —
+/// nodebuilderimpl.go:2253-2360, the pseudoTypeEquivalentToType arm with
+/// `!requiresAddingUndefined && isOptionalDeclaration(declaration)`
+/// optionality-conveys-undefined). The pseudochecker subsystem is not
+/// ported; the equivalence is approximated by checker-type identity of the
+/// annotation's resolved type against `t` — exactly the addOptionalityEx
+/// `getOptionalType(annType, isProperty)` that produced `t` in
+/// getTypeForVariableLikeDeclaration — and the written annotation is
+/// rendered as its source text (Go's pseudoTypeToNode preserves the
+/// written form for parse-tree annotations). Go's gates are mirrored:
+/// `!isActivelyExpanding` (expanding is declaration-emit-only),
+/// `tryReuse`, `enclosingDeclaration != nil`, `HasInferredType`
+/// (parameters/property declarations/property signatures), and
+/// `!(t.objectFlags & RequiresWidening)`. `requiresAddingImplicitUndefined`
+/// (the required-initialized-parameter-property arm) keeps the legacy
+/// `| undefined` render; its corpus shapes don't reach the identity check.
 fn serialize_type_for_declaration(
     c: &mut Checker,
     ctx: &mut NbCtx,
     t: TypeId,
     symbol: Option<SymbolId>,
+    declaration: Option<NodeId>,
 ) -> Option<String> {
     let _ = symbol;
-    // requiresAddingUndefined / addUndefinedForParameter: the parameter arm —
-    // handled inside the parameter renderer where the declaration is known.
+    if let Some(decl) = declaration {
+        let kind = c.store().node(decl).kind;
+        let has_inferred_type = matches!(
+            kind,
+            Kind::Parameter
+                | Kind::PropertySignature
+                | Kind::PropertyDeclaration
+                | Kind::BindingElement
+                | Kind::VariableDeclaration
+                | Kind::JSDocParameterTag
+                | Kind::JSDocPropertyTag
+        );
+        if has_inferred_type
+            && ctx.enclosing_declaration.is_some()
+            && !c.type_(t).object_flags.intersects(ObjectFlags::REQUIRES_WIDENING)
+            && let Some(ann) = crate::ast_shims::type_of_node(c.store(), decl)
+        {
+            let is_property =
+                matches!(kind, Kind::PropertySignature) || kind == Kind::PropertyDeclaration;
+            // Go: `conveysUndefined := !requiresAddingUndefined && isOptionalDeclaration(declaration)`
+            // (isOptionalDeclaration = HasQuestionToken, utilities.go:298).
+            let conveys_undefined = crate::ast_shims::question_token_of(c.store(), decl).is_some();
+            if let Some(ann_type) = c.try_get_type_from_type_node(decl) {
+                let equivalent = t == ann_type
+                    || (c.strict_null_checks
+                        && conveys_undefined
+                        && t == c.get_optional_type(ann_type, is_property));
+                if equivalent {
+                    // Go: pseudoTypeToNode preserves the written annotation;
+                    // the port slices the annotation's source text (same
+                    // form for parse-tree annotations). Keyword annotations
+                    // (`number`) and identifier references alike survive
+                    // the source slice (Node.Text() panics on keyword
+                    // kinds — the token-text accessor is not source text).
+                    if let Some(sf) = tsc_ast::utilities::get_source_file_of_node(c.store(), ann) {
+                        let written = tsc_scanner::utilities::get_source_text_of_node_from_source_file(
+                            sf, ann, false,
+                        );
+                        if !written.is_empty() {
+                            return Some(written.into_owned());
+                        }
+                    }
+                }
+            }
+        }
+    }
     let restore = save_restore_flags(ctx);
     let result = ttn(c, ctx, t, TP::LOWEST);
     restore_flags(ctx, restore);
@@ -3180,8 +3255,14 @@ fn symbol_to_parameter_declaration(
             .check_flags
             .intersects(CheckFlags::OPTIONAL_PARAMETER);
     let q = if is_optional { "?" } else { "" };
-    let type_text = serialize_type_for_declaration(c, ctx, parameter_type, Some(parameter_symbol))
-        .unwrap_or_else(|| "any".to_string());
+    let type_text = serialize_type_for_declaration(
+        c,
+        ctx,
+        parameter_type,
+        Some(parameter_symbol),
+        parameter_declaration,
+    )
+    .unwrap_or_else(|| "any".to_string());
     ctx.approximate_length += c.program_symbol(parameter_symbol).name.len() + 3;
     format!("{modifiers}{dot}{name}{q}: {type_text}")
 }

@@ -5970,7 +5970,7 @@ struct ExportCollision {
 }
 
 /// Go: `func getExcludedSymbolFlags(flags)` (checker.go:14552).
-fn get_excluded_symbol_flags(flags: SymbolFlags) -> SymbolFlags {
+pub(crate) fn get_excluded_symbol_flags(flags: SymbolFlags) -> SymbolFlags {
     let mut result = SymbolFlags::NONE;
     if flags.intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE) {
         result |= SymbolFlags::BLOCK_SCOPED_VARIABLE_EXCLUDES;
