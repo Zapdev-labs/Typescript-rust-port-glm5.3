@@ -1842,24 +1842,101 @@ impl Checker {
         &mut self,
         t: Option<TypeId>,
         index: usize,
-        _length: i32,
+        length: i32,
         first_spread_index: i32,
-        _last_spread_index: i32,
+        last_spread_index: i32,
     ) -> Option<TypeId> {
         let t = t?;
         Some(crate::typenodes::map_type(self, t, |c, t| {
             if c.is_tuple_type(t) {
-                // TODO(port M6 S9): the tuple arm's spread/ending-fixed
-                // geometry (getElementTypeOfSliceOfTupleType with
-                // fixedEndLength/endSkipCount arithmetic) rides the tuple
-                // arithmetic wave; the fixed-constituent answer below is the
-                // common no-spread case.
-                if first_spread_index < 0 || (index as i32) < first_spread_index {
-                    if let Some(element) = crate::relater::resolve_type_arguments(c, t).get(index) {
-                        return crate::relater::remove_missing_type(c, *element, false);
+                // PORT (FCS tranche 20): Go checker.go:30526-30556 — the
+                // tuple arm's spread/ending-fixed geometry (was the M6 S9
+                // TODO stub, which answered the fixed constituent at
+                // `index` and ignored `length`/`lastSpreadIndex`; the
+                // ending-fixed arm below is what contextually types the
+                // tuple-tail parameters of `[...T, F]`-style rest tuples).
+                let (fixed_length, combined_flags, element_infos) = c
+                    .type_(t)
+                    .target()
+                    .and_then(|target| c.type_(target).as_tuple_type())
+                    .map(|d| (d.fixed_length, d.combined_flags, d.element_infos.clone()))
+                    .unwrap_or_default();
+                // If index is before any spread element and within the fixed
+                // part of the contextual tuple type, return the type of the
+                // contextual tuple element.
+                if (first_spread_index < 0 || (index as i32) < first_spread_index)
+                    && (index as i32) < fixed_length
+                {
+                    if let Some(&element) =
+                        crate::relater::resolve_type_arguments(c, t).get(index)
+                    {
+                        let is_optional = element_infos
+                            .get(index)
+                            .map(|info| {
+                                info.flags
+                                    .intersects(crate::types::ElementFlags::OPTIONAL)
+                            })
+                            .unwrap_or(false);
+                        return crate::relater::remove_missing_type(c, element, is_optional);
                     }
+                    return c.unknown_type();
                 }
-                return c.unknown_type();
+                // When the length is known and the index is after all spread
+                // elements we compute the offset from the element to the end
+                // and the number of ending fixed elements in the contextual
+                // tuple type.
+                let mut offset = 0;
+                if length >= 0 && (last_spread_index < 0 || (index as i32) > last_spread_index)
+                {
+                    offset = length - index as i32;
+                }
+                let mut fixed_end_length = 0;
+                if offset > 0 && combined_flags.intersects(crate::types::ElementFlags::VARIABLE)
+                {
+                    fixed_end_length = c
+                        .type_(t)
+                        .target()
+                        .and_then(|target| c.type_(target).as_tuple_type())
+                        .map(|d| {
+                            crate::typenodes::get_end_element_count(
+                                d,
+                                crate::types::ElementFlags::FIXED,
+                            )
+                        })
+                        .unwrap_or(0) as i32;
+                }
+                // If the offset is within the ending fixed part of the
+                // contextual tuple type, return the type of the contextual
+                // tuple element.
+                if offset > 0 && offset <= fixed_end_length {
+                    let arity = crate::relater::get_type_reference_arity(c, t);
+                    if let Some(&element) = crate::relater::resolve_type_arguments(c, t)
+                        .get((arity - offset).max(0) as usize)
+                    {
+                        return element;
+                    }
+                    return c.unknown_type();
+                }
+                // Return a union of the possible contextual element types
+                // with no subtype reduction.
+                let mut tuple_index = fixed_length;
+                if first_spread_index >= 0 {
+                    tuple_index = tuple_index.min(first_spread_index);
+                }
+                let mut end_skip_count = fixed_end_length;
+                if length >= 0 && last_spread_index >= 0 {
+                    end_skip_count = end_skip_count.min(length - last_spread_index);
+                }
+                let end_skip_count = end_skip_count.max(0);
+                return crate::typenodes::get_element_type_of_slice_of_tuple_type(
+                    c,
+                    t,
+                    tuple_index.max(0) as usize,
+                    end_skip_count as usize,
+                    false, /*writing*/
+                    true,  /*noReductions*/
+                )
+                .unwrap_or_else(|| c.unknown_type());
             }
             // If element index is known and a contextual property with that
             // name exists, return it. Otherwise return the iterated or

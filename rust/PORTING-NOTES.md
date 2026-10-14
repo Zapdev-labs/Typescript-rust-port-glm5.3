@@ -2779,3 +2779,23 @@ typeSatisfaction x4, tagged-template/destructuring cases). 57 suites
 (fcs19 pins); clippy 0; all 300-slice gates green fresh. Honest residual:
 9 rust-extra 7006s inside 4 variadic-tuple records — the variadic-tuple S8
 seam is the next candidate family.
+
+## Sweep micro-tranche 20 landed (2026-10-31, RIG-VALIDATED) — the variadic-tuple family COLLAPSED; divergent 1,284 -> 1,282
+
+Two Go-exact gaps: (1) get_contextual_type_for_element_expression's tuple
+arm was the S9 TODO stub — it answered the fixed constituent at index and
+ignored length/lastSpreadIndex, dropping Go checker.go:30526-30556's
+ending-fixed arm (the arm that contextually types the tail function
+element of ...args: [...T, F] rest tuples) and the variadic slice-union
+fallback — ported Go-exactly (removeMissingType + fixedEndLength geometry
++ get_element_type_of_slice_of_tuple_type noReductions). (2) get_start/
+end_element_count were S7 TODO stubs returning 0 — inferFromObjectTypes's
+endLength consumed them, so Go inference.go:805's single-variadic-middle
+arm never fired and T inferred as {} instead of the source slice — ported
+as real prefix/suffix scans. All 9 rust-extra 7006s + 2 7019s collapsed
+(census: TS7006 -9 exactly, TS2345 -22 collateral); contextualTypeTupleEnd
+30->17==17, variadicTuples1 62->53==53. intraExpressionInferences'
+mapped-type residual confirmed NOT shared (still 36/35). PLAIN-sweep
+census: divergent 1,282 (1,083 count / 199 hash), identical 6,285/7,567;
+newly-divergent 0, newly-identical 2. 58 suites (fcs20 pins); clippy 0;
+all 300-slice gates green fresh.

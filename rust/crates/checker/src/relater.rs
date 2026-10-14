@@ -10115,19 +10115,44 @@ pub(crate) fn tuple_type_element_flags(c: &Checker, t: TypeId, pos: usize) -> cr
 }
 
 /// Go: `getStartElementCount(tuple, flags)` (utilities.go).
+/// PORT (FCS tranche 20): real element-flag prefix scan (was the M6 S7
+/// TODO stub returning 0); `t` is the tuple type whose target's
+/// `elementInfos` Go scans.
 pub(crate) fn get_start_element_count(c: &Checker, t: TypeId, flags: crate::types::ElementFlags) -> usize {
-    // TODO(port M6 S7): the element-flag prefix scan.
-    let _ = flags;
-    let _ = c.type_(t);
-    0
+    let Some(d) = c
+        .type_(t)
+        .target()
+        .and_then(|target| c.type_(target).as_tuple_type())
+    else {
+        return 0;
+    };
+    for (i, info) in d.element_infos.iter().enumerate() {
+        if !info.flags.intersects(flags) {
+            return i;
+        }
+    }
+    d.element_infos.len()
 }
 
 /// Go: `getEndElementCount(tuple, flags)` (utilities.go).
+/// PORT (FCS tranche 20): real element-flag suffix scan (was the M6 S7
+/// TODO stub returning 0); `t` is the tuple type whose target's
+/// `elementInfos` Go scans. The variadic-tuple inference arms
+/// (inferFromObjectTypes' `endLength`) consume it.
 pub(crate) fn get_end_element_count(c: &Checker, t: TypeId, flags: crate::types::ElementFlags) -> usize {
-    // TODO(port M6 S7): the element-flag suffix scan.
-    let _ = flags;
-    let _ = c.type_(t);
-    0
+    let Some(d) = c
+        .type_(t)
+        .target()
+        .and_then(|target| c.type_(target).as_tuple_type())
+    else {
+        return 0;
+    };
+    for i in (1..=d.element_infos.len()).rev() {
+        if !d.element_infos[i - 1].flags.intersects(flags) {
+            return d.element_infos.len() - i;
+        }
+    }
+    d.element_infos.len()
 }
 
 /// Go: `conditional_parts_ex` — the same `(checkType, extendsType)` pair

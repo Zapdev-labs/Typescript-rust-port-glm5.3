@@ -304,7 +304,7 @@ fn get_start_element_count(t: &types::TupleType, flags: ElementFlags) -> usize {
 }
 
 /// Go: `func getEndElementCount(t *TupleType, flags ElementFlags) int` (checker.go:23901).
-fn get_end_element_count(t: &types::TupleType, flags: ElementFlags) -> usize {
+pub(crate) fn get_end_element_count(t: &types::TupleType, flags: ElementFlags) -> usize {
     for i in (1..=t.element_infos.len()).rev() {
         if !t.element_infos[i - 1].flags.intersects(flags) {
             return t.element_infos.len() - i;
