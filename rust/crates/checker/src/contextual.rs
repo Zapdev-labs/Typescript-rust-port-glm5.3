@@ -114,13 +114,30 @@ impl Checker {
     // ────────────────────────────────────────────────────────────────────────
 
     /// Go: `func (c *Checker) getInferenceContext(node *ast.Node) *InferenceContext`
-    /// (checker.go:31504).
+    /// (checker.go:31513).
+    ///
+    /// PORT(FCS tranche 17): Go matches the first stack entry whose recorded
+    /// node is an ANCESTOR of the queried node (`isNodeDescendantOf` walks
+    /// the parent chain), and returns that entry's context even when it is
+    /// nil (the search stops at the first ancestor match). The former port
+    /// required an exact node match, so a context-sensitive member or
+    /// parameter INSIDE a call argument never resolved the argument's
+    /// inference context — instantiateContextualType then skipped the
+    /// nonFixingMapper/returnMapper substitution, the member's contextual
+    /// type kept the RAW type parameter, the second inference pass recorded
+    /// a self-referential contravariant candidate (T := T), and the final
+    /// applicability pass related against the UNINSTANTIATED candidate
+    /// signature (spurious TS2345; intraExpressionInferences,
+    /// typeArgumentInferenceWithObjectLiteral, restTuplesFromContextualTypes).
     pub(crate) fn get_inference_context(
         &self,
         node: NodeId,
     ) -> Option<crate::todo_shapes::InferenceContextId> {
         for i in (0..self.inference_context_infos.len()).rev() {
-            if self.inference_context_infos[i].node == Some(node) {
+            let entry_node = self.inference_context_infos[i].node;
+            if entry_node.is_some()
+                && crate::utilities::is_node_descendant_of(self.store(), node, entry_node.expect("checked Some"))
+            {
                 return self.inference_context_infos[i].context;
             }
         }

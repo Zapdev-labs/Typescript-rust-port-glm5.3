@@ -2710,3 +2710,27 @@ PLAIN-sweep census: divergent 1,345 (1,126 count / 219 hash), identical
 6,222/7,567; both drivers 0/3,826/3,741/0; panics 0; newly-divergent 0.
 54 suites (fcs16 pins); clippy 0; all 300-slice gates green fresh.
 (Cargo.lock: stale-lock regen adding the tranche-7 tsc-module entries.)
+
+## Sweep micro-tranche 17 landed (2026-10-28, RIG-VALIDATED) — the inference-context ancestor match; divergent 1,345 -> 1,341
+
+ONE 21-line root for the fcs16 diagnosis: get_inference_context required an
+EXACT node match where Go's getInferenceContext (checker.go:31513) matches
+the first stack entry whose node is an ANCESTOR (isNodeDescendantOf,
+utilities.go:912), returning that entry's context (even nil) on the first
+ancestor hit. With the exact match, context-sensitive members inside call
+arguments never resolved the argument's inference context -> the nonFixing
+substitution was skipped -> the second pass recorded a self-referential
+contravariant candidate (T:=T) -> the final applicability pass related
+against the UNINSTANTIATED candidate (instrumented-confirmed). Fix: Go's
+ancestor match via the existing is_node_descendant_of. Repro deltas:
+intraExpressionInferences 67/35 -> 36/35; typeArgumentInferenceWith-
+ObjectLiteral 21/9 -> 9/9 DIAG-IDENTICAL; minimal repros k1-k4 IDENTICAL.
+TS2345 records-with-extra 176 -> 131 (-45); TS2322 105->99. Honest split:
+two distinct sub-roots remain in the contextual-signature instantiation
+chain — restTuplesFromContextualTypes 42/18 (Go instantiates the
+contextual rest signature with renamed params args_0/...args; the port
+relates against uninstantiated ...arg) and parenthesizedContexualTyping2
+sub-shape B (ternary/comma arrows, 7006+2347 vs 2345). PLAIN-sweep
+census: divergent 1,341 (1,121 count / 220 hash), identical 6,226/7,567;
+newly-divergent 0, newly-identical 4. 55 suites (fcs17 pins); clippy 0;
+all 300-slice gates green fresh.
