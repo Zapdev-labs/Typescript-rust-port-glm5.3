@@ -9148,11 +9148,18 @@ pub(crate) fn get_string_number_symbol_type(c: &mut Checker) -> TypeId {
     c.string_number_symbol_type()
 }
 
-/// Go: `c.anyFunctionType` (None until the signature-construction wave).
-pub(crate) fn any_function_type(_c: &mut Checker) -> Option<TypeId> {
-    // TODO(port M6 S8): the anyFunctionType wildcard signature type (the
-    // empty-signature anonymous object rides the member/signature wave).
-    None
+/// Go: `c.anyFunctionType` — REAL (FCS tranche 15): the seeded
+/// empty-signature anonymous object (checker.rs checker.go:1037 port) IS
+/// the wildcard. It was a `None` stub, which dead-coded the anyFunctionType
+/// arms in signaturesRelatedTo (relater.go:4478/4481) — every
+/// context-sensitive function expression's first-pass (SkipContextSensitive)
+/// applicability check typed as anyFunctionType and then FAILED the
+/// relation walk, so multi-overload calls with function-typed first
+/// parameters (parenthesizedContexualTyping1/2, genericCallWithFunctionTyped*
+/// ...) resolved against the wrong overload (bogus TS2345s) or failed
+/// silently (single-candidate calls).
+pub(crate) fn any_function_type(c: &mut Checker) -> Option<TypeId> {
+    c.any_function_type
 }
 
 /// Go: `func (c *Checker) getGlobalESSymbolType() *Type`.

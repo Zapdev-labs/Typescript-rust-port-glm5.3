@@ -1148,19 +1148,18 @@ impl Checker {
         }
         for i in arg_count..effective_minimum_arguments as usize {
             let t = self.get_type_at_position(signature, i);
-            // PORT: Go filters the parameter type for acceptsVoid and checks
-            // the never flag; the void-parameter filter is the same any-typed
-            // filter family (utilities.go everyType).
-            if self.type_(t).flags.intersects(TypeFlags::VOID) {
-                continue;
-            }
-            // Go: `c.filterType(t, acceptsVoid).flags&TypeFlagsNever != 0` —
-            // a non-void parameter with a never-filtered remainder means the
-            // arity check fails. TODO(port M6 S7): the filterType union walk;
-            // the flags probe below composes the never answer for the
-            // non-union case (Go's everyType(t, acceptsVoid) keeps a
-            // constituent only when void — a never result).
-            if self.type_(t).flags.intersects(TypeFlags::NEVER) {
+            // PORT (FCS tranche 15): Go
+            // `c.filterType(t, acceptsVoid).flags&TypeFlagsNever != 0` — a
+            // non-void parameter filters to never (too-few-args fails the
+            // candidate); a void parameter survives the filter. The former
+            // direct flags probe only rejected literal-never params and
+            // accepted every other under-supplied call, so arity-mismatched
+            // overload candidates stayed in the race and surfaced their
+            // argument errors (the bogus "number -> FuncType" TS2345 arm on
+            // parenthesizedContexualTyping2 a-d).
+            let filtered =
+                self.filter_type(t, |c, u| c.type_(u).flags.intersects(TypeFlags::VOID));
+            if self.type_(filtered).flags.intersects(TypeFlags::NEVER) {
                 return false;
             }
         }
@@ -2458,9 +2457,65 @@ impl Checker {
                 vec![arg]
             }
             Kind::TaggedTemplateExpression => {
-                // TODO(port M6 factory): the TemplateStringsArray synthetic
-                // first argument + the span expressions; empty until then.
-                Vec::new()
+                // PORT (FCS tranche 15): Go checker.go:30636 — the template
+                // IS the call's arguments: a synthetic first argument typed
+                // TemplateStringsArray (createSyntheticExpression: loc/parent
+                // = the template node) plus one argument per span expression.
+                // The former empty stub held EVERY tagged-template call at
+                // zero arguments — dormant while hasCorrectArity's
+                // too-few-args ladder accepted everything, surfaced as
+                // TS2554/2555 once the filterType fix made arity real.
+                let template = self
+                    .store()
+                    .node(node)
+                    .as_tagged_template_expression()
+                    .expect("TaggedTemplateExpression data")
+                    .template;
+                let t = self.get_global_template_strings_array_type();
+                let synthetic = tsc_ast::Node {
+                    kind: Kind::SyntheticExpression,
+                    flags: tsc_ast::NodeFlags::NONE,
+                    loc: self.store().node(template).loc,
+                    id: std::cell::Cell::new(0),
+                    parent: std::cell::Cell::new(NodeId::NONE),
+                    data: tsc_ast::NodeData::SyntheticExpression(Box::new(
+                        tsc_ast::SyntheticExpression {
+                            type_: std::sync::Arc::new(t),
+                            is_spread: false,
+                            tuple_name_source: None,
+                        },
+                    )),
+                };
+                let first_arg = self.program.node_store_mut().alloc(synthetic);
+                self.program
+                    .node_store_mut()
+                    .node_mut(first_arg)
+                    .parent
+                    .set(template);
+                if self.store().node(template).kind != Kind::TemplateExpression {
+                    return vec![first_arg];
+                }
+                let spans: Vec<NodeId> = self
+                    .store()
+                    .node(template)
+                    .as_template_expression()
+                    .expect("TemplateExpression data")
+                    .template_spans
+                    .as_ref()
+                    .map(|l| l.nodes.to_vec())
+                    .unwrap_or_default();
+                let mut args = Vec::with_capacity(spans.len() + 1);
+                args.push(first_arg);
+                for span in spans {
+                    args.push(
+                        self.store()
+                            .node(span)
+                            .as_template_span()
+                            .expect("TemplateSpan data")
+                            .expression,
+                    );
+                }
+                args
             }
             Kind::Decorator => {
                 // TODO(port M6 decorator wave): getEffectiveDecoratorArguments.
@@ -2648,14 +2703,33 @@ fn c_is_spread_argument(store: &dyn NodeStore, arg: NodeId) -> bool {
     store.node(arg).kind == Kind::SpreadElement
 }
 
-/// Go: `func getErrorNodeForCallNode(node) *ast.Node` (checker.go:10062).
+/// Go: `func getErrorNodeForCallNode(node) *ast.Node` (checker.go:10073).
 fn get_error_node_for_call_node(store: &dyn NodeStore, node: NodeId) -> NodeId {
-    // Go (checker.go:10062): an import call's arity error points at the
-    // specifier argument.
+    // The import-call arm is the tranche-7 addition (an import call's arity
+    // error points at the specifier argument); Go's own body follows.
     if is_import_call(store, node) {
         let args = binder_node_data::arguments_of(store, node);
         if !args.is_empty() {
             return args[0];
+        }
+    }
+    // PORT (FCS tranche 15): Go's main body — the error node of a call is
+    // the callee expression, and a property-access callee narrows to its
+    // NAME (`f(1)` reports on `f`, `o.m()` on `m`). The former port
+    // returned the whole call node, so every TS2554/2555 arity error
+    // spanned the call (probe k9: 107-111 vs Go's 107-108).
+    let mut node = node;
+    if store.node(node).kind == Kind::CallExpression {
+        if let Some(expression) = crate::ast_shims::expression_of(store, node) {
+            node = expression;
+        }
+        if store.node(node).kind == Kind::PropertyAccessExpression {
+            let name = store
+                .node(node)
+                .as_property_access_expression()
+                .expect("PropertyAccessExpression data")
+                .name;
+            node = name;
         }
     }
     node

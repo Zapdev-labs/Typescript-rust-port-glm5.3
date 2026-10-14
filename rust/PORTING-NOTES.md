@@ -2664,3 +2664,26 @@ node.Symbol() inline); TS2699 missing 12->0. PLAIN-sweep census: divergent
 0/3,826/3,741/0; panics 0; newly-divergent 0. 52 suites (fcs14 pins);
 clippy 0; all 300-slice gates green fresh. Next by census: TS2345 (131),
 TS2322 (103/173), TS2699 (96 extra), TS2556 (66), TS2339 missing 127.
+
+## Sweep micro-tranche 15 landed (2026-10-26, RIG-VALIDATED) — TS2345 residual: divergent 1,393 -> 1,346
+
+Three co-masking roots in the call-arity/relater chain: (1) the relater's
+any_function_type() helper was a None STUB — dead-coding Go's anyFunctionType
+wildcard arms in signatures_related_to (relater.go:4478/4481), so the
+context-sensitive first applicability pass (typed anyFunctionType) never
+matched any function type — multi-overload calls resolved against later
+overloads (the bogus number->FuncType 2345s). (2) has_correct_arity's
+too-few ladder probed raw t.flags instead of Go's filterType(t, acceptsVoid)
+(checker.go:9389) — every under-supplied call with non-void params was
+accepted. (3) get_effective_call_arguments' TaggedTemplateExpression arm was
+an empty Vec stub (30636) — dormant while (2) accepted everything; the arity
+fix surfaced TS2554/2555 on ~265 instances. Plus get_error_node_for_call_
+node's missing main body (10073). TS2554 missing 78->0; TS2345 missing off
+the top-50. The live wildcard EXPOSED the next seam honestly: get_regular_
+type_of_object_literal lacks Go's context-sensitive-member regularization
+(records-with-2345-extra 131->176 from previously-masked sites; net records
+still -47; newly-divergent 4 vs newly-identical 51). PLAIN-sweep census:
+divergent 1,346 (1,128 count / 218 hash), identical 6,221/7,567; both
+drivers 0/3,826/3,741/0; panics 0. 53 suites (fcs15 pins); clippy 0; all
+300-slice gates green fresh. NEW CADENCE: single-family micro-tranches,
+one commit each.
