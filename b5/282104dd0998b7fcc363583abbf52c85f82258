@@ -1,0 +1,24 @@
+rust/crates/checker/src/jsx.rs
+  s_4446579951daae::t_9586798201fef9 1979-1990,1992-2008
+rust/crates/checker/tests/fcs24_pins.rs
+  s_4446579951daae::t_4a1378c159201e 69
+  s_4446579951daae::t_cfd66a78ed3893 1-68,70-280
+rust/crates/checker/src/expressions.rs
+  s_4446579951daae::t_0a0f0a45dd651b 5512-5534
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b5282104dd0998b7fcc363583abbf52c85f82258",
+  "prompts": {},
+  "sessions": {
+    "s_4446579951daae": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "7f2500bc-1837-4267-bc9e-f72351529966",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
