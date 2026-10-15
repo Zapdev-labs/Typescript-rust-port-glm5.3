@@ -2889,3 +2889,35 @@ intraExpressionInferences x11 remain). PLAIN-sweep census: divergent
 300-slice gates green fresh. (Worker cut off three times silently; the
 rig-side battery script completed + orchestrator re-verified everything
 fresh.)
+
+## Sweep micro-tranche 24 landed (2026-11-02, RIG-VALIDATED) — tuple intra-expression site + JSX spread attributes; divergent 1,224 -> 1,190
+
+The intraExpressionInferences "cluster" was TWO single-instance roots
+(census msgkey-mates over-count; each record's dump diff was exactly one
+diagnostic), both fixed Go-exactly:
+- ROOT A (.ts, the tuple case): check_array_literal's
+  addIntraExpressionInferenceSite arm was the "TODO M6 S6/S9" STUB — Go
+  checker.go:8277-8281 adds an intra-expression inference site for
+  context-sensitive elements under inTupleContext && Inferential &&
+  !SkipContextSensitive. Without it the CS producer `_a => 0` was
+  omitted from the first argument-inference pass and `T` never inferred
+  (TS18046 'n' is unknown vs Go's TS2339 toFixed on number). Ported
+  Go-exact.
+- ROOT B (.tsx, the spread-attribute case): create_jsx_attributes_
+  type_from_attributes_property hoisted the member lookup ABOVE the kind
+  branch and continue'd on None — a JsxSpreadAttribute has neither, so
+  EVERY JSX spread attribute was silently dropped from the attributes
+  type (extra TS2739 + missing TS2339). Go jsx.go:736-739 branches on
+  IsJsxAttribute FIRST; the spread arm runs unconditionally.
+  Restructured to the Go shape — and 32 additional jsx records became
+  IDENTICAL for free (tsxSpreadAttributesResolution 4/11/13-16,
+  tsxStatelessFunctionComponent* x8, tsxAttributeResolution 3/4/5/8,
+  tsxGenericAttributesType 3/4, correctlyMarkAliasAsReferences, others).
+Repro-identical both records; newly-divergent 0; newly-identical 34;
+missing-2339 census 37/16 -> 16/8. PLAIN-sweep census: divergent 1,190
+(1,013 count / 177 hash), identical 6,377/7,567; both drivers
+0/3,826/3,741/0; panics 0. 62 suites (fcs24 pins, 4, GO-verified
+byte-same); clippy 0; all gates green fresh (orchestrator re-ran tests +
+sweeps + census independently). Remaining census: privateNameAndObjectRest
+Spread x4, jsdoc/assertionsAndNonReturningFunctions x3, salsa x2,
+typesWithPrivate/ProtectedConstructor x2 each, 3 singles.

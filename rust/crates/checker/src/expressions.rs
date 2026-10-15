@@ -5509,11 +5509,29 @@ impl Checker {
                     },
                     labeled_declaration: None,
                 };
-                // Go: CheckModeInferential's intra-expression inference site
-                // (the S6/S9 inference-context readers are permissive; the
-                // isContextSensitive probe stays dormant under them).
-                // TODO(port M6 S6/S9): addIntraExpressionInferenceSite.
-                let _ = (in_tuple_context, check_mode);
+                // PORT (FCS tranche 24): Go checker.go:8277-8281 — the
+                // intra-expression inference site for context-sensitive
+                // array-literal elements under a tuple context (the
+                // `[(n: number) => T, (x: T) => void]` argument shape:
+                // context-sensitive producers are omitted from the first
+                // inference pass, so their return-type inference must ride
+                // the site list inferFromIntraExpressionSites walks at
+                // fix time). Was the M6 S6/S9 TODO stub. PORT: like the
+                // object-literal site add, the inference-context
+                // registration seam can miss this node at depth — the site
+                // is skipped then (Go's context is always non-nil under
+                // CheckModeInferential).
+                if in_tuple_context
+                    && check_mode.intersects(CheckMode::INFERENTIAL)
+                    && !check_mode.intersects(CheckMode::SKIP_CONTEXT_SENSITIVE)
+                    && self.is_context_sensitive(e)
+                {
+                    if let Some(inference_context) = self.get_inference_context(node) {
+                        // In CheckMode.Inferential we should always have an
+                        // inference context (Go comment).
+                        self.add_intra_expression_inference_site(inference_context, e, t);
+                    }
+                }
             }
         }
         self.pop_contextual_type();

@@ -1976,24 +1976,36 @@ impl Checker {
             // (Go doc comment).
             let attribute_decls = jsx_properties_of(self.store(), attributes);
             for attribute_decl in attribute_decls {
-                let member = self
-                    .store()
-                    .node(attribute_decl)
-                    .name()
-                    .map(|_| ())
-                    .and_then(|()| self.get_symbol_of_declaration(attribute_decl))
-                    .or_else(|| {
-                        // Go reads attributeDecl.Symbol() — the binder
-                        // payload symbol (JsxAttribute/JsxSpreadAttribute).
-                        self.store()
-                            .node(attribute_decl)
-                            .as_jsx_attribute()
-                            .and_then(|d| d.symbol)
-                    });
-                let Some(member) = member else {
-                    continue;
-                };
+                // PORT (FCS tranche 24): Go jsx.go:736-739 reads
+                // `member := attributeDecl.Symbol()` and branches on
+                // `ast.IsJsxAttribute(attributeDecl)` FIRST — the symbol is
+                // only used inside the attribute arm; the SPREAD arm runs
+                // unconditionally. The former port hoisted the member
+                // lookup (name() → JsxAttribute payload symbol) above the
+                // kind branch and `continue`d when it resolved to None — a
+                // JsxSpreadAttribute has neither a name nor a JsxAttribute
+                // payload symbol, so EVERY spread attribute was silently
+                // dropped from the attributes type (JSX spread props never
+                // merged; the intraExpressionInferencesJsx `{...{a, b}}`
+                // shape collapsed to `{}`).
                 if self.store().node(attribute_decl).kind == Kind::JsxAttribute {
+                    let member = self
+                        .store()
+                        .node(attribute_decl)
+                        .name()
+                        .map(|_| ())
+                        .and_then(|()| self.get_symbol_of_declaration(attribute_decl))
+                        .or_else(|| {
+                            // Go reads attributeDecl.Symbol() — the binder
+                            // payload symbol (JsxAttribute/JsxSpreadAttribute).
+                            self.store()
+                                .node(attribute_decl)
+                                .as_jsx_attribute()
+                                .and_then(|d| d.symbol)
+                        });
+                    let Some(member) = member else {
+                        continue;
+                    };
                     let expr_type = self.check_jsx_attribute(attribute_decl, check_mode);
                     object_flags |= self.type_(expr_type).object_flags & ObjectFlags::PROPAGATING_FLAGS;
                     let member_flags = self.program_symbol(member).flags;
