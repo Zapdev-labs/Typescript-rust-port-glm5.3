@@ -3495,7 +3495,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getTypeOfDottedName(node, diagnostic) *Type` (flow.go:2122).
-    fn get_type_of_dotted_name(&mut self, node: NodeId, diagnostic: Option<NodeId>) -> Option<TypeId> {
+    pub(crate) fn get_type_of_dotted_name(&mut self, node: NodeId, diagnostic: Option<NodeId>) -> Option<TypeId> {
         let flags = self.store().node(node).flags;
         if !flags.intersects(NF::IN_WITH_STATEMENT) {
             let kind = self.store().node(node).kind;
@@ -3516,8 +3516,27 @@ impl Checker {
                         .as_property_access_expression()
                         .expect("PropertyAccessExpression data")
                         .name;
-                    let name_text = tsc_ast::node_text(self.store(), name).to_string();
-                    let prop = self.get_property_of_type(t, &name_text);
+                    // PORT(FCS tranche 23): Go flow.go:2122-2144 — the
+                    // private-identifier arm. A `#name` access resolves
+                    // through the class symbol's brand name
+                    // (`__#<symbolId>@#name`, binder.GetSymbolNameFor
+                    // PrivateIdentifier), not the plain property table.
+                    let prop = if tsc_ast::is_private_identifier(self.store().node(name)) {
+                        self.type_(t).symbol.and_then(|class_symbol| {
+                            let description = tsc_ast::node_text(self.store(), name);
+                            let id = tsc_binder::ast_shims::get_symbol_id(
+                                self.program_symbol(class_symbol),
+                            );
+                            let private_name = format!(
+                                "{}#{id}@{description}",
+                                tsc_ast::INTERNAL_SYMBOL_NAME_PREFIX
+                            );
+                            self.get_property_of_type(t, &private_name)
+                        })
+                    } else {
+                        let name_text = tsc_ast::node_text(self.store(), name).to_string();
+                        self.get_property_of_type(t, &name_text)
+                    };
                     if let Some(prop) = prop {
                         return self.get_explicit_type_of_symbol(prop, diagnostic);
                     }

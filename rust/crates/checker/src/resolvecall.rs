@@ -2410,7 +2410,55 @@ impl Checker {
         let Some(signature) = signature else {
             return self.any_type();
         };
-        self.get_return_type_of_signature(signature)
+        let return_type = self.get_return_type_of_signature(signature);
+        // (Go checker.go:8552-8555: the ESSymbolLike fresh-literal seam —
+        // isSymbolOrSymbolForCall + getESSymbolLikeTypeForNode — is a
+        // TODO(port M6) and unchanged in this tranche.)
+        // PORT(FCS tranche 23): Go checker.go:8560-8566 — the assertion-call
+        // validation. An expression-statement call whose resolved signature
+        // carries a type predicate and whose return type is void must have a
+        // dotted-name target resolvable through the effects-signature
+        // machinery, else TS2776 (not dotted) / TS2775 (dotted but the
+        // effects signature did not resolve).
+        if self.store().node(node).kind == Kind::CallExpression
+            && self
+                .store()
+                .node(node)
+                .as_call_expression()
+                .expect("CallExpression data")
+                .question_dot_token
+                .is_none()
+            && self.store().node(self.store().node(node).parent.get()).kind
+                == Kind::ExpressionStatement
+            && self.type_(return_type).flags.intersects(TypeFlags::VOID)
+            && self.get_type_predicate_of_signature(signature).is_some()
+        {
+            if let Some(expression) = crate::ast_shims::expression_of(self.store(), node) {
+                if !crate::ast_shims::is_dotted_name(self.store(), expression) {
+                    self.error(
+                        expression,
+                        &diag::ASSERTIONS_REQUIRE_THE_CALL_TARGET_TO_BE_AN_IDENTIFIER_OR_QUALIFIED_NAME,
+                        &[],
+                    );
+                } else if self.get_effects_signature(node).is_none() {
+                    self.error(
+                        expression,
+                        &diag::ASSERTIONS_REQUIRE_EVERY_NAME_IN_THE_CALL_TARGET_TO_BE_DECLARED_WITH_AN_EXPLICIT_TYPE_ANNOTATION,
+                        &[],
+                    );
+                    // Go threads the resulting *ast.Diagnostic into
+                    // getTypeOfDottedName so getExplicitTypeOfSymbol can
+                    // attach the TS2782 "'X' needs an explicit type
+                    // annotation" related info — that related-info seam is
+                    // unported (getExplicitTypeOfSymbolWorker ignores the
+                    // diagnostic), so the port passes None; the primary
+                    // 2775 is identical, the related info rides a future
+                    // tranche.
+                    let _ = self.get_type_of_dotted_name(expression, None);
+                }
+            }
+        }
+        return_type
     }
 
     /// Go: `func (c *Checker) checkDeprecatedSignature(sig, node)` (checker.go:8617).

@@ -598,3 +598,18 @@ pub fn module_specifier_of(store: &dyn NodeStore, node: NodeId) -> Option<NodeId
         _ => None,
     }
 }
+
+/// Go: `func IsDottedName(node *Node) bool` (ast/utilities.go:1638).
+/// PORT(FCS tranche 23): the assertion-call validation in checkCallExpression
+/// (Go checker.go:8561) needs the dotted-name predicate; the binder crate's
+/// twin lives in binder/src/ast_shims.rs, this is the checker-side mirror of
+/// the same Go function.
+pub fn is_dotted_name(store: &dyn NodeStore, node: NodeId) -> bool {
+    match store.node(node).kind {
+        Kind::Identifier | Kind::ThisKeyword | Kind::SuperKeyword | Kind::MetaProperty => true,
+        Kind::PropertyAccessExpression | Kind::ParenthesizedExpression => {
+            is_dotted_name(store, expression_of(store, node).expect("expression"))
+        }
+        _ => false,
+    }
+}

@@ -2723,11 +2723,39 @@ impl Checker {
                 let predicate = self.get_union_or_intersection_type_predicate(&signatures, is_union);
                 sig_mut(self, signature).resolved_type_predicate = predicate;
             } else if let Some(declaration) = s.declaration {
-                // Go: the type-predicate-node and body paths —
-                // createTypePredicateFromTypePredicateNode needs type-node
-                // resolution (S5) and getTypePredicateFromBody needs flow (W3).
-                // TODO(port M6 S5/W3): the declared type-predicate resolution.
-                let _ = declaration;
+                // PORT(FCS tranche 23): Go relater.go:2062-2072 — the
+                // declared type-predicate resolution. typeNode != nil: a
+                // TypePredicateNode return annotation resolves through
+                // createTypePredicateFromTypePredicateNode (relater.go:2117);
+                // any other annotation leaves the sentinel unset (Go's
+                // fall-through to noTypePredicate below). typeNode == nil:
+                // Go probes the body via getTypePredicateFromBody
+                // (checker.go:20922) — that body-inference seam stays
+                // unported (it needs synthetic flow nodes), so the port
+                // keeps Go's pre-body noTypePredicate marker, which is
+                // byte-equal to Go's result for every body that infers no
+                // predicate.
+                let type_node = crate::ast_shims::type_of_node(self.store(), declaration);
+                if let Some(type_node) = type_node {
+                    if tsc_ast::is_type_predicate_node(self.store().node(type_node)) {
+                        let predicate = self
+                            .create_type_predicate_from_type_predicate_node(type_node, signature);
+                        sig_mut(self, signature).resolved_type_predicate = Some(Box::new(predicate));
+                    }
+                } else if tsc_ast::is_function_like(self.store().node(declaration))
+                    && (s.resolved_return_type.is_none()
+                        || self
+                            .type_(s.resolved_return_type.expect("checked some"))
+                            .flags
+                            .intersects(TypeFlags::BOOLEAN))
+                    && self.get_parameter_count(signature) > 0
+                {
+                    // Go sets the noTypePredicate sentinel before
+                    // getTypePredicateFromBody to avoid infinite loops; with
+                    // the body seam unported the marker stays set (== Go's
+                    // "body inferred no predicate" outcome).
+                    sig_mut(self, signature).no_type_predicate = true;
+                }
             }
             if sig(self, signature).resolved_type_predicate.is_none() {
                 // Go: noTypePredicate — the non-predicate sentinel. PORT: the
@@ -2787,6 +2815,48 @@ impl Checker {
     /// Go: `func (c *Checker) typePredicateKindsMatch(a, b) bool`.
     pub(crate) fn type_predicate_kinds_match(&self, a: &TypePredicate, b: &TypePredicate) -> bool {
         a.kind == b.kind && a.parameter_index == b.parameter_index
+    }
+
+    /// Go: `func (c *Checker) createTypePredicateFromTypePredicateNode(node, signature) *TypePredicate`
+    /// (relater.go:2117). PORT(FCS tranche 23): the declared-predicate
+    /// constructor — kind from the asserts modifier, parameter index found by
+    /// name in the signature's parameter list (Go's `core.FindIndex` returns
+    /// -1 when the name matches no parameter).
+    pub(crate) fn create_type_predicate_from_type_predicate_node(
+        &mut self,
+        node: NodeId,
+        signature: crate::types::SignatureId,
+    ) -> TypePredicate {
+        let predicate_node = self
+            .store()
+            .node(node)
+            .as_type_predicate_node()
+            .expect("TypePredicateNode data")
+            .clone();
+        let t = predicate_node
+            .type_
+            .map(|type_node| self.get_type_from_type_node(type_node));
+        if self.store().node(predicate_node.parameter_name).kind == Kind::ThisType {
+            let kind = if predicate_node.asserts_modifier.is_some() {
+                TypePredicateKind::AssertsThis
+            } else {
+                TypePredicateKind::This
+            };
+            return self.new_type_predicate(kind, "", 0, t);
+        }
+        let kind = if predicate_node.asserts_modifier.is_some() {
+            TypePredicateKind::AssertsIdentifier
+        } else {
+            TypePredicateKind::Identifier
+        };
+        let name = tsc_ast::node_text(self.store(), predicate_node.parameter_name).to_string();
+        let parameters = self.signatures[signature.0 as usize].parameters.clone();
+        let index = parameters
+            .iter()
+            .position(|&p| self.program_symbol(p).name == name)
+            .map(|i| i as i32)
+            .unwrap_or(-1);
+        self.new_type_predicate(kind, &name, index, t)
     }
 
     /// Go: `func (c *Checker) instantiateTypePredicate(predicate, mapper) *TypePredicate`.

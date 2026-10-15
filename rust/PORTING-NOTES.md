@@ -2852,3 +2852,40 @@ Predicates1 x10, intraExpressionInferences x11, privateNameAndObjectRest-
 Spread x4, jsx clusters) — next micro-tranches. (Worker died mid-
 battery; the rig-side battery script completed + orchestrator re-verified
 tests fresh.)
+
+## Sweep micro-tranche 23 landed (2026-11-02, RIG-VALIDATED) — declared type-predicate resolution; divergent 1,242 -> 1,224
+
+The assertionTypePredicates1 record was ONE mega-root: relater.rs
+get_type_predicate_of_signature's `else if declaration` arm was a TODO
+stub — every signature with a DECLARED `asserts`/`is` predicate resolved
+to no_type_predicate, dead-coding the effects-signature gates,
+get_type_at_flow_call, narrow_type_by_call_expression, flow-call
+reachability, and the 2775/2776 validation. Fixes: the declared arm
+Go-exact (typeNode -> predicate node -> NEW
+create_type_predicate_from_type_predicate_node, Go relater.go:2117;
+FindIndex -> position/-1), the missing Go checker.go:8560-8566
+2775/2776 assertion-call validation tail in check_call_expression, and a
+NEW ast_shims is_dotted_name (Go ast/utilities.go:1638) +
+get_type_of_dotted_name made available to the resolvecall caller.
+Recovered (newly-identical): assertionTypePredicates1 AND 2, the whole
+typeGuard/typeGuardFunction family, controlFlowOptionalChain,
+typeGuardOfFormIsType, narrowFromAnyWithTypePredicate,
+spreadObjectOrFalsy, stringLiteralCheckedInIf02, thisTypeInFunctions4 —
+19 records at the worker's checkpoint, more after the private arm.
+Its regression (privateNamesAssertion es2022/esnext x2: the
+get_type_of_dotted_name PropertyAccess arm had NO private-identifier
+case; Go flow.go:2122-2144 resolves `#name` through
+GetSymbolNameForPrivateIdentifier) fixed and repro byte-IDENTICAL.
+HONEST SPLIT: inferred predicates from function bodies
+(getTypePredicateFromBody, checker.go:20922, needs synthetic flow nodes)
+remain unported — typeFromJSInitializer's extra 2322/7010s are that
+pre-existing seam, byte-same before this tranche (verified against the
+t22 dumps); TS2782 related-info rides a diagnostic seam, residual.
+Missing-2339 census: 49 instances/18 records -> 37/16 (assertion
+predicates + typeGuard-of-form families gone; jsx singles +
+intraExpressionInferences x11 remain). PLAIN-sweep census: divergent
+1,224 (1,039 count / 185 hash), identical 6,343/7,567; both drivers
+0/3,826/3,741/0; panics 0. 61 suites (fcs23 pins); clippy 0; all
+300-slice gates green fresh. (Worker cut off three times silently; the
+rig-side battery script completed + orchestrator re-verified everything
+fresh.)

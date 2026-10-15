@@ -783,15 +783,45 @@ fn is_instance_of_expression(store: &dyn NodeStore, node: NodeId) -> bool {
             == Kind::InstanceOfKeyword
 }
 
-/// Go: `scanner.GetTokenPosOfNode(startNode, sourceFile, false)` (the
-/// skip-trivia'd node start).
+/// Go: `func scanner.GetTokenPosOfNode(node, sourceFile, includeJSDoc bool) int`
+/// (scanner.go:2526) — the skip-trivia'd token start.
 ///
-/// PORT: the scanner crate's GetTokenPosOfNode port lands with the scanner/
-/// utilities wholesale wave (W3-adjacent); the node's own `pos` is the
-/// trivia-inclusive position Go skips — identical for the statement starts
-/// the unreachable diagnostic reports (statements begin on their keyword).
+/// PORT(FCS tranche 23): the former stub returned the node's raw `pos`;
+/// that is only pos==token start for statement kinds that begin on their
+/// keyword. ExpressionStatement nodes (the unreachable-code diagnostic's
+/// usual span targets after assertion calls) carry the leading line break +
+/// indent in `pos`, so the stub reported spans starting up to a line's worth
+/// of trivia early. The real Go ladder is now ported; the unreachable call
+/// site passes includeJSDoc=false (checker.go:2489), so the JSDoc-attached
+/// arm is unreachable from there.
 fn get_token_pos_of_node_stub(store: &dyn NodeStore, node: NodeId) -> TextPos {
-    store.node(node).loc.pos()
+    let n = store.node(node);
+    // With nodes that have no width (i.e. 'Missing' nodes), we actually
+    // *don't* want to skip trivia because this will launch us forward to
+    // the next token. (Go comment, verbatim.)
+    if tsc_ast::utilities::node_is_missing(n) {
+        return n.loc.pos();
+    }
+    let Some(file) = tsc_ast::utilities::get_source_file_of_node(store, node) else {
+        // No source file: Go dereferences a real file (its text backs
+        // SkipTrivia); the port's synthetic-node callers keep the raw pos.
+        return n.loc.pos();
+    };
+    let text = file.text();
+    if tsc_ast::is_jsdoc_node_kind(n.kind) || n.kind == Kind::JsxText {
+        // JsxText cannot actually contain comments, even though the scanner
+        // will think it sees comments (Go comment, verbatim).
+        let options = tsc_scanner::SkipTriviaOptions {
+            stop_at_comments: true,
+            ..Default::default()
+        };
+        return tsc_scanner::skip_trivia_ex(text, n.loc.pos(), Some(&options));
+    }
+    let options = tsc_scanner::SkipTriviaOptions {
+        in_jsdoc: n.flags.intersects(NF::JSDOC),
+        ..Default::default()
+    };
+    tsc_scanner::skip_trivia_ex(text, n.loc.pos(), Some(&options))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
