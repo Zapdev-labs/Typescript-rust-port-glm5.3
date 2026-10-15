@@ -2829,3 +2829,26 @@ residual), a 2318 lib-family root. PLAIN-sweep census: divergent 1,251
 3,741/0; panics 0. 59 suites (fcs21 pins, 4); clippy 0; all 300-slice
 gates green fresh. (Worker cut off twice silently; orchestrator finished
 the battery + fixed its doc-test compile slip.)
+
+## Sweep micro-tranche 22 landed (2026-11-02, RIG-VALIDATED) — the S10 computed-name contextual-signature family; divergent 1,251 -> 1,242
+
+The computedPropertyNamesContextualType ES5/ES6 family (18 missing 2339s
++ 18 extra 7006s across 6 records — the fcs21 honest split): the
+contextual-signature lookup for computed-name object-literal methods never
+matched its index-signature contextual type. Root fixes per the worker's
+[s2]-[s4]: the element-impl name reads now use the generated Go-exact
+node().name() (Go line cites), the map_type_ex arm restored, and the
+instrument/restore formatting mangle fixed. DUMP DIAGS IDENTICAL through
+both drivers on all 6 records; pin 3 (no index sig -> still 7006, no
+2339) Go-verified through BOTH drivers to guard against over-application.
+Newly-identical 9 (all 6 records' variants), newly-divergent 0. The
+BindingElement property_name.or(name) latent divergence NOTED for a
+future tranche (Go's ArrayBindingPattern check at 30151 reads plain
+Name()). PLAIN-sweep census: divergent 1,242 (1,058 count / 184 hash),
+identical 6,325/7,567; both drivers 0/3,826/3,741/0; panics 0. 60 suites
+(fcs22 pins); clippy 0; all 300-slice gates green fresh. Remaining
+missing-2339 census: 49 instances across 18 records (assertionType-
+Predicates1 x10, intraExpressionInferences x11, privateNameAndObjectRest-
+Spread x4, jsx clusters) — next micro-tranches. (Worker died mid-
+battery; the rig-side battery script completed + orchestrator re-verified
+tests fresh.)

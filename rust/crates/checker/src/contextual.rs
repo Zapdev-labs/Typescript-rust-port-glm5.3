@@ -1960,7 +1960,20 @@ impl Checker {
         if binder_shims::has_dynamic_name(self.store(), element) {
             // Go: for a dynamic name, look the computed property's
             // expression type up in the contextual type.
-            if let Some(name) = name_of_node(self.store(), element) {
+            // PORT (FCS tranche 22): Go checker.go:30494 reads the name
+            // through ast.GetNameOfDeclaration (utilities.go:4263 — for
+            // object-literal element kinds this is the node's Name(),
+            // the generated full-accessor family). The port's local
+            // name_of_node helper carried only the
+            // variable/parameter/property-assignment arms, so a
+            // computed-name METHOD (`[key](y) { ... }`) reached the
+            // dynamic-name arm with no name node, fell through, and never
+            // reached the index-signature arm below — its parameters
+            // resolved to implicit any (the TS7006-extra /
+            // TS2339-missing pair on computedPropertyNamesContextualType
+            // x18/6 records). The generated Node::name() twin is Go-exact
+            // for these kinds.
+            if let Some(name) = self.store().node(element).name() {
                 if self.store().node(name).kind == Kind::ComputedPropertyName {
                     if let Some(expr) = expression_of_node(self, name) {
                         let expr_type = self.check_expression(expr);
@@ -1979,7 +1992,11 @@ impl Checker {
                 }
             }
         }
-        if let Some(name) = name_of_node(self.store(), element) {
+        // PORT (FCS tranche 22): Go checker.go:30500 `element.Name()` —
+        // the generated Name() accessor family (MethodDeclaration,
+        // accessors, MethodSignatureDeclaration included), NOT the local
+        // shorthand subset; same root as the dynamic-name arm above.
+        if let Some(name) = self.store().node(element).name() {
             let name_type = self.get_literal_type_from_property_name(name);
             // We avoid calling getApplicableIndexInfo here because it
             // performs potentially expensive intersection reduction (Go's
@@ -1994,16 +2011,15 @@ impl Checker {
             // contextually typed parameters fell to implicit any (the
             // TS7006 extras on contextualTypeWithUnionTypeIndexSignatures /
             // computedPropertyNamesContextualType / indexSignatures1).
-            return self
-                .map_type_ex(
-                    t,
-                    &mut |c: &mut Checker, t: TypeId| {
-                        let index_infos = c.get_index_infos_of_structured_type_impl(t);
-                        c.find_applicable_index_info(&index_infos, name_type)
-                            .map(|info| c.index_info_value_type(info))
-                    },
-                    true, /*noReductions*/
-                );
+            return self.map_type_ex(
+                t,
+                &mut |c: &mut Checker, t: TypeId| {
+                    let index_infos = c.get_index_infos_of_structured_type_impl(t);
+                    c.find_applicable_index_info(&index_infos, name_type)
+                        .map(|info| c.index_info_value_type(info))
+                },
+                true, /*noReductions*/
+            );
         }
         None
     }
