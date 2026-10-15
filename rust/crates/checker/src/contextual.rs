@@ -10,7 +10,7 @@
 
 use crate::checker::Checker;
 use crate::types::{ContextFlags, TypeFlags, TypeId};
-use tsc_ast::{Kind, NodeData, NodeId};
+use tsc_ast::{Kind, NodeData, NodeId, SymbolId};
 use tsc_ast::symbolflags::SymbolFlags;
 use tsc_jsnum::Number;
 use tsc_binder::ast_shims as binder_shims;
@@ -1669,6 +1669,13 @@ impl Checker {
         let parent = self.store().node(node).parent.get();
         let op = operator_kind(self.store(), parent);
         let (left, right) = left_right_of(self.store(), parent)?;
+        // Go: the `/** @type T */ x = expr` reparsed annotation on the
+        // binary takes precedence over the operand ladders. PORT(FCS
+        // tranche 21): the arm was absent (the JSDoc @type family's
+        // contextual typing).
+        if let Some(binary_type) = crate::ast_shims::type_of_node(self.store(), parent) {
+            return Some(self.get_type_from_type_node(binary_type));
+        }
         if matches!(
             op,
             Kind::EqualsToken
@@ -1728,8 +1735,197 @@ impl Checker {
         binary: NodeId,
     ) -> Option<TypeId> {
         let (left, _) = left_right_of(self.store(), binary)?;
-        // TODO(port M6 W2/W4): the access-expression JS-declaration and
-        // this-keyword special cases ride the JS-support waves.
+        // PORT(FCS tranche 21): REAL body (checker.go's
+        // getContextualTypeForAssignmentExpression) — was the M6 W2/W4
+        // permissive stub (`Some(get_type_of_expression(left))`, Go's
+        // final tail). The dropped guard ladder is the circularity
+        // avoidance for JS expando assignment declarations: for
+        // `F.id = expr` / `F[xxx] = expr` (binary.Symbol set by the
+        // binder) the contextual type comes ONLY from an annotated
+        // variable's type node — otherwise there is NO contextual type.
+        // The stub's unconditional left-type resolution re-entered
+        // getTypeOfSymbol(F.id) mid-resolution, hit the circularity
+        // guard, and cached errorType — so the expando property typed
+        // as any and the property-does-not-exist TS2339 family
+        // (typeFromPrototypeAssignment 1/2/3, the salsa expando wave)
+        // never fired.
+        if tsc_ast::is_access_expression(self.store().node(left)) {
+            let expr = expression_of_node(self, left)?;
+            match self.store().node(expr).kind {
+                Kind::Identifier => {
+                    let symbol = self
+                        .get_resolved_symbol(expr)
+                        .map(|s| self.get_export_symbol_of_value_symbol_if_exported(s));
+                    if let Some(symbol) = symbol {
+                        if self
+                            .program_symbol(symbol)
+                            .flags
+                            .intersects(SymbolFlags::MODULE_EXPORTS)
+                        {
+                            // No contextual type for an expression of the form 'module.exports = expr'.
+                            return None;
+                        }
+                    }
+                    let binary_symbol = crate::typeofsymbol::payload_symbol(self.store().node(binary));
+                    if binary_symbol.is_some() {
+                        // We have an assignment declaration (a binary
+                        // expression with a symbol assigned by the binder)
+                        // of the form 'F.id = expr' or 'F[xxx] = expr'.
+                        // If 'F' is declared as a variable with a type
+                        // annotation, we can obtain a contextual type from
+                        // the annotated type without triggering a
+                        // circularity. Otherwise, the assignment
+                        // declaration has no contextual type.
+                        if let Some(symbol) = symbol {
+                            let value_declaration = self.program_symbol(symbol).value_declaration;
+                            if let Some(value_declaration) = value_declaration
+                                && tsc_ast::is_variable_declaration(
+                                    self.store().node(value_declaration),
+                                )
+                            {
+                                let type_node = crate::ast_shims::type_of_node(
+                                    self.store(),
+                                    value_declaration,
+                                );
+                                if let Some(type_node) = type_node {
+                                    if tsc_ast::is_property_access_expression(
+                                        self.store().node(left),
+                                    ) {
+                                        let name = self
+                                            .store()
+                                            .node(left)
+                                            .as_property_access_expression()
+                                            .expect("PropertyAccessExpression data")
+                                            .name;
+                                        let annotated =
+                                            self.get_type_from_type_node(type_node);
+                                        let name_text =
+                                            tsc_ast::node_text(self.store(), name).to_string();
+                                        return self
+                                            .get_type_of_property_of_contextual_type(
+                                                annotated,
+                                                &name_text,
+                                            );
+                                    }
+                                    let argument = self
+                                        .store()
+                                        .node(left)
+                                        .as_element_access_expression()
+                                        .expect("ElementAccessExpression data")
+                                        .argument_expression;
+                                    let name_type = self.check_expression_cached(argument);
+                                    if crate::utilities::is_type_usable_as_property_name(
+                                        self.type_(name_type),
+                                    ) {
+                                        let property_name =
+                                            crate::utilities::get_property_name_from_type(
+                                                self.type_(name_type),
+                                            );
+                                        let annotated =
+                                            self.get_type_from_type_node(type_node);
+                                        return self.get_type_of_property_of_contextual_type_ex(
+                                            annotated,
+                                            &property_name,
+                                            Some(name_type),
+                                        );
+                                    }
+                                    return Some(self.get_type_of_expression(left));
+                                }
+                            }
+                        }
+                        return None;
+                    }
+                }
+                Kind::PropertyAccessExpression | Kind::ElementAccessExpression => {
+                    let binary_symbol = crate::typeofsymbol::payload_symbol(self.store().node(binary));
+                    if binary_symbol.is_some() {
+                        return None;
+                    }
+                }
+                Kind::ThisKeyword => {
+                    let mut symbol: Option<SymbolId> = None;
+                    let this_type = self.get_type_of_expression(expr);
+                    if tsc_ast::is_property_access_expression(self.store().node(left)) {
+                        let name = self
+                            .store()
+                            .node(left)
+                            .as_property_access_expression()
+                            .expect("PropertyAccessExpression data")
+                            .name;
+                        if tsc_ast::is_private_identifier(self.store().node(name)) {
+                            if let Some(this_symbol) = self.type_(this_type).symbol {
+                                let id = self.program_symbol(this_symbol).id.get();
+                                let member_name = format!(
+                                    "{}#{}@{}",
+                                    tsc_ast::INTERNAL_SYMBOL_NAME_PREFIX,
+                                    id,
+                                    tsc_ast::node_text(self.store(), name)
+                                );
+                                symbol = self.get_property_of_type(this_type, &member_name);
+                            }
+                        } else {
+                            let name_text =
+                                tsc_ast::node_text(self.store(), name).to_string();
+                            symbol = self.get_property_of_type(this_type, &name_text);
+                        }
+                    } else {
+                        let argument = self
+                            .store()
+                            .node(left)
+                            .as_element_access_expression()
+                            .expect("ElementAccessExpression data")
+                            .argument_expression;
+                        let prop_type = self.check_expression_cached(argument);
+                        if crate::utilities::is_type_usable_as_property_name(self.type_(prop_type))
+                        {
+                            let property_name = crate::utilities::get_property_name_from_type(
+                                self.type_(prop_type),
+                            );
+                            symbol = self.get_property_of_type(this_type, &property_name);
+                        }
+                    }
+                    if let Some(symbol) = symbol {
+                        let d = self.program_symbol(symbol).value_declaration;
+                        if let Some(d) = d
+                            && (tsc_ast::is_property_declaration(self.store().node(d))
+                                || tsc_ast::is_property_signature_declaration(self.store().node(d)))
+                            && crate::ast_shims::type_of_node(self.store(), d).is_none()
+                            && crate::ast_shims::initializer_of(self.store(), d).is_none()
+                        {
+                            // No contextual type for 'this.xxx = expr', where
+                            // xxx is declared as a property with no type
+                            // annotation or initializer.
+                            return None;
+                        }
+                    }
+                    let binary_symbol = crate::typeofsymbol::payload_symbol(self.store().node(binary));
+                    if let Some(binary_symbol) = binary_symbol
+                        && let Some(vd) = self.program_symbol(binary_symbol).value_declaration
+                        && crate::ast_shims::type_of_node(self.store(), vd).is_none()
+                    {
+                        // We have an assignment declaration 'this.xxx = expr'
+                        // with no (synthetic) type annotation.
+                        let container = binder_shims::get_this_container(
+                            self.store(),
+                            expr,
+                            false, /*includeArrowFunctions*/
+                            false, /*includeClassComputedPropertyName*/
+                        );
+                        if !binder_shims::is_object_literal_method(self.store(), container) {
+                            return None;
+                        }
+                        // and now for one single case of object literal methods
+                        let _name = tsc_ast::get_element_or_property_access_name(
+                            self.store(),
+                            left,
+                        );
+                        // !!! contextual typing for `this` in object literals
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+        }
         Some(self.get_type_of_expression(left))
     }
 

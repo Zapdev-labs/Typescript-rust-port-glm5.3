@@ -2799,3 +2799,33 @@ mapped-type residual confirmed NOT shared (still 36/35). PLAIN-sweep
 census: divergent 1,282 (1,083 count / 199 hash), identical 6,285/7,567;
 newly-divergent 0, newly-identical 2. 58 suites (fcs20 pins); clippy 0;
 all 300-slice gates green fresh.
+
+## Sweep micro-tranche 21 landed (2026-11-01, RIG-VALIDATED) — the JS expando assignment-declaration seam; divergent 1,282 -> 1,251
+
+The TS2339-missing family's huge-radius root: EVERY JS expando assignment-
+declaration symbol (this.x=..., C.prototype={...}, C.prototype.m=...,
+exports.x=..., module.exports, Object.defineProperty) typed as ANY in the
+port. Two roots: (1) get_widened_type_for_assignment_declaration + is_
+constructor_declared_this_property were the "TODO M6 S4" permissive stubs —
+Go checker.go:18478-18647 REAL bodies ported (kind ladder, declarations
+scan, get_assignment_declaration_initializer_type union with the Module-
+Exports/ExportsProperty/ThisProperty/defineProperty arms, the JS all-
+nullable implicit-any report) + the missing ast_shims type_of_node
+Kind::BinaryExpression arm. (2) get_contextual_type_for_assignment_
+expression was the "TODO M6 W2/W4" permissive stub (get_type_of_expression
+(left) — Go's TAIL only): the REAL body (Identifier module.exports -> nil,
+binary.Symbol set -> annotated-VariableDeclaration-only else nil (THE
+circularity guard — the port's permissive stub hit tvpp(prototype)
+re-entry, cached errorType, and poisoned the outer resolution), ThisKeyword
+ladder, prop/element-access arms) + binary.Type (@type) precedence in
+get_contextual_type_for_binary_operand. Instrumented Go ground truth: ONE
+tvpp(prototype) per run, no re-entrancy. Recovered: moduleExportAlias ALL
+22, typeFromPrototypeAssignment 1/2/3 all 15, jsDeclarations x10,
+jsdocTemplateTag4/5, salsa/jsdoc families broadly. Honest splits left:
+moduleExportAlias's 12 extra 2323 redeclares (separate binder family),
+computedPropertyNamesContextualType ES5/ES6 x18 (S10 contextual-signature
+residual), a 2318 lib-family root. PLAIN-sweep census: divergent 1,251
+(1,058 count / 193 hash), identical 6,316/7,567; both drivers 0/3,826/
+3,741/0; panics 0. 59 suites (fcs21 pins, 4); clippy 0; all 300-slice
+gates green fresh. (Worker cut off twice silently; orchestrator finished
+the battery + fixed its doc-test compile slip.)

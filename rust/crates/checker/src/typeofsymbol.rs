@@ -3681,29 +3681,289 @@ impl Checker {
 // ────────────────────────────────────────────────────────────────────────────
 
 impl Checker {
-    /// Go: `func (c *Checker) getWidenedTypeForAssignmentDeclaration(symbol) *Type`.
+    /// Go: `func (c *Checker) getWidenedTypeForAssignmentDeclaration(symbol) *Type`
+    /// (checker.go:18478). PORT(FCS tranche 21): REAL — was the M6 S4
+    /// permissive anyType stub, which typed EVERY JS expando
+    /// assignment-declaration symbol (`this.x = ...`, `C.prototype = {...}`,
+    /// `C.prototype.m = ...`, `exports.x = ...`, Object.defineProperty)
+    /// as any and silenced the prototype-assignment TS2339 family
+    /// (typeFromPrototypeAssignment 1/2/3, the salsa expando wave).
     fn get_widened_type_for_assignment_declaration(&mut self, symbol: SymbolId) -> TypeId {
-        // TODO(port M6 S4): isConstructorDeclaredThisProperty's control-flow
-        // and base-class arms + getAssignmentDeclarationInitializerType's JS
-        // expando paths — the permissive anyType is Go's fallback answer.
-        let kind = self.is_constructor_declared_this_property(symbol).0;
+        let (kind, location) = self.is_constructor_declared_this_property(symbol);
         let mut t: Option<TypeId> = None;
-        if kind == ThisAssignmentDeclarationKind::Typed {
-            // TODO(port M6 S5): getTypeFromTypeNode(location).
-            t = None;
+        match kind {
+            ThisAssignmentDeclarationKind::Typed => {
+                // Go: t = c.getTypeFromTypeNode(location) — the JSDoc @type
+                // annotation on the this-property assignment.
+                t = Some(self.get_type_from_type_node(
+                    location.expect("location should not be nil when this assignment has a type"),
+                ));
+            }
+            ThisAssignmentDeclarationKind::Constructor => {
+                // Go: t = c.getFlowTypeInConstructor(symbol, location).
+                t = self.get_flow_type_in_constructor(
+                    symbol,
+                    location.expect(
+                        "constructor should not be nil when this assignment is in a constructor",
+                    ),
+                );
+            }
+            ThisAssignmentDeclarationKind::Method => {
+                // Go: t = c.getTypeOfPropertyInBaseClass(symbol).
+                t = self.get_type_of_property_in_base_class(symbol);
+            }
+            _ => {}
         }
-        let _ = &mut t;
-        let mut types: Vec<TypeId> = Vec::new();
-        // We ignore initial assignments of undefined to CommonJS exports when
-        // there are multiple assignment declarations
-        let _ = &mut types;
-        let t = t.unwrap_or_else(|| self.any_type());
-        // TODO(port M6 S7): getUnionType(types) — the permissive stub keeps
-        // anyType.
-        self.get_widened_type(t)
+        if t.is_none() {
+            let mut types: Vec<TypeId> = Vec::new();
+            let declarations = self.program.symbol(symbol).declarations.clone();
+            for (i, declaration) in declarations.iter().copied().enumerate() {
+                if self.store().node(declaration).kind == Kind::BinaryExpression {
+                    if let Some(type_node) =
+                        ast_shims::type_of_node(self.store(), declaration)
+                    {
+                        t = Some(self.get_type_from_type_node(type_node));
+                        break;
+                    }
+                }
+                if let Some(assigned_type) =
+                    self.get_assignment_declaration_initializer_type(declaration)
+                {
+                    // We ignore initial assignments of undefined to CommonJS
+                    // exports when there are multiple assignment declarations
+                    if tsc_ast::get_assignment_declaration_kind(self.store(), declaration)
+                        != tsc_ast::JSDeclarationKind::ExportsProperty
+                        || i != 0
+                        || declarations.len() == 1
+                        || !self.type_(assigned_type).flags.intersects(TypeFlags::UNDEFINED)
+                    {
+                        // Go: core.AppendIfUnique(types, assignedType).
+                        if !types.contains(&assigned_type) {
+                            types.push(assigned_type);
+                        }
+                    }
+                }
+            }
+            if kind == ThisAssignmentDeclarationKind::Method
+                && !types.is_empty()
+                && self.strict_null_checks
+            {
+                let undefined_or_missing = self.undefined_or_missing_type();
+                if !types.contains(&undefined_or_missing) {
+                    types.push(undefined_or_missing);
+                }
+            }
+            if t.is_none() {
+                t = Some(if types.is_empty() {
+                    self.any_type()
+                } else {
+                    self.get_union_type(&types)
+                });
+            }
+        }
+        let t = self.get_widened_type(t.expect("Go's anyType fallback"));
+        // report an all-nullable or empty union as an implicit any in JS files
+        let value_declaration = self.program.symbol(symbol).value_declaration;
+        if let Some(value_declaration) = value_declaration {
+            let all_nullable =
+                self.filter_type(t, |c, ty| !(c.type_(ty).flags & !TypeFlags::NULLABLE).is_empty())
+                    == self.never_type();
+            if tsc_ast::utilities::is_in_js_file(self.store().node(value_declaration))
+                && all_nullable
+            {
+                self.report_implicit_any(value_declaration, self.any_type(), WideningKind::Normal);
+                return self.any_type();
+            }
+        }
+        t
     }
 
-    /// Go: `func (c *Checker) isConstructorDeclaredThisProperty(symbol) (kind, location)`.
+    /// Go: `func (c *Checker) getAssignmentDeclarationInitializerType(node) *Type`
+    /// (checker.go:18527). PORT(FCS tranche 21): REAL (the JS expando
+    /// assignment-declaration initializer typing the widened-type ladder above
+    /// reads).
+    fn get_assignment_declaration_initializer_type(&mut self, node: NodeId) -> Option<TypeId> {
+        if self.store().node(node).kind == Kind::BinaryExpression {
+            let binary = self
+                .store()
+                .node(node)
+                .as_binary_expression()
+                .expect("BinaryExpression data")
+                .clone();
+            let t: TypeId = match tsc_ast::get_assignment_declaration_kind(self.store(), node) {
+                tsc_ast::JSDeclarationKind::ModuleExports
+                | tsc_ast::JSDeclarationKind::ExportsProperty => {
+                    // Go: getRegularTypeOfLiteralType(checkExpressionCached(
+                    // GetRightMostAssignedExpression(node))).
+                    let right_most =
+                        tsc_ast::get_right_most_assigned_expression(self.store(), node);
+                    let checked = self.check_expression_cached(right_most);
+                    self.get_regular_type_of_literal_type(checked)
+                }
+                tsc_ast::JSDeclarationKind::ThisProperty => {
+                    // Go: the containsSameNamedThisProperty guard — a same-
+                    // named this-property reference inside the initializer
+                    // suppresses the declaration (nil).
+                    if self.contains_same_named_this_property(binary.left, binary.right) {
+                        return None;
+                    }
+                    self.check_expression_for_mutable_location(
+                        binary.right,
+                        CheckMode::CHECK_MODE_NORMAL,
+                    )
+                }
+                _ => {
+                    self.check_expression_for_mutable_location(
+                        binary.right,
+                        CheckMode::CHECK_MODE_NORMAL,
+                    )
+                }
+            };
+            if crate::relater::is_empty_array_literal_type(self, t) {
+                let symbol = payload_symbol(self.store().node(node));
+                let has_annotation = match symbol {
+                    Some(symbol) => self.has_parent_with_type_annotation(symbol),
+                    None => false,
+                };
+                if !has_annotation {
+                    self.report_implicit_any(node, self.any_array_type, WideningKind::Normal);
+                    return Some(self.any_array_type);
+                }
+            }
+            return Some(t);
+        }
+        if self.store().node(node).kind == Kind::CallExpression {
+            // Go: getTypeFromPropertyDescriptor(node.Arguments()[2]) — the
+            // Object.defineProperty(x, 'name', descriptor) shape.
+            let arguments = self
+                .store()
+                .node(node)
+                .as_call_expression()
+                .expect("CallExpression data")
+                .arguments
+                .as_ref()
+                .map(|l| l.nodes.to_vec())
+                .unwrap_or_default();
+            if arguments.len() > 2 {
+                return Some(self.get_type_from_property_descriptor(arguments[2]));
+            }
+            // PORT: Go indexes Arguments()[2] unguarded; the port answers the
+            // anyType descriptor result instead of panicking on the short
+            // list (same answer as getTypeFromPropertyDescriptor's fallback).
+            return Some(self.any_type());
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) hasParentWithTypeAnnotation(symbol) bool`
+    /// (checker.go:18554).
+    ///
+    /// Return true if the parent symbol of the given assignment declaration
+    /// symbol has declaration with a type annotation. For example, returns
+    /// true for the symbol associated with `f.a` below:
+    ///
+    /// ```ts
+    /// const f: { (): void, a: string[] } = () => {};
+    /// f.a = [];
+    /// ```
+    fn has_parent_with_type_annotation(&mut self, symbol: SymbolId) -> bool {
+        let parent = self.get_parent_of_symbol(symbol);
+        if let Some(parent) = parent {
+            let parent_value_declaration = self.program.symbol(parent).value_declaration;
+            if let Some(parent_value_declaration) = parent_value_declaration
+                && binder_shims::is_function_expression_or_arrow_function(
+                    self.store().node(parent_value_declaration),
+                )
+            {
+                let parent_of_declaration =
+                    self.store().node(parent_value_declaration).parent.get();
+                let possibly_annotated_symbol =
+                    self.get_symbol_of_node_real(parent_of_declaration);
+                if let Some(possibly_annotated_symbol) = possibly_annotated_symbol
+                    && let Some(declaration) =
+                        self.program.symbol(possibly_annotated_symbol).value_declaration
+                {
+                    return ast_shims::type_of_node(self.store(), declaration).is_some();
+                }
+            }
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) containsSameNamedThisProperty(thisProperty, expression) bool`
+    /// (checker.go:18566).
+    fn contains_same_named_this_property(
+        &mut self,
+        this_property: NodeId,
+        expression: NodeId,
+    ) -> bool {
+        if self.is_matching_reference(this_property, expression) {
+            return true;
+        }
+        if binder_shims::is_function_like(self.store().node(expression)) {
+            return false;
+        }
+        let mut children: Vec<NodeId> = Vec::new();
+        self.store()
+            .node(expression)
+            .for_each_child(&mut |child| {
+                children.push(child);
+                false
+            });
+        for child in children {
+            if self.contains_same_named_this_property(this_property, child) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) getTypeFromPropertyDescriptor(node) *Type`
+    /// (checker.go:18579) — the Object.defineProperty descriptor typing.
+    fn get_type_from_property_descriptor(&mut self, node: NodeId) -> TypeId {
+        let object_literal_type = self.check_expression_cached(node);
+        if let Some(value_type) =
+            self.get_type_of_property_of_type(object_literal_type, "value")
+        {
+            return value_type;
+        }
+        if let Some(get_func) = self.get_type_of_property_of_type(object_literal_type, "get") {
+            if let Some(get_sig) = self.get_single_call_signature(get_func) {
+                return self.get_return_type_of_signature(get_sig);
+            }
+        }
+        if let Some(set_func) = self.get_type_of_property_of_type(object_literal_type, "set") {
+            if let Some(set_sig) = self.get_single_call_signature(set_func) {
+                return self.get_type_of_first_parameter_of_signature(set_sig);
+            }
+        }
+        self.any_type()
+    }
+
+    /// Go: `func (c *Checker) getDeclaringConstructor(symbol) *ast.Node`
+    /// (checker.go:27919).
+    fn get_declaring_constructor(&mut self, symbol: SymbolId) -> Option<NodeId> {
+        let declarations = self.program.symbol(symbol).declarations.clone();
+        for declaration in declarations {
+            let container = binder_shims::get_this_container(
+                self.store(),
+                declaration,
+                false, /*includeArrowFunctions*/
+                false, /*includeClassComputedPropertyName*/
+            );
+            if container != NodeId::NONE
+                && self.store().node(container).kind == Kind::Constructor
+            {
+                return Some(container);
+            }
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) isConstructorDeclaredThisProperty(symbol) (kind, location)`
+    /// (checker.go:18602). PORT(FCS tranche 21): REAL — was the M6 S4
+    /// permissive None/None stub (every this-property assignment classified
+    /// None, so the Typed/Constructor/Method ladder above never fired).
     fn is_constructor_declared_this_property(
         &mut self,
         symbol: SymbolId,
@@ -3722,11 +3982,66 @@ impl Checker {
                 .expect("location should be cached whenever this expando symbol is cached");
             return (kind, location);
         }
-        // TODO(port M6 S4): the allThis/typeAnnotation scan + the expando
-        // location resolution (getDeclaringConstructor) — permissive None/None
-        // (the JS expando classification).
-        let (kind, location): (ThisAssignmentDeclarationKind, Option<NodeId>) =
-            (ThisAssignmentDeclarationKind::None, None);
+        // A property is considered a constructor declared property when all
+        // declaration sites are this.xxx assignments, when no declaration
+        // sites have JSDoc type annotations, and when at least one
+        // declaration site is in the body of a class constructor.
+        let declarations = self.program.symbol(symbol).declarations.clone();
+        let mut all_this = true;
+        let mut type_annotation: Option<NodeId> = None;
+        for &declaration in &declarations {
+            if self.store().node(declaration).kind != Kind::BinaryExpression {
+                all_this = false;
+                break;
+            }
+            let binary = self
+                .store()
+                .node(declaration)
+                .as_binary_expression()
+                .expect("BinaryExpression data");
+            let is_this_property = tsc_ast::get_assignment_declaration_kind(
+                self.store(),
+                declaration,
+            ) == tsc_ast::JSDeclarationKind::ThisProperty
+                && {
+                    let left_kind = self.store().node(binary.left).kind;
+                    left_kind != Kind::ElementAccessExpression || {
+                        let argument = self
+                            .store()
+                            .node(binary.left)
+                            .as_element_access_expression()
+                            .expect("ElementAccessExpression data")
+                            .argument_expression;
+                        argument != NodeId::NONE
+                            && tsc_ast::utilities::is_string_or_numeric_literal_like(
+                                self.store().node(argument),
+                            )
+                    }
+                };
+            if is_this_property {
+                if let Some(type_node) = ast_shims::type_of_node(self.store(), declaration) {
+                    type_annotation = Some(type_node);
+                }
+            } else {
+                all_this = false;
+                break;
+            }
+        }
+        let mut location: Option<NodeId> = None;
+        let mut kind = ThisAssignmentDeclarationKind::None;
+        if all_this {
+            if let Some(type_annotation) = type_annotation {
+                location = Some(type_annotation);
+                kind = ThisAssignmentDeclarationKind::Typed;
+            } else {
+                location = self.get_declaring_constructor(symbol);
+                kind = if location.is_none() {
+                    ThisAssignmentDeclarationKind::Method
+                } else {
+                    ThisAssignmentDeclarationKind::Constructor
+                };
+            }
+        }
         self.this_expando_kinds.insert(symbol, kind);
         self.this_expando_locations.insert(symbol, location);
         (kind, location)

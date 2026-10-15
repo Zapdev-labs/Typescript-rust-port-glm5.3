@@ -497,6 +497,12 @@ pub fn type_of_node(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
         // with the ast/utilities.go wholesale wave (PORT note).
         tsc_ast::NodeData::FunctionTypeNode(d) => d.type_,
         tsc_ast::NodeData::ConstructorTypeNode(d) => d.type_,
+        // Go: `node.Type()` on BinaryExpression (ast.go:675) — the JS
+        // `/** @type T */ x = expr` reparsed annotation the checker's
+        // getWidenedTypeForAssignmentDeclaration declarations scan reads
+        // (checker.go:18494). PORT(FCS tranche 21): the arm was absent —
+        // Go's Node.Type() includes it, the port's partial surface didn't.
+        tsc_ast::NodeData::BinaryExpression(d) => d.type_,
         // Go: `node.Type() on the assertion family (checker.go's
         // checkAssertion/checkSatisfiesExpression call sites).
         // (Same PORT(FCS tranche 3) sentinel filter as the declaration
