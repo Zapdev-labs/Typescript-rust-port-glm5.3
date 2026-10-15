@@ -1,0 +1,23 @@
+rust/crates/checker/src/contextual.rs
+  s_10e4fa07c72bae::t_5d8adec2628b89 1963-1976,1995-1999,2014-2022
+rust/crates/checker/tests/fcs22_pins.rs
+  s_10e4fa07c72bae::t_c0b8b7e705e69e 41
+  s_10e4fa07c72bae::t_308fd81470619d 67
+  s_10e4fa07c72bae::t_7ffca26a699a41 1-40,42-66,68-251
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "99a53b2907933b0f7fdf8b3fb40fa8b622f154d7",
+  "prompts": {},
+  "sessions": {
+    "s_10e4fa07c72bae": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "cfdd5be7-0b9f-4603-8df3-41c30a6eae85",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
