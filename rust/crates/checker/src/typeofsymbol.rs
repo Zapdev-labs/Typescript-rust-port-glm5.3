@@ -3367,14 +3367,96 @@ impl Checker {
         properties: &[NodeId],
         symbol: Option<SymbolId>,
     ) -> TypeId {
-        // TODO(port M6 S4/S7/S8): the spread/omit-key construction
-        // (filterType, getUnionType of the omitted literal types,
-        // getSpreadSymbol, isSpreadableProperty, getGlobalOmitSymbol,
-        // getTypeAliasInstantiation) — the permissive stub returns the
-        // source's non-nullable form (Go's answer for a spread with no
-        // omissible properties).
-        let _ = (properties, symbol);
-        crate::relater::get_non_nullable_type(self, source)
+        // PORT(FCS tranche 25): Go checker.go:18193-18233 — getRestType,
+        // the object binding-pattern rest element's type. The former M6
+        // S4/S7/S8 permissive stub returned the source's non-nullable form,
+        // so private (`#name`) members survived into the rest type and
+        // `const { ...rest } = other; rest.#prop` resolved through the
+        // source instead of erroring 2339 (the privateNameAndObjectRestSpread
+        // missing-2339 family; the spread-expression `{...other}` path was
+        // already real, which is why only the rest cases diverged).
+        let source = self.filter_type(source, |c, t| {
+            !c.type_(t).flags.intersects(TypeFlags::NULLABLE)
+        });
+        if self.type_(source).flags.intersects(TypeFlags::NEVER) {
+            return self.empty_object_type();
+        }
+        if self.type_(source).flags.intersects(TypeFlags::UNION) {
+            return crate::typenodes::map_type(self, source, |c, t| {
+                c.get_rest_type(t, properties, symbol)
+            });
+        }
+        let omit_types: Vec<TypeId> = properties
+            .iter()
+            .map(|&name| self.get_literal_type_from_property_name(name))
+            .collect();
+        let mut omit_key_type = crate::relater::get_union_type(self, omit_types);
+        let mut spreadable_properties: Vec<SymbolId> = Vec::new();
+        let mut unspreadable_to_rest_keys: Vec<TypeId> = Vec::new();
+        for prop in crate::relater::get_properties_of_type(self, source) {
+            // Go: getLiteralTypeFromProperty returns neverType when the
+            // include/NonPublic gate rejects (private/protected props, and
+            // non-literal names) — the port surfaces that branch as None.
+            // never is assignable to everything, so Go's
+            // !isTypeAssignableTo(never, omitKeyType) is false: such props
+            // are never spreadable and land in unspreadableToRestKeys as
+            // never (which the omit union reduces away).
+            let literal_type_from_property =
+                crate::relater::get_literal_type_from_property(
+                    self,
+                    prop,
+                    TypeFlags::STRING_OR_NUMBER_LITERAL_OR_UNIQUE,
+                    false,
+                )
+                .unwrap_or_else(|| self.never_type());
+            if !self.is_type_assignable_to(literal_type_from_property, omit_key_type)
+                && !crate::relater::get_declaration_modifier_flags_from_symbol(self, prop)
+                    .intersects(ModifierFlags::PRIVATE.union(ModifierFlags::PROTECTED))
+                && self.is_spreadable_property(prop)
+            {
+                spreadable_properties.push(prop);
+            } else {
+                unspreadable_to_rest_keys.push(literal_type_from_property);
+            }
+        }
+        if crate::relater::is_generic_object_type(self, source)
+            || crate::relater::is_generic_index_type(self, omit_key_type)
+        {
+            if !unspreadable_to_rest_keys.is_empty() {
+                // If the type we're spreading from has properties that cannot
+                // be spread into the rest type (e.g. getters, methods), ensure
+                // they are explicitly omitted, as they would in the
+                // non-generic case.
+                let mut types = vec![omit_key_type];
+                types.extend(unspreadable_to_rest_keys);
+                omit_key_type = crate::relater::get_union_type(self, types);
+            }
+            if self.type_(omit_key_type).flags.intersects(TypeFlags::NEVER) {
+                return source;
+            }
+            let Some(omit_type_alias) = self.get_global_omit_symbol() else {
+                return self.error_type();
+            };
+            return self.get_type_alias_instantiation(
+                omit_type_alias,
+                vec![source, omit_key_type],
+                None,
+            );
+        }
+        let mut members = SymbolTable::new();
+        for prop in spreadable_properties {
+            let spread_symbol = self.get_spread_symbol(prop, false);
+            let name = self.program_symbol(prop).name.clone();
+            members.set(name, spread_symbol);
+        }
+        let index_infos = crate::relater::get_index_infos_of_type(self, source);
+        let result = self.new_anonymous_type_with_members(
+            symbol,
+            members.clone(),
+            ObjectFlags::OBJECT_REST_TYPE,
+        );
+        self.set_structured_type_members(result, members, Vec::new(), Vec::new(), index_infos);
+        result
     }
 
     /// Go: `func (c *Checker) isValidSpreadType(t) bool` (checker.go:13748) —

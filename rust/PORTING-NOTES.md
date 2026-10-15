@@ -2921,3 +2921,30 @@ byte-same); clippy 0; all gates green fresh (orchestrator re-ran tests +
 sweeps + census independently). Remaining census: privateNameAndObjectRest
 Spread x4, jsdoc/assertionsAndNonReturningFunctions x3, salsa x2,
 typesWithPrivate/ProtectedConstructor x2 each, 3 singles.
+
+## Sweep micro-tranche 25 landed (2026-11-02, RIG-VALIDATED) — getRestType real; divergent 1,190 -> 1,187
+
+privateNameAndObjectRestSpread's 4 instances, ONE root: Checker::
+get_rest_type was the "TODO M6 S4/S7/S8" permissive STUB — it returned
+the source's non-nullable form unchanged, so `const {...rest} = other`
+gave rest the FULL source type and `rest.#prop` resolved silently. Go's
+getRestType (checker.go:18193-18233) builds the member-excluded rest
+type: private/protected members, omitted (destructured) names, and
+unspreadable properties filtered out. Full Go-exact port: filterType
+nullable strip; never->emptyObjectType; union->mapType recursion;
+omitKeyType union of literal property-name types; the per-prop gate
+(!isTypeAssignableTo(lit, omit) && modifiers&(Private|Protected)==0 &&
+isSpreadableProperty, neverType-literal surfaced as None.unwrap_or
+(never)); generic-object/index branch -> getGlobalOmitSymbol +
+getTypeAliasInstantiation(Omit<source, omitKeys>); else anonymous
+OBJECT_REST_TYPE with getSpreadSymbol members + getIndexInfosOfType via
+set_structured_type_members. Collateral: mappedTypeConstraints + object
+Rest records also recovered (newly-identical 3). T23's private-identifier
+flow arm was NOT implicated (the spread-expression path was already
+real). Missing-2339 census 16/8 -> 12/7 (family fully gone). PLAIN-sweep
+census: divergent 1,187 (1,009 count / 178 hash), identical 6,380/7,567;
+both drivers 0/3,826/3,741/0; panics 0. 63 suites (fcs25 pins, 4,
+twin-verified); clippy 0; all gates green fresh (orchestrator re-ran
+tests + sweeps + census independently). Remaining census:
+jsdoc/assertionsAndNonReturningFunctions x3, salsa/jsObjectsMarkedAs
+OpenEnded x2, typesWith{Private,Protected}Constructor x2 each, 3 singles.
