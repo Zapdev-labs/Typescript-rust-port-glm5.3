@@ -2948,3 +2948,43 @@ twin-verified); clippy 0; all gates green fresh (orchestrator re-ran
 tests + sweeps + census independently). Remaining census:
 jsdoc/assertionsAndNonReturningFunctions x3, salsa/jsObjectsMarkedAs
 OpenEnded x2, typesWith{Private,Protected}Constructor x2 each, 3 singles.
+
+## Sweep micro-tranche 26 landed (2026-11-02, RIG-VALIDATED) — the missing-2339 census tail; divergent 1,187 -> 1,152
+
+Six of seven target records recovered (missing-2339 census 12/7 -> 1/1):
+- typesWith{Private,Protected}Constructor: get_return_type_of_single_
+  non_generic_signature used a getSingleSignature stub (always None);
+  now real + Go's quickType NEW arm (new C() -> type C even after the
+  2673/2674 error).
+- salsa/jsObjectsMarkedAsOpenEnded: real utilities is_unchecked_js_
+  suggestion (utilities.go:1777) + the full report_nonexistent_property
+  arm structure (checker.go:11767) with 6 helpers.
+- jsdoc/assertionsAndNonReturningFunctions: the JSDoc FullSignature seam
+  (get_signature_of_full_signature_type / get_parameter_type_of_full_
+  signature, get_signatures_of_symbol order) + the exhaustiveness
+  consumer's isLiteralType BOOLEAN arm (flow.go:1968 twin).
+- restElementWithAssignmentPattern4: the array-destructuring rest arm
+  now does Go checker.go:12937 mapType(source, sliceTupleType(t,
+  elementIndex, 0)) (was permissive identity).
+- for-of49: for-of array/object-literal targets ran a NO-OP stub
+  instead of checkDestructuringAssignment (checker.go:4091) — wired
+  real, stub deleted; plus binder get_assignment_target's for-in/of arm
+  was dead-coded by a bogus expression.is_none() gate (Go ast/
+  utilities.go:203 has none) -> spurious 2454s. Both fixed.
+- Regression round: relater get_base_type_of_literal_type default arm
+  is Go's `return t` (was error_type) — was printing boolean-typed
+  sources as any in the isLiteralType generalization.
+DELIBERATE SCOPINGS: is_literal_type's boolean/union/unit arms scoped to
+the exhaustiveness consumer only (flipped optionalBindingParameters2 +
+objectSpread when global); quickType's call/call-chain arms stay inert
+(flipped multi-config objectSpread) — deferred seams, in-tree notes.
+HONEST REMAINDER: paramTagTypeResolution2 (1 instance) — root-caused
+with pure-TS controls (f26p10/11/12) to the contextual typing of a
+context-sensitive object-literal argument through a mapper-INSTANTIATED
+generic mapped type ({[K in keyof T]: (value: T[K]) => void}) — a
+resolveCall two-pass/instantiation seam, NOT JSDoc-specific. PLAIN-sweep
+census: divergent 1,152 (973 count / 179 hash), identical 6,415/7,567;
+both drivers 0/3,826/3,741/0; panics 0; newly-divergent 0, newly-
+identical 35. 64 suites (fcs26 pins 7/7); clippy 0; all gates green
+fresh (orchestrator re-ran tests + sweeps + census independently; Go
+probe restore md5-verified both sides).

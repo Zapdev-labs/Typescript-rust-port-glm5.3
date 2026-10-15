@@ -3288,7 +3288,19 @@ impl Checker {
         } else {
             let checked = self.check_expression_cached(expression);
             let t = relater::get_base_constraint_or_type(self, checked);
-            if !relater::is_literal_type(self, t) {
+            // PORT note (FCS tranche 26): Go's isLiteralType BOOLEAN first
+            // arm (checker.go:25927), scoped to this exhaustiveness consumer.
+            // The `boolean` TYPE carries TypeFlags.Boolean, not
+            // BooleanLiteral, so the literal-flags-only probe answered
+            // false and exhaustive boolean switches never marked the
+            // unmatched path unreachable (the jsdoc/assertions 7027
+            // family). The arm is not global until the remaining
+            // permissive isLiteralType consumers (object-literal
+            // elaboration, spread override) are Go-exact — see
+            // relater::is_literal_type's note.
+            let is_literal = relater::is_literal_type(self, t)
+                || self.type_(t).flags.intersects(TypeFlags::BOOLEAN);
+            if !is_literal {
                 return false;
             }
             let switch_types = self.get_switch_clause_types(node);

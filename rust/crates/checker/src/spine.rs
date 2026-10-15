@@ -1574,16 +1574,28 @@ impl Checker {
             // IsImportCall — the call-shape guards; permissive false until
             // the S6 call surface lands.
             if callee_kind != Kind::SuperKeyword {
-                if u::is_call_chain(self.store().node(expr)) {
-                    return self.get_return_type_of_single_non_generic_signature_of_call_chain(expr);
-                }
-                let callee = crate::ast_shims::expression_of(self.store(), expr)
-                    .expect("CallExpression has an expression");
-                let func_type = self.check_non_null_expression(callee);
-                return self.get_return_type_of_single_non_generic_signature(
-                    func_type,
-                    crate::types::SignatureKind::Call,
-                );
+                // PORT(FCS tranche 26): Go checker.go:7578/7583 — the CALL
+                // and call-CHAIN arms stay inert (None): wiring the real
+                // getSingleSignature flipped the multi-config
+                // types/spread/objectSpread corpus record (target=es5/es2015
+                // matrix) — the spread-override of a
+                // boolean-literal-typed property resolved `never` and a
+                // duplicate-property TS1117 went missing. That seam is not
+                // root-caused yet; only the NEW arm (the
+                // typesWith{Private,Protected}Constructor quick type) is
+                // live. Restore the two arms below when the spread/
+                // duplicate-property seam is ported:
+                //   if u::is_call_chain(self.store(), expr) {
+                //       return self.get_return_type_of_single_non_generic_signature_of_call_chain(expr);
+                //   }
+                //   let callee = crate::ast_shims::expression_of(self.store(), expr)
+                //       .expect("CallExpression has an expression");
+                //   let func_type = self.check_non_null_expression(callee);
+                //   return self.get_return_type_of_single_non_generic_signature(
+                //       func_type,
+                //       crate::types::SignatureKind::Call,
+                //   );
+                return None;
             }
         }
         if is_new_expression(self.store().node(expr)) {
@@ -1622,7 +1634,13 @@ impl Checker {
         func_type: TypeId,
         kind: crate::types::SignatureKind,
     ) -> Option<TypeId> {
-        let signature = self.get_single_signature_stub(func_type, kind, true /*allowMembers*/);
+        // PORT(FCS tranche 26): the S8 `getSingleSignature` is real now
+        // (members.rs); the old `get_single_signature_stub` always answered
+        // None, so every `var x = new C(...)`/single-signature call
+        // initializer fell back to the full check (which yields errorType
+        // after constructor-accessibility errors) instead of Go's quick
+        // type (the signature's return type — the class instance type).
+        let signature = self.get_single_signature(func_type, kind, true /*allowMembers*/);
         match signature {
             Some(signature)
                 if self.signatures[signature.0 as usize]
@@ -1636,7 +1654,10 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getReturnTypeOfSingleNonGenericSignatureOfCallChain(expr *ast.Node) *Type`
-    /// (checker.go:7587).
+    /// (checker.go:7587). Inert as of FCS tranche 26: its only caller (the
+    /// quickType call-chain arm) is deferred with the spread seam — see
+    /// the PORT note at the call arm in get_quick_type_of_expression.
+    #[allow(dead_code)] // restored with the objectSpread spread-override seam
     fn get_return_type_of_single_non_generic_signature_of_call_chain(
         &mut self,
         expr: NodeId,
@@ -1657,20 +1678,6 @@ impl Checker {
             let _ = non_optional_type;
             return Some(return_type);
         }
-        None
-    }
-
-    /// Go: `func (c *Checker) getSingleSignature(t *Type, kind, allowMembers) *Signature`
-    /// (checker.go:19757 — S8's structured-member machinery). Permissive
-    /// None until S8 (nil in Go = "no single signature").
-    fn get_single_signature_stub(
-        &mut self,
-        t: TypeId,
-        _kind: crate::types::SignatureKind,
-        _allow_members: bool,
-    ) -> Option<crate::types::SignatureId> {
-        // TODO(port M6 S8): getSignaturesOfType → the single-signature pick.
-        let _ = t;
         None
     }
 
@@ -2045,8 +2052,8 @@ impl Checker {
             return t;
         }
         let call_signature =
-            self.get_single_signature_stub(t, crate::types::SignatureKind::Call, true /*allowMembers*/);
-        let construct_signature = self.get_single_signature_stub(
+            self.get_single_signature(t, crate::types::SignatureKind::Call, true /*allowMembers*/);
+        let construct_signature = self.get_single_signature(
             t,
             crate::types::SignatureKind::Construct,
             true /*allowMembers*/,
@@ -2058,11 +2065,13 @@ impl Checker {
         if self.signatures[signature.0 as usize].type_parameters.is_empty() {
             return t;
         }
-        // TODO(port M6 S8/S9): the contextual-signature instantiation tail —
+        // TODO(port M6 S9): the contextual-signature instantiation tail —
         // getApparentTypeOfContextualType, the return-signature inference
         // pass, and getOrCreateTypeFromSignature(instantiateSignatureInContextOf(...)).
-        // Go's tail is unreachable while getSingleSignature resolves no
-        // members (S8); the wave that lands S8 fills it in.
+        // PORT(FCS tranche 26): the S8 `getSingleSignature` lookup is real
+        // now (members.rs); the deep tail stays permissive `t` — the
+        // signature/type-parameter gates above are Go-exact, so the tail
+        // is the only remaining seam.
         let _ = node;
         t
     }

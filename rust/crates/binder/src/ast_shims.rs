@@ -199,9 +199,15 @@ pub fn get_assignment_target(store: &dyn NodeStore, node: NodeId) -> Option<Node
                 };
             }
             Kind::ForInStatement | Kind::ForOfStatement => {
-                return if node_data::expression_of(store, parent).is_none()
-                    && initializer_of_for(store, parent) == Some(node)
-                {
+                // PORT note (FCS tranche 26): Go ast/utilities.go:203 —
+                // `if parent.Initializer() == node { return parent }` with NO
+                // extra gate. The former `expression_of(parent).is_none()`
+                // leg dead-coded the whole arm (the iteration expression is
+                // always present on a checked for-in/of), so destructuring
+                // targets in for-of heads resolved to AssignmentKindNone and
+                // the definite-assignment early return in checkIdentifier
+                // never fired (spurious TS2454s in for-of49).
+                return if initializer_of_for(store, parent) == Some(node) {
                     Some(parent)
                 } else {
                     None

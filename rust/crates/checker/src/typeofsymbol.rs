@@ -2438,9 +2438,50 @@ impl Checker {
 
     /// TODO(port M6 S9): `getParameterTypeOfFullSignature(fn, parameter)` —
     /// the contextual-signature parameter typing; permissive None.
+    /// Go: `func (c *Checker) getSignatureOfFullSignatureType(node) *Signature`
+    /// (checker.go:20476) — the JSDoc @type tag's function type on a JS
+    /// function/method. REAL as of FCS tranche 26 (was permissive None).
+    pub(crate) fn get_signature_of_full_signature_type(&mut self, node: NodeId) -> Option<crate::types::SignatureId> {
+        let n = self.store().node(node);
+        let kind_matches = matches!(
+            n.kind,
+            Kind::FunctionDeclaration | Kind::MethodDeclaration | Kind::FunctionExpression | Kind::ArrowFunction
+        );
+        if !tsc_ast::utilities::is_in_js_file(n) || !kind_matches {
+            return None;
+        }
+        let full_signature = match n.kind {
+            Kind::FunctionDeclaration => n.as_function_declaration().expect("data").full_signature,
+            Kind::MethodDeclaration => n.as_method_declaration().expect("data").full_signature,
+            Kind::FunctionExpression => n.as_function_expression().expect("data").full_signature,
+            Kind::ArrowFunction => n.as_arrow_function().expect("data").full_signature,
+            _ => None,
+        };
+        let full_signature = full_signature?;
+        let t = self.get_type_from_type_node(full_signature);
+        self.get_single_call_signature(t)
+    }
+
+    /// Go: `func (c *Checker) getParameterTypeOfFullSignature(node, parameter) *Type`
+    /// (checker.go:20483) — REAL as of FCS tranche 26 (was permissive None,
+    /// so `/** @type {(x: unknown) => asserts x is string} */ function f(x)`
+    /// typed x as implicit any instead of unknown).
     fn get_parameter_type_of_full_signature(&mut self, fn_: NodeId, parameter: NodeId) -> Option<TypeId> {
-        let _ = (fn_, parameter);
-        None
+        let signature = self.get_signature_of_full_signature_type(fn_)?;
+        let parameters = crate::ast_shims::parameters_of(self.store(), fn_);
+        let pos = parameters.iter().position(|&p| p == parameter)?;
+        let is_rest = self
+            .store()
+            .node(parameter)
+            .as_parameter_declaration()
+            .expect("ParameterDeclaration data")
+            .dot_dot_dot_token
+            .is_some();
+        if is_rest {
+            self.get_rest_type_at_position(signature, pos, false /*readonly*/)
+        } else {
+            Some(self.get_type_at_position(signature, pos))
+        }
     }
 
     /// TODO(port M6 S9): `getContextuallyTypedParameterType(parameter)` —

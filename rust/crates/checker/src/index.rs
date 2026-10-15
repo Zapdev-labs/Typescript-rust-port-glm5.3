@@ -1026,8 +1026,9 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) typeHasStaticProperty(propName, containingType) bool`
-    /// (checker.go:27735).
-    fn type_has_static_property(&mut self, prop_name: &str, containing_type: TypeId) -> bool {
+    /// (checker.go:27735). pub(crate) as of FCS tranche 26 (the
+    /// reportNonexistentProperty port in expressions.rs calls it).
+    pub(crate) fn type_has_static_property(&mut self, prop_name: &str, containing_type: TypeId) -> bool {
         if let Some(symbol) = self.type_(containing_type).symbol {
             let symbol_type = self.get_type_of_symbol(symbol);
             return self.get_property_of_type_impl(symbol_type, prop_name).is_some_and(|prop| {

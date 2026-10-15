@@ -944,13 +944,16 @@ impl Checker {
             let iterated_type = self.check_right_hand_side_of_for_of(node);
             let var_kind = self.store().node(var_expr).kind;
             if var_kind == Kind::ArrayLiteralExpression || var_kind == Kind::ObjectLiteralExpression {
-                // iteratedType may be undefined — short-circuit the
-                // relation with the errorType (the typeofsymbol wrapper
-                // already maps Go's nil to errorType).
-                let iterated = iterated_type;
-                self.check_destructuring_assignment_stub(
+                // PORT note (FCS tranche 26): Go checker.go:4091 — the
+                // for-of destructuring target runs the REAL
+                // checkDestructuringAssignment (the wrapper at
+                // typeofsymbol.rs:2603 already maps Go's nil iteratedType to
+                // errorType). The former no-op stub silently dropped every
+                // 2339 inside for-of array/object destructuring (for-of49's
+                // `[k, ...[v]]` over an unresolved Map).
+                self.check_destructuring_assignment(
                     var_expr,
-                    iterated,
+                    iterated_type,
                     CheckMode::CHECK_MODE_NORMAL,
                     false,
                 );
@@ -1906,16 +1909,6 @@ if candidates.is_empty() {
 
     /// Go: `func (c *Checker) checkDestructuringAssignment(...)` (S4's
     /// destructuring family). Permissive no-op.
-    pub(crate) fn check_destructuring_assignment_stub(
-        &mut self,
-        expr: NodeId,
-        type_: TypeId,
-        check_mode: CheckMode,
-        is_destructuring_assignment: bool,
-    ) {
-        let _ = (expr, type_, check_mode, is_destructuring_assignment);
-    }
-
     /// Go: `func (c *Checker) checkExternalEmitHelpers(node, helpers)`
     /// (checker.go:29105 — S10). Permissive no-op (the emit-helpers
     /// context machinery is the emit wave's).

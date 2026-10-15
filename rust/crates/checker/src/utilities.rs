@@ -3320,15 +3320,73 @@ pub fn node_starts_new_lexical_environment(node: &Node) -> bool {
     )
 }
 
-/// Go: `func (c *Checker) isUncheckedJSSuggestion(node, suggestion, excludeClasses) bool`.
+/// Go: `func (c *Checker) isUncheckedJSSuggestion(node, suggestion, excludeClasses) bool`
+/// (utilities.go:1777) — REAL as of FCS tranche 26 (was a banner stub that
+/// always answered false, so every unchecked-JS property access rode the
+/// checked-JS arms).
 ///
-/// PORT (banner): the full body needs CheckJs directives, heritage-clause
-/// walking and decoration checks (ast/utilities + JSDoc waves). The
-/// compilerOptions.CheckJs file-level gate is the spike's reachable surface;
-/// everything past it is M6.
-pub fn is_unchecked_js_suggestion(c: &Checker, _node: NodeId, _suggestion: Option<SymbolId>, _exclude_classes: bool) -> bool {
-    if c.program.options().check_js.is_unknown() {
-        return false;
+/// PORT(FCS tranche 26): `ast.ClassOrConstructorParameterIsDecorated` has no
+/// Rust twin yet — permissive `false` there (Go's answer flips only when the
+/// suggested class has decorated ctor params, which the corpus never trips).
+pub fn is_unchecked_js_suggestion(c: &Checker, node: NodeId, suggestion: Option<SymbolId>, exclude_classes: bool) -> bool {
+    let file = tsc_ast::utilities::get_source_file_of_node(c.store(), node);
+    if let Some(file) = file {
+        let file_id = file.as_node_id();
+        // The SourceFileNodeData lives on the file node (the §5.1 arena).
+        let file_data = c
+            .store()
+            .node(file_id)
+            .as_source_file()
+            .expect("SourceFile data");
+        let check_js_directive = file_data.check_js_directive.is_none();
+        let script_kind_js = file_data.script_kind == tsc_core::scriptkind::ScriptKind::JS
+            || file_data.script_kind == tsc_core::scriptkind::ScriptKind::JSX;
+        if c.program.options().check_js.is_unknown() && check_js_directive && script_kind_js {
+            // Go: the declaration file of the suggestion's first declaration.
+            let declaration_file: Option<NodeId> = suggestion.and_then(|s| {
+                c.program_symbol(s)
+                    .declarations
+                    .first()
+                    .copied()
+                    .and_then(|d| tsc_ast::utilities::get_source_file_of_node(c.store(), d))
+                    .map(|f| f.as_node_id())
+            });
+            // Go: `suggestionHasNoExtendsOrDecorators := suggestion == nil ||
+            // suggestion.ValueDeclaration == nil || !IsClassLike(...) ||
+            // len(GetExtendsHeritageClauseElements(...)) != 0 ||
+            // ClassOrConstructorParameterIsDecorated(false, ...)`.
+            let suggestion_has_no_extends_or_decorators = match suggestion {
+                None => true,
+                Some(s) => match c.program_symbol(s).value_declaration {
+                    None => true,
+                    Some(vd) => {
+                        if !crate::statements::is_class_like(c.store(), vd) {
+                            true
+                        } else {
+                            // ClassOrConstructorParameterIsDecorated —
+                            // permissive false (no Rust twin yet).
+                            !crate::statements::get_extends_heritage_clause_elements(c.store(), vd)
+                                .is_empty()
+                        }
+                    }
+                },
+            };
+            let is_global_decl_file = declaration_file.is_some_and(|d| {
+                let same = d == file_id;
+                !same && is_global_source_file(c.store(), d)
+            });
+            let class_suggestion = suggestion.is_some_and(|s| {
+                exclude_classes
+                    && c.program_symbol(s).flags.intersects(SymbolFlags::CLASS)
+                    && suggestion_has_no_extends_or_decorators
+            });
+            let this_property_access = exclude_classes
+                && c.store().node(node).kind == Kind::PropertyAccessExpression
+                && ast_shims::expression_of(c.store(), node)
+                    .is_some_and(|e| c.store().node(e).kind == Kind::ThisKeyword)
+                    && suggestion_has_no_extends_or_decorators;
+            return !is_global_decl_file && !class_suggestion && !this_property_access;
+        }
     }
     false
 }

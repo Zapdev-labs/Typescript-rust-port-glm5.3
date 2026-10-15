@@ -8555,6 +8555,18 @@ pub(crate) fn is_unit_like_type(c: &mut Checker, t: TypeId) -> bool {
 
 /// Go: `func isLiteralType(t) bool` (utilities.go — the widened form without
 /// unique symbols).
+/// Go: `func isLiteralType(t *Type) bool` (checker.go:25927) — PORT(FCS
+/// tranche 26): Go's BOOLEAN first arm is NOT enabled globally yet. Wiring
+/// it flipped two go-verified seams: the object-literal elaboration family
+/// (optionalBindingParameters2 — Go keeps the head 2345, the port
+/// elaborated per-property 2322s) and the spread-override family
+/// (objectSpread — Go's `{...t, id: 'id'}` override resolves id: string,
+/// the port resolved never). Those consumers are still permissive; until
+/// they are Go-exact, the boolean arm lives ONLY at the exhaustiveness
+/// consumer (flow.go:1968 — the 7027 family's caller, where it is
+/// required: the `boolean` TYPE carries TypeFlags.Boolean, not
+/// BooleanLiteral, so exhaustive boolean switches never marked the
+/// unmatched path unreachable).
 pub(crate) fn is_literal_type(c: &Checker, t: TypeId) -> bool {
     c.type_(t).flags.intersects(
         TypeFlags::STRING_LITERAL
@@ -9663,7 +9675,14 @@ pub(crate) fn get_base_type_of_literal_type(c: &mut Checker, t: TypeId) -> TypeI
         // uniontypes.rs's eagerly-seeded boolean intrinsic).
         return c.boolean_type();
     }
-    c.error_type()
+    // PORT note (FCS tranche 26): Go checker.go:25986 — the switch's
+    // default is `return t` (non-literal types pass through unchanged; the
+    // `boolean` TYPE hits this arm since it carries TypeFlags.Boolean, not
+    // BooleanLiteral). The former error_type() default made every
+    // non-literal source reaching reportRelationError's isLiteralType
+    // generalization (checker.go:4789, live now that isLiteralType answers
+    // true for boolean) print as the error type instead of itself.
+    t
 }
 
 /// Go: `func (c *Checker) getBaseTypeOfEnumLikeType(t) *Type` — S2 stub.

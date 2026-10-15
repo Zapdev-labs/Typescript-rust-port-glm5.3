@@ -1227,10 +1227,14 @@ impl Checker {
             }
             // If this is a function or method declaration, get the signature
             // from the @type tag for the sake of optional parameters (Go's
-            // comment) — the JS JSDoc full-signature seam stays bannered
-            // until the W3/JS wave.
-            // TODO(port M6 W3): getSignatureOfFullSignatureType (JSDoc FullSignature).
-            let sig = self.get_signature_from_declaration_impl(decl);
+            // comment) — PORT(FCS tranche 26): the JSDoc FullSignature seam
+            // is real now (typeofsymbol.rs), matching Go's
+            // getSignatureOfFullSignatureType-then-getSignatureFromDeclaration
+            // order here.
+            let sig = match self.get_signature_of_full_signature_type(decl) {
+                Some(sig) => sig,
+                None => self.get_signature_from_declaration_impl(decl),
+            };
             result.push(sig);
         }
         result

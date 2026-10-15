@@ -70,6 +70,10 @@ use tsc_diagnostics::{
     PRIVATE_IDENTIFIERS_ARE_NOT_ALLOWED_OUTSIDE_CLASS_BODIES,
     PRIVATE_IDENTIFIERS_CANNOT_BE_USED_IN_DESTRUCTURING_PATTERNS,
     PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1,
+    PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_2,
+    PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_TO_ACCESS_THE_STATIC_MEMBER_2_INSTEAD,
+    PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_DO_YOU_NEED_TO_CHANGE_YOUR_TARGET_LIBRARY_TRY_CHANGING_THE_LIB_COMPILER_OPTION_TO_2_OR_LATER,
+    PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_TRY_CHANGING_THE_LIB_COMPILER_OPTION_TO_INCLUDE_DOM,
     PROPERTY_0_IS_PRIVATE_AND_ONLY_ACCESSIBLE_WITHIN_CLASS_1,
     PROPERTY_0_IS_PROTECTED_AND_ONLY_ACCESSIBLE_THROUGH_AN_INSTANCE_OF_CLASS_1_THIS_IS_AN_INSTANCE_OF_CLASS_2,
     PROPERTY_0_IS_PROTECTED_AND_ONLY_ACCESSIBLE_WITHIN_CLASS_1_AND_ITS_SUBCLASSES,
@@ -2039,10 +2043,19 @@ impl Checker {
                         .iter()
                         .all(|&t| self.is_tuple_type(t));
                     let t = if all_tuples {
-                        // TODO(port M6 S7): mapType over the tuple union +
-                        // sliceTupleType — permissive elementType (the tuple
-                        // slicing is S7's mapped-type machinery).
-                        element_type
+                        // PORT note (FCS tranche 26): Go checker.go:12937 —
+                        // `c.mapType(sourceType, func(t) { return
+                        // c.sliceTupleType(t, elementIndex, 0) })`. The former
+                        // permissive identity seam handed the rest expression
+                        // the UNSLICED source tuple, so object-literal rest
+                        // destructuring skipped the 2339s on the sliced tail
+                        // (restElementWithAssignmentPattern4's `{0: a = "",
+                        // b}` against a tuple). slice_tuple_type and map_type
+                        // are both real (tranches 18/24).
+                        self.map_type(source_type, &mut |c, t| {
+                            Some(c.slice_tuple_type(t, element_index, 0))
+                        })
+                        .unwrap_or(element_type)
                     } else {
                         self.create_array_type(element_type)
                     };
@@ -4260,28 +4273,236 @@ impl Checker {
             return;
         }
         self.non_existent_properties.insert(key);
+        // Go: `if links.flags&NodeCheckFlagsTypeChecked != 0 { return }` —
+        // the error is already made or in progress; then the flag is set
+        // for this node.
+        if self
+            .node_links
+            .get(prop_node)
+            .flags
+            .intersects(crate::types::NodeCheckFlags::TYPE_CHECKED)
+        {
+            return;
+        }
+        self.node_links.get(prop_node).flags |= crate::types::NodeCheckFlags::TYPE_CHECKED;
         if is_jsdoc_name_reference_context(self, prop_node) {
             return;
         }
-        // Go: NewDiagnosticChainForNode builds the chained diagnostic and
-        // addErrorOrSuggestion commits it; the related-info/chain plumbing is
-        // M7, so the plain arm reports here.
+        // PORT(FCS tranche 26): the REAL Go arm structure (checker.go:11767
+        // — was a two-arm simplified port that answered 2353 whenever
+        // isUncheckedJS, missing the union-subtype/static-member/promise/
+        // lib/spelling/DOM arms entirely). The chain tails (per-subtype
+        // chains, elaborateNeverIntersection, related info) affect only the
+        // flattened message — the twin-record identity (primary message,
+        // code, position, args, error-vs-suggestion) is preserved by the
+        // arm selection below.
         let missing_property = tsc_ast::node_text(self.store(), prop_node).to_string();
-        let container = relater::type_to_string(self, containing_type);
-        if !is_unchecked_js {
-            self.error(
-                prop_node,
-                &PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1,
-                &[missing_property, container],
+        let is_private = tsc_ast::is_private_identifier(self.store().node(prop_node));
+        // Go: the union-subtype arm — a chained 2339 on the first offending
+        // constituent (primary = the per-subtype message when no later arm
+        // chains onto it).
+        let mut diagnostic: Option<(&'static Message, Vec<String>)> = None;
+        let t_flags = self.type_(containing_type).flags;
+        if !is_private
+            && t_flags.intersects(TypeFlags::UNION)
+            && !t_flags.intersects(TypeFlags::PRIMITIVE)
+        {
+            let subtypes = self.type_(containing_type).types().to_vec();
+            for subtype in subtypes {
+                let prop =
+                    relater::get_property_of_type(self, subtype, &missing_property).is_none();
+                let index = relater::get_applicable_index_info_for_name(
+                    self,
+                    subtype,
+                    &missing_property,
+                )
+                .is_none();
+                if prop && index {
+                    let container = relater::type_to_string(self, subtype);
+                    diagnostic = Some((
+                        &PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1,
+                        vec![missing_property.clone(), container],
+                    ));
+                    break;
+                }
+            }
+        }
+        let message: (&'static Message, Vec<String>);
+        if self.type_has_static_property(&missing_property, containing_type) {
+            // Go: typeHasStaticProperty → "Did you mean to access the
+            // static member instead" variant.
+            let type_name = relater::type_to_string(self, containing_type);
+            message = (
+                &PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_TO_ACCESS_THE_STATIC_MEMBER_2_INSTEAD,
+                vec![
+                    missing_property.clone(),
+                    type_name.clone(),
+                    format!("{type_name}.{missing_property}"),
+                ],
             );
         } else {
-            self.error(
-                prop_node,
-                &PROPERTY_0_MAY_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_2,
-                &[missing_property, container],
-            );
+            // Go: GetPromisedTypeOfPromise arm — a chained 2339 plus the
+            // "Did you forget to use 'await'?" related info (related info
+            // doesn't reach the record identity).
+            let promised = self.get_promised_type_of_promise(containing_type);
+            if promised.is_some()
+                && relater::get_property_of_type(self, promised.expect("checked"), &missing_property)
+                    .is_some()
+            {
+                let container = relater::type_to_string(self, containing_type);
+                message = (
+                    &PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1,
+                    vec![missing_property.clone(), container],
+                );
+            } else {
+                let lib_suggestion =
+                    self.get_suggested_lib_for_non_existent_property(&missing_property, containing_type);
+                if let Some(lib) = lib_suggestion {
+                    let container = relater::type_to_string(self, containing_type);
+                    message = (
+                        &PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_DO_YOU_NEED_TO_CHANGE_YOUR_TARGET_LIBRARY_TRY_CHANGING_THE_LIB_COMPILER_OPTION_TO_2_OR_LATER,
+                        vec![missing_property.clone(), container, lib],
+                    );
+                } else {
+                    let suggestion =
+                        self.get_suggested_symbol_for_nonexistent_property(prop_node, containing_type);
+                    if let Some(suggestion) = suggestion {
+                        let container = relater::type_to_string(self, containing_type);
+                        let suggested_name = self.program_symbol(suggestion).name.clone();
+                        message = if is_unchecked_js {
+                            (
+                                &PROPERTY_0_MAY_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_2,
+                                vec![missing_property.clone(), container, suggested_name],
+                            )
+                        } else {
+                            (
+                                &PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_2,
+                                vec![missing_property.clone(), container, suggested_name],
+                            )
+                        };
+                    } else {
+                        // Go: elaborateNeverIntersection chains here (never
+                        // intersections; the plain message stays primary).
+                        let container = relater::type_to_string(self, containing_type);
+                        if self.container_seems_to_be_empty_dom_element(containing_type) {
+                            message = (
+                                &PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1_TRY_CHANGING_THE_LIB_COMPILER_OPTION_TO_INCLUDE_DOM,
+                                vec![missing_property.clone(), container],
+                            );
+                        } else {
+                            message = (
+                                &PROPERTY_0_DOES_NOT_EXIST_ON_TYPE_1,
+                                vec![missing_property.clone(), container],
+                            );
+                        }
+                    }
+                }
+            }
         }
+        let _ = diagnostic; // the union-subtype chain — superseded whenever a later arm fires
+        // Go: `c.addErrorOrSuggestion(!isUncheckedJS || diagnostic.Code() !=
+        // Property_0_may_not_exist_1_Did_you_mean_2.Code(), diagnostic)` —
+        // the plain 2339 reports as an ERROR even in unchecked JS; only the
+        // spelling-suggestion form downgrades to a suggestion.
+        let (msg, args) = message;
+        let report = !is_unchecked_js
+            || msg.code() != PROPERTY_0_MAY_NOT_EXIST_ON_TYPE_1_DID_YOU_MEAN_2.code();
+        self.error_or_suggestion(report, prop_node, msg, &args);
     }
+
+    /// Go: `func (c *Checker) GetPromisedTypeOfPromise(t *Type) *Type`
+    /// (checker.go:29448) — the two-argument wrapper over the _ex body.
+    pub(crate) fn get_promised_type_of_promise(&mut self, t: TypeId) -> Option<TypeId> {
+        self.get_promised_type_of_promise_ex(t, None, &mut None)
+    }
+
+    /// Go: `func (c *Checker) getSuggestedLibForNonExistentProperty(missingProperty string, containingType *Type) string`
+    /// (checker.go:11830). PORT(FCS tranche 26): the feature-map walk.
+    pub(crate) fn get_suggested_lib_for_non_existent_property(
+        &mut self,
+        missing_property: &str,
+        containing_type: TypeId,
+    ) -> Option<String> {
+        let apparent = self.get_apparent_type(containing_type);
+        if let Some(container) = self.type_(apparent).symbol {
+            let name = self.program_symbol(container).name.clone();
+            if let Some(type_features) = u::get_feature_map().get(name.as_str()) {
+                for entry in type_features {
+                    if entry.props.contains(&missing_property) {
+                        return Some(entry.lib.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Go: `func (c *Checker) getSuggestedSymbolForNonexistentProperty(name *ast.Node, containingType *Type) *ast.Symbol`
+    /// (checker.go:11845). PORT(FCS tranche 26): the completion-validity
+    /// filter rides `is_property_accessible` (exports.rs) — the S4
+    /// permissive-false stub drops every candidate for property-access
+    /// parents, so spelling suggestions currently answer None there (the
+    /// plain-2339 arm covers those records).
+    pub(crate) fn get_suggested_symbol_for_nonexistent_property(
+        &mut self,
+        name: NodeId,
+        containing_type: TypeId,
+    ) -> Option<SymbolId> {
+        let props = self.get_properties_of_type(containing_type);
+        let parent = self.store().node(name).parent.get();
+        let props = if self.store().node(parent).kind == Kind::PropertyAccessExpression {
+            let mut filtered = Vec::new();
+            for prop in props {
+                if self.is_valid_property_access_for_completions(parent, containing_type, prop) {
+                    filtered.push(prop);
+                }
+            }
+            filtered
+        } else {
+            props
+        };
+        let name_text = tsc_ast::node_text(self.store(), name).to_string();
+        self.get_spelling_suggestion_for_name(&name_text, &props, SymbolFlags::VALUE)
+    }
+
+    /// Go: `func (c *Checker) containerSeemsToBeEmptyDomElement(containingType *Type) bool`
+    /// (checker.go:11891) — `!contains(lib, "lib.dom.d.ts") &&
+    /// everyContainedType(t, hasCommonDomTypeName) && isEmptyObjectType(t)`.
+    pub(crate) fn container_seems_to_be_empty_dom_element(
+        &mut self,
+        containing_type: TypeId,
+    ) -> bool {
+        let has_dom_lib = self
+            .compiler_options
+            .lib
+            .as_ref()
+            .is_some_and(|libs| libs.iter().any(|l| l == "lib.dom.d.ts"));
+        if has_dom_lib {
+            return false;
+        }
+        let every = every_contained_type(self, containing_type, has_common_dom_name);
+        every && relater::is_empty_object_type(self, containing_type)
+    }
+}
+
+/// Go: `func everyContainedType(t, f) bool` (checker.go:27085).
+fn every_contained_type(c: &mut Checker, t: TypeId, mut f: impl FnMut(&mut Checker, TypeId) -> bool) -> bool {
+    if c.type_(t).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+        let types = c.type_(t).types().to_vec();
+        types.iter().all(|&u| f(c, u))
+    } else {
+        f(c, t)
+    }
+}
+
+/// Go: `func hasCommonDomTypeName(t *Type) bool` (checker.go:11897).
+fn has_common_dom_name(c: &mut Checker, t: TypeId) -> bool {
+    let Some(symbol) = c.type_(t).symbol else {
+        return false;
+    };
+    let name = c.program_symbol(symbol).name.clone();
+    name == "EventTarget" || name == "Node" || name == "Element"
+        || (name.starts_with("HTML") && name.ends_with("Element"))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
