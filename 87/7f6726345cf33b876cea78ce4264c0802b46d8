@@ -1,0 +1,21 @@
+rust/crates/checker/tests/fcs25_pins.rs
+  s_755201f1072c04::t_9daeb92bea0904 1-253
+rust/crates/checker/src/typeofsymbol.rs
+  s_755201f1072c04::t_f69498a8a55898 3370-3459
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "877f6726345cf33b876cea78ce4264c0802b46d8",
+  "prompts": {},
+  "sessions": {
+    "s_755201f1072c04": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "4c95ec81-bae5-455d-8ee2-c1dc2562167b",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
