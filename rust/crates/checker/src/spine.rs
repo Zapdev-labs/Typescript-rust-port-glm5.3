@@ -2036,10 +2036,13 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) instantiateTypeWithSingleGenericCallSignature(node, t, checkMode) *Type`
-    /// (checker.go:7848). The reachable prefix is exact; the deep
-    /// inference tail needs S8 (getSingleSignature) and S9 (the contextual
-    /// signature + inference merge) — with the S8 stub returning None the
-    /// function returns `t` at the same gate Go would.
+    /// (checker.go:7809) — REAL (FCS tranche 35): the contextual-signature
+    /// instantiation tail. The expression is an argument of a generic
+    /// function for which we are performing type argument inference; its
+    /// type has a single generic call/construct signature and the contextual
+    /// type has a single NON-generic one — the outer function's return
+    /// signature can then adopt the expression signature's type parameters
+    /// as inferred type parameters (checker.go:7826-7859).
     pub(crate) fn instantiate_type_with_single_generic_call_signature(
         &mut self,
         node: NodeId,
@@ -2065,15 +2068,149 @@ impl Checker {
         if self.signatures[signature.0 as usize].type_parameters.is_empty() {
             return t;
         }
-        // TODO(port M6 S9): the contextual-signature instantiation tail —
-        // getApparentTypeOfContextualType, the return-signature inference
-        // pass, and getOrCreateTypeFromSignature(instantiateSignatureInContextOf(...)).
-        // PORT(FCS tranche 26): the S8 `getSingleSignature` lookup is real
-        // now (members.rs); the deep tail stays permissive `t` — the
-        // signature/type-parameter gates above are Go-exact, so the tail
-        // is the only remaining seam.
-        let _ = node;
-        t
+        let Some(contextual_type) =
+            self.get_apparent_type_of_contextual_type(node, ContextFlags::NO_CONSTRAINTS)
+        else {
+            return t;
+        };
+        let non_nullable_contextual_type = self.get_non_nullable_type(contextual_type);
+        let contextual_signature = self.get_single_signature(
+            non_nullable_contextual_type,
+            if call_signature.is_some() {
+                crate::types::SignatureKind::Call
+            } else {
+                crate::types::SignatureKind::Construct
+            },
+            false /*allowMembers*/,
+        );
+        let Some(contextual_signature) = contextual_signature else {
+            return t;
+        };
+        if !self.signatures[contextual_signature.0 as usize]
+            .type_parameters
+            .is_empty()
+        {
+            return t;
+        }
+        if check_mode.intersects(CheckMode::SKIP_GENERIC_FUNCTIONS) {
+            self.skipped_generic_function(node, check_mode);
+            return crate::relater::any_function_type(self).expect("Go anyFunctionType");
+        }
+        // Go dereferences the context unconditionally here (checker.go:7823
+        // `context.signature` — a nil context would panic in Go); the
+        // Inferential gate guarantees an enclosing inference context.
+        let Some(context) = self.get_inference_context(node) else {
+            return t;
+        };
+        // We have an expression that is an argument of a generic function for
+        // which we are performing type argument inference. The expression is
+        // of a function type with a single generic call signature and a
+        // contextual function type with a single non-generic call signature.
+        // Now check if the outer function returns a function type with a
+        // single non-generic call signature and if some of the outer function
+        // type parameters have no inferences so far. If so, we can potentially
+        // add inferred type parameters to the outer function return type.
+        // (Go comment, verbatim.)
+        let mut return_signature: Option<crate::types::SignatureId> = None;
+        if let Some(context_signature) = self.inference_contexts[context.0 as usize].signature {
+            // Go: `returnType := c.getReturnTypeOfSignature(context.signature);
+            // if returnType != nil` — the port's return-type read is
+            // non-optional (never a nil *Type).
+            let return_type = self.get_return_type_of_signature(context_signature);
+            return_signature = self.get_single_call_or_construct_signature(return_type);
+        }
+        let has_inference_candidates =
+            crate::inference::has_inference_candidates;
+        if return_signature.is_some_and(|rs| {
+            self.signatures[rs.0 as usize].type_parameters.is_empty()
+        }) && !self.inference_contexts[context.0 as usize]
+            .inferences
+            .iter()
+            .all(has_inference_candidates)
+        {
+            // Instantiate the signature with its own type parameters as type
+            // arguments, possibly renaming the type parameters to ensure they
+            // have unique names.
+            let signature_type_parameters =
+                self.signatures[signature.0 as usize].type_parameters.clone();
+            let unique_type_parameters =
+                self.get_unique_type_parameters(context, &signature_type_parameters);
+            let instantiated_signature = self
+                .get_signature_instantiation_without_filling_in_type_arguments_for_members(
+                    signature,
+                    &unique_type_parameters,
+                );
+            // Infer from the parameters of the instantiated signature to the
+            // parameters of the contextual signature starting with an empty
+            // set of inference candidates.
+            let inferences: Vec<crate::inference::InferenceInfo> =
+                self.inference_contexts[context.0 as usize]
+                    .inferences
+                    .iter()
+                    .map(|info| crate::inference::new_inference_info(info.type_parameter))
+                    .collect();
+            let inferences = self.new_bare_inference_context(inferences);
+            let mut n = self.get_inference_state_for_context(inferences);
+            self.apply_to_parameter_types(&mut n, instantiated_signature, contextual_signature, |c, n, source, target| {
+                c.infer_types(n.inferences, source, target, crate::inference::InferencePriority::NONE, true /*contravariant*/);
+            });
+            self.put_inference_state_for_context(n);
+            if self.inference_contexts[inferences.0 as usize]
+                .inferences
+                .iter()
+                .any(has_inference_candidates)
+            {
+                // We have inference candidates, indicating that one or more
+                // type parameters are referenced in the parameter types of the
+                // contextual signature. Now also infer from the return type.
+                // (Go comment, verbatim.)
+                let mut n = self.get_inference_state_for_context(inferences);
+                self.apply_to_return_types(&mut n, instantiated_signature, contextual_signature, |c, n, source, target| {
+                    c.infer_types(n.inferences, source, target, crate::inference::InferencePriority::NONE, false);
+                });
+                self.put_inference_state_for_context(n);
+                // If the type parameters for which we produced candidates do
+                // not have any inferences yet, we adopt the new inference
+                // candidates and add the type parameters of the expression
+                // type to the set of inferred type parameters for the outer
+                // function return type. (Go comment, verbatim.)
+                let overlapping = {
+                    let (a, b) = {
+                        let contexts = &self.inference_contexts;
+                        (&contexts[context.0 as usize].inferences, &contexts[inferences.0 as usize].inferences)
+                    };
+                    crate::inference::has_overlapping_inferences(a, b)
+                };
+                if !overlapping {
+                    let source_inferences = self.inference_contexts[inferences.0 as usize]
+                        .inferences
+                        .clone();
+                    let target_inferences = &mut self.inference_contexts[context.0 as usize].inferences;
+                    crate::inference::merge_inferences(target_inferences, &source_inferences);
+                    self.inference_contexts[context.0 as usize]
+                        .inferred_type_parameters
+                        .extend(unique_type_parameters);
+                    return self.get_or_create_type_from_signature(instantiated_signature);
+                }
+            }
+        }
+        // TODO: The signature may reference any outer inference contexts, but
+        // we map pop off and then apply new inference contexts, and thus get
+        // different inferred types. That this is cached on the *first* such
+        // attempt is not currently an issue, since expression types *also*
+        // get cached on the first pass. If we ever properly speculate,
+        // though, the cached "isolatedSignatureType" signature field
+        // absolutely needs to be included in the list of speculative caches.
+        // (Go comment, verbatim.)
+        let result = self.instantiate_signature_in_context_of(
+            signature,
+            contextual_signature,
+            Some(context),
+            crate::relater::TypeComparerKind::Assignable,
+            None,
+            crate::relater::IntersectionState::NONE,
+        );
+        self.get_or_create_type_from_signature(result)
     }
 
     /// Go: `func (c *Checker) getOuterInferenceTypeParameters() []*Type`
@@ -2094,11 +2231,14 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getUniqueTypeParameters(context *InferenceContext, typeParameters []*Type) []*Type`
-    /// (checker.go:7910) — instantiates the signature with its own type
+    /// (checker.go:7886) — instantiates the signature with its own type
     /// parameters as type arguments, possibly renaming the type parameters
     /// to ensure they have unique names.
-    #[allow(dead_code)] // S4/S7 callers (contextual literals, signature
-                    // inference, the real newTypeParameter ctor)
+    ///
+    /// PORT (FCS tranche 35): REAL — the fresh type parameters now carry the
+    /// Go wiring: `newTypeParameter.AsTypeParameter().target = tp` and the
+    /// shared `newTypeMapper(oldTypeParameters, newTypeParameters)` back-
+    /// written onto each renamed parameter (checker.go:7908-7912).
     fn get_unique_type_parameters(
         &mut self,
         context: crate::todo_shapes::InferenceContextId,
@@ -2108,7 +2248,9 @@ impl Checker {
         let mut new_type_parameters: Vec<TypeId> = Vec::new();
         let mut result: Vec<TypeId> = Vec::with_capacity(type_parameters.len());
         for &tp in type_parameters {
-            let name = self.program.symbol(self.type_(tp).symbol.expect("type parameter symbol"))
+            let name = self
+                .program
+                .symbol(self.type_(tp).symbol.expect("type parameter symbol"))
                 .name
                 .clone();
             let inferred = &self.inference_contexts[context.0 as usize].inferred_type_parameters;
@@ -2126,14 +2268,11 @@ impl Checker {
                     &name,
                 );
                 let symbol = self.new_symbol(SymbolFlags::TYPE_PARAMETER, &new_name);
-                // TODO(port M6 S7): newTypeParameter wires target + mapper;
-                // the minimal ctor keeps the S1 seam permissive.
-                let new_type_parameter = self.new_type_parameter_stub(Some(symbol));
-                let tp_data = self.type_mut(new_type_parameter);
-                if let TypeData::TypeParameter(data) = &mut tp_data.data {
-                    // Go: newTypeParameter.AsTypeParameter().target = tp —
-                    // the mapper wiring is S7 (todo_shapes::TypeMapperId seam).
-                    let _ = data;
+                // Go: `newTypeParameter := c.newTypeParameter(symbol)` +
+                // `newTypeParameter.AsTypeParameter().target = tp`.
+                let new_type_parameter = self.new_type_parameter(Some(symbol));
+                if let TypeData::TypeParameter(data) = &mut self.type_mut(new_type_parameter).data {
+                    data.target = Some(tp);
                 }
                 old_type_parameters.push(tp);
                 new_type_parameters.push(new_type_parameter);
@@ -2143,28 +2282,16 @@ impl Checker {
             }
         }
         if !new_type_parameters.is_empty() {
-            // TODO(port M6 S7): newTypeMapper(oldTypeParameters, newTypeParameters)
-            // + the tp.mapper back-writes (mapper.rs's real constructor).
+            // Go: `mapper := newTypeMapper(oldTypeParameters, newTypeParameters)`;
+            // each renamed parameter's `.mapper` back-write.
+            let mapper = self.new_type_mapper(&old_type_parameters, &new_type_parameters);
+            for &tp in &new_type_parameters {
+                if let TypeData::TypeParameter(data) = &mut self.type_mut(tp).data {
+                    data.mapper = Some(mapper);
+                }
+            }
         }
         result
-    }
-
-    /// Go: `func (c *Checker) newTypeParameter(symbol *ast.Symbol) *Type`
-    /// (checker.go:25537+ — S7's ctor family). Minimal S1 construction: the
-    /// distributed/constraint fields S7 owns stay default (the marker types
-    /// in new_checker use the same shape directly).
-    #[allow(dead_code)] // S4/S7 callers (contextual literals, signature
-                    // inference, the real newTypeParameter ctor)
-    fn new_type_parameter_stub(&mut self, symbol: Option<SymbolId>) -> TypeId {
-        let t = self.new_type(
-            TypeFlags::TYPE_PARAMETER,
-            ObjectFlags::NONE,
-            TypeData::TypeParameter(Box::default()),
-        );
-        if let Some(symbol) = symbol {
-            self.type_mut(t).symbol = Some(symbol);
-        }
-        t
     }
 
     /// Go: `func (c *Checker) checkExpressionWorker(node, checkMode) *Type`

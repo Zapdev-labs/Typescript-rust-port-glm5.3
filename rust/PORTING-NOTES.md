@@ -3244,3 +3244,39 @@ all gates green fresh (orchestrator re-ran tests + sweeps + census
 independently; Go tree md5-verified pristine). NOTE recorded: remote-sync
 overwrites the rig's tsc tree — Go probes must be re-applied after
 every sync and restored+md5-verified.
+
+## Sweep micro-tranche 35 landed (2026-11-03, RIG-VALIDATED) — instantiateTypeWithSingleGenericCallSignature; divergent 839 -> 836
+
+genericContextualTypes1 RECOVERED byte-identical (16 errors, the f13
+2322 rendering — the exact fcs34 residual). spine.rs gained the FULL
+tail: the contextualSignature lookup (getApparentTypeOfContextualType ->
+GetNonNullableType -> getSingleSignature), the skip arm, the
+returnSignature candidate dance (getUniqueTypeParameters REAL target+
+mapper wiring -> getSignatureInstantiationWithoutFillingInTypeArguments
+-> contravariant param inference on a fresh BARE inferences list ->
+return inference -> !hasOverlappingInferences -> mergeInferences +
+context.inferredTypeParameters += uniqueTypeParameters ->
+getOrCreateTypeFromSignature), else the instantiateSignatureInContextOf
+fallback; get_unique_type_parameters made REAL; new_type_parameter_stub
+DELETED. inference.rs: InferenceInfo Clone + pub(crate) helpers + NEW
+new_bare_inference_context (Go's raw []*InferenceInfo registered as a
+context id without mapper side-effects). relater.rs: instantiate_
+signature_in_context_of gained the non-nil inferenceContext param
+(checker.go:19873-19885: restType -> non-fixing-vs-fixing mapper; the
+return-type pass gated on inferenceContext == nil). resolvecall.rs
+collateral IN-FAMILY: skipped_generic_function now sets the per-context
+InferenceFlagsSkippedGenericFunction (checker.go:10250) instead of the
+checker-global is_inference_partially_blocked (the stub PERMANENTLY
+suppressed reportErrors at checker.go:9066 — Go sets the global only
+around services' speculation); the argCheckMode |= SkipGenericFunctions
+propagation (checker.go:9282) added after first-pass inferTypeArguments.
+Newly-divergent 0; newly-identical 3 (the target + contextualSignature
+Instantiation + genericCallWithFunctionTypedArguments5). PLAIN-sweep
+census: divergent 836 (656 count / 180 hash), identical 6,731/7,567;
+both drivers 0/3,826/3,741/0; panics 0. 74 test binaries green, 0
+failures (fcs35 pins 3/3; the worker's "78 result lines" was a counting-
+method artifact — orchestrator re-ran and counted 74 Running lines, 74
+ok, 0 FAILED); clippy 0; all gates green fresh; Go tree md5-verified
+pristine. Residual queue unchanged (2322 destructuring/mapped tops,
+paramTagTypeResolution2, typeFromJSInitializer, TS2304 extras — full
+list ~/.fcs35-continuation.md).

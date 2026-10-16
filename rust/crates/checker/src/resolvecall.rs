@@ -976,6 +976,19 @@ impl Checker {
                         s.arg_check_mode | CheckMode::SKIP_GENERIC_FUNCTIONS,
                         context,
                     );
+                    // PORT (FCS tranche 35): Go checker.go:9282 — a generic
+                    // function skipped during inferential typing (the
+                    // instantiateTypeWithSingleGenericCallSignature skip arm,
+                    // checker.go:7820) widens argCheckMode with
+                    // CheckModeSkipGenericFunctions so this candidate's
+                    // applicability check + second pass re-check the
+                    // arguments against the erased/anyFunctionType shape.
+                    if self.inference_contexts[context.0 as usize]
+                        .flags
+                        .intersects(crate::inference::InferenceFlags::SKIPPED_GENERIC_FUNCTION)
+                    {
+                        s.arg_check_mode |= CheckMode::SKIP_GENERIC_FUNCTIONS;
+                    }
                     type_argument_types = Some(types);
                     inference_context = Some(context);
                 }
@@ -2509,16 +2522,28 @@ impl Checker {
         has_type_parameters && self.is_function_type(return_type)
     }
 
-    /// Go: `func (c *Checker) skippedGenericFunction(node, checkMode)` (checker.go:10256).
-    fn skipped_generic_function(&mut self, node: NodeId, check_mode: CheckMode) {
+    /// Go: `func (c *Checker) skippedGenericFunction(node, checkMode)` (checker.go:10250).
+    ///
+    /// PORT (FCS tranche 35): REAL — Go sets InferenceFlagsSkippedGenericFunction
+    /// on the ENCLOSING inference context (chooseOverload reads it back at
+    /// checker.go:9282 to widen argCheckMode with CheckModeSkipGenericFunctions
+    /// for the second pass). The former port set the checker-global
+    /// isInferencePartiallyBlocked instead — Go sets that only around services'
+    /// speculative runWithoutResolvedSignatureCaching (services.go:346), so the
+    /// stub permanently suppressed reportErrors (checker.go:9066) after the
+    /// first skipped generic function in a file. Go has no nil guard here (a
+    /// nil context would panic); the port's `if let` only diverges on inputs
+    /// Go crashes on.
+    pub(crate) fn skipped_generic_function(&mut self, node: NodeId, check_mode: CheckMode) {
         if check_mode.intersects(CheckMode::INFERENTIAL) {
             // We have skipped a generic function during inferential typing.
             // Obtain the inference context and indicate this has occurred
-            // such that we know a second pass of inference is needed.
-            // TODO(port M6 S9): the per-node inference-context links
-            // (getInferenceContext) ride the S9 contextual engine.
-            let _ = node;
-            self.is_inference_partially_blocked = true;
+            // such that we know a second pass of inference is needed. (Go
+            // comment, verbatim.)
+            if let Some(context) = self.get_inference_context(node) {
+                self.inference_contexts[context.0 as usize].flags |=
+                    crate::inference::InferenceFlags::SKIPPED_GENERIC_FUNCTION;
+            }
         }
     }
 

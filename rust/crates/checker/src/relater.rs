@@ -1954,6 +1954,7 @@ impl Checker {
             source = self.instantiate_signature_in_context_of(
                 source,
                 target,
+                None, /*inferenceContext — Go compareSignaturesRelated passes nil*/
                 compare_types,
                 relater.as_deref_mut(),
                 intersection_state,
@@ -9959,29 +9960,32 @@ impl Checker {
     // on this shared Checker type.
 
     /// Go: `func (c *Checker) instantiateSignatureInContextOf(signature, contextualSignature, inferenceContext, compareTypes) *Signature`
-    /// (checker.go:19813) — section 3.8.5 in the TypeScript spec: infer the
+    /// (checker.go:19870) — section 3.8.5 in the TypeScript spec: infer the
     /// generic signature's type arguments from the contextual signature,
     /// then instantiate. This is the seam the whole assignmentCompat
     /// call/construct-signature family rides (TS2322 extras: `a = b` where
     /// b is generic — Go instantiates b in context of a before comparing).
     ///
     /// PORT(FCS tranche 10): replaced the M6 S6 identity stub with the real
-    /// body. Two shape notes:
-    /// - Go's only caller (compareSignaturesRelated, relater.go) passes
-    ///   `inferenceContext == nil`, so the nonFixing/mapper arm (and its
-    ///   `instantiateSignature(contextualSignature, mapper)`) is dead code
-    ///   here — the port keeps the single live path
-    ///   (`sourceSignature == contextualSignature`).
+    /// body. Shape notes:
     /// - Go threads the `compareTypes` closure into newInferenceContext; the
     ///   port's InferenceComparer carries the same information (Assignables
     ///   = the method comparer, Relater = the active relater's relation —
     ///   see inference.rs's PORT note). `relater`/`intersection_state` are
     ///   threaded from compare_signatures_related exactly as the Go closure
     ///   captured them.
+    /// - PORT(FCS tranche 35): the `inferenceContext` parameter is now real
+    ///   (checker.go:19873-19885). compareSignaturesRelated passes nil (the
+    ///   historical single caller); instantiateTypeWithSingleGenericCall-
+    ///   Signature (checker.go:7865) passes the outer context — then the
+    ///   restType non-fixing/mapper arm instantiates the contextual
+    ///   signature and the return-type inference pass is SKIPPED (Go gates
+    ///   it on `inferenceContext == nil`).
     pub(crate) fn instantiate_signature_in_context_of(
         &mut self,
         source: crate::types::SignatureId,
         contextual_signature: crate::types::SignatureId,
+        inference_context: Option<crate::todo_shapes::InferenceContextId>,
         compare_types: TypeComparerKind,
         relater: Option<&mut Relater>,
         _intersection_state: IntersectionState,
@@ -10009,19 +10013,43 @@ impl Checker {
             crate::inference::InferenceFlags::NONE,
             comparer,
         );
+        // Go: `restType := c.getEffectiveRestType(contextualSignature)` +
+        // the non-nil inferenceContext mapper choice — the nonFixing mapper
+        // when the contextual signature's rest type is a type parameter
+        // (leave it possible to later infer back into the rest type),
+        // else the fixing mapper.
+        let rest_type = self.get_effective_rest_type(contextual_signature);
+        let mapper = inference_context.and_then(|outer| {
+            let outer_context = &self.inference_contexts[outer.0 as usize];
+            if rest_type
+                .is_some_and(|r| self.type_(r).flags.intersects(TypeFlags::TYPE_PARAMETER))
+            {
+                outer_context.non_fixing_mapper
+            } else {
+                outer_context.mapper
+            }
+        });
+        // Go: `sourceSignature = c.instantiateSignature(contextualSignature, mapper)`
+        // when a mapper is present; the nil-mapper form is the identity.
+        let source_signature = mapper
+            .map(|m| self.instantiate_signature(contextual_signature, Some(m)))
+            .unwrap_or(contextual_signature);
         // Go: inferTypes is invoked per pair with the context's inferences;
         // the port's InferenceState carries the context id so the fn-pointer
         // callbacks (which cannot capture) can reach it.
         let mut n = self.get_inference_state_for_context(context);
         n.inferences = context;
-        self.apply_to_parameter_types(&mut n, contextual_signature, source, |c, n, s, t| {
+        self.apply_to_parameter_types(&mut n, source_signature, source, |c, n, s, t| {
             c.infer_types(n.inferences, s, t, crate::inference::InferencePriority::NONE, false);
         });
-        // Go: `if inferenceContext == nil { applyToReturnTypes(...) }` —
-        // always live at this caller.
-        self.apply_to_return_types(&mut n, contextual_signature, source, |c, n, s, t| {
-            c.infer_types(n.inferences, s, t, crate::inference::InferencePriority::RETURN_TYPE, false);
-        });
+        // Go: `if inferenceContext == nil { applyToReturnTypes(contextualSignature, ...) }`
+        // — the non-nil shape (tranche 35) leaves the return-type inferences
+        // to the outer context's own return-type pass.
+        if inference_context.is_none() {
+            self.apply_to_return_types(&mut n, contextual_signature, source, |c, n, s, t| {
+                c.infer_types(n.inferences, s, t, crate::inference::InferencePriority::RETURN_TYPE, false);
+            });
+        }
         self.put_inference_state_for_context(n);
         let type_arguments = self.get_inferred_types(context);
         // Go: `ast.IsInJSFile(contextualSignature.declaration)` — the JS-file

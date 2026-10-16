@@ -266,7 +266,9 @@ pub struct InferenceContext {
 
 /// Go: `type InferenceInfo struct` (checker.go). The first three field names
 /// are the W1 mapper.rs contract (`typeParameter`/`isFixed`/`inferredType`).
-#[derive(Debug, Default)]
+/// PORT(FCS tranche 35): `Clone` — Go copies *InferenceInfo values freely;
+/// `mergeInferences` (checker.go:1691) installs the source entry by value.
+#[derive(Debug, Default, Clone)]
 pub struct InferenceInfo {
     /// Go: `typeParameter *Type`.
     pub type_parameter: TypeId,
@@ -2313,6 +2315,34 @@ impl Checker {
         id
     }
 
+    /// PORT (FCS tranche 35): Go's instantiateTypeWithSingleGenericCallSignature
+    /// (checker.go:7837) builds a BARE `[]*InferenceInfo` (via
+    /// `core.Map(context.inferences, newInferenceInfo)`) — no InferenceContext,
+    /// so no mapper side-effects. The port's `infer_types` takes a context id
+    /// (the inferences list lives in the context arena), so the bare list is
+    /// registered as a context WITHOUT `newInferenceContextWorker`'s
+    /// `newInferenceTypeMapper` calls; only `.inferences` is ever read through
+    /// the id on this path (the candidate checks read the list directly).
+    pub(crate) fn new_bare_inference_context(
+        &mut self,
+        inferences: Vec<InferenceInfo>,
+    ) -> InferenceContextId {
+        let id = InferenceContextId(self.inference_contexts.len() as u32);
+        self.inference_contexts.push(InferenceContext {
+            inferences,
+            signature: None,
+            flags: InferenceFlags::NONE,
+            compare_types: InferenceComparer::Assignable,
+            mapper: None,
+            non_fixing_mapper: None,
+            return_mapper: None,
+            outer_return_mapper: None,
+            inferred_type_parameters: Vec::new(),
+            intra_expression_inference_sites: Vec::new(),
+        });
+        id
+    }
+
     /// Go: `func (c *Checker) addIntraExpressionInferenceSite(n, node, t)`.
     pub(crate) fn add_intra_expression_inference_site(
         &mut self,
@@ -2879,7 +2909,7 @@ fn tuple_types_definitely_unrelated(c: &Checker, source: TypeId, target: TypeId)
 }
 
 /// Go: `func newInferenceInfo(typeParameter) *InferenceInfo`.
-fn new_inference_info(type_parameter: TypeId) -> InferenceInfo {
+pub(crate) fn new_inference_info(type_parameter: TypeId) -> InferenceInfo {
     InferenceInfo {
         type_parameter,
         priority: InferencePriority::MAX_VALUE,
@@ -2904,7 +2934,7 @@ fn clone_inference_info(info: &InferenceInfo) -> InferenceInfo {
 }
 
 /// Go: `func hasInferenceCandidates(info) bool`.
-fn has_inference_candidates(info: &InferenceInfo) -> bool {
+pub(crate) fn has_inference_candidates(info: &InferenceInfo) -> bool {
     !info.candidates.is_empty() || !info.contra_candidates.is_empty()
 }
 
@@ -2924,8 +2954,7 @@ fn has_type_parameter_default(tp: TypeId) -> bool {
 }
 
 /// Go: `func hasOverlappingInferences(a, b) bool`.
-#[allow(dead_code)]
-fn has_overlapping_inferences(a: &[InferenceInfo], b: &[InferenceInfo]) -> bool {
+pub(crate) fn has_overlapping_inferences(a: &[InferenceInfo], b: &[InferenceInfo]) -> bool {
     for i in 0..a.len() {
         if has_inference_candidates(&a[i]) && has_inference_candidates(&b[i]) {
             return true;
@@ -2935,8 +2964,7 @@ fn has_overlapping_inferences(a: &[InferenceInfo], b: &[InferenceInfo]) -> bool 
 }
 
 /// Go: `func (c *Checker) mergeInferences(target, source)`.
-#[allow(dead_code)]
-fn merge_inferences(target: &mut [InferenceInfo], source: &[InferenceInfo]) {
+pub(crate) fn merge_inferences(target: &mut [InferenceInfo], source: &[InferenceInfo]) {
     for i in 0..target.len() {
         if !has_inference_candidates(&target[i]) && has_inference_candidates(&source[i]) {
             target[i] = clone_inference_info(&source[i]);
