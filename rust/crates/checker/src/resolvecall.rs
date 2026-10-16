@@ -980,17 +980,27 @@ impl Checker {
                     inference_context = Some(context);
                 }
                 let type_argument_types = type_argument_types.unwrap_or_default();
+                // PORT (FCS tranche 34): Go checker.go:9289 —
+                // `inferredTypeParameters = inferenceContext.inferredTypeParameters`,
+                // the context FIELD (only populateTypeWithSingleGenericCall-
+                // Signature, checker.go:7858, writes it — that S9-family
+                // contextual generic-function-argument seam is not yet
+                // ported, so the field is always empty here). The previous
+                // get_inferred_type approximation passed the INFERRED TYPES
+                // as "type parameters" into getSignatureInstantiation's
+                // inferredTypeParameters branch (checker.go:19719 — clones
+                // the return signature and installs the list as its
+                // typeParameters), producing a bogus generic return
+                // signature whose non-parameter "parameters" render as
+                // "(Missing type parameter)" (non-identifier symbolless
+                // types). Benign while the contextual-return inference
+                // prologue (tranche 34) was dormant; unmasked by it
+                // (genericContextualTypes1 f40 flip(zip)/f13 compose).
                 let inferred_type_parameters = inference_context
                     .map(|context| {
-                        let count = self.inference_contexts[context.0 as usize].inferences.len();
-                        (0..count)
-                            .map(|i| {
-                                self.get_inferred_type(
-                                    context,
-                                    i,
-                                )
-                            })
-                            .collect::<Vec<_>>()
+                        self.inference_contexts[context.0 as usize]
+                            .inferred_type_parameters
+                            .clone()
                     })
                     .unwrap_or_default();
                 check_candidate = self.get_signature_instantiation(
@@ -1039,10 +1049,12 @@ impl Checker {
                 if let Some(context) = inference_context {
                     let type_argument_types =
                         self.infer_type_arguments(s.node, candidate, &s.args, s.arg_check_mode, context);
-                    let count = self.inference_contexts[context.0 as usize].inferences.len();
-                    let inferred: Vec<TypeId> = (0..count)
-                        .map(|i| self.get_inferred_type(context, i))
-                        .collect();
+                    // PORT (FCS tranche 34): Go checker.go:9313 —
+                    // `inferenceContext.inferredTypeParameters` (the field,
+                    // not getInferredTypes; see the first-pass note above).
+                    let inferred = self.inference_contexts[context.0 as usize]
+                        .inferred_type_parameters
+                        .clone();
                     final_candidate =
                         self.get_signature_instantiation(candidate, &type_argument_types, false, &inferred);
                     // Generic-rest arity re-check.
@@ -1588,11 +1600,128 @@ impl Checker {
         if tsc_ast::utilities::is_jsx_opening_like_element(self.store().node(node)) {
             return self.infer_jsx_type_arguments(node, signature, check_mode, context);
         }
-        // TODO(port M6 S9): the contextual-return inference half (getContextualType
-        // → inferTypes against the signature's return type + the return
-        // mapper) rides the S9 contextual-typing engine; the seam answers
-        // None so the arm is dormant.
-        let _ = (node, check_mode);
+        // PORT (FCS tranche 34): Go's contextual-return inference prologue
+        // (checker.go:9627-9686) — "If a contextual type is available, infer
+        // from that type to the return type of the call expression." Was the
+        // dormant M6 S9 TODO: the generic call's contextual type (the
+        // assignability target of its return value) feeds RETURN_TYPE-priority
+        // inference candidates into the same context the argument inference
+        // uses, plus a separate returnMapper pass
+        // (`instantiateContextualType` consumes it for the contextual types
+        // of later arguments). Without it, `assign({...})` at
+        // `entry?: AssignAction<TContext>` inferred TContext only from the
+        // `PropertyAssigner` argument (a mapped type — no candidate), typed
+        // the call `AssignAction<unknown>`, and the final
+        // `AssignAction<unknown> -> AssignAction<{...}>` reference-arm
+        // variance check failed with a rust-EXTRA TS2322
+        // (genericContextualTypes2/3 — the fcs33 ND pair; the pre-t33
+        // vacuous alias-variance probe had masked it).
+        if !tsc_ast::is_decorator(self.store().node(node))
+            && self.store().node(node).kind != Kind::BinaryExpression
+        {
+            let signature_type_parameters =
+                self.signatures[signature.0 as usize].type_parameters.clone();
+            // If a binding pattern would answer a different contextual type
+            // than the plain query, only the returnMapper pass applies (Go's
+            // isFromBindingPattern).
+            let skip_binding_patterns = signature_type_parameters
+                .iter()
+                .all(|&p| self.get_default_from_type_parameter(p).is_some());
+            let context_flags = if skip_binding_patterns {
+                crate::types::ContextFlags::SKIP_BINDING_PATTERNS
+            } else {
+                crate::types::ContextFlags::NONE
+            };
+            if let Some(contextual_type) = self.get_contextual_type(node, context_flags) {
+                let inference_target_type = self.get_return_type_of_signature(signature);
+                if self.could_contain_type_variables(inference_target_type) {
+                    let outer_context = self.get_inference_context(node);
+                    // A return type inference from a binding pattern can be
+                    // used in instantiating the contextual type of an
+                    // argument later in inference, but cannot stand on its
+                    // own as the final return type (Go's comment).
+                    let is_from_binding_pattern = !skip_binding_patterns
+                        && self.get_contextual_type(node, crate::types::ContextFlags::SKIP_BINDING_PATTERNS)
+                            != Some(contextual_type);
+                    if !is_from_binding_pattern {
+                        // We clone the inference context to avoid disturbing
+                        // a resolution in progress for an outer call
+                        // expression (Go's comment).
+                        let outer_mapper = self
+                            .clone_inference_context(outer_context, crate::inference::InferenceFlags::NO_DEFAULT)
+                            .and_then(|cloned| self.get_mapper_from_context(Some(cloned)));
+                        let instantiated_type = match outer_mapper {
+                            Some(m) => self.instantiate_type(contextual_type, m),
+                            None => contextual_type,
+                        };
+                        // If the contextual type is a generic function type
+                        // with a single call signature, we instantiate the
+                        // type with its own type parameters and type
+                        // arguments (Go's comment) so the type parameters can
+                        // be inferred from the contextual type. Go:
+                        // `c.getSingleCallSignature(instantiatedType)`
+                        // (checker.go:9654) — the REAL isolated-signature
+                        // read (members.rs), NOT relater.rs's
+                        // get_single_call_signature_of_type S8 stub.
+                        let contextual_signature = self.get_single_call_signature(instantiated_type);
+                        let inference_source_type = match contextual_signature {
+                            Some(cs)
+                                if !self.signatures[cs.0 as usize].type_parameters.is_empty() =>
+                            {
+                                let cs_params =
+                                    self.signatures[cs.0 as usize].type_parameters.clone();
+                                let instantiated =
+                                    self.get_signature_instantiation_without_filling_in_type_arguments(cs, &cs_params);
+                                self.get_or_create_type_from_signature(instantiated)
+                            }
+                            _ => instantiated_type,
+                        };
+                        // Inferences made from return types have lower
+                        // priority than all other inferences (Go's comment).
+                        self.infer_types(
+                            context,
+                            inference_source_type,
+                            inference_target_type,
+                            crate::inference::InferencePriority::RETURN_TYPE,
+                            false, /*contravariant*/
+                        );
+                    }
+                    // Create a type mapper for instantiating generic
+                    // contextual types using the inferences made from the
+                    // return type (Go's comment).
+                    let context_flags_value = self.inference_contexts[context.0 as usize].flags;
+                    let return_context = self.new_inference_context(
+                        &signature_type_parameters,
+                        Some(signature),
+                        context_flags_value,
+                        crate::inference::InferenceComparer::default(),
+                    );
+                    let outer_return_mapper = outer_context
+                        .and_then(|oc| self.create_outer_return_mapper(oc));
+                    let return_source_type = match outer_return_mapper {
+                        Some(m) => self.instantiate_type(contextual_type, m),
+                        None => contextual_type,
+                    };
+                    self.infer_types(
+                        return_context,
+                        return_source_type,
+                        inference_target_type,
+                        crate::inference::InferencePriority::NONE,
+                        false, /*contravariant*/
+                    );
+                    let has_candidates = self.inference_contexts[return_context.0 as usize]
+                        .inferences
+                        .iter()
+                        .any(|info| !info.candidates.is_empty() || !info.contra_candidates.is_empty());
+                    self.inference_contexts[context.0 as usize].return_mapper = if has_candidates {
+                        self.clone_inferred_part_of_context(return_context)
+                            .and_then(|cloned| self.get_mapper_from_context(Some(cloned)))
+                    } else {
+                        None
+                    };
+                }
+            }
+        }
         let rest_type = self.get_non_array_rest_type(signature);
         let mut arg_count = args.len();
         if rest_type.is_some() {

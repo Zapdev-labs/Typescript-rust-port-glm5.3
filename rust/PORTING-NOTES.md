@@ -3206,3 +3206,41 @@ identical 6,722/7,567; both drivers 0/3,826/3,741/0; panics 0. 76 suites
 (fcs33 pins 8/8; spike.rs stale assertion updated Go-exactly); clippy 0;
 all gates green fresh (orchestrator re-ran tests + sweeps + census
 independently; checker.go + relater.go md5-verified pristine).
+
+## Sweep micro-tranche 34 landed (2026-11-03, RIG-VALIDATED) — inferTypeArguments contextual-return prologue; divergent 845 -> 839
+
+HONEST DISCONFIRMATION first: the fcs33 "variance measurement seam"
+hypothesis was WRONG — fresh FCS34_DBG probes through a re-created
+go-bench-dbg (restored, md5-verified) show the marker probes and retry
+ladder were already Go-exact: both drivers measure AssignAction INVARIANT
+(Go's VarianceFlagsInvariant == 0 and rust's INVARIANT == NONE == 0 —
+the fcs33 reading was an ENCODING MISREAD of the same value), and GO's
+reference-arm probe proves Go never compares AssignAction instantiations
+there at all. REAL ROOT (ported Go-exactly, resolvecall.rs):
+- Go checker.go:9627-9686 inferTypeArguments contextual-return inference
+  PROLOGUE (the dormant M6 S9 TODO): GO infers TContext={count:number}
+  for assign({...}) from the entry property's contextual type
+  (inferFromReferenceTypeArguments -> getVariances(AssignAction)=[in
+  out]); rust, lacking it, typed the call AssignAction<unknown> and the
+  Go-exact reference-arm variance check failed (the rust-EXTRA 2322).
+  Key subtlety: getSingleCallSignature is the REAL members.rs one, not
+  relater.rs's S8-stub.
+- Collateral the prologue unmasked: chooseOverload (both sites) now
+  reads inferenceContext.inferredTypeParameters (checker.go:9289/9313,
+  the FIELD) instead of get_inferred_type results (which
+  getSignatureInstantiation installed as a bogus typeParameters list
+  rendering "(Missing type parameter)").
+genericContextualTypes2/3 RECOVERED byte-identical (exact GO records);
+genericContextualTypes1 improved 20-vs-16 -> 17-vs-16, residual
+root-caused to instantiateTypeWithSingleGenericCallSignature
+(checker.go:7809-7870, the type-parameters-kept-as-candidates seam) —
+queued as the next S9 family. Newly-divergent 0; newly-identical 6
+(keyofInferenceLowerPriorityThanReturn, dependentDestructuredVariables
+FromNestedPatterns, esDecorators-contextualTypes.2, callChain.3, the
+target pair). 2322 census: EXTRA 92->86/49->46. PLAIN-sweep census:
+divergent 839 (658 count / 181 hash), identical 6,728/7,567; both
+drivers 0/3,826/3,741/0; panics 0. 77 suites (fcs34 pins 4/4); clippy 0;
+all gates green fresh (orchestrator re-ran tests + sweeps + census
+independently; Go tree md5-verified pristine). NOTE recorded: remote-sync
+overwrites the rig's tsc tree — Go probes must be re-applied after
+every sync and restored+md5-verified.
