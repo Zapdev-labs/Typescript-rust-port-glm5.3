@@ -3102,3 +3102,37 @@ Newly-divergent 0; newly-identical 3. PLAIN-sweep census: divergent 982
 5 exact-GO-twin records); clippy 0; all gates green fresh (orchestrator
 re-ran tests + sweeps + census independently; Go tree md5-verified
 untouched — no Go probes used).
+
+## Sweep micro-tranche 31 landed (2026-11-03, RIG-VALIDATED) — type-parameter-list arms + accessor computed names; divergent 982 -> 945
+
+Fresh census corrected the stale figure: the TS2304 family was 39
+rust-missing instances/22 records (not 121/23). All 39 fixed, THREE
+roots in statements.rs:
+- R1 (~31 inst/19 records): type_parameters_of (Go Node.TypeParameter-
+  List, ast.go:527) had NO class/interface/class-expression/type-alias/
+  template-tag arms — checkClassLikeDeclaration / checkInterfaceDecla-
+  ration passed an EMPTY list, so checkTypeParameter never ran: no 2304
+  on unresolved constraint names (and no 2368/2344 constraint checks
+  either). Method/function/alias constraints were already fine.
+- R2 (1): check_accessor_declaration called the grammar STUB where Go
+  checker.go:3001 calls the REAL checkComputedPropertyName (checker.go:
+  27336) for accessor computed names (get/set [Symbol()]).
+- R3 (pre-ship catch): R1 exposed 11 phantom rust-EXTRA TS2428s —
+  check_type_parameter_lists_identical passed a permissive-EMPTY
+  get_local_type_parameters stub as Go's interface LocalTypeParameters;
+  the identical-interface-merge check previously passed by ACCIDENT
+  (empty source AND empty target). Fixed to read the interface-type
+  payload row — the 2428s never shipped.
+Newly-divergent 0; newly-identical 37 (the 2304 cluster + constraint
+friends + the 11 phantom-2428 records). TS2304 census: rust-missing 0;
+rust-extra 8 (pre-existing stragglers, unchanged: mappedTypeProperties
+mapped-computed-name x4, YieldExpression11/14 x2, parser duplicate
+implements/extends x2). PLAIN-sweep census: divergent 945 (754 count /
+191 hash), identical 6,622/7,567; both drivers 0/3,826/3,741/0;
+panics 0. 73 suites (fcs31 pins: checker 7/7 + testrunner 3/3 exact-GO
+twins); clippy 0; all gates green fresh (orchestrator re-ran tests +
+sweeps + census independently; Go tree md5-verified untouched). Lesson
+recorded: tsc-testrunner -test.run filter needs the Parent/component.ts
+form. Residual queue: carried fcs28/29/30 families (2504/async-iteration
+pair, 2318 stragglers, JSDoc-tag imports, bare-require, dynamic import
++ 2882).

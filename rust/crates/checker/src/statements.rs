@@ -3656,7 +3656,26 @@ use u::has_dot_dot_dot_token;
 /// Go: `node.TypeParameters()` for the function-like payloads.
 pub(crate) fn type_parameters_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> {
     let n = store.node(node);
+    // PORT (FCS tranche 31): Go's Node.TypeParameterList (ast.go:527) also
+    // covers ClassDeclaration, ClassExpression, InterfaceDeclaration,
+    // TypeAliasDeclaration|JSTypeAliasDeclaration and JSDocTemplateTag —
+    // the missing class/interface arms meant checkClassLikeDeclaration/
+    // checkInterfaceDeclaration passed an EMPTY list to checkTypeParameters,
+    // so checkTypeParameter never ran for class/interface type parameters
+    // (the corpus-proven TS2304 family: `class C<T extends Date>` and
+    // friends never reported the unresolved constraint).
     let list = match n.kind {
+        Kind::ClassDeclaration => n.as_class_declaration().expect("data").type_parameters.as_ref(),
+        Kind::ClassExpression => n.as_class_expression().expect("data").type_parameters.as_ref(),
+        Kind::InterfaceDeclaration => {
+            n.as_interface_declaration().expect("data").type_parameters.as_ref()
+        }
+        Kind::TypeAliasDeclaration | Kind::JSTypeAliasDeclaration => {
+            n.as_type_alias_declaration().expect("data").type_parameters.as_ref()
+        }
+        Kind::JSDocTemplateTag => {
+            n.as_jsdoc_template_tag().expect("data").type_parameters.as_ref()
+        }
         Kind::FunctionDeclaration => n.as_function_declaration().expect("data").type_parameters.as_ref(),
         Kind::FunctionExpression => n.as_function_expression().expect("data").type_parameters.as_ref(),
         Kind::ArrowFunction => n.as_arrow_function().expect("data").type_parameters.as_ref(),
@@ -7004,8 +7023,13 @@ impl Checker {
         // Do not use hasDynamicName here, because that returns false for
         // well known symbols. We want to perform checkComputedPropertyName
         // for all computed properties, including well known symbols.
+        // PORT (FCS tranche 31): Go checker.go:3001 calls the REAL
+        // checkComputedPropertyName (checker.go:27336) — the S10 body in
+        // expressions.rs — not the grammar stub; the stub miswiring left
+        // accessor computed names (`get [Symbol()]() { }`) without their
+        // TS2304 (the same W3T5 fix shape the binding-pattern sites got).
         if name.is_some_and(|n| self.store().node(n).kind == Kind::ComputedPropertyName) {
-            self.check_grammar_computed_property_name(name.expect("checked"));
+            let _ = self.check_computed_property_name(name.expect("checked"));
         }
         if self.has_bindable_name(node) {
             // TypeScript 1.0 spec (April 2014): 8.4.3
@@ -8844,7 +8868,19 @@ impl Checker {
             let t = self.get_declared_type_of_symbol(symbol);
             // Go: t.AsInterfaceType().LocalTypeParameters() — the resolved
             // local type-parameter row.
-            let local_type_parameters = self.get_local_type_parameters(t);
+            // PORT (FCS tranche 31): the REAL payload read — was the
+            // permissive-empty get_local_type_parameters stub, which kept
+            // areTypeParametersIdentical's target list EMPTY. With the
+            // type_parameters_of arms in place the comparison runs for real
+            // (Go checker.go:4497), so the stub made identical `interface
+            // B<T>` merges report phantom 2428s (source [T] > empty
+            // target) that Go never emits.
+            let local_type_parameters = self
+                .type_(t)
+                .as_interface_type()
+                .expect("InterfaceType data")
+                .local_type_parameters()
+                .to_vec();
             let source_list: Vec<NodeId> = declarations.clone();
             let identical = self.are_type_parameters_identical(
                 &source_list,
@@ -11010,13 +11046,11 @@ impl Checker {
         false
     }
 
-    /// TODO(port M6 S7): `LocalTypeParameters` — the resolved local type-
-    /// parameter row on a class/interface type; permissive empty (the
-    /// identical-list check trivially passes with no target parameters,
-    /// matching an untyped-parameter class).
-    fn get_local_type_parameters(&mut self, _t: TypeId) -> Vec<TypeId> {
-        Vec::new()
-    }
+    // PORT (FCS tranche 31): the permissive-empty `LocalTypeParameters`
+    // stub removed — check_type_parameter_lists_identical now reads the
+    // interface-type payload directly (Go checker.go:4497
+    // `t.AsInterfaceType().LocalTypeParameters()`), the same row
+    // members.rs's signature builder reads.
 
     // Go: `func (c *Checker) isValidBaseType(t) bool` — S8's REAL body
     // (members.rs) replaced the S7 permissive stub; the method resolves
