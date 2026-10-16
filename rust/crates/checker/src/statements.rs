@@ -932,7 +932,7 @@ impl Checker {
                     && self.language_version < Feature::ForAwaitOf.minimum_target()
                 {
                     // for..await..of prior to ESNext requires __asyncValues
-                    self.check_external_emit_helpers_stub(node, ExternalEmitHelpers::FOR_AWAIT_OF_INCLUDES);
+                    self.check_external_emit_helpers(node, ExternalEmitHelpers::FOR_AWAIT_OF_INCLUDES);
                 }
             }
         }
@@ -1626,33 +1626,36 @@ where
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// ExternalEmitHelpers (Go checker/types.go:130-150) — the emit-helper
-// bitfield checkExternalEmitHelpers reads. TODO(port M6 W5): the real
-// checkExternalEmitHelpers (emitsupport.go's wave — the context/emit-helpers
-// machinery); permissive no-op here.
+// ExternalEmitHelpers — Go checker/types.go's bitfield
+// checkExternalEmitHelpers reads. PORT (FCS tranche 32): the real
+// checkExternalEmitHelpers/resolveHelpersModule landed; the flags are the
+// Go-exact `crate::types::ExternalEmitHelpers` (this slice previously kept
+// a local partial duplicate with divergent bit values — dropped).
 // ────────────────────────────────────────────────────────────────────────────
 
-define_flags!(ExternalEmitHelpers, u32);
+pub(crate) use crate::types::{
+    EXTERNAL_HELPERS_MODULE_NAME_TEXT, ExternalEmitHelpers,
+};
 
-impl ExternalEmitHelpers {
-    pub const REST: ExternalEmitHelpers = ExternalEmitHelpers(1 << 0);
-    pub const DECORATE: ExternalEmitHelpers = ExternalEmitHelpers(1 << 1);
-    pub const PARAM: ExternalEmitHelpers = ExternalEmitHelpers(1 << 2);
-    pub const AWAITER: ExternalEmitHelpers = ExternalEmitHelpers(1 << 3);
-    pub const ASYNC_VALUES: ExternalEmitHelpers = ExternalEmitHelpers(1 << 4);
-    pub const ASYNC_GENERATOR_INCLUDES: ExternalEmitHelpers = ExternalEmitHelpers(1 << 5);
-    pub const EXPORT_STAR: ExternalEmitHelpers = ExternalEmitHelpers(1 << 6);
-    pub const IMPORT_STAR: ExternalEmitHelpers = ExternalEmitHelpers(1 << 7);
-    pub const IMPORT_DEFAULT: ExternalEmitHelpers = ExternalEmitHelpers(1 << 8);
-    pub const ADD_DISPOSABLE_RESOURCE_AND_DISPOSE_RESOURCES: ExternalEmitHelpers =
-        ExternalEmitHelpers(1 << 9);
-    pub const SET_FUNCTION_NAME: ExternalEmitHelpers = ExternalEmitHelpers(1 << 10);
-    pub const PROP_KEY: ExternalEmitHelpers = ExternalEmitHelpers(1 << 11);
-    /// Go: `ExternalEmitHelpersForAwaitOfIncludes = ExternalEmitHelpersAsyncValues`.
-    pub const FOR_AWAIT_OF_INCLUDES: ExternalEmitHelpers = ExternalEmitHelpers(1 << 4);
-    /// Go: `ExternalEmitHelpersESDecorateAndRunInitializers = Decorate | Param`.
-    pub const ES_DECORATE_AND_RUN_INITIALIZERS: ExternalEmitHelpers =
-        ExternalEmitHelpers((1 << 1) | (1 << 2));
+/// Go: the `externalHelpersModule`/`requestedExternalEmitHelpers` rows of
+/// checker.go's `sourceFileLinks` map (checker.go:29195/29113) — keyed by the
+/// source-file node id. PORT (FCS tranche 32).
+#[derive(Debug, Default)]
+pub(crate) struct ExternalHelpersFileLinks {
+    /// Whether `external_helpers_module` has been computed (Go:
+    /// `externalHelpersModule *ast.Symbol` starts nil; `unknownSymbol` is
+    /// the resolved-but-unfound answer — `None` here covers both).
+    pub(crate) resolved: bool,
+    /// Go: `externalHelpersModule *ast.Symbol` — the resolved "tslib"
+    /// module symbol (`unknownSymbol` on failure — `None`).
+    pub(crate) external_helpers_module: Option<SymbolId>,
+    /// Go: `requestedExternalEmitHelpers ExternalEmitHelpers` — the
+    /// already-requested helper union (each helper name is checked once).
+    pub(crate) requested_external_emit_helpers: ExternalEmitHelpers,
+    /// The port's synthetic `"tslib"` specifier node (Go's rides the
+    /// program's `importHelpersImportSpecifiers` map — the Program trait
+    /// seam hands back the string only; see resolve_helpers_module).
+    pub(crate) synthetic_specifier: Option<NodeId>,
 }
 
 /// Go: `LanguageFeatureMinimumTarget` (checker/types.go:1450-1490) — the
@@ -1665,6 +1668,7 @@ pub(crate) enum Feature {
     AsyncGenerators,
     ObjectSpreadRest,
     UsingAndAwaitUsing,
+    PrivateNamesAndClassStaticBlocks,
     ClassAndClassElementDecorators,
 }
 
@@ -1680,6 +1684,7 @@ impl Feature {
             Feature::AsyncGenerators => ScriptTarget::ES2018,
             Feature::ObjectSpreadRest => ScriptTarget::ES2018,
             Feature::UsingAndAwaitUsing => ScriptTarget::ESNext,
+            Feature::PrivateNamesAndClassStaticBlocks => ScriptTarget::ES2022,
             Feature::ClassAndClassElementDecorators => ScriptTarget::ESNext,
         }
     }
@@ -1907,13 +1912,217 @@ if candidates.is_empty() {
         true
     }
 
-    /// Go: `func (c *Checker) checkDestructuringAssignment(...)` (S4's
-    /// destructuring family). Permissive no-op.
-    /// Go: `func (c *Checker) checkExternalEmitHelpers(node, helpers)`
-    /// (checker.go:29105 — S10). Permissive no-op (the emit-helpers
-    /// context machinery is the emit wave's).
-    pub(crate) fn check_external_emit_helpers_stub(&mut self, node: NodeId, helpers: ExternalEmitHelpers) {
-        let _ = (node, helpers);
+    /// Go: `func (c *Checker) resolveHelpersModule(file, errorNode) *ast.Symbol`
+    /// (checker.go:29195 — the memoized `sourceFileLinks.externalHelpersModule`
+    /// resolution of the "tslib" external-helpers module).
+    ///
+    /// PORT (FCS tranche 32): Go's `location` (the mode-derivation context)
+    /// is the synthetic `"tslib"` import-specifier node the FILE LOADER
+    /// creates and parks in `program.importHelpersImportSpecifiers`; the
+    /// Rust Program trait's seam hands back the module-reference STRING only
+    /// (the compiler crate's node rides the program merge — the same shape as
+    /// the JSX react-jsx seam, checker.rs's `get_jsx_runtime_import_specifier`
+    /// PORT note), so the checker synthesizes the equivalent StringLiteral
+    /// node (parented to the source file — Go parents it to a synthetic
+    /// ImportDeclaration; neither parent passes a walk the mode derivation
+    /// makes: no resolution-mode override either way, so
+    /// `get_mode_for_usage_location` answers the file's emit syntax in both).
+    fn resolve_helpers_module(&mut self, source_file: NodeId, error_node: NodeId) -> Option<SymbolId> {
+        {
+            let links = self.external_helpers_links.entry(source_file).or_default();
+            if links.resolved {
+                return links.external_helpers_module;
+            }
+        }
+        let has_specifier = self
+            .program
+            .get_import_helpers_import_specifier(source_file)
+            .is_some();
+        let result = if has_specifier {
+            let specifier = match self
+                .external_helpers_links
+                .get(&source_file)
+                .expect("entry just created")
+                .synthetic_specifier
+            {
+                Some(spec) => spec,
+                None => {
+                    let loc = self.store().node(source_file).loc;
+                    let synthetic = tsc_ast::Node {
+                        kind: Kind::StringLiteral,
+                        flags: tsc_ast::NodeFlags::NONE,
+                        loc,
+                        id: std::cell::Cell::new(0),
+                        parent: std::cell::Cell::new(source_file),
+                        data: tsc_ast::NodeData::StringLiteral(Box::new(tsc_ast::StringLiteral {
+                            text: EXTERNAL_HELPERS_MODULE_NAME_TEXT.into(),
+                            token_flags: tsc_ast::TokenFlags::NONE,
+                        })),
+                    };
+                    let spec = self.program.node_store_mut().alloc(synthetic);
+                    self.external_helpers_links
+                        .get_mut(&source_file)
+                        .expect("entry just created")
+                        .synthetic_specifier = Some(spec);
+                    spec
+                }
+            };
+            self.resolve_external_module(
+                specifier,
+                EXTERNAL_HELPERS_MODULE_NAME_TEXT,
+                Some(&tsc_diagnostics::THIS_SYNTAX_REQUIRES_AN_IMPORTED_HELPER_BUT_MODULE_0_CANNOT_BE_FOUND),
+                Some(error_node),
+                false, /*isForAugmentation*/
+                None,  /*importAttributesType*/
+            )
+        } else {
+            // Go: `location` is nil (the loader created no synthetic import —
+            // its gate declined the file), so `errorNode` is nil too and the
+            // 2354 can never fire; resolveExternalModule still answers the
+            // ambient `"tslib"` module if one is declared. The Rust ladder
+            // needs a location node, so the ambient half is read directly
+            // (the resolved-module half requires Go's nil-location walk and
+            // is unreachable with a nil errorNode's no-diagnostic contract).
+            self.try_find_ambient_module_real(EXTERNAL_HELPERS_MODULE_NAME_TEXT, true)
+                .and_then(|ambient| {
+                    let empty = self.empty_object_type();
+                    self.try_resolve_pattern_ambient_module(Some(ambient), EXTERNAL_HELPERS_MODULE_NAME_TEXT, empty)
+                })
+        };
+        let links = self
+            .external_helpers_links
+            .get_mut(&source_file)
+            .expect("entry just created");
+        links.resolved = true;
+        links.external_helpers_module = result;
+        result
+    }
+
+    /// Go: `func (c *Checker) getHelperNames(helper) []string`
+    /// (checker.go:29147).
+    fn get_helper_names(&self, helper: ExternalEmitHelpers) -> Vec<&'static str> {
+        // PORT: Go's Decorate arm reads c.legacyDecorators.
+        match helper {
+            h if h == ExternalEmitHelpers::REST => vec!["__rest"],
+            h if h == ExternalEmitHelpers::DECORATE => {
+                if self.legacy_decorators {
+                    vec!["__decorate"]
+                } else {
+                    vec!["__esDecorate", "__runInitializers"]
+                }
+            }
+            h if h == ExternalEmitHelpers::METADATA => vec!["__metadata"],
+            h if h == ExternalEmitHelpers::PARAM => vec!["__param"],
+            h if h == ExternalEmitHelpers::AWAITER => vec!["__awaiter"],
+            h if h == ExternalEmitHelpers::AWAIT => vec!["__await"],
+            h if h == ExternalEmitHelpers::ASYNC_GENERATOR => vec!["__asyncGenerator"],
+            h if h == ExternalEmitHelpers::ASYNC_DELEGATOR => vec!["__asyncDelegator"],
+            h if h == ExternalEmitHelpers::ASYNC_VALUES => vec!["__asyncValues"],
+            h if h == ExternalEmitHelpers::EXPORT_STAR => vec!["__exportStar"],
+            h if h == ExternalEmitHelpers::IMPORT_STAR => vec!["__importStar"],
+            h if h == ExternalEmitHelpers::IMPORT_DEFAULT => vec!["__importDefault"],
+            h if h == ExternalEmitHelpers::MAKE_TEMPLATE_OBJECT => vec!["__makeTemplateObject"],
+            h if h == ExternalEmitHelpers::CLASS_PRIVATE_FIELD_GET => vec!["__classPrivateFieldGet"],
+            h if h == ExternalEmitHelpers::CLASS_PRIVATE_FIELD_SET => vec!["__classPrivateFieldSet"],
+            h if h == ExternalEmitHelpers::CLASS_PRIVATE_FIELD_IN => vec!["__classPrivateFieldIn"],
+            h if h == ExternalEmitHelpers::SET_FUNCTION_NAME => vec!["__setFunctionName"],
+            h if h == ExternalEmitHelpers::PROP_KEY => vec!["__propKey"],
+            h if h == ExternalEmitHelpers::ADD_DISPOSABLE_RESOURCE_AND_DISPOSE_RESOURCES => {
+                vec!["__addDisposableResource", "__disposeResources"]
+            }
+            h if h == ExternalEmitHelpers::REWRITE_RELATIVE_IMPORT_EXTENSION => {
+                vec!["__rewriteRelativeImportExtension"]
+            }
+            _ => panic!("Unrecognized helper"),
+        }
+    }
+
+    /// Go: `func (c *Checker) hasSignatureWithArityGreaterThan(symbol, arity) bool`
+    /// (checker.go:29142).
+    fn has_signature_with_arity_greater_than(&mut self, symbol: SymbolId, arity: i32) -> bool {
+        for signature in self.get_signatures_of_symbol(Some(symbol)) {
+            if self.get_parameter_count(signature) > arity {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) checkExternalEmitHelpers(location, helpers)`
+    /// (checker.go:29105) — REAL (FCS tranche 32; was the permissive no-op
+    /// stub): the importHelpers gate, the effective-external-module gate,
+    /// the memoized "tslib" resolution (one TS2354 per source file, at the
+    /// FIRST helper-requiring syntax node) and the per-helper-name
+    /// TS2343/TS2807 ladder.
+    pub(crate) fn check_external_emit_helpers(&mut self, location: NodeId, helpers: ExternalEmitHelpers) {
+        if !self.compiler_options.import_helpers.is_true() {
+            return;
+        }
+        let source_file = match tsc_ast::utilities::get_source_file_of_node(self.store(), location) {
+            Some(file) => file,
+            None => return,
+        };
+        if !crate::grammarchecks::is_effective_external_module(source_file, self.module_kind)
+            || self.store().node(location).flags.intersects(tsc_ast::NodeFlags::AMBIENT)
+        {
+            return;
+        }
+        let source_file = source_file.as_node_id();
+        let helpers_module = match self.resolve_helpers_module(source_file, location) {
+            Some(module) => module,
+            None => return, // Go: `helpersModule == c.unknownSymbol`
+        };
+        let requested = self
+            .external_helpers_links
+            .get(&source_file)
+            .expect("resolve_helpers_module entry")
+            .requested_external_emit_helpers;
+        if !requested.contains(helpers) {
+            let unchecked_helpers = ExternalEmitHelpers(helpers.bits() & !requested.bits());
+            let mut helper = ExternalEmitHelpers::FIRST_EMIT_HELPER;
+            while helper.bits() <= ExternalEmitHelpers::LAST_EMIT_HELPER.bits() {
+                if unchecked_helpers.intersects(helper) {
+                    for name in self.get_helper_names(helper) {
+                        let exports = self.get_exports_of_module(helpers_module);
+                        let symbol = self
+                            .get_symbol(&exports, name, SymbolFlags::VALUE)
+                            .map(|symbol| self.resolve_symbol(symbol));
+                        match symbol {
+                            None => {
+                                self.error(
+                                    location,
+                                    &tsc_diagnostics::THIS_SYNTAX_REQUIRES_AN_IMPORTED_HELPER_NAMED_1_WHICH_DOES_NOT_EXIST_IN_0_CONSIDER_UPGRADING_YOUR_VERSION_OF_0,
+                                    &[EXTERNAL_HELPERS_MODULE_NAME_TEXT.to_string(), name.to_string()],
+                                );
+                            }
+                            Some(symbol) if helper.contains(ExternalEmitHelpers::CLASS_PRIVATE_FIELD_GET) => {
+                                if !self.has_signature_with_arity_greater_than(symbol, 3) {
+                                    self.error(
+                                        location,
+                                        &tsc_diagnostics::THIS_SYNTAX_REQUIRES_AN_IMPORTED_HELPER_NAMED_1_WITH_2_PARAMETERS_WHICH_IS_NOT_COMPATIBLE_WITH_THE_ONE_IN_0_CONSIDER_UPGRADING_YOUR_VERSION_OF_0,
+                                        &[EXTERNAL_HELPERS_MODULE_NAME_TEXT.to_string(), name.to_string(), "4".to_string()],
+                                    );
+                                }
+                            }
+                            Some(symbol) if helper.contains(ExternalEmitHelpers::CLASS_PRIVATE_FIELD_SET) => {
+                                if !self.has_signature_with_arity_greater_than(symbol, 4) {
+                                    self.error(
+                                        location,
+                                        &tsc_diagnostics::THIS_SYNTAX_REQUIRES_AN_IMPORTED_HELPER_NAMED_1_WITH_2_PARAMETERS_WHICH_IS_NOT_COMPATIBLE_WITH_THE_ONE_IN_0_CONSIDER_UPGRADING_YOUR_VERSION_OF_0,
+                                        &[EXTERNAL_HELPERS_MODULE_NAME_TEXT.to_string(), name.to_string(), "5".to_string()],
+                                    );
+                                }
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                }
+                helper = ExternalEmitHelpers(helper.bits() << 1);
+            }
+            let links = self.external_helpers_links.get_mut(&source_file).expect("entry");
+            links.requested_external_emit_helpers =
+                links.requested_external_emit_helpers.union(helpers);
+        }
     }
 
     /// Go: `func (c *Checker) checkAwaitedType(t, withAlias, errorNode, message)`
@@ -3835,7 +4044,7 @@ impl Checker {
         if (block_scope_kind == NF::USING || block_scope_kind == NF::AWAIT_USING)
             && self.language_version < Feature::UsingAndAwaitUsing.minimum_target()
         {
-            self.check_external_emit_helpers_stub(
+            self.check_external_emit_helpers(
                 node,
                 ExternalEmitHelpers::ADD_DISPOSABLE_RESOURCE_AND_DISPOSE_RESOURCES,
             );
@@ -3933,7 +4142,7 @@ impl Checker {
                 && has_dot_dot_dot_token(self.store(), node)
                 && self.language_version < Feature::ObjectSpreadRest.minimum_target()
             {
-                self.check_external_emit_helpers_stub(node, ExternalEmitHelpers::REST);
+                self.check_external_emit_helpers(node, ExternalEmitHelpers::REST);
             }
             // check computed properties inside property names of binding
             // elements (Go: checkComputedPropertyName, checker.go:6011 —
@@ -4374,9 +4583,59 @@ impl Checker {
         };
         if !crate::resolvecall::can_have_decorators(self.store().node(node))
             || !crate::grammarchecks::has_decorators(self.store(), node)
-            || !self.node_can_be_decorated(node, parent, grandparent)
+            || !self.node_can_be_decorated(self.legacy_decorators, node, parent, grandparent)
         {
             return;
+        }
+        // PORT (FCS tranche 32): Go checker.go:6228-6252 — the
+        // firstDecorator emit-helper requests (the TS2354 family: the
+        // memoized "tslib" resolution fires its one 2354 per source file
+        // at the FIRST helper-requiring syntax node — here firstDecorator).
+        let first_decorator = modifier_nodes_of(self.store(), node)
+            .into_iter()
+            .find(|&modifier| self.store().node(modifier).kind == Kind::Decorator);
+        let Some(first_decorator) = first_decorator else {
+            return;
+        };
+        if self.legacy_decorators {
+            self.check_external_emit_helpers(first_decorator, ExternalEmitHelpers::DECORATE);
+            if self.store().node(node).kind == Kind::Parameter {
+                self.check_external_emit_helpers(first_decorator, ExternalEmitHelpers::PARAM);
+            }
+        } else if self.language_version < Feature::ClassAndClassElementDecorators.minimum_target()
+        {
+            self.check_external_emit_helpers(
+                first_decorator,
+                ExternalEmitHelpers::ES_DECORATE_AND_RUN_INITIALIZERS,
+            );
+            if self.store().node(node).kind == Kind::ClassDeclaration {
+                if self.store().node(node).name().is_none()
+                    || self.get_first_transformable_static_class_element(node).is_some()
+                {
+                    self.check_external_emit_helpers(
+                        first_decorator,
+                        ExternalEmitHelpers::SET_FUNCTION_NAME,
+                    );
+                }
+            } else if self.store().node(node).kind != Kind::ClassExpression {
+                let name = self.store().node(node).name();
+                if name.is_some_and(|name| {
+                    tsc_ast::ast_generated::is_private_identifier(self.store().node(name))
+                        && (self.store().node(node).kind == Kind::MethodDeclaration
+                            || crate::grammarchecks::is_accessor(self.store().node(node))
+                            || tsc_binder::ast_shims::is_auto_accessor_property_declaration(
+                                self.store().node(node),
+                            ))
+                }) {
+                    self.check_external_emit_helpers(
+                        first_decorator,
+                        ExternalEmitHelpers::SET_FUNCTION_NAME,
+                    );
+                }
+                if name.is_some_and(|name| self.store().node(name).kind == Kind::ComputedPropertyName) {
+                    self.check_external_emit_helpers(first_decorator, ExternalEmitHelpers::PROP_KEY);
+                }
+            }
         }
         for modifier in modifier_nodes_of(self.store(), node) {
             if self.store().node(modifier).kind == Kind::Decorator {
@@ -4385,13 +4644,70 @@ impl Checker {
         }
     }
 
+    /// Go: `func (c *Checker) getFirstTransformableStaticClassElement(node) *ast.Node`
+    /// (checker.go:10279) — the first class member the downlevel decorator
+    /// transform rewrites. PORT (FCS tranche 32).
+    pub(crate) fn get_first_transformable_static_class_element(&self, node: NodeId) -> Option<NodeId> {
+        let will_transform_static_elements_of_decorated_class = !self.legacy_decorators
+            && self.language_version < Feature::ClassAndClassElementDecorators.minimum_target()
+            && class_or_constructor_parameter_is_decorated(self, false, node);
+        let will_transform_private_elements_or_class_static_blocks = self.language_version
+            < Feature::PrivateNamesAndClassStaticBlocks.minimum_target()
+            || self.language_version < Feature::ClassAndClassElementDecorators.minimum_target();
+        let will_transform_initializers = !self.emit_standard_class_fields;
+        let members = tsc_binder::node_data::members_of(self.store(), node);
+        if !(will_transform_static_elements_of_decorated_class
+            || will_transform_private_elements_or_class_static_blocks)
+        {
+            return None;
+        }
+        for member in members {
+            if will_transform_static_elements_of_decorated_class
+                && class_element_or_class_element_parameter_is_decorated(self, false, *member, node)
+            {
+                if let Some(first_decorator) = modifier_nodes_of(self.store(), node)
+                    .into_iter()
+                    .find(|&modifier| self.store().node(modifier).kind == Kind::Decorator)
+                {
+                    return Some(first_decorator);
+                }
+                return Some(node);
+            } else if will_transform_private_elements_or_class_static_blocks {
+                // Go: `if IsClassStaticBlockDeclaration { return member } else
+                // if IsStatic && (...) { return member }` — both branches
+                // return the member; combined (clippy if-same-then-else),
+                // same evaluation semantics (no side effects either side).
+                let is_static_block =
+                    self.store().node(*member).kind == Kind::ClassStaticBlockDeclaration;
+                let static_transformable = u::is_static(self.store(), self.store().node(*member))
+                    && (tsc_ast::utilities::is_private_identifier_class_element_declaration(
+                        self.store(),
+                        *member,
+                    ) || (will_transform_initializers
+                        && is_initialized_property(self.store(), *member)));
+                if is_static_block || static_transformable {
+                    return Some(*member);
+                }
+            }
+        }
+        None
+    }
+
     /// Go: `func ast.NodeCanBeDecorated(useLegacyDecorators, node, parent, grandparent) bool`
-    /// (ast/utilities.go:4327) — PORT (FCS tranche 29).
-    fn node_can_be_decorated(&self, node: NodeId, parent: NodeId, grandparent: NodeId) -> bool {
+    /// (ast/utilities.go:4327) — PORT (FCS tranche 29); FCS tranche 32 added
+    /// the `use_legacy` parameter (the decorator-predicate family reads it
+    /// with `false` like Go's getFirstTransformableStaticClassElement call).
+    fn node_can_be_decorated(
+        &self,
+        use_legacy: bool,
+        node: NodeId,
+        parent: NodeId,
+        grandparent: NodeId,
+    ) -> bool {
         let store = self.store();
         let n = store.node(node);
         // private names cannot be used with decorators yet (Go's comment).
-        if self.legacy_decorators
+        if use_legacy
             && n.name().is_some_and(|name| {
                 tsc_ast::ast_generated::is_private_identifier(store.node(name))
             })
@@ -4404,14 +4720,14 @@ impl Checker {
             // class declarations are valid targets (Go's comment).
             Kind::ClassDeclaration => true,
             // class expressions are valid targets for native decorators (Go's comment).
-            Kind::ClassExpression => !self.legacy_decorators,
+            Kind::ClassExpression => !use_legacy,
             // property declarations are valid if their parent is a class
             // declaration (Go's comment).
             Kind::PropertyDeclaration => {
                 parent_ok
-                    && (self.legacy_decorators
+                    && (use_legacy
                         && tsc_ast::is_class_declaration(store.node(parent))
-                        || !self.legacy_decorators
+                        || !use_legacy
                             && tsc_binder::ast_shims::is_class_like(store.node(parent))
                             && !crate::grammarchecks::has_abstract_modifier(n)
                             && !crate::grammarchecks::has_ambient_modifier(n))
@@ -4421,15 +4737,15 @@ impl Checker {
             Kind::GetAccessor | Kind::SetAccessor | Kind::MethodDeclaration => {
                 parent_ok
                     && function_body_of(store, node).is_some()
-                    && (self.legacy_decorators
+                    && (use_legacy
                         && tsc_ast::is_class_declaration(store.node(parent))
-                        || !self.legacy_decorators
+                        || !use_legacy
                             && tsc_binder::ast_shims::is_class_like(store.node(parent)))
             }
             // TODO(rbuckton): ParameterDeclaration decorator support for ES
             // decorators must wait until it is standardized (Go's comment).
             Kind::Parameter => {
-                if !self.legacy_decorators {
+                if !use_legacy {
                     return false;
                 }
                 // if the parameter's parent has a body and its grandparent is
@@ -5404,10 +5720,293 @@ pub(crate) fn binding_pattern_elements(store: &dyn NodeStore, pattern: NodeId) -
     list.map(|l| l.nodes.to_vec()).unwrap_or_default()
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// The decorator ast-predicate family (Go ast/utilities.go:4345-4470) —
+// PORT (FCS tranche 32): read by getFirstTransformableStaticClassElement /
+// checkClassExpressionExternalHelpers (the SetFunctionName/PropKey emit-
+// helper requests).
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Go: `func NodeIsDecorated(useLegacyDecorators, node, parent, grandparent) bool`
+/// (ast/utilities.go:4345).
+pub(crate) fn node_is_decorated(
+    c: &Checker,
+    use_legacy: bool,
+    node: NodeId,
+    parent: NodeId,
+    grandparent: NodeId,
+) -> bool {
+    crate::grammarchecks::has_decorators(c.store(), node)
+        && c.node_can_be_decorated(use_legacy, node, parent, grandparent)
+}
+
+/// Go: `func NodeOrChildIsDecorated(useLegacyDecorators, node, parent, grandparent) bool`
+/// (ast/utilities.go:4349).
+pub(crate) fn node_or_child_is_decorated(
+    c: &Checker,
+    use_legacy: bool,
+    node: NodeId,
+    parent: NodeId,
+    grandparent: NodeId,
+) -> bool {
+    node_is_decorated(c, use_legacy, node, parent, grandparent)
+        || child_is_decorated(c, use_legacy, node, parent)
+}
+
+/// Go: `func ChildIsDecorated(useLegacyDecorators, node, parent) bool`
+/// (ast/utilities.go:4355).
+pub(crate) fn child_is_decorated(c: &Checker, use_legacy: bool, node: NodeId, parent: NodeId) -> bool {
+    match c.store().node(node).kind {
+        Kind::ClassDeclaration | Kind::ClassExpression => {
+            let members = tsc_binder::node_data::members_of(c.store(), node);
+            members
+                .iter()
+                .any(|&member| node_or_child_is_decorated(c, use_legacy, member, node, parent))
+        }
+        Kind::MethodDeclaration | Kind::SetAccessor | Kind::Constructor => {
+            let parameters = crate::ast_shims::parameters_of(c.store(), node);
+            parameters
+                .iter()
+                .any(|&parameter| node_is_decorated(c, use_legacy, parameter, node, parent))
+        }
+        _ => false,
+    }
+}
+
+/// Go: `func GetFirstConstructorWithBody(node) *Node` (ast/utilities.go).
+fn get_first_constructor_with_body(store: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
+    tsc_binder::node_data::members_of(store, node)
+        .iter()
+        .copied()
+        .find(|&member| {
+            store.node(member).kind == Kind::Constructor
+                && function_body_of(store, member).is_some()
+        })
+}
+
+/// Go: `type AllAccessorDeclarations` (ast/utilities.go:4429) — the rows
+/// `ClassElementOrClassElementParameterIsDecorated` reads.
+struct AllAccessorDeclarations {
+    first_accessor: Option<NodeId>,
+    second_accessor: Option<NodeId>,
+    set_accessor: Option<NodeId>,
+}
+
+/// Go: `func ClassOrConstructorParameterIsDecorated(useLegacyDecorators, node) bool`
+/// (ast/utilities.go:4361).
+pub(crate) fn class_or_constructor_parameter_is_decorated(
+    c: &Checker,
+    use_legacy: bool,
+    node: NodeId,
+) -> bool {
+    if node_is_decorated(c, use_legacy, node, NodeId::NONE, NodeId::NONE) {
+        return true;
+    }
+    match get_first_constructor_with_body(c.store(), node) {
+        Some(constructor) => child_is_decorated(c, use_legacy, constructor, node),
+        None => false,
+    }
+}
+
+/// Go: `func ClassElementOrClassElementParameterIsDecorated(useLegacyDecorators, node, parent) bool`
+/// (ast/utilities.go:4369).
+pub(crate) fn class_element_or_class_element_parameter_is_decorated(
+    c: &Checker,
+    use_legacy: bool,
+    node: NodeId,
+    parent: NodeId,
+) -> bool {
+    let store = c.store();
+    let mut parameters: Option<Vec<NodeId>> = None;
+    if crate::grammarchecks::is_accessor(store.node(node)) {
+        let members = tsc_binder::node_data::members_of(store, parent);
+        let decls = get_all_accessor_declarations(members, node, c);
+        let first_accessor_with_decorators = if crate::grammarchecks::has_decorators(store, decls.first_accessor.expect("first accessor")) {
+            decls.first_accessor
+        } else if decls
+            .second_accessor
+            .is_some_and(|second| crate::grammarchecks::has_decorators(store, second))
+        {
+            decls.second_accessor
+        } else {
+            None
+        };
+        if first_accessor_with_decorators.is_none() || first_accessor_with_decorators != Some(node) {
+            return false;
+        }
+        if let Some(set_accessor) = decls.set_accessor {
+            parameters = Some(crate::ast_shims::parameters_of(store, set_accessor).to_vec());
+        }
+    } else if store.node(node).kind == Kind::MethodDeclaration {
+        parameters = Some(crate::ast_shims::parameters_of(store, node).to_vec());
+    }
+    if node_is_decorated(c, use_legacy, node, parent, NodeId::NONE) {
+        return true;
+    }
+    if let Some(parameters) = parameters {
+        for parameter in parameters {
+            if crate::ast_shims::is_this_parameter(store, parameter) {
+                continue;
+            }
+            if node_is_decorated(c, use_legacy, parameter, node, parent) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Go: `func GetAllAccessorDeclarations(parentDeclarations, accessor)` —
+/// the member-list twin (HasDynamicName takes the solo-accessor path; the
+/// matching pairs share the property name and staticness).
+fn get_all_accessor_declarations(
+    parent_declarations: &[NodeId],
+    accessor: NodeId,
+    c: &Checker,
+) -> AllAccessorDeclarations {
+    let store = c.store();
+    if tsc_binder::ast_shims::has_dynamic_name(store, accessor) {
+        // dynamic names can only be matched up via checker symbol lookup;
+        // just return an object with just this accessor (Go's comment).
+        return AllAccessorDeclarations {
+            first_accessor: Some(accessor),
+            second_accessor: None,
+            set_accessor: if store.node(accessor).kind == Kind::SetAccessor {
+                Some(accessor)
+            } else {
+                None
+            },
+        };
+    }
+    let accessor_kind = store.node(accessor).kind;
+    let other_kind = if accessor_kind == Kind::SetAccessor {
+        Kind::GetAccessor
+    } else if accessor_kind == Kind::GetAccessor {
+        Kind::SetAccessor
+    } else {
+        panic!("Unexpected node kind {:?}", accessor_kind)
+    };
+    let accessor_name = store.node(accessor).name().map(|name| crate::ast_shims::get_property_name_for_property_name_node(store, name));
+    let accessor_static = u::is_static(store, store.node(accessor));
+    let matches: Vec<NodeId> = parent_declarations
+        .iter()
+        .copied()
+        .filter(|&member| {
+            crate::grammarchecks::is_accessor(store.node(member))
+                && u::is_static(store, store.node(member)) == accessor_static
+                && store
+                    .node(member)
+                    .name()
+                    .map(|name| crate::ast_shims::get_property_name_for_property_name_node(store, name))
+                    == accessor_name
+        })
+        .collect();
+    // Go: GetAllAccessorDeclarationsForDeclaration over the matches.
+    let other_accessor = matches.iter().copied().find(|&d| store.node(d).kind == other_kind);
+    let (first_accessor, second_accessor) = match other_accessor {
+        Some(other) if store.node(other).pos() < store.node(accessor).pos() => {
+            (Some(other), Some(accessor))
+        }
+        _ => (Some(accessor), other_accessor),
+    };
+    let set_accessor = if accessor_kind == Kind::SetAccessor {
+        Some(accessor)
+    } else {
+        other_accessor.filter(|&other| store.node(other).kind == Kind::SetAccessor)
+    };
+    AllAccessorDeclarations {
+        first_accessor,
+        second_accessor,
+        set_accessor,
+    }
+}
+
+/// Go: `func IsInitializedProperty(node) bool` — a property declaration
+/// with an initializer (the downlevel class-fields transform target).
+fn is_initialized_property(store: &dyn NodeStore, node: NodeId) -> bool {
+    store.node(node).kind == Kind::PropertyDeclaration
+        && store
+            .node(node)
+            .as_property_declaration()
+            .is_some_and(|d| d.initializer.is_some())
+}
+
+/// Go: `func ast.IsNamedEvaluationSource(node) bool` (ast/utilities.go) —
+/// the anonymous-class-expression naming positions. PORT (FCS tranche 32;
+/// read by checkClassExpressionExternalHelpers).
+pub(crate) fn is_named_evaluation_source(store: &dyn NodeStore, node: NodeId) -> bool {
+    let n = store.node(node);
+    match n.kind {
+        Kind::PropertyAssignment => !is_proto_setter(
+            store,
+            n.as_property_assignment()
+                .expect("PropertyAssignment data")
+                .name,
+        ),
+        Kind::ShorthandPropertyAssignment => n
+            .as_shorthand_property_assignment()
+            .expect("ShorthandPropertyAssignment data")
+            .object_assignment_initializer
+            .is_some(),
+        Kind::VariableDeclaration => {
+            tsc_ast::is_identifier(store.node(n.name().expect("name")))
+                && n.as_variable_declaration()
+                    .expect("VariableDeclaration data")
+                    .initializer
+                    .is_some()
+        }
+        Kind::Parameter => {
+            tsc_ast::is_identifier(store.node(n.name().expect("name")))
+                && n.as_parameter_declaration()
+                    .expect("Parameter data")
+                    .initializer
+                    .is_some()
+                && n.as_parameter_declaration()
+                    .expect("Parameter data")
+                    .dot_dot_dot_token
+                    .is_none()
+        }
+        Kind::BindingElement => {
+            tsc_ast::is_identifier(store.node(n.name().expect("name")))
+                && n.as_binding_element()
+                    .expect("BindingElement data")
+                    .initializer
+                    .is_some()
+                && n.as_binding_element()
+                    .expect("BindingElement data")
+                    .dot_dot_dot_token
+                    .is_none()
+        }
+        Kind::PropertyDeclaration => n
+            .as_property_declaration()
+            .expect("PropertyDeclaration data")
+            .initializer
+            .is_some(),
+        Kind::BinaryExpression => {
+            let d = n.as_binary_expression().expect("BinaryExpression data");
+            matches!(
+                store.node(d.operator_token).kind,
+                Kind::EqualsToken
+                    | Kind::AmpersandAmpersandEqualsToken
+                    | Kind::BarBarEqualsToken
+                    | Kind::QuestionQuestionEqualsToken
+            ) && tsc_ast::is_identifier(store.node(d.left))
+        }
+        Kind::ExportAssignment => true,
+        _ => false,
+    }
+}
+
+/// Go: `func ast.IsProtoSetter(name) bool` — the `__proto__` setter name
+/// is NOT a named-evaluation source.
+fn is_proto_setter(store: &dyn NodeStore, name: NodeId) -> bool {
+    tsc_ast::is_identifier(store.node(name)) && tsc_ast::node_text(store, name) == "__proto__"
+}
+
+
 /// Go: `node.ModifierNodes()` (the modifier list's nodes; decorators ride in
 /// the same list).
-pub(crate) fn modifier_nodes_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> {
-    store
+pub(crate) fn modifier_nodes_of(store: &dyn NodeStore, node: NodeId) -> Vec<NodeId> {    store
         .node(node)
         .modifiers()
         .map(|m| m.nodes.to_vec())
@@ -6716,7 +7315,7 @@ impl Checker {
             if function_flags == FunctionFlags::ASYNC_GENERATOR
                 && self.language_version < Feature::AsyncGenerators.minimum_target()
             {
-                self.check_external_emit_helpers_stub(
+                self.check_external_emit_helpers(
                     node,
                     ExternalEmitHelpers::ASYNC_GENERATOR_INCLUDES,
                 );
@@ -6724,7 +7323,7 @@ impl Checker {
             if function_flags == FunctionFlags::ASYNC
                 && self.language_version < Feature::AsyncFunctions.minimum_target()
             {
-                self.check_external_emit_helpers_stub(node, ExternalEmitHelpers::AWAITER);
+                self.check_external_emit_helpers(node, ExternalEmitHelpers::AWAITER);
             }
         }
         let type_parameters = type_parameters_of(self.store(), node);
@@ -11322,10 +11921,15 @@ impl Checker {
                 if let Some(named_bindings) = named_bindings {
                     if tsc_ast::is_namespace_import(self.store().node(named_bindings)) {
                         self.check_import_binding(named_bindings);
-                        if self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS {
+                        // PORT (FCS tranche 32): Go uses the REAL per-file
+                        // emit format here (checker.go:5450
+                        // GetEmitModuleFormatOfFile) — the module_kind
+                        // approximation misses node16/nodenext per-file
+                        // formats (the twin's .ts unit answers CommonJS).
+                        if self.program.get_emit_module_format_of_file(node) == ModuleKind::CommonJS {
                             // import * as ns from "foo";
                             needs_import_star = true;
-                            self.check_external_emit_helpers_stub(
+                            self.check_external_emit_helpers(
                                 node,
                                 ExternalEmitHelpers::IMPORT_STAR,
                             );
@@ -11357,10 +11961,12 @@ impl Checker {
                 }
                 if clause_name.is_some()
                     && !needs_import_star
-                    && self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS
+                    // PORT (FCS tranche 32): Go checker.go:5466 — the REAL
+                    // per-file emit format (was the module_kind seam).
+                    && self.program.get_emit_module_format_of_file(node) == ModuleKind::CommonJS
                 {
                     // import d from "foo";
-                    self.check_external_emit_helpers_stub(
+                    self.check_external_emit_helpers(
                         node,
                         ExternalEmitHelpers::IMPORT_DEFAULT,
                     );
@@ -11482,9 +12088,11 @@ impl Checker {
             if tsc_binder::ast_shims::module_export_name_is_default(
                 self.store(),
                 property_name_or_name,
-            ) && self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS
+            // PORT (FCS tranche 32): Go checker.go:5533 — the REAL per-file
+            // emit format (was the module_kind seam).
+            ) && self.program.get_emit_module_format_of_file(node) == ModuleKind::CommonJS
             {
-                self.check_external_emit_helpers_stub(
+                self.check_external_emit_helpers(
                     node,
                     ExternalEmitHelpers::IMPORT_DEFAULT,
                 );
@@ -11874,16 +12482,18 @@ impl Checker {
                     let name = self.store().node(export_clause).name();
                     self.check_module_export_name(name, true /*allowStringLiteral*/);
                 }
-                if self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS {
+                // PORT (FCS tranche 32): Go checker.go:5710 — the REAL
+                // per-file emit format (was the module_kind seam).
+                if self.program.get_emit_module_format_of_file(node) == ModuleKind::CommonJS {
                     if export_clause.is_some() {
                         // export * as ns from "foo";
-                        self.check_external_emit_helpers_stub(
+                        self.check_external_emit_helpers(
                             node,
                             ExternalEmitHelpers::IMPORT_STAR,
                         );
                     } else {
                         // export * from "foo"
-                        self.check_external_emit_helpers_stub(
+                        self.check_external_emit_helpers(
                             node,
                             ExternalEmitHelpers::EXPORT_STAR,
                         );
@@ -11988,13 +12598,15 @@ impl Checker {
             }
             // TODO(port M6 S?): markLinkedReferences (ReferenceHintExportSpecifier)
             // — the reference-marking seam; permissive no-op.
-        } else if self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS
+        // PORT (FCS tranche 32): Go checker.go:5756 — the REAL per-file
+        // emit format (was the module_kind seam).
+        } else if self.program.get_emit_module_format_of_file(node) == ModuleKind::CommonJS
             && tsc_binder::ast_shims::module_export_name_is_default(
                 self.store(),
                 property_name_or_name,
             )
         {
-            self.check_external_emit_helpers_stub(node, ExternalEmitHelpers::IMPORT_DEFAULT);
+            self.check_external_emit_helpers(node, ExternalEmitHelpers::IMPORT_DEFAULT);
         }
     }
 

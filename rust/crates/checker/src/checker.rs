@@ -201,6 +201,20 @@ pub trait Program {
     fn get_jsx_runtime_import_specifier(&self, _file: NodeId) -> Option<String> {
         None
     }
+    /// Go: `Program.GetImportHelpersImportSpecifier(path) *ast.StringLiteralNode`
+    /// (program.go:2235 — the file loader's synthetic `"tslib"` import node
+    /// under `importHelpers`, the location/`externalHelpersModuleNameText`
+    /// `resolveHelpersModule` resolves, checker.go:29195). PORT (FCS
+    /// tranche 32): the trait hands back the module-reference STRING only
+    /// (Go's synthetic specifier NODE rides the program merge — the same
+    /// shape as the JSX seam above); the checker synthesizes the equivalent
+    /// node for the mode walk. The permissive default mirrors a program
+    /// with no importHelpers auto-import data; the check twin's
+    /// CheckerUnitProgram carries the twin answer (the compiler crate's
+    /// Program owns the real map — outside this wave's write scope).
+    fn get_import_helpers_import_specifier(&self, _file: NodeId) -> Option<String> {
+        None
+    }
     /// Go: the importing source file's `FileName()` (checker.go:15508's
     /// `ast.GetSourceFileOfNode(location).FileName()` — the
     /// suggested-extension directory resolution) — the per-file name the
@@ -301,6 +315,11 @@ pub struct Checker {
     pub(crate) shard: u16,
     pub(crate) program: Box<dyn Program>,
     pub(crate) compiler_options: CompilerOptions,
+    /// Go: the `externalHelpersModule`/`requestedExternalEmitHelpers` rows
+    /// of `sourceFileLinks` (checker.go's `c.sourceFileLinks.Get(file)`),
+    /// keyed by the source-file node id — PORT (FCS tranche 32): added with
+    /// the REAL checkExternalEmitHelpers/resolveHelpersModule.
+    pub(crate) external_helpers_links: FxHashMap<NodeId, crate::statements::ExternalHelpersFileLinks>,
     /// Go: `fileIndexMap map[*ast.SourceFile]int` — keyed by the source
     /// file's node id (the §5.1 file identity).
     pub(crate) file_index_map: FxHashMap<u64, usize>,
@@ -1650,6 +1669,7 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         shard: id as u16,
         program,
         compiler_options: compiler_options.clone(),
+        external_helpers_links: FxHashMap::default(),
         file_index_map,
         type_count: 0,
         symbol_count: 0,

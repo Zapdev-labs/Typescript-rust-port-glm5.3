@@ -865,9 +865,20 @@ impl Checker {
             return self.silent_never_type();
         }
         if self.store().node(left).kind == Kind::PrivateIdentifier {
-            // TODO(port M6 W3/S10): the emit-helper gate on target/ decorators
-            // (checkExternalEmitHelpers ClassPrivateFieldIn) — permissive
-            // skip; the helper machinery is the emit wave's.
+            // PORT (FCS tranche 32): Go checker.go:13326-13331 — the
+            // __classPrivateFieldIn request (checker.go's downlevel-private
+            // transform gate).
+            if self.language_version
+                < crate::statements::Feature::PrivateNamesAndClassStaticBlocks.minimum_target()
+                || self.language_version
+                    < crate::statements::Feature::ClassAndClassElementDecorators.minimum_target()
+                || !self.compiler_options.get_use_define_for_class_fields()
+            {
+                self.check_external_emit_helpers(
+                    left,
+                    crate::statements::ExternalEmitHelpers::CLASS_PRIVATE_FIELD_IN,
+                );
+            }
             // Unlike in 'checkPrivateIdentifierExpression' we now have access to the RHS type
             // which provides us with the opportunity to emit more detailed errors
             if self.symbol_node_links.get(left).resolved_symbol.is_none()
@@ -2709,7 +2720,17 @@ impl Checker {
         if asterisk_token.is_some() {
             // Async generator functions prior to ES2018 require the __await, __asyncDelegator,
             // and __asyncValues helpers
-            // TODO(port M6 W3/S10): checkExternalEmitHelpers — permissive skip.
+            // PORT (FCS tranche 32): Go checker.go:11212 — REAL now
+            // (was the permissive skip).
+            if is_async
+                && self.language_version
+                    < crate::statements::Feature::AsyncGenerators.minimum_target()
+            {
+                self.check_external_emit_helpers(
+                    node,
+                    crate::statements::ExternalEmitHelpers::ASYNC_DELEGATOR_INCLUDES,
+                );
+            }
         }
         // There is no point in doing an assignability check if the function
         // has no explicit return type because the return type is directly computed
@@ -3207,8 +3228,28 @@ impl Checker {
             u::is_type_any(Some(self.type_(apparent_type))) || apparent_type == self.silent_never_type();
         let mut prop: Option<SymbolId> = None;
         if self.store().node(right).kind == Kind::PrivateIdentifier {
-            // (Go's emit-helper arms for downlevel private names run under
-            // checkExternalEmitHelpers — TODO(port M6 W3/S10).)
+            // PORT (FCS tranche 32): Go checker.go:11497-11512 — the
+            // __classPrivateFieldSet/__classPrivateFieldGet requests (the
+            // downlevel-private transform gate; was the permissive skip).
+            if self.language_version
+                < crate::statements::Feature::PrivateNamesAndClassStaticBlocks.minimum_target()
+                || self.language_version
+                    < crate::statements::Feature::ClassAndClassElementDecorators.minimum_target()
+                || !self.compiler_options.get_use_define_for_class_fields()
+            {
+                if assignment_kind != u::AssignmentKind::None {
+                    self.check_external_emit_helpers(
+                        node,
+                        crate::statements::ExternalEmitHelpers::CLASS_PRIVATE_FIELD_SET,
+                    );
+                }
+                if assignment_kind != u::AssignmentKind::Definite {
+                    self.check_external_emit_helpers(
+                        node,
+                        crate::statements::ExternalEmitHelpers::CLASS_PRIVATE_FIELD_GET,
+                    );
+                }
+            }
             let right_text = tsc_ast::node_text(self.store(), right).to_string();
             let lexically_scoped_symbol =
                 self.lookup_symbol_for_private_identifier_declaration(&right_text, right);
@@ -7979,14 +8020,54 @@ impl Checker {
         self.get_type_of_symbol(symbol)
     }
 
-    /// Go: `func (c *Checker) checkClassExpressionExternalHelpers(node)` (checker.go:10289)
-    /// — the emit-helpers probe. Permissive (W5's checkExternalEmitHelpers
-    /// seam is the no-op carrier).
+    /// Go: `func (c *Checker) checkClassExpressionExternalHelpers(node)`
+    /// (checker.go:10289) — REAL (FCS tranche 32; was the permissive stub):
+    /// the __setFunctionName/__propKey requests for an anonymous class
+    /// expression in a named-evaluation position.
     pub(crate) fn check_class_expression_external_helpers(&mut self, node: NodeId) {
-        // TODO(port M6 W5): getFirstTransformableStaticClassElement +
-        // checkExternalEmitHelpers (SetFunctionName/PropKey) — emitsupport.go's
-        // wave.
-        let _ = node;
+        if self.store().node(node).name().is_some() {
+            return;
+        }
+        let parent = crate::ast_shims::walk_up_outer_expressions(self.store(), node)
+            .unwrap_or(node);
+        if !crate::statements::is_named_evaluation_source(self.store(), parent) {
+            return;
+        }
+        let will_transform_es_decorators = !self.legacy_decorators
+            && self.language_version
+                < crate::statements::Feature::ClassAndClassElementDecorators.minimum_target();
+        let location = if will_transform_es_decorators
+            && crate::statements::class_or_constructor_parameter_is_decorated(self, false, node)
+        {
+            match crate::statements::modifier_nodes_of(self.store(), node)
+                .into_iter()
+                .find(|&modifier| self.store().node(modifier).kind == Kind::Decorator)
+            {
+                Some(first_decorator) => Some(first_decorator),
+                None => Some(node),
+            }
+        } else {
+            self.get_first_transformable_static_class_element(node)
+        };
+        if let Some(location) = location {
+            self.check_external_emit_helpers(
+                location,
+                crate::statements::ExternalEmitHelpers::SET_FUNCTION_NAME,
+            );
+            let parent_node = self.store().node(parent);
+            if matches!(
+                parent_node.kind,
+                Kind::PropertyAssignment | Kind::PropertyDeclaration | Kind::BindingElement
+            ) && parent_node
+                .name()
+                .is_some_and(|name| self.store().node(name).kind == Kind::ComputedPropertyName)
+            {
+                self.check_external_emit_helpers(
+                    location,
+                    crate::statements::ExternalEmitHelpers::PROP_KEY,
+                );
+            }
+        }
     }
 
     /// Go: `func (c *Checker) checkClassExpressionDeferred(node)` (checker.go:10309).

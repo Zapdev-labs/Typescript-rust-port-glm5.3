@@ -5890,7 +5890,9 @@ impl Checker {
     /// (c.patternAmbientModules) and the assignability probe ride the S7
     /// union/relater + pattern-machinery seams; permissive pass-through of
     /// resolvedSymbol keeps non-pattern modules exact.
-    fn try_resolve_pattern_ambient_module(
+    /// PORT (FCS tranche 32): pub(crate) — resolveHelpersModule's
+    /// nil-location ambient-only path reads it.
+    pub(crate) fn try_resolve_pattern_ambient_module(
         &mut self,
         resolved_symbol: Option<SymbolId>,
         _module_reference: &str,

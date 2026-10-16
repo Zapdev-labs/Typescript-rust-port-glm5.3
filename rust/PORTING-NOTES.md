@@ -3136,3 +3136,36 @@ recorded: tsc-testrunner -test.run filter needs the Parent/component.ts
 form. Residual queue: carried fcs28/29/30 families (2504/async-iteration
 pair, 2318 stragglers, JSDoc-tag imports, bare-require, dynamic import
 + 2882).
+
+## Sweep micro-tranche 32 landed (2026-11-03, RIG-VALIDATED) — checkExternalEmitHelpers real; divergent 945 -> 873
+
+Fresh census corrected the label again (second time; the t26-era code
+labels keep being wrong): TS2354 is "This syntax requires an imported
+helper but module cannot be found" — the importHelpers/tslib-unresolvable
+error. GO=104 / RUST=0: rust-missing 104 instances/72 records, family
+fully CLOSED. ONE root: check_external_emit_helpers was a permissive
+NO-OP STUB (11 rust call sites landed there). Go: checkExternalEmitHelpers
+-> resolveHelpersModule (memoized per source file) -> resolveExternal-
+Module (location=synthetic tslib import node, msg 2354, errorNode=the
+syntax node) — resolution fails in the per-unit 1-file twin FS -> one
+2354 per source file at the first helper-requiring syntax node. Ported
+Go-exactly: real check_external_emit_helpers/resolve_helpers_module/
+getHelperNames + the 2343/2807 ladder + per-file ExternalHelpersFile-
+Links; flags unified on the Go-exact types::ExternalEmitHelpers; the
+missing call sites added (checkDecorators 6228-6252 with getFirst-
+TransformableStaticClassElement + the decorator ast-predicate family,
+checkClassExpressionExternalHelpers 10289-10331, private Set/Get/In,
+yield AsyncDelegatorIncludes 11212); the 5 import/export CJS gates now
+read the REAL per-file emit format (GetEmitModuleFormatOfFile — the
+module_kind approximation missed node16/nodenext); Program trait seam
+get_import_helpers_import_specifier + CheckerUnitProgram twin. Newly-
+divergent 0; newly-identical 72 (exactly the census family). HONEST
+RESIDUAL QUEUE: markDecoratorAliasReferenced METADATA site (29224,
+needs emitDecoratorMetadata) + checkDestructuringAssignment spread-REST
+site (12869, stubbed fn) — corpus-dead parity gaps; the module_kind
+approximation remains at the non-emit-helper seam users. PLAIN-sweep
+census: divergent 873 (682 count / 191 hash), identical 6,694/7,567;
+both drivers 0/3,826/3,741/0; panics 0. 75 suites (fcs32: checker 11/11
++ twin 5/5 with 42 exact GO twin records); clippy 0; all gates green
+fresh (orchestrator re-ran tests + sweeps + census independently; Go
+tree md5-verified pristine).

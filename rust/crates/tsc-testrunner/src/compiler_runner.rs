@@ -118,6 +118,12 @@ struct CheckerUnitProgram {
     /// Go: program.SourceFileMayBeEmitted(unit, false) — the twin program's
     /// own computation (the rewriteRelativeImportExtensions arm reads it).
     may_be_emitted: bool,
+    /// Go: program.GetImportHelpersImportSpecifier(unit.PathKey()) — the
+    /// twin program's `importHelpersImportSpecifiers` entry (the file loader
+    /// creates the synthetic `"tslib"` import under `importHelpers` for
+    /// JS files and external modules; PORT FCS tranche 32 — the checker's
+    /// resolveHelpersModule reads it).
+    import_helpers_specifier: Option<String>,
 }
 
 impl Program for CheckerUnitProgram {
@@ -270,6 +276,17 @@ impl Program for CheckerUnitProgram {
             false
         }
     }
+    // ── The FCS-tranche-32 importHelpers seam (Go: program.go:2235
+    // GetImportHelpersImportSpecifier — the file loader's synthetic "tslib"
+    // import; the twin program's map holds the unit's entry exactly when
+    // Go's loader gate created it). ──
+    fn get_import_helpers_import_specifier(&self, file: tsc_ast::NodeId) -> Option<String> {
+        if file == self.source_file.as_node_id() {
+            self.import_helpers_specifier.clone()
+        } else {
+            None
+        }
+    }
 }
 
 /// The unit's semantic diagnostics — Go program.go `GetSemanticDiagnostics`'s
@@ -362,6 +379,9 @@ fn semantic_diagnostics_of_unit(
         .cloned()
         .unwrap_or_default();
     let may_be_emitted = unit_program.source_file_may_be_emitted(unit_file, false);
+    let import_helpers_specifier = unit_program
+        .get_import_helpers_import_specifier(unit_file.path_key())
+        .cloned();
     let mut source_file = parse_source_file(Default::default(), content, script_kind);
     let Some(bind) = bind_source_file(&mut source_file) else {
         return Vec::new();
@@ -377,6 +397,7 @@ fn semantic_diagnostics_of_unit(
         checker_symbols: Vec::new(),
         resolutions,
         may_be_emitted,
+        import_helpers_specifier,
     }));
     // Go's exported GetDiagnostics (checker.go:14222+14232) computes
     // checkUnused from the noUnused* options — the regular (non-suggestion)
