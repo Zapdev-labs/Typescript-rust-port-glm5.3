@@ -1,0 +1,49 @@
+rust/crates/checker/src/index.rs
+  s_1663f6db89a681::t_48a2d91790f1d1 132-133,136-144
+rust/crates/checker/src/statements.rs
+  s_1663f6db89a681::t_310a6fe1a466b4 5023
+  s_1663f6db89a681::t_955dd46f3961d3 4973-4974,4982
+  s_1663f6db89a681::t_1083228b41cc5c 5024
+  s_1663f6db89a681::t_a9308d10b99c39 4720-4722
+  s_1663f6db89a681::t_08abfa19cd9493 4872
+  s_1663f6db89a681::t_a790d088d5703e 4433-4439,4442-4540,4542-4551,4553-4572,4574-4621,4623-4674,4676-4695,4697-4719,4723-4871,4874-4938,4940-4952,4954-4972,4975-4981,4983-5022,5025-5045
+  s_1663f6db89a681::t_2fe9e01161b13e 4343-4348,4350-4361,4369-4428
+  s_1663f6db89a681::t_c03145469143d5 4873
+rust/crates/checker/src/resolvecall.rs
+  s_1663f6db89a681::t_2e79dca0b9a593 2742-2746
+  s_1663f6db89a681::t_b5b7d41bf05aa1 3076
+  s_1663f6db89a681::t_d2b1a5e6c820eb 532-551,564-568,579-592
+rust/crates/checker/src/contextual.rs
+  s_1663f6db89a681::t_1bcb74cb7254a3 2306-2316
+  s_1663f6db89a681::t_8875e86899b8a4 477-480,484
+rust/crates/checker/src/typeofsymbol.rs
+  s_1663f6db89a681::t_156342438f4619 3665-3673
+rust/crates/checker/src/grammarchecks.rs
+  s_1663f6db89a681::t_b9b7e5a02ea149 166-168,172-173
+rust/crates/tsc-testrunner/tests/fcs29_global_type_2318.rs
+  s_1663f6db89a681::t_13fec5baa7bc0d 1-157
+rust/crates/checker/src/checker.rs
+  s_1663f6db89a681::t_d1cb28a2d9b4bb 1159-1177
+rust/crates/checker/tests/fcs29_global_type_2318.rs
+  s_1663f6db89a681::t_c3941df6a10f26 144-146,148-149
+  s_1663f6db89a681::t_105c255b1590cf 164-170,172,176,179-183
+  s_1663f6db89a681::t_416403a557e68a 1-143,147,150-163,171,173-175,177-178,184-236,238-258,260-334
+  s_1663f6db89a681::t_463fc6b7877d1b 237
+  s_1663f6db89a681::t_7e1a3dc4e5a5ad 259
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "66bc0fa4502e4cee80cf6d2a0e3f9eff30b8a5de",
+  "prompts": {},
+  "sessions": {
+    "s_1663f6db89a681": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "1fa59aa1-4051-448b-adf3-d96a81c3e8c4",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
