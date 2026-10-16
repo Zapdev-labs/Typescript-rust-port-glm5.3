@@ -3082,3 +3082,23 @@ decorators/destructuring/esDecorators/for-in/keyof families). 69 suites
 (fcs29 pins: checker 8/8 + testrunner 6/6 exact-GO-twin records);
 clippy 0; all gates green fresh (orchestrator re-ran tests + sweeps +
 census independently; Go tree md5-verified pristine).
+
+## Sweep micro-tranche 30 landed (2026-11-02, RIG-VALIDATED) — the TS2818 super-in-static-initializers pair; divergent 985 -> 982
+
+TS2818 is "Duplicate identifier: compiler reserves name when emitting
+super references in static initializers" — and was rust-MISSING 114 in
+ONE record (superInStaticMembers1.ts x3 baselines, es5/es2015/es2021,
+38 each). TWO roots in expressions.rs: (1) Go checker.go:8155's
+GetEnclosingBlockScopeContainer walk setting ContainsSuperPropertyIn-
+StaticInitializer for super.x in static initializers (target <= ES2021)
+was a TODO stub in check_super_property — the check_reflect_collision
+consumer was already ported but never fired; (2) Go checker.go:10346's
+checkCollisionsForDeclarationName for FunctionExpression names was a
+TODO stub (the remaining 6 inContainingFuncExpr instances). Both ported
+Go-exact; TS2818 census 114 -> 0, all 5 records byte-identical twins.
+Newly-divergent 0; newly-identical 3. PLAIN-sweep census: divergent 982
+(791 count / 191 hash), identical 6,585/7,567; both drivers
+0/3,826/3,741/0; panics 0. 71 suites (fcs30 pins: checker 6 + testrunner
+5 exact-GO-twin records); clippy 0; all gates green fresh (orchestrator
+re-ran tests + sweeps + census independently; Go tree md5-verified
+untouched — no Go probes used).

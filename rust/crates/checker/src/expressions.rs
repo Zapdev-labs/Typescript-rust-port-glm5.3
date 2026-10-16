@@ -5027,9 +5027,27 @@ impl Checker {
                 // for `super.x` or `super[x]` in a static initializer, mark all
                 // enclosing block scope containers so that we can report potential
                 // collisions with `Reflect`.
-                // TODO(port M6 W3): GetEnclosingBlockScopeContainer walk +
-                // the ContainsSuperPropertyInStaticInitializer flag (the
-                // grammarchecks consumer is W3's); permissive skip.
+                // PORT: Go checker.go:8155 (FCS tranche 30) — the
+                // GetEnclosingBlockScopeContainer walk setting
+                // NodeCheckFlagsContainsSuperPropertyInStaticInitializer (the
+                // checkReflectCollision consumer in statements.rs reads it).
+                let parent = self.store().node(node).parent.get();
+                let mut current =
+                    crate::resolution::get_enclosing_block_scope_container(self.store(), parent);
+                while let Some(container) = current {
+                    let n = self.store().node(container);
+                    let is_module = n.kind == Kind::SourceFile
+                        && binder_shims::is_external_or_common_js_module(
+                            self.store().file(container.file_id()),
+                        );
+                    if n.kind != Kind::SourceFile || is_module {
+                        self.node_links.get(container).flags |= crate::types::NodeCheckFlags::CONTAINS_SUPER_PROPERTY_IN_STATIC_INITIALIZER;
+                    }
+                    current = crate::resolution::get_enclosing_block_scope_container(
+                        self.store(),
+                        container,
+                    );
+                }
             }
             return self.get_base_constructor_type_of_class(class_type);
         }
@@ -7924,8 +7942,10 @@ impl Checker {
         // TODO(port M6 S3): checkSourceElement(FullSignature) — the JSDoc
         // full-signature family; permissive.
         if self.store().node(node).kind == Kind::FunctionExpression {
-            // TODO(port M6 S3): checkCollisionsForDeclarationName — the
-            // statements.rs stub carrier.
+            // PORT: Go checker.go:10346 (FCS tranche 30) —
+            // checkCollisionsForDeclarationName for function expression
+            // names (the TS2818 Reflect-collision consumer).
+            self.check_collisions_for_declaration_name(node, self.store().node(node).name());
         }
         if check_mode.intersects(CheckMode::SKIP_CONTEXT_SENSITIVE)
             && self.is_context_sensitive(node)
