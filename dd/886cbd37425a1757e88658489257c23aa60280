@@ -1,0 +1,27 @@
+rust/crates/checker/src/resolvecall.rs
+  s_1519006791d3a9::t_4d582325b0924f 983-998,1001-1003
+  s_1519006791d3a9::t_d55a669bdf3dfd 1052-1057
+  s_1519006791d3a9::t_1845e887241eca 1603-1660,1667-1699,1701-1724
+  s_1519006791d3a9::t_96438982c69cdb 1661-1666
+  s_1519006791d3a9::t_e379b74ba46f45 1700
+rust/crates/checker/tests/fcs34_contextual_return_inference_pins.rs
+  s_1519006791d3a9::t_3263af1918c5b5 239
+  s_1519006791d3a9::t_50bd8397b66b3d 1-238,240-253,256-314
+  s_1519006791d3a9::t_077e9b0ce262f0 254-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "dd886cbd37425a1757e88658489257c23aa60280",
+  "prompts": {},
+  "sessions": {
+    "s_1519006791d3a9": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "32bd3503-9739-49a5-99e8-db0f99420453",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
