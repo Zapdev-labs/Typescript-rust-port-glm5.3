@@ -6670,10 +6670,25 @@ impl Checker {
                         if self.program_symbol(symbol).name == "prototype" {
                             if let Some(name) = self.store().node(member).name() {
                                 let symbol_name = self.program_symbol(symbol).name.clone();
-                                let node_symbol = self.get_symbol_of_declaration_merged(node);
-                                let node_symbol_name = node_symbol
-                                    .map(|s| self.program_symbol(s).name.clone())
-                                    .unwrap_or_default();
+                                // Go: c.symbolToString(c.getSymbolOfDeclaration(node))
+                                // (checker.go:3237). PORT (FCS tranche 27):
+                                // was the RAW program-symbol name — for
+                                // anonymous class expressions (binder name
+                                // "class") and export-default classes
+                                // ("default") the nodebuilder resolves the
+                                // symbol chain to the assigned variable /
+                                // class name; the raw name printed "class"
+                                // / "default" instead. symbol_to_string is
+                                // the REAL nodebuilder twin (the sibling
+                                // name/length/caller/arguments 2699 site
+                                // already used it).
+                                let node_symbol_name =
+                                    match self.get_symbol_of_declaration_merged(node) {
+                                        Some(s) => {
+                                            crate::relater::symbol_to_string(self, s)
+                                        }
+                                        None => String::new(),
+                                    };
                                 self.error(
                                     name,
                                     &diag::STATIC_PROPERTY_0_CONFLICTS_WITH_BUILT_IN_PROPERTY_FUNCTION_0_OF_CONSTRUCTOR_FUNCTION_1,
@@ -8087,10 +8102,16 @@ impl Checker {
     /// Go: `func (c *Checker) checkClassForStaticPropertyNameConflicts(node)`
     /// (checker.go:4455).
     pub(crate) fn check_class_for_static_property_name_conflicts(&mut self, node: NodeId) {
-        // Go: c.compilerOptions.GetUseDefineForClassFields() gate.
-        // TODO(port M6 W8): the useDefineForClassFields emit option seam;
-        // permissive false (Go's non-define default).
-        if self.emit_standard_class_fields {
+        // Go: c.compilerOptions.GetUseDefineForClassFields() gate
+        // (checker.go:4468). PORT (FCS tranche 27): was the permissive
+        // false stub `emit_standard_class_fields` (the M6 W8 seam) — the
+        // staticPropertyNameConflicts corpus case pins
+        // `@useDefineForClassFields: true,false`; Go silences the
+        // name/length/caller/arguments 2699 family for the true configs,
+        // which the stub never did (rust emitted in ALL configs, 96 extra
+        // 2699s). get_use_define_for_class_fields is the Go-exact twin
+        // (compileroptions.go:170: TSUnknown → target >= ES2022).
+        if self.compiler_options.get_use_define_for_class_fields() {
             return;
         }
         let node_symbol_name = match self.get_symbol_of_declaration_merged(node) {

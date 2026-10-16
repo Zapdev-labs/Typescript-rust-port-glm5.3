@@ -2988,3 +2988,29 @@ both drivers 0/3,826/3,741/0; panics 0; newly-divergent 0, newly-
 identical 35. 64 suites (fcs26 pins 7/7); clippy 0; all gates green
 fresh (orchestrator re-ran tests + sweeps + census independently; Go
 probe restore md5-verified both sides).
+
+## Sweep micro-tranche 27 landed (2026-11-02, RIG-VALIDATED) — the TS2699 static-name-conflicts udcff gate; the +96 family gone
+
+staticPropertyNameConflicts.ts: go 144 / rust 240 TS2699s (+96 across the
+4-config matrix). TWO roots, both fixed in statements.rs:
+- The +96: Go's checkClassForStaticPropertyNameConflicts name/length/
+  caller/arguments arm (checker.go:4466) gates on GetUseDefineFor-
+  ClassFields (emits only the udcff=false configs; the prototype 2699
+  at checker.go:3237 is ungated). Rust gated on the permissive
+  emit_standard_class_fields STUB (always false at es5/es2015) — emitted
+  in all 4 configs. Switched to the Go-exact compiler_options.get_use_
+  define_for_class_fields() twin (compileroptions.go:170).
+- The same-record hash tail: the prototype site's 2nd arg routes through
+  symbolToString — nodebuilder passed the RAW binder name ("class"/
+  "default") instead of the real relater::symbol_to_string chain
+  (anonymous class expressions -> the assigned variable name
+  "StaticPrototype_Anonymous"; export-default -> the class name).
+TS2699 per-case census: 0 count-diff cases (family gone). Census
+unchanged at divergent 1,152 (973/179), identical 6,415/7,567 — the
+record stays divergent on the HONEST tail: Go-only 2300 Duplicate
+identifier '[FunctionPropertyNames.prototype]' (static+instance computed
+prototype pairs, 12 diags) — a binder computed-name collision family,
+NOT fixed, next-family candidate. Both drivers 0/3,826/3,741/0; panics 0;
+newly-divergent 0. 65 suites (fcs27 pins 4/4); clippy 0; all gates green
+fresh (orchestrator re-ran tests + sweeps + census independently; Go
+tree md5-verified untouched).
