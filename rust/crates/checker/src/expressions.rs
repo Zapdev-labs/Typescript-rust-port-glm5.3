@@ -2113,12 +2113,32 @@ impl Checker {
 
     /// Go: `func (c *Checker) getBaseTypeOfLiteralTypeForComparison(t) *Type`
     /// (checker.go:25988 — S7's literal-widening family, called only by
-    /// S4's relational arms). TODO(port M6 S7): the fresh-literal-aware
-    /// comparison variant; the plain widening value below is Go's
-    /// getBaseTypeOfLiteralType answer (identical for non-fresh literals).
+    /// S4's relational arms) — REAL (FCS tranche 36; was the M6 S7 stub
+    /// delegating to getBaseTypeOfLiteralType). This is like
+    /// getBaseTypeOfLiteralType, but instead treats enum literals as
+    /// strings/numbers instead of returning their enum base type (which
+    /// depends on the types of other literals in the enum).
     pub(crate) fn get_base_type_of_literal_type_for_comparison(&mut self, t: TypeId) -> TypeId {
-        // TODO(port M6 S7): the comparison-flavored widening.
-        self.get_base_type_of_literal_type(t)
+        let flags = self.type_(t).flags;
+        if flags.intersects(
+            TypeFlags::STRING_LITERAL | TypeFlags::TEMPLATE_LITERAL | TypeFlags::STRING_MAPPING,
+        ) {
+            return self.string_type();
+        }
+        if flags.intersects(TypeFlags::NUMBER_LITERAL | TypeFlags::ENUM) {
+            return self.number_type();
+        }
+        if flags.intersects(TypeFlags::BIGINT_LITERAL) {
+            return self.bigint_type();
+        }
+        if flags.intersects(TypeFlags::BOOLEAN_LITERAL) {
+            return self.boolean_type();
+        }
+        if flags.intersects(TypeFlags::UNION) {
+            let mapped = self.map_type(t, &mut |c, u| Some(c.get_base_type_of_literal_type_for_comparison(u)));
+            return mapped.unwrap_or(t);
+        }
+        t
     }
 }
 

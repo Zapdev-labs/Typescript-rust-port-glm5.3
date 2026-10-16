@@ -1686,7 +1686,19 @@ impl Checker {
                     // corresponding type parameter in 'Foo'. When multiple
                     // 'infer T' declarations are present, we form an
                     // intersection of the inferred constraint types.
-                    let (mut child, mut parent_node) = (declaration, parent);
+                    // PORT note (FCS tranche 36): Go seeds the walk with
+                    // `child = declaration.Parent; parent = child.Parent` —
+                    // i.e. one level PAST the InferType node (the arm
+                    // switches on what CONTAINS the `infer T`, not the
+                    // InferType itself). The former seeding stopped at
+                    // InferType, so every arm missed (an `infer B` in a rest
+                    // position answered no constraint instead of
+                    // `unknown[]`, and the rest-parameter check 2370'd
+                    // `...tail: infer B` where GO stays assignable).
+                    let (mut child, mut parent_node) = (
+                        parent,
+                        self.store().node(parent).parent.get(),
+                    );
                     // Skip parenthesized type nodes.
                     loop {
                         let parent_kind = self.store().node(parent_node).kind;
@@ -1711,14 +1723,25 @@ impl Checker {
                         || parent_kind == Kind::NamedTupleMember
                             && self.store().node(parent_node).as_named_tuple_member().is_some_and(|m| m.dot_dot_dot_token.is_some())
                     {
-                        // TODO(port M6 S7): createArrayType(c.unknownType) —
-                        // the permissive array-type identity stub keeps
-                        // unknownType (the element type) as the inference.
-                        inferences.push(self.unknown_type());
+                        // Go: `inferences = append(inferences,
+                        // c.createArrayType(c.unknownType))` — REAL (FCS
+                        // tranche 36; was the M6 S7 permissive stub that
+                        // kept `unknownType` — the ELEMENT type — as the
+                        // inference, so an `infer B` in a rest position
+                        // answered constraint `unknown` instead of
+                        // `unknown[]`, and the rest-parameter check
+                        // (checker.go:2743) 2370'd `...tail: infer B`
+                        // where GO's `unknown[]` stays assignable to
+                        // anyReadonlyArrayType).
+                        inferences.push(self.create_array_type(self.unknown_type()));
                     } else if parent_kind == Kind::TemplateLiteralTypeSpan {
                         inferences.push(self.string_type());
                     } else if parent_kind == Kind::TypeParameter
-                        && self.store().node(self.store().node(parent_node).parent.get()).kind == Kind::MappedType
+                        && self
+                            .store()
+                            .node(self.store().node(parent_node).parent.get())
+                            .kind
+                            == Kind::MappedType
                     {
                         // TODO(port M6 S7): stringNumberSymbolType (as the
                         // mapped-type-key arm above).

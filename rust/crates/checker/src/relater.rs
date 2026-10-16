@@ -8788,22 +8788,16 @@ pub(crate) fn get_normalized_type(c: &mut Checker, t: TypeId, writing: bool) -> 
 }
 
 /// Go: `func (c *Checker) getConstraintOfType(t) *Type` (checker.go:17434) —
-/// REAL (M6 S10): the exact Go switch — typeParameter → the payload
-/// constraint reader, indexedAccess → getConstraintOfIndexedAccess (index.rs),
-/// conditional → the payload's resolved constraint; everything else (INDEX
-/// included) → getBaseConstraintOfType.
+/// REAL (FCS tranche 36; was the M6-era raw-field shortcut reading
+/// `typeParameter.constraint` / the conditional's `resolvedBaseConstraint`
+/// payload directly). The raw field can hold a constraint where Go's
+/// sentinel protocol answers nil (an unconstrained type parameter stores
+/// the eagerly-installed default/`noConstraintType` handling; Go answers
+/// nil via getConstraintOfTypeParameter's hasNonCircularBaseConstraint +
+/// getConstraintFromTypeParameter noConstraintType read), so the relation
+/// arms must go through the Go-exact typeofsymbol.rs family.
 pub(crate) fn get_constraint_of_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
-    let flags = c.type_(t).flags;
-    if flags.intersects(TypeFlags::TYPE_PARAMETER) {
-        return c.type_(t).as_type_parameter().and_then(|d| d.constraint);
-    }
-    if flags.intersects(TypeFlags::INDEXED_ACCESS) {
-        return c.get_constraint_of_indexed_access(t);
-    }
-    if let Some(data) = c.type_(t).as_conditional_type() {
-        return data.base.resolved_base_constraint;
-    }
-    get_base_constraint_of_type(c, t)
+    c.get_constraint_of_type(t)
 }
 
 /// Go: `func (c *Checker) getConstraintOfTypeParameter(t) *Type`.
@@ -9709,11 +9703,23 @@ pub(crate) fn get_base_type_of_literal_type(c: &mut Checker, t: TypeId) -> TypeI
     t
 }
 
-/// Go: `func (c *Checker) getBaseTypeOfEnumLikeType(t) *Type` — S2 stub.
+/// Go: `func (c *Checker) getBaseTypeOfEnumLikeType(t) *Type`
+/// (checker.go:25980) — REAL (FCS tranche 36; was the M6 S2 None stub).
+/// Go returns the declared type of the member's parent enum for an enum
+/// member's type, and `t` itself otherwise; the Option form carries Go's
+/// non-nil answer as `Some` in both cases.
 pub(crate) fn get_base_type_of_enum_like_type(c: &mut Checker, t: TypeId) -> Option<TypeId> {
-    // TODO(port M6 S2): getBaseTypeOfEnumLikeType.
-    let _ = (c, t);
-    None
+    if c.type_(t).flags.intersects(TypeFlags::ENUM_LIKE)
+        && c.type_(t)
+            .symbol
+            .is_some_and(|s| c.program_symbol(s).flags.intersects(SymbolFlags::ENUM_MEMBER))
+    {
+        let symbol = c.type_(t).symbol.expect("checked above");
+        if let Some(parent) = c.get_parent_of_symbol(symbol) {
+            return Some(get_declared_type_of_symbol(c, parent));
+        }
+    }
+    Some(t)
 }
 
 /// Go: `func (c *Checker) hasBaseType(t, s) bool`.

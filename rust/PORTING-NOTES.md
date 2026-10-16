@@ -3280,3 +3280,37 @@ ok, 0 FAILED); clippy 0; all gates green fresh; Go tree md5-verified
 pristine. Residual queue unchanged (2322 destructuring/mapped tops,
 paramTagTypeResolution2, typeFromJSInitializer, TS2304 extras — full
 list ~/.fcs35-continuation.md).
+
+## Sweep micro-tranche 36 landed (2026-11-03, RIG-VALIDATED) — comparison-operator relation roots; divergent 836 -> 815
+
+Label AND split both stale (third mislabel): TS2365 here is the
+relational comparison-operator message, and the family was 4 records /
+RUST-EXTRA 94 + RUST-MISSING 46 (comparisonOperatorWithNoRelationship*
+x2, compoundAddition/additionOperatorWithInvalidOperands). FOUR roots,
+all GO-verified via temporary relater.go probes (removed; md5-verified):
+- ROOT B (the 48 count-diff): relater get_constraint_of_type was a
+  RAW-FIELD shortcut; GO answers nil for unconstrained type params
+  (noConstraintType sentinel via getConstraintOfTypeParameter) — the raw
+  field held the eagerly-installed {} default, so the relation arm fell
+  into the {}-vs-primitive shortcut. Fixed: Go-exact delegate to the
+  typeofsymbol family.
+- ROOT A (rendering, all 4 records): get_base_type_of_literal_type_for_
+  comparison was the M6 S7 stub; ported checker.go:25988 exactly (enum
+  operand renders number).
+- ROOT C: get_base_type_of_enum_like_type was the M6 S2 None stub;
+  ported checker.go:25980 exactly.
+- ROOT D (root-caused during the battery): get_inferred_type_parameter_
+  constraint's arm walk was seeded one level short (GO seeds PAST the
+  InferType node) and the rest arm kept unknownType instead of
+  createArrayType(unknownType) -> rust-EXTRA 2370 on genericRest-
+  Parameters2.
+TS2365 per-case census: FULLY RECOVERED corpus-wide (delta 0/0/0).
+Newly-divergent 0; newly-identical 21 (the 4 records + genericRest-
+Parameters2 + partiallyNamedTuples2 + 15 collateral constraint/relation
+recoveries). PLAIN-sweep census: divergent 815 (640 count / 175 hash),
+identical 6,752/7,567; both drivers 0/3,826/3,741/0; panics 0. 79 ok
+lines / 0 FAILED (fcs36 pins 4/4); clippy 0; all gates green fresh
+(orchestrator re-ran tests + sweeps + census independently; Go tree
+md5-verified pristine). Residual queue: TS2322 remainder, the inferred-
+constraint type-reference arm TODO (M6 S5/S7 seam exposed by root B),
+carried fcs31+ residuals.
