@@ -1,0 +1,22 @@
+rust/crates/checker/src/statements.rs
+  s_9d15bb7cedadf5::t_b61aaeec81ec80 6673-6691
+  s_9d15bb7cedadf5::t_45db33f751673f 8105-8114
+rust/crates/checker/tests/fcs27_pins.rs
+  s_9d15bb7cedadf5::t_37df01765a3670 1-250
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "ca1b2be1b94e8fca1811d1cffd479155bf1b1050",
+  "prompts": {},
+  "sessions": {
+    "s_9d15bb7cedadf5": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "c4f93914-85d2-4a6c-a71c-0163b9932ed5",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
