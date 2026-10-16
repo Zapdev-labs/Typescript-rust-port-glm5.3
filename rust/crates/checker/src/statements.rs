@@ -4340,13 +4340,25 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkDecorators(node)` (checker.go:6206) — the
-    /// real gate shape with S6's getResolvedSignature stubbed permissive
-    /// (checkDecorator's signature resolution reports nothing).
+    /// REAL (FCS tranche 29) decorator grammar gates
+    /// (CanHaveDecorators/HasDecorators/NodeCanBeDecorated — the permissive
+    /// walk ran the decorator machinery for private-named members and
+    /// body-less overloads that Go rejects with 1206 first; 3 newly-extra
+    /// TS2318 TypedPropertyDescriptor on the corpus). The emit-helper
+    /// variants (S10) + markLinkedReferences stay permissive.
     pub(crate) fn check_decorators(&mut self, node: NodeId) {
-        // TODO(port M6 W3): the CanHaveDecorators/NodeCanBeDecorated grammar
-        // gates + the emit-helper variants (S10) + markLinkedReferences
-        // (ReferenceHintDecorator, symboltracker.rs). Permissive: the
-        // decorator walk below keeps the per-declaration recursion.
+        let parent = self.store().node(node).parent.get();
+        let grandparent = if parent != NodeId::NONE {
+            self.store().node(parent).parent.get()
+        } else {
+            NodeId::NONE
+        };
+        if !crate::resolvecall::can_have_decorators(self.store().node(node))
+            || !crate::grammarchecks::has_decorators(self.store(), node)
+            || !self.node_can_be_decorated(node, parent, grandparent)
+        {
+            return;
+        }
         for modifier in modifier_nodes_of(self.store(), node) {
             if self.store().node(modifier).kind == Kind::Decorator {
                 self.check_decorator(modifier);
@@ -4354,15 +4366,683 @@ impl Checker {
         }
     }
 
+    /// Go: `func ast.NodeCanBeDecorated(useLegacyDecorators, node, parent, grandparent) bool`
+    /// (ast/utilities.go:4327) — PORT (FCS tranche 29).
+    fn node_can_be_decorated(&self, node: NodeId, parent: NodeId, grandparent: NodeId) -> bool {
+        let store = self.store();
+        let n = store.node(node);
+        // private names cannot be used with decorators yet (Go's comment).
+        if self.legacy_decorators
+            && n.name().is_some_and(|name| {
+                tsc_ast::ast_generated::is_private_identifier(store.node(name))
+            })
+        {
+            return false;
+        }
+        let parent_ok = parent != NodeId::NONE;
+        let grandparent_ok = grandparent != NodeId::NONE;
+        match n.kind {
+            // class declarations are valid targets (Go's comment).
+            Kind::ClassDeclaration => true,
+            // class expressions are valid targets for native decorators (Go's comment).
+            Kind::ClassExpression => !self.legacy_decorators,
+            // property declarations are valid if their parent is a class
+            // declaration (Go's comment).
+            Kind::PropertyDeclaration => {
+                parent_ok
+                    && (self.legacy_decorators
+                        && tsc_ast::is_class_declaration(store.node(parent))
+                        || !self.legacy_decorators
+                            && tsc_binder::ast_shims::is_class_like(store.node(parent))
+                            && !crate::grammarchecks::has_abstract_modifier(n)
+                            && !crate::grammarchecks::has_ambient_modifier(n))
+            }
+            // if this method has a body and its parent is a class declaration,
+            // this is a valid target (Go's comment).
+            Kind::GetAccessor | Kind::SetAccessor | Kind::MethodDeclaration => {
+                parent_ok
+                    && function_body_of(store, node).is_some()
+                    && (self.legacy_decorators
+                        && tsc_ast::is_class_declaration(store.node(parent))
+                        || !self.legacy_decorators
+                            && tsc_binder::ast_shims::is_class_like(store.node(parent)))
+            }
+            // TODO(rbuckton): ParameterDeclaration decorator support for ES
+            // decorators must wait until it is standardized (Go's comment).
+            Kind::Parameter => {
+                if !self.legacy_decorators {
+                    return false;
+                }
+                // if the parameter's parent has a body and its grandparent is
+                // a class declaration, this is a valid target (Go's comment).
+                parent_ok
+                    && function_body_of(store, parent).is_some()
+                    && matches!(
+                        store.node(parent).kind,
+                        Kind::Constructor | Kind::MethodDeclaration | Kind::SetAccessor
+                    )
+                    && crate::grammarchecks::get_this_parameter(store, parent) != Some(node)
+                    && grandparent_ok
+                    && store.node(grandparent).kind == Kind::ClassDeclaration
+            }
+            _ => false,
+        }
+    }
+
     /// Go: `func (c *Checker) checkDecorator(node)` (checker.go:6245) —
-    /// TODO(port M6 S6): getResolvedSignature; permissive no-op body.
+    /// REAL (FCS tranche 29): the decorator-call signature resolution +
+    /// the return-type assignability check. The synthetic signature's
+    /// construction reads the reportErrors=true global resolvers
+    /// (TypedPropertyDescriptor / the ClassXDecoratorContext family),
+    /// which report the location-less TS2318 of a lib-less program on
+    /// their first (memoized) resolution — the 86-instance family this
+    /// tranche closes.
     pub(crate) fn check_decorator(&mut self, node: NodeId) {
         self.check_grammar_decorator(node);
-        // The decorator-call signature resolution + return-type check is
-        // S6's getResolvedSignature + S8's getReturnTypeOfSignature seam;
-        // permissive until those land (the twins' --generateTrace path
-        // never emits decorator diagnostics at parse+bind depth).
-        let _ = node;
+        // Go: `c.getResolvedSignature(node, nil, CheckModeNormal)` — never
+        // nil (anySignature on failure).
+        let signature = self
+            .get_resolved_signature(node)
+            .unwrap_or_else(|| self.any_signature.expect("anySignature"));
+        self.check_deprecated_signature_real(signature, node);
+        let return_type = self.get_return_type_of_signature(signature);
+        if self.type_(return_type).flags.intersects(crate::types::TypeFlags::ANY) {
+            return;
+        }
+        // If we fail to get a signature and return type here, we will have
+        // already reported a grammar error in `checkDecorators` (Go's comment).
+        let Some(decorator_signature) = self.get_decorator_call_signature(node) else {
+            return;
+        };
+        let expected_return_type = self.signatures[decorator_signature.0 as usize].resolved_return_type;
+        let Some(expected_return_type) = expected_return_type else {
+            return;
+        };
+        let parent = self.store().node(node).parent.get();
+        // Go: `node.Parent.Kind` switch (checker.go:6275) — PropertyDeclaration
+        // falls through to the 1271 arm when !legacyDecorators.
+        let head_message: &'static Message = match self.store().node(parent).kind {
+            Kind::ClassDeclaration | Kind::ClassExpression => {
+                &diag::DECORATOR_FUNCTION_RETURN_TYPE_0_IS_NOT_ASSIGNABLE_TO_TYPE_1
+            }
+            Kind::PropertyDeclaration => {
+                if !self.legacy_decorators {
+                    &diag::DECORATOR_FUNCTION_RETURN_TYPE_0_IS_NOT_ASSIGNABLE_TO_TYPE_1
+                } else {
+                    &diag::DECORATOR_FUNCTION_RETURN_TYPE_IS_0_BUT_IS_EXPECTED_TO_BE_VOID_OR_ANY
+                }
+            }
+            Kind::Parameter => &diag::DECORATOR_FUNCTION_RETURN_TYPE_IS_0_BUT_IS_EXPECTED_TO_BE_VOID_OR_ANY,
+            Kind::MethodDeclaration | Kind::GetAccessor | Kind::SetAccessor => {
+                &diag::DECORATOR_FUNCTION_RETURN_TYPE_0_IS_NOT_ASSIGNABLE_TO_TYPE_1
+            }
+            _ => panic!(
+                "Unhandled case in checkDecorator: {}",
+                self.store().node(parent).kind_string()
+            ),
+        };
+        let error_node = crate::ast_shims::expression_of(self.store(), node);
+        self.check_type_assignable_to(return_type, expected_return_type, error_node, Some(head_message));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // The decorator call-signature family (Go checker.go:30665-31101) —
+    // PORT (FCS tranche 29)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Go: `func (c *Checker) createSyntheticExpression(parent, t, isSpread, tupleNameSource) *ast.Node`
+    /// (checker.go:30665) — Loc/Parent from the `parent` node (Go's factory
+    /// node carries Loc = parent.Loc, Parent = parent).
+    pub(crate) fn create_synthetic_expression(
+        &mut self,
+        parent: NodeId,
+        t: TypeId,
+        is_spread: bool,
+        tuple_name_source: Option<NodeId>,
+    ) -> NodeId {
+        let loc = self.store().node(parent).loc;
+        let synthetic = tsc_ast::Node {
+            kind: Kind::SyntheticExpression,
+            flags: tsc_ast::NodeFlags::NONE,
+            loc,
+            id: std::cell::Cell::new(0),
+            parent: std::cell::Cell::new(NodeId::NONE),
+            data: tsc_ast::NodeData::SyntheticExpression(Box::new(tsc_ast::SyntheticExpression {
+                type_: std::sync::Arc::new(t),
+                is_spread,
+                tuple_name_source,
+            })),
+        };
+        let result = self.program.node_store_mut().alloc(synthetic);
+        self.program.node_store_mut().node_mut(result).parent.set(parent);
+        result
+    }
+
+    /// Returns the synthetic argument list for a decorator invocation.
+    /// Go: `func (c *Checker) getEffectiveDecoratorArguments(node) []*ast.Node`
+    /// (checker.go:30692).
+    pub(crate) fn get_effective_decorator_arguments(&mut self, node: NodeId) -> Vec<NodeId> {
+        let expr = crate::ast_shims::expression_of(self.store(), node)
+            .expect("decorator expression");
+        let signature = self
+            .get_decorator_call_signature(node)
+            .expect("Decorator signature not found");
+        let parameters = self.signatures[signature.0 as usize].parameters.clone();
+        let mut args = Vec::with_capacity(parameters.len());
+        for param in parameters {
+            let t = self.get_type_of_symbol(param);
+            args.push(self.create_synthetic_expression(expr, t, false, None));
+        }
+        args
+    }
+
+    /// Go: `func (c *Checker) getDecoratorCallSignature(decorator) *Signature`
+    /// (checker.go:30704).
+    pub(crate) fn get_decorator_call_signature(&mut self, decorator: NodeId) -> Option<crate::types::SignatureId> {
+        if self.legacy_decorators {
+            self.get_legacy_decorator_call_signature(decorator)
+        } else {
+            self.get_es_decorator_call_signature(decorator)
+        }
+    }
+
+    /// Go: `func (c *Checker) getLegacyDecoratorCallSignature(decorator) *Signature`
+    /// (checker.go:30709) — the memoized per-declaration signatureLinks
+    /// slot (anySignature is Go's "not found" sentinel).
+    fn get_legacy_decorator_call_signature(&mut self, decorator: NodeId) -> Option<crate::types::SignatureId> {
+        let node = self.store().node(decorator).parent.get();
+        if node == NodeId::NONE {
+            return None;
+        }
+        let existing = self.signature_node_links.get(node).decorator_signature;
+        let result = existing.or_else(|| {
+            let any_signature = self.any_signature.expect("anySignature");
+            self.signature_node_links.get(node).decorator_signature = Some(any_signature);
+            let built = self.get_legacy_decorator_call_signature_uncached(node);
+            self.signature_node_links.get(node).decorator_signature = built;
+            built
+        });
+        if result == self.any_signature {
+            None
+        } else {
+            result
+        }
+    }
+
+    /// Go: getLegacyDecoratorCallSignature's `switch node.Kind` (checker.go:30715).
+    fn get_legacy_decorator_call_signature_uncached(&mut self, node: NodeId) -> Option<crate::types::SignatureId> {
+        let node_kind = self.store().node(node).kind;
+        let parent = self.store().node(node).parent.get();
+        match node_kind {
+            // For a class decorator, the `target` is the type of the class
+            // (the "static" or "constructor" side of the class) (Go's comment).
+            Kind::ClassDeclaration | Kind::ClassExpression => {
+                let class_symbol =
+                    crate::typeofsymbol::get_symbol_of_declaration(self, node)
+                        .expect("class declaration symbol");
+                let target_type = self.get_type_of_symbol(class_symbol);
+                let target_param = self.new_parameter("target", target_type);
+                let return_type = self.get_union_type(&[target_type, self.void_type()]);
+                Some(self.new_decorator_call_signature(vec![target_param], return_type))
+            }
+            Kind::Parameter => {
+                let grandparent = self.store().node(parent).parent.get();
+                // A parameter declaration decorator will have three arguments
+                // (see `ParameterDecorator` in core.d.ts) (Go's comment).
+                if !tsc_ast::is_constructor_declaration(self.store().node(parent))
+                    && !(tsc_ast::is_method_declaration(self.store().node(parent))
+                        || tsc_ast::is_set_accessor_declaration(self.store().node(parent))
+                            && tsc_binder::ast_shims::is_class_like(self.store().node(grandparent)))
+                {
+                    return None;
+                }
+                let this_parameter = crate::grammarchecks::get_this_parameter(self.store(), parent);
+                if this_parameter == Some(node) {
+                    return None;
+                }
+                let parameters: &[NodeId] =
+                    crate::ast_shims::parameters_of(self.store(), parent);
+                let has_this = this_parameter.is_some();
+                let index = parameters
+                    .iter()
+                    .position(|&p| p == node)
+                    .map(|i| if has_this { i - 1 } else { i })
+                    .expect("parameter in its parent's parameter list") as i32;
+                debug_assert!(index >= 0);
+                let (target_type, key_type) = if tsc_ast::is_constructor_declaration(self.store().node(parent)) {
+                    let class_symbol = crate::typeofsymbol::get_symbol_of_declaration(self, grandparent)
+                        .expect("constructor's class symbol");
+                    (self.get_type_of_symbol(class_symbol), self.undefined_type())
+                } else {
+                    (
+                        self.get_parent_type_of_class_element(parent),
+                        self.get_class_element_property_key_type(parent),
+                    )
+                };
+                let index_type = self.get_number_literal_type(tsc_jsnum::Number(index as f64));
+                let target_param = self.new_parameter("target", target_type);
+                let key_param = self.new_parameter("propertyKey", key_type);
+                let index_param = self.new_parameter("parameterIndex", index_type);
+                Some(self.new_decorator_call_signature(
+                    vec![target_param, key_param, index_param],
+                    self.void_type(),
+                ))
+            }
+            // A method or accessor declaration decorator will have either two
+            // or three arguments (see `PropertyDecorator` and `MethodDecorator`
+            // in core.d.ts) (Go's comment).
+            Kind::MethodDeclaration | Kind::GetAccessor | Kind::SetAccessor | Kind::PropertyDeclaration => {
+                if parent == NodeId::NONE
+                    || !tsc_binder::ast_shims::is_class_like(self.store().node(parent))
+                {
+                    return None;
+                }
+                let target_type = self.get_parent_type_of_class_element(node);
+                let target_param = self.new_parameter("target", target_type);
+                let key_type = self.get_class_element_property_key_type(node);
+                let key_param = self.new_parameter("propertyKey", key_type);
+                let is_property = node_kind == Kind::PropertyDeclaration;
+                let member_type = self.get_type_of_node_for_decorator_member(node);
+                let return_type = if is_property {
+                    self.void_type()
+                } else {
+                    self.new_typed_property_descriptor_type(member_type)
+                };
+                // PORT (FCS tranche 29): Go's `ast.HasAccessorModifier(node)`.
+                let has_prop_desc =
+                    !is_property || tsc_binder::ast_shims::has_accessor_modifier(self.store().node(node));
+                if has_prop_desc {
+                    let descriptor_type = self.new_typed_property_descriptor_type(member_type);
+                    let descriptor_param = self.new_parameter("descriptor", descriptor_type);
+                    let union = self.get_union_type(&[return_type, self.void_type()]);
+                    Some(self.new_decorator_call_signature(
+                        vec![target_param, key_param, descriptor_param],
+                        union,
+                    ))
+                } else {
+                    let union = self.get_union_type(&[return_type, self.void_type()]);
+                    Some(self.new_decorator_call_signature(vec![target_param, key_param], union))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Go: `func (c *Checker) getESDecoratorCallSignature(decorator) *Signature`
+    /// (checker.go:30778) — the ES-decorator context types; every
+    /// ClassXDecoratorContext resolver is reportErrors=true (the TS2318
+    /// family of a lib-less program).
+    fn get_es_decorator_call_signature(&mut self, decorator: NodeId) -> Option<crate::types::SignatureId> {
+        let node = self.store().node(decorator).parent.get();
+        if node == NodeId::NONE {
+            return None;
+        }
+        let existing = self.signature_node_links.get(node).decorator_signature;
+        let result = existing.or_else(|| {
+            let any_signature = self.any_signature.expect("anySignature");
+            self.signature_node_links.get(node).decorator_signature = Some(any_signature);
+            let built = self.get_es_decorator_call_signature_uncached(node);
+            self.signature_node_links.get(node).decorator_signature = built;
+            built
+        });
+        if result == self.any_signature {
+            None
+        } else {
+            result
+        }
+    }
+
+    /// Go: getESDecoratorCallSignature's `switch node.Kind` (checker.go:30858).
+    fn get_es_decorator_call_signature_uncached(&mut self, node: NodeId) -> Option<crate::types::SignatureId> {
+        let node_kind = self.store().node(node).kind;
+        let parent = self.store().node(node).parent.get();
+        match node_kind {
+            // Class decorators have a `context` of `ClassDecoratorContext<Class>`,
+            // where the `Class` type argument will be the "final type" of the
+            // class after all decorators are applied (Go's comment).
+            Kind::ClassDeclaration | Kind::ClassExpression => {
+                let class_symbol =
+                    crate::typeofsymbol::get_symbol_of_declaration(self, node)
+                        .expect("class declaration symbol");
+                let target_type = self.get_type_of_symbol(class_symbol);
+                let context_type = self.new_class_decorator_context_type(target_type);
+                Some(self.new_es_decorator_call_signature_impl(target_type, context_type, target_type))
+            }
+            // Method decorators have a `context` of `ClassMethodDecoratorContext<This, Value>`
+            // (getter/setter decorators: ClassGetter/ClassSetterDecoratorContext) — Go's comment.
+            Kind::MethodDeclaration | Kind::GetAccessor | Kind::SetAccessor => {
+                if parent == NodeId::NONE
+                    || !tsc_binder::ast_shims::is_class_like(self.store().node(parent))
+                {
+                    return None;
+                }
+                let value_type = if node_kind == Kind::MethodDeclaration {
+                    let signature = self
+                        .get_signature_from_declaration(node)
+                        .expect("method declaration signature");
+                    self.get_or_create_type_from_signature(signature)
+                } else {
+                    self.get_type_of_node_for_decorator_member(node)
+                };
+                let this_type = self.get_decorator_this_type(parent);
+                // We wrap the "input type", if necessary, to match the
+                // decoration target (Go's comment).
+                let target_type = if node_kind == Kind::GetAccessor {
+                    self.new_getter_function_type(value_type)
+                } else if node_kind == Kind::SetAccessor {
+                    self.new_setter_function_type(value_type)
+                } else {
+                    value_type
+                };
+                let context_type =
+                    self.new_class_member_decorator_context_type_for_node(node, this_type, value_type);
+                Some(self.new_es_decorator_call_signature_impl(target_type, context_type, target_type))
+            }
+            // Field decorators have a `context` of `ClassFieldDecoratorContext<This, Value>`
+            // and auto-accessor decorators one of `ClassAccessorDecoratorContext<This, Value>`
+            // (Go's comment).
+            Kind::PropertyDeclaration => {
+                if parent == NodeId::NONE
+                    || !tsc_binder::ast_shims::is_class_like(self.store().node(parent))
+                {
+                    return None;
+                }
+                let value_type = self.get_type_of_node_for_decorator_member(node);
+                let this_type = self.get_decorator_this_type(parent);
+                // PORT (FCS tranche 29): Go's `ast.HasAccessorModifier(node)`.
+                let has_accessor =
+                    tsc_binder::ast_shims::has_accessor_modifier(self.store().node(node));
+                let target_type = if has_accessor {
+                    self.new_class_accessor_decorator_target_type(this_type, value_type)
+                } else {
+                    self.undefined_type()
+                };
+                let return_type = if has_accessor {
+                    self.new_class_accessor_decorator_result_type(this_type, value_type)
+                } else {
+                    self.new_class_field_decorator_initializer_mutator_type(this_type, value_type)
+                };
+                let context_type =
+                    self.new_class_member_decorator_context_type_for_node(node, this_type, value_type);
+                Some(self.new_es_decorator_call_signature_impl(target_type, context_type, return_type))
+            }
+            _ => None,
+        }
+    }
+
+    /// Go: `ast.HasStaticModifier ? getTypeOfSymbol(classSymbol) : getDeclaredTypeOfClassOrInterface(classSymbol)`
+    /// (checker.go:30884/30922) — the ES-decorator `This` type argument.
+    /// PORT (FCS tranche 29): `u::is_static` carries both Go IsStatic and
+    /// HasStaticModifier (the syntactic-modifier flag read).
+    fn get_decorator_this_type(&mut self, class_parent: NodeId) -> TypeId {
+        let class_symbol = crate::typeofsymbol::get_symbol_of_declaration(self, class_parent)
+            .expect("class declaration symbol");
+        if u::is_static(self.store(), self.store().node(class_parent)) {
+            self.get_type_of_symbol(class_symbol)
+        } else {
+            self.get_declared_type_of_class_or_interface(class_symbol)
+        }
+    }
+
+    /// Go: `func (c *Checker) newClassDecoratorContextType(classType)` (checker.go:30954).
+    fn new_class_decorator_context_type(&mut self, class_type: TypeId) -> TypeId {
+        let g = self.get_global_class_decorator_context_type();
+        self.try_create_type_reference(g, &[class_type])
+    }
+
+    /// Go: `func (c *Checker) newClassMethodDecoratorContextType(classType, valueType)` (checker.go:30960).
+    fn new_class_method_decorator_context_type(&mut self, class_type: TypeId, value_type: TypeId) -> TypeId {
+        let g = self.get_global_class_method_decorator_context_type();
+        self.try_create_type_reference(g, &[class_type, value_type])
+    }
+
+    /// Go: `func (c *Checker) newClassGetterDecoratorContextType(classType, valueType)` (checker.go:30963).
+    fn new_class_getter_decorator_context_type(&mut self, class_type: TypeId, value_type: TypeId) -> TypeId {
+        let g = self.get_global_class_getter_decorator_context_type();
+        self.try_create_type_reference(g, &[class_type, value_type])
+    }
+
+    /// Go: `func (c *Checker) newClassSetterDecoratorContextType(classType, valueType)` (checker.go:30966).
+    fn new_class_setter_decorator_context_type(&mut self, class_type: TypeId, value_type: TypeId) -> TypeId {
+        let g = self.get_global_class_setter_decorator_context_type();
+        self.try_create_type_reference(g, &[class_type, value_type])
+    }
+
+    /// Go: `func (c *Checker) newClassAccessorDecoratorContextType(thisType, valueType)` (checker.go:30969).
+    fn new_class_accessor_decorator_context_type(&mut self, this_type: TypeId, value_type: TypeId) -> TypeId {
+        let g = self.get_global_class_accessor_decorator_context_type();
+        self.try_create_type_reference(g, &[this_type, value_type])
+    }
+
+    /// Go: `func (c *Checker) newClassFieldDecoratorContextType(thisType, valueType)` (checker.go:30972).
+    fn new_class_field_decorator_context_type(&mut self, this_type: TypeId, value_type: TypeId) -> TypeId {
+        let g = self.get_global_class_field_decorator_context_type();
+        self.try_create_type_reference(g, &[this_type, value_type])
+    }
+
+    /// Gets a type like `{ name: "foo", private: false, static: true }` that is
+    /// used to provide member-specific details that will be intersected with a
+    /// decorator context type (Go's comment).
+    /// Go: `func (c *Checker) getClassMemberDecoratorContextOverrideType(nameType, isPrivate, isStatic)` (checker.go:30976).
+    fn get_class_member_decorator_context_override_type(
+        &mut self,
+        name_type: TypeId,
+        is_private: bool,
+        is_static: bool,
+    ) -> TypeId {
+        let kind = if is_private {
+            if is_static {
+                crate::todo_shapes::CachedTypeKind::DecoratorContextPrivateStatic
+            } else {
+                crate::todo_shapes::CachedTypeKind::DecoratorContextPrivate
+            }
+        } else if is_static {
+            crate::todo_shapes::CachedTypeKind::DecoratorContextStatic
+        } else {
+            crate::todo_shapes::CachedTypeKind::DecoratorContext
+        };
+        if let Some(cached) = self.cached_types_get(kind, name_type) {
+            return cached;
+        }
+        let true_type = self.true_type();
+        let false_type = self.false_type();
+        let name_symbol = self.new_property("name", name_type);
+        let private_symbol = self.new_property("private", if is_private { true_type } else { false_type });
+        let static_symbol = self.new_property("static", if is_static { true_type } else { false_type });
+        let mut members = tsc_ast::SymbolTable::new();
+        members.set("name".to_string(), name_symbol);
+        members.set("private".to_string(), private_symbol);
+        members.set("static".to_string(), static_symbol);
+        let override_type = self.new_anonymous_type_with_members(None, members, crate::types::ObjectFlags::NONE);
+        self.cached_types_set(kind, name_type, Some(override_type));
+        override_type
+    }
+
+    /// Go: `func (c *Checker) newClassMemberDecoratorContextTypeForNode(node, thisType, valueType)` (checker.go:31002).
+    fn new_class_member_decorator_context_type_for_node(
+        &mut self,
+        node: NodeId,
+        this_type: TypeId,
+        value_type: TypeId,
+    ) -> TypeId {
+        let is_static = u::is_static(self.store(), self.store().node(node));
+        let name = self.store().node(node).name().expect("member name");
+        let is_private = tsc_ast::ast_generated::is_private_identifier(self.store().node(name));
+        let name_type = if is_private {
+            let text = tsc_ast::node_text(self.store(), name).to_string();
+            self.get_string_literal_type(&text)
+        } else {
+            self.get_literal_type_from_property_name(name)
+        };
+        let node_kind = self.store().node(node).kind;
+        let context_type = match node_kind {
+            Kind::MethodDeclaration => {
+                self.new_class_method_decorator_context_type(this_type, value_type)
+            }
+            Kind::GetAccessor => {
+                self.new_class_getter_decorator_context_type(this_type, value_type)
+            }
+            Kind::SetAccessor => {
+                self.new_class_setter_decorator_context_type(this_type, value_type)
+            }
+            Kind::PropertyDeclaration
+                if tsc_binder::ast_shims::is_auto_accessor_property_declaration(
+                    self.store().node(node),
+                ) =>
+            {
+                self.new_class_accessor_decorator_context_type(this_type, value_type)
+            }
+            Kind::PropertyDeclaration => {
+                self.new_class_field_decorator_context_type(this_type, value_type)
+            }
+            _ => panic!(
+                "Unhandled case in createClassMemberDecoratorContextTypeForNode: {}",
+                self.store().node(node).kind_string()
+            ),
+        };
+        let override_type =
+            self.get_class_member_decorator_context_override_type(name_type, is_private, is_static);
+        self.get_intersection_type(&[context_type, override_type])
+    }
+
+    /// Go: `func (c *Checker) newClassAccessorDecoratorTargetType(thisType, valueType)` (checker.go:31031).
+    fn new_class_accessor_decorator_target_type(&mut self, this_type: TypeId, value_type: TypeId) -> TypeId {
+        let g = self.get_global_class_accessor_decorator_target_type();
+        self.try_create_type_reference(g, &[this_type, value_type])
+    }
+
+    /// Go: `func (c *Checker) newClassAccessorDecoratorResultType(thisType, valueType)` (checker.go:31035).
+    fn new_class_accessor_decorator_result_type(&mut self, this_type: TypeId, value_type: TypeId) -> TypeId {
+        let g = self.get_global_class_accessor_decorator_result_type();
+        self.try_create_type_reference(g, &[this_type, value_type])
+    }
+
+    /// Go: `func (c *Checker) newClassFieldDecoratorInitializerMutatorType(thisType, valueType)` (checker.go:31039).
+    fn new_class_field_decorator_initializer_mutator_type(
+        &mut self,
+        this_type: TypeId,
+        value_type: TypeId,
+    ) -> TypeId {
+        let this_param = self.new_parameter("this", this_type);
+        let value_param = self.new_parameter("value", value_type);
+        self.new_function_type_for_decorator(vec![], Some(this_param), vec![value_param], value_type)
+    }
+
+    /// Creates a call signature for an ES Decorator. This method is used by the
+    /// semantics of `getESDecoratorCallSignature` (Go's comment).
+    /// Go: `func (c *Checker) newESDecoratorCallSignature(targetType, contextType, nonOptionalReturnType)` (checker.go:31046).
+    fn new_es_decorator_call_signature_impl(
+        &mut self,
+        target_type: TypeId,
+        context_type: TypeId,
+        non_optional_return_type: TypeId,
+    ) -> crate::types::SignatureId {
+        let target_param = self.new_parameter("target", target_type);
+        let context_param = self.new_parameter("context", context_type);
+        let return_type = self.get_union_type(&[non_optional_return_type, self.void_type()]);
+        self.new_decorator_call_signature(vec![target_param, context_param], return_type)
+    }
+
+    /// Go: `func (c *Checker) newCallSignature(typeParameters, thisParameter, parameters, returnType) *Signature`
+    /// (checker.go:31052) — the decorator family's synthetic-signature form.
+    /// PORT (FCS tranche 29): Go anchors the signature at a factory-made
+    /// synthetic FunctionTypeNode declaration; the port has no factory, so
+    /// `declaration` is None — every declaration-reading outcome matches
+    /// (synthetic nodes carry no flags/links, so IsDeprecatedDeclaration
+    /// and friends answer the same as nil).
+    fn new_decorator_call_signature(&mut self, parameters: Vec<SymbolId>, return_type: TypeId) -> crate::types::SignatureId {
+        self.new_signature(
+            crate::types::SignatureFlags::NONE,
+            None,
+            Vec::new(),
+            None,
+            parameters.clone(),
+            Some(return_type),
+            parameters.len() as i32,
+        )
+    }
+
+    /// Go: `func (c *Checker) newFunctionType(typeParameters, thisParameter, parameters, returnType)` (checker.go:31058).
+    fn new_function_type_for_decorator(
+        &mut self,
+        type_parameters: Vec<TypeId>,
+        this_parameter: Option<SymbolId>,
+        parameters: Vec<SymbolId>,
+        return_type: TypeId,
+    ) -> TypeId {
+        // Go's newCallSignature sets minArgumentCount = len(parameters).
+        let min_argument_count = parameters.len() as i32;
+        let signature = self.new_signature(
+            crate::types::SignatureFlags::NONE,
+            None,
+            type_parameters,
+            this_parameter,
+            parameters,
+            Some(return_type),
+            min_argument_count,
+        );
+        self.get_or_create_type_from_signature(signature)
+    }
+
+    /// Go: `func (c *Checker) newGetterFunctionType(t)` (checker.go:31062).
+    fn new_getter_function_type(&mut self, t: TypeId) -> TypeId {
+        self.new_function_type_for_decorator(Vec::new(), None, Vec::new(), t)
+    }
+
+    /// Go: `func (c *Checker) newSetterFunctionType(t)` (checker.go:31066).
+    fn new_setter_function_type(&mut self, t: TypeId) -> TypeId {
+        let value_param = self.new_parameter("value", t);
+        self.new_function_type_for_decorator(Vec::new(), None, vec![value_param], self.void_type())
+    }
+
+    /// Go: `func (c *Checker) newTypedPropertyDescriptorType(propertyType)` (checker.go:31073)
+    /// — createTypeFromGenericGlobalType(getGlobalTypedPropertyDescriptorType(), ...)
+    /// (checker.go:1116: arity 1, reportErrors=true — the TS2318 site).
+    fn new_typed_property_descriptor_type(&mut self, property_type: TypeId) -> TypeId {
+        let g = self.get_global_typed_property_descriptor_type();
+        self.create_type_from_generic_global_type(Some(g), vec![property_type])
+    }
+
+    /// Go: `func (c *Checker) getParentTypeOfClassElement(node)` (checker.go:31077).
+    fn get_parent_type_of_class_element(&mut self, node: NodeId) -> TypeId {
+        let parent = self.store().node(node).parent.get();
+        let class_symbol = crate::typeofsymbol::get_symbol_of_declaration(self, parent)
+            .expect("class symbol");
+        if u::is_static(self.store(), self.store().node(node)) {
+            self.get_type_of_symbol(class_symbol)
+        } else {
+            self.get_declared_type_of_symbol(class_symbol)
+        }
+    }
+
+    /// Go: `func (c *Checker) getClassElementPropertyKeyType(element)` (checker.go:31085).
+    fn get_class_element_property_key_type(&mut self, element: NodeId) -> TypeId {
+        let name = self.store().node(element).name().expect("member name");
+        match self.store().node(name).kind {
+            Kind::Identifier | Kind::NumericLiteral | Kind::StringLiteral => {
+                let text = tsc_ast::node_text(self.store(), name).to_string();
+                self.get_string_literal_type(&text)
+            }
+            Kind::ComputedPropertyName => {
+                let name_type = self.check_computed_property_name(name);
+                if self.is_type_assignable_to_kind(name_type, crate::types::TypeFlags::ESSYMBOL_LIKE) {
+                    name_type
+                } else {
+                    self.string_type()
+                }
+            }
+            _ => self.error_type(),
+        }
+    }
+
+    /// Go: `func (c *Checker) getTypeOfNode(node) *Type` (checker.go:32483) — the
+    /// `ast.IsDeclaration(node)` arm (checker.go:32548) is the only arm the
+    /// decorator family reaches (method / accessor / property declarations):
+    /// `getTypeOfSymbol(getSymbolOfDeclaration(node))`. PORT (FCS tranche 29).
+    fn get_type_of_node_for_decorator_member(&mut self, node: NodeId) -> TypeId {
+        let symbol = crate::typeofsymbol::get_symbol_of_declaration(self, node)
+            .expect("declaration symbol");
+        self.get_type_of_symbol(symbol)
     }
 
     /// Go: `func (c *Checker) checkCollisionsForDeclarationName(node *ast.Node, name *ast.Node)`

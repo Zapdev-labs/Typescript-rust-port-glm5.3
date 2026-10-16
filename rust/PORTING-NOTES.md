@@ -3047,3 +3047,38 @@ Imports 2882 arm). PLAIN-sweep census: divergent 1,093 (916 count /
 0. 67 suites (fcs28 pins x7, incl. exact GO twin records); clippy 0;
 all gates green fresh (orchestrator re-ran tests + sweeps + census
 independently; Go tree md5-verified untouched).
+
+## Sweep micro-tranche 29 landed (2026-11-02, RIG-VALIDATED) — the TS2318 global-type + decorator wave; divergent 1,093 -> 985
+
+The rust-missing TS2318 family (130 instances, clustered by global
+name) collapsed to 6. Roots fixed (all PORT-noted "FCS tranche 29"):
+- TypedPropertyDescriptor x45: the legacy-decorator synthetic signature
+  (checker.go:30762/31073; the checked row at checker.go:1116).
+- Extract x25: getExtractStringType read the memoized CHECKED resolver
+  (checker.go:27242/1080); the port passed report_errors=false.
+- Iterable x20: empty/rest-only array binding patterns build
+  createIterableType(anyType) at ES2015+ (checker.go:18370); the port
+  had a permissive anyArrayType TODO stub.
+- ES decorator context types x41 (ClassDecoratorContext + method/
+  accessor/getter/field/setter): the full decorator call-signature wave
+  (checker.go:30665-31101 + 6206-6291) — real check_decorator,
+  legacy/es decorator call signatures + all synthetic helpers,
+  resolveDecorator's 1329 arm + nil guard, getEffectiveCallArguments
+  Decorator arm, getContextualTypeForDecorator + dispatch, and the
+  checkDecorators grammar gate (NodeCanBeDecorated, ast/utilities.go:
+  4327 — the gate kept 3 records from becoming newly-divergent).
+HONEST RESIDUAL QUEUE (distinct roots): IterableIterator x2 (rides with
+the 2504/async-iteration pair — the largest adjacent family), Record x2
+(JSDoc Object<K,V> arm via the @type-on-binary attachment seam,
+checker.go:23588), PromiseLike x1 (inferTypeArguments contextual await
+read), ClassMethodDecoratorContext x1 (decorator-factory generic
+inference); plus the 17 rust-EXTRA 2318s (AsyncIterableIterator es2018
+x10, Promise es2015 x3, TemplateStringsArray x2, Record, Function) and
+the standing fcs28 queue (JSDoc-tag import types ~10, bare-require ~6,
+dynamic import + 2882 ~8). PLAIN-sweep census: divergent 985 (794
+count / 191 hash), identical 6,582/7,567; both drivers 0/3,826/3,741/
+0; panics 0; newly-divergent 0, newly-identical 108 (the whole
+decorators/destructuring/esDecorators/for-in/keyof families). 69 suites
+(fcs29 pins: checker 8/8 + testrunner 6/6 exact-GO-twin records);
+clippy 0; all gates green fresh (orchestrator re-ran tests + sweeps +
+census independently; Go tree md5-verified pristine).

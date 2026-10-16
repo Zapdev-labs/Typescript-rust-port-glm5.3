@@ -3662,10 +3662,15 @@ impl Checker {
         if elements.is_empty() || (elements.len() == 1 && rest_element.is_some()) {
             // TODO: remove ScriptTargetES2015
             if self.language_version >= tsc_core::options_generated::ScriptTarget::ES2015 {
-                // TODO(port M6 S7): createIterableType(c.anyType) — the
-                // iterable construction; permissive anyArrayType (Go's
-                // pre-ES2015 answer).
-                return self.any_array_type;
+                // PORT(FCS tranche 29): Go checker.go:18370 — the empty /
+                // rest-only array binding pattern's type is
+                // `createIterableType(c.anyType)`, which reads the MEMOIZED
+                // getGlobalIterableTypeChecked row (reportErrors=true — the
+                // location-less TS2318 "Cannot find global type 'Iterable'"
+                // of a lib-less program; 20 rust-missing instances). The
+                // former permissive anyArrayType also served the ES2015+
+                // arm, where Go answers Iterable<any, any, undefined>.
+                return self.create_iterable_type(self.any_type());
             }
             return self.any_array_type;
         }

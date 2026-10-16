@@ -163,11 +163,14 @@ pub(crate) fn get_this_parameter(store: &dyn NodeStore, signature: NodeId) -> Op
 
 /// Go: `func HasAbstractModifier(node *Node) bool` / `HasAmbientModifier`
 /// (utilities.go) — HasSyntacticModifier over the flag.
-fn has_abstract_modifier(node: &Node) -> bool {
+/// PORT (FCS tranche 29): pub(crate) — NodeCanBeDecorated (statements.rs)
+/// reads both.
+pub(crate) fn has_abstract_modifier(node: &Node) -> bool {
     has_syntactic_modifier(node, ModifierFlags::ABSTRACT)
 }
 
-fn has_ambient_modifier(node: &Node) -> bool {
+/// Go: `func HasAmbientModifier(node *Node) bool` (utilities.go).
+pub(crate) fn has_ambient_modifier(node: &Node) -> bool {
     has_syntactic_modifier(node, ModifierFlags::AMBIENT)
 }
 

@@ -529,12 +529,26 @@ impl Checker {
         }
         // Go's len(callSignatures) == 0 arm (checker.go:8985): the
         // invocationError chain — the S8-seam-era untyped-call composition
-        // is retired (members are real). The decorator-wave surfaces
-        // (isPotentiallyUncalledDecorator, getDecoratorCallSignature) stay
-        // bannered until that wave.
-        // TODO(port M6 decorator wave): isPotentiallyUncalledDecorator's
-        // accepts-too-few-arguments error + getDecoratorCallSignature's
-        // synthetic-argument applicability filter.
+        // is retired (members are real).
+        // PORT (FCS tranche 29): the decorator-wave surfaces are real now —
+        // Go checker.go:8974-8992: the isPotentiallyUncalledDecorator probe
+        // ("accepts too few arguments", TS1329) + getDecoratorCallSignature's
+        // nil guard (a member whose synthetic signature doesn't exist
+        // resolves as an error call; the signature's construction reports
+        // the TS2318 TypedPropertyDescriptor / ClassXDecoratorContext
+        // family of a lib-less program).
+        if self.is_potentially_uncalled_decorator(node, &call_signatures)
+            && !tsc_ast::ast_generated::is_parenthesized_expression(self.store().node(expression))
+        {
+            // Go: `scanner.GetTextOfNode(node.Expression())`.
+            let node_str = crate::ast_shims::get_text_of_node(self.store(), expression);
+            self.error(
+                node,
+                &diag::X_0_ACCEPTS_TOO_FEW_ARGUMENTS_TO_BE_USED_AS_A_DECORATOR_HERE_DID_YOU_MEAN_TO_CALL_IT_FIRST_AND_WRITE_0,
+                &[node_str],
+            );
+            return self.resolve_error_call(node);
+        }
         let head_message = self.get_diagnostic_head_message_for_decorator_resolution(node);
         if call_signatures.is_empty() {
             let chain = self.invocation_error_details(node, apparent_type, crate::types::SignatureKind::Call);
@@ -547,6 +561,11 @@ impl Checker {
             self.add_diagnostic(diagnostic);
             return self.resolve_error_call(node);
         }
+        // Go checker.go:8986 — `decoratorSignature := c.getDecoratorCallSignature(node);
+        // if decoratorSignature == nil { return c.resolveErrorCall(node) }`.
+        if self.get_decorator_call_signature(node).is_none() {
+            return self.resolve_error_call(node);
+        }
         self.resolve_call(
             node,
             &call_signatures,
@@ -555,6 +574,22 @@ impl Checker {
             SignatureFlags::NONE,
             head_message,
         )
+    }
+
+    /// Go: `func (c *Checker) isPotentiallyUncalledDecorator(decorator, signatures) bool`
+    /// (checker.go:8996) — PORT (FCS tranche 29).
+    fn is_potentially_uncalled_decorator(
+        &mut self,
+        decorator: NodeId,
+        signatures: &[SignatureId],
+    ) -> bool {
+        !signatures.is_empty()
+            && signatures.iter().all(|&sig| {
+                let has_rest = u::signature_has_rest_parameter(&self.signatures[sig.0 as usize]);
+                !has_rest
+                    && self.get_min_argument_count(sig) == 0
+                    && self.get_parameter_count(sig) < self.get_decorator_argument_count(decorator, sig)
+            })
     }
 
     /// Go: `func (c *Checker) getDiagnosticHeadMessageForDecoratorResolution(node) *diagnostics.Message`
@@ -2704,8 +2739,11 @@ impl Checker {
                 args
             }
             Kind::Decorator => {
-                // TODO(port M6 decorator wave): getEffectiveDecoratorArguments.
-                Vec::new()
+                // PORT (FCS tranche 29): Go checker.go:30610 —
+                // getEffectiveDecoratorArguments (the synthetic
+                // target/propertyKey/descriptor or target/context
+                // arguments of the decorator's call signature).
+                self.get_effective_decorator_arguments(node)
             }
             Kind::BinaryExpression => {
                 // Handles instanceof operator
@@ -3035,7 +3073,7 @@ pub(crate) fn is_import_call(store: &dyn NodeStore, node: NodeId) -> bool {
 }
 
 /// Go: `ast.CanHaveDecorators` (the parser's copy is the dedup candidate).
-fn can_have_decorators(node: &tsc_ast::Node) -> bool {
+pub(crate) fn can_have_decorators(node: &tsc_ast::Node) -> bool {
     matches!(
         node.kind,
         Kind::Parameter

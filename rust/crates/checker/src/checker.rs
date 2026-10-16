@@ -1156,6 +1156,25 @@ impl Checker {
         symbol
     }
 
+    /// Go: `func (c *Checker) newParameter(name string, t *Type) *ast.Symbol`
+    /// (checker.go:14355) — PORT (FCS tranche 29): the decorator-call-signature
+    /// family's synthetic parameter (newSymbol(FunctionScopedVariable) +
+    /// the resolvedType link seed).
+    pub(crate) fn new_parameter(&mut self, name: &str, t: TypeId) -> SymbolId {
+        let symbol = self.new_symbol(SymbolFlags::FUNCTION_SCOPED_VARIABLE, name);
+        self.value_symbol_links.get(symbol).resolved_type = Some(t);
+        symbol
+    }
+
+    /// Go: `func (c *Checker) newProperty(name string, t *Type) *ast.Symbol`
+    /// (checker.go:14361) — PORT (FCS tranche 29): the decorator context
+    /// override type's synthetic property.
+    pub(crate) fn new_property(&mut self, name: &str, t: TypeId) -> SymbolId {
+        let symbol = self.new_symbol(SymbolFlags::PROPERTY, name);
+        self.value_symbol_links.get(symbol).resolved_type = Some(t);
+        symbol
+    }
+
     /// Go: `func (c *Checker) getDeclarationNodeFlagsFromSymbol(s *ast.Symbol) ast.NodeFlags`.
     pub(crate) fn get_declaration_node_flags_from_symbol(&self, symbol: SymbolId) -> NodeFlags {
         // Go routes through getCombinedNodeFlagsCached (a single-entry memo

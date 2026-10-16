@@ -474,12 +474,14 @@ impl Checker {
                 t.and_then(|t| self.try_get_type_from_type_node(t))
             }
             // M6 W5: the JSX arms (Go checker.go:29949-29953) — the
-            // jsx.go contextual family. KindDecorator needs W4's decorator
-            // signature machinery; KindImportAttribute needs the global
-            // ImportAttributes type resolver.
+            // jsx.go contextual family. PORT (FCS tranche 29): the
+            // KindDecorator arm (Go checker.go:29914) — the contextual
+            // type of a node inside a decorator is the decorator's
+            // synthetic call-signature type.
             Kind::JsxExpression => {
                 self.get_contextual_type_for_jsx_expression(parent, context_flags)
             }
+            Kind::Decorator => self.get_contextual_type_for_decorator(parent),
             Kind::JsxAttribute | Kind::JsxSpreadAttribute => {
                 self.get_contextual_type_for_jsx_attribute(parent, context_flags)
             }
@@ -2299,6 +2301,17 @@ impl Checker {
             None,
             None,
         ))
+    }
+
+    /// Go: `func (c *Checker) getContextualTypeForDecorator(decorator *ast.Node) *Type`
+    /// (checker.go:30349) — PORT (FCS tranche 29): the decorator's
+    /// synthetic call-signature type (getOrCreateTypeFromSignature).
+    pub(crate) fn get_contextual_type_for_decorator(
+        &mut self,
+        decorator: NodeId,
+    ) -> Option<TypeId> {
+        let signature = self.get_decorator_call_signature(decorator)?;
+        Some(self.get_or_create_type_from_signature(signature))
     }
 
     // ────────────────────────────────────────────────────────────────────────

@@ -129,11 +129,19 @@ impl Checker {
 
     /// Go: `func (c *Checker) getExtractStringType(t *Type) *Type` (checker.go:27240)
     /// — REAL (M6 S10; replaces typeofsymbol.rs's stringType stub). Without
-    /// lib.d.ts the global `Extract` type alias is absent (Go's
-    /// getGlobalExtractSymbol answers nil), so Go's stringType fallback is
+    /// lib.d.ts the global `Extract` type alias is absent — Go's
+    /// getGlobalExtractSymbol answers nil, so Go's stringType fallback is
     /// the faithful answer.
     pub(crate) fn get_extract_string_type_impl(&mut self, t: TypeId) -> TypeId {
-        let extract_type_alias = self.get_global_type_alias_symbol("Extract", 2, false);
+        // PORT(FCS tranche 29): Go checker.go:27242 reads the MEMOIZED
+        // `c.getGlobalExtractSymbol()` — the resolver row seeded with
+        // reportErrors=true (checker.go:1080: getGlobalTypeAliasResolver(
+        // "Extract", 2, true)). The former direct call passed
+        // report_errors=false, so the TS2318 "Cannot find global type
+        // 'Extract'" of a lib-less program never fired (25 rust-missing
+        // instances across the corpus). The spine accessor is the exact
+        // memoized row twin.
+        let extract_type_alias = self.get_global_extract_symbol();
         if let Some(extract_type_alias) = extract_type_alias {
             let string_type = self.string_type();
             return self.get_type_alias_instantiation(extract_type_alias, vec![t, string_type], None);
