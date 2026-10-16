@@ -5014,6 +5014,40 @@ impl Checker {
         None
     }
 
+    /// Go: `func (c *Checker) getResolutionModeOverride(node *ast.ImportAttributes, reportErrors bool) core.ResolutionMode`
+    /// (checker.go:3386) — the reporting wrapper over the ast walk: with
+    /// reportErrors the grammarErrorOnNode callback fires TS1453 on a
+    /// resolution-mode value that is neither "import" nor "require".
+    /// PORT(FCS tranche 28).
+    pub(crate) fn get_resolution_mode_override_checked(
+        &mut self,
+        node: NodeId,
+        report_errors: bool,
+    ) -> ResolutionMode {
+        if !report_errors {
+            let (mode, _) = get_resolution_mode_override(self.store(), node);
+            return mode;
+        }
+        // Collect the grammar-error site during the borrow-free walk, then
+        // emit after the store borrow ends (Go's callback fires inline; the
+        // emission is order-equivalent — the error is the walk's only
+        // side effect).
+        let mut grammar_error: Option<(NodeId, &'static Message)> = None;
+        let (mode, _) = get_resolution_mode_override_ex(
+            self.store(),
+            node,
+            Some(|value: NodeId, message: &'static Message| {
+                grammar_error = Some((value, message));
+            }),
+        );
+        if let Some((value, message)) = grammar_error {
+            // Go: c.grammarErrorOnNode (checker.go:3391) — skipped when the
+            // source file has parse diagnostics.
+            self.grammar_error_on_node(value, message, &[]);
+        }
+        mode
+    }
+
     /// Go: `func (c *Checker) resolveExternalModule(location, moduleReference, moduleNotFoundError, errorNode, isForAugmentation, importAttributesType) *ast.Symbol`
     /// (checker.go:15453). REAL as of FCS tranche 7: the ambient-module
     /// half, the resolved-module half (program.GetResolvedModule /
@@ -6445,6 +6479,18 @@ fn is_require_call(store: &dyn NodeStore, node: NodeId, require_string_literal_l
 /// (`grammarErrorOnNode` is dropped exactly like there; the checker.go
 /// callers pass nil).
 fn get_resolution_mode_override(store: &dyn NodeStore, node: NodeId) -> (ResolutionMode, bool) {
+    get_resolution_mode_override_ex::<fn(NodeId, &'static Message)>(store, node, None)
+}
+
+/// Go: `func (node *ImportAttributesNode) GetResolutionModeOverride(grammarErrorOnNode)`
+/// (ast/ast.go:2217) — the callback-bearing form for the checker.go:3391
+/// caller (checkImportType) that reports TS1453 on a bad resolution-mode
+/// value. PORT(FCS tranche 28): the callback arm was dropped before.
+fn get_resolution_mode_override_ex<F: FnMut(NodeId, &'static Message)>(
+    store: &dyn NodeStore,
+    node: NodeId,
+    mut grammar_error_on_node: Option<F>,
+) -> (ResolutionMode, bool) {
     if node == NodeId::NONE {
         return (ResolutionModeNone, false);
     }
@@ -6471,13 +6517,21 @@ fn get_resolution_mode_override(store: &dyn NodeStore, node: NodeId) -> (Resolut
         return (ResolutionModeNone, false);
     }
     let text = tsc_ast::node_text(store, value);
-    // Go: the grammarErrorOnNode arm is unreachable (nil callback).
+    // Go: the grammarErrorOnNode arm — only reached when the caller passes
+    // the callback (checker.go:3391's reportErrors form).
+    if text != "import" && text != "require" {
+        if let Some(grammar_error_on_node) = grammar_error_on_node.as_mut() {
+            grammar_error_on_node(
+                value,
+                &diag::X_RESOLUTION_MODE_SHOULD_BE_EITHER_REQUIRE_OR_IMPORT,
+            );
+        }
+        return (ResolutionModeNone, false);
+    }
     if text == "import" {
         (ResolutionModeESM, true)
-    } else if text == "require" {
-        (ResolutionModeCommonJS, true)
     } else {
-        (ResolutionModeNone, false)
+        (ResolutionModeCommonJS, true)
     }
 }
 

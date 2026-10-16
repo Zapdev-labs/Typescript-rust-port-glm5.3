@@ -6999,10 +6999,13 @@ impl Checker {
             .clone();
         self.check_source_element(Some(d.argument));
         if let Some(attributes) = d.attributes {
-            // TODO(port M6 W3): checkGrammarImportAttributeValues +
-            // getResolutionModeOverride (jsdoc/import-attributes grammar);
-            // permissive.
-            let _ = attributes;
+            // PORT(FCS tranche 28): Go checker.go:3377-3382 — the
+            // attribute-value grammar check + the reporting
+            // getResolutionModeOverride (TS1453 on a resolution-mode value
+            // that is neither "import" nor "require"); both were permissive
+            // stubs before (the missing-1453 half of the TypeMode records).
+            self.check_grammar_import_attribute_values(attributes);
+            self.get_resolution_mode_override_checked(attributes, true /*reportErrors*/);
         }
         self.check_type_reference_or_import(node);
         // Go: checkImportAttributes(node) (checker.go:5460) — wired to the

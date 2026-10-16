@@ -3014,3 +3014,36 @@ NOT fixed, next-family candidate. Both drivers 0/3,826/3,741/0; panics 0;
 newly-divergent 0. 65 suites (fcs27 pins 4/4); clippy 0; all gates green
 fresh (orchestrator re-ran tests + sweeps + census independently; Go
 tree md5-verified untouched).
+
+## Sweep micro-tranche 28 landed (2026-11-02, RIG-VALIDATED) — the TS2307 import-type resolver; divergent 1,152 -> 1,093
+
+The rust-missing TS2307 family (340 instances/81 records, entirely
+missing — zero rust-extra) collapsed to 24/17. ONE root for the 316:
+the Rust port called the PUBLIC ResolveExternalModuleName carrier
+(exports.rs), which hard-codes ignoreErrors=true — every import-type
+node's module-not-found was silently swallowed. Go's getTypeFromImport-
+TypeNode (checker.go:25116) resolves through the INTERNAL resolver with
+ignoreErrors=false + the import-attributes type. Companion: check_
+import_type's dropped grammarErrorOnNode callbacks (Go checker.go:
+3375-3383): checkGrammarImportAttributeValues (TS2858) + the REPORTING
+getResolutionModeOverride (TS1453 on a bad resolution-mode value).
+Fixes: typenodes.rs internal resolver (errors ON, attributes type,
+location=ImportTypeNode); statements.rs check_import_type attribute-
+value grammar + 1453 reporting; resolution.rs get_resolution_mode_
+override_ex (callback arm, ast.go:2237) + get_resolution_mode_override_
+checked (checker.go:3386). Clusters fixed: TypeMode resolution-mode
+type nodes (200), rel:noext import-type annotations + JSDoc @param tags
++ typeof import() (~79 of 87), rel:ext/bare import decls (~49 of 53).
+Newly-identical 59; newly-divergent 0. HONEST RESIDUAL QUEUE (24
+instances/17 records, 3 distinct roots, NOT fixed): (1) JSDoc-tag import
+types ~10 (jsdocThisType, jsdocTypeReferenceToImport, commonJSReexport,
+exportNestedNamespaces2, jsDeclarations*; TS8030 rides along); (2) bare-
+require variable path ~6 (nestedDestructuringOfRequire, requireTwo-
+PropertyAccesses, requireOfESWithPropertyAccess — the alias arm is
+Go-exact but never reached upstream); (3) dynamic import() calls +
+TS2882 ~8 (rewriteRelativeImportExtensions + noUncheckedSideEffect-
+Imports 2882 arm). PLAIN-sweep census: divergent 1,093 (916 count /
+177 hash), identical 6,474/7,567; both drivers 0/3,826/3,741/0; panics
+0. 67 suites (fcs28 pins x7, incl. exact GO twin records); clippy 0;
+all gates green fresh (orchestrator re-ran tests + sweeps + census
+independently; Go tree md5-verified untouched).

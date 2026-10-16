@@ -3178,13 +3178,13 @@ impl Checker {
     /// Go: `func (c *Checker) getTypeFromImportTypeNode(node) *Type` (checker.go:25121).
     fn get_type_from_import_type_node(&mut self, node: NodeId) -> TypeId {
         if self.type_node_links.get(node).resolved_type.is_none() {
-            let (argument, is_type_of, qualifier) = {
+            let (argument, is_type_of, qualifier, attributes) = {
                 let d = self
                     .store()
                     .node(node)
                     .as_import_type_node()
                     .expect("ImportTypeNode data");
-                (d.argument, d.is_type_of, d.qualifier)
+                (d.argument, d.is_type_of, d.qualifier, d.attributes)
             };
             // Go: ast.IsLiteralImportTypeNode — the argument must be a
             // string-literal-wrapping LiteralTypeNode.
@@ -3211,17 +3211,27 @@ impl Checker {
             };
             // TODO: Future work: support unions/generics/whatever via a
             // deferred import-type.
-            // TODO(port M6 S8): the import-attributes type (Go passes
-            // c.getTypeFromImportAttributes(...)); the S6 module-resolution
-            // seam is permissive None regardless.
             let module_specifier = self
                 .store()
                 .node(argument)
                 .as_literal_type_node()
                 .expect("data")
                 .literal;
-            let inner_module_symbol =
-                self.resolve_external_module_name(module_specifier, None);
+            // PORT(FCS tranche 28): Go checker.go:25116 calls the INTERNAL
+            // resolver — `c.resolveExternalModuleName(node, literal, false
+            // /*ignoreErrors*/, c.getTypeFromImportAttributes(ast.
+            // GetImportAttributes(node)))` — with errors ON and the
+            // import-attributes type. The previous code used the public
+            // ResolveExternalModuleName carrier (ignoreErrors hard-coded
+            // true), which swallowed the module-not-found diagnostics of
+            // EVERY import-type node (the TS2307 residual family).
+            let import_attributes_type = self.get_type_from_import_attributes(attributes);
+            let inner_module_symbol = self.resolve_external_module_name_ex(
+                node,
+                Some(module_specifier),
+                false, /*ignoreErrors*/
+                import_attributes_type,
+            );
             let Some(inner_module_symbol) = inner_module_symbol else {
                 self.symbol_node_links.get(node).resolved_symbol = Some(self.unknown_symbol());
                 let t = self.error_type();
