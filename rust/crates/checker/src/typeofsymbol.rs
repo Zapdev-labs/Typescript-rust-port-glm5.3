@@ -5167,7 +5167,17 @@ impl Checker {
             }
             let mut all_type_parameters = type_parameters;
             all_type_parameters.push(this_type);
-            let resolved_type_arguments = all_type_parameters.clone();
+            // PORT (FCS tranche 33): Go checker.go:17722 sets
+            // `d.resolvedTypeArguments = d.TypeParameters()` — the
+            // self-reference instantiation's type arguments are the type
+            // parameters EXCLUDING the trailing thisType. The port had
+            // `all_type_parameters.clone()` (thisType included), so the class
+            // self-reference carried one bogus type argument; then
+            // getTypeWithThisArgument's `len(TypeParameters()) ==
+            // len(typeArguments)` guard bailed and `this` was never
+            // substituted with the receiver in apparent-type member lookups
+            // (the TS2322 thisType family: `this` vs `T`/`U` mismatches).
+            let resolved_type_arguments = all_type_parameters[..all_type_parameters.len() - 1].to_vec();
             let instantiations = self.type_mut(t)
                 .as_interface_type_mut()
                 .expect("InterfaceType data");

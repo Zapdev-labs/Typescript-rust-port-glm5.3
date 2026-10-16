@@ -3169,3 +3169,40 @@ both drivers 0/3,826/3,741/0; panics 0. 75 suites (fcs32: checker 11/11
 + twin 5/5 with 42 exact GO twin records); clippy 0; all gates green
 fresh (orchestrator re-ran tests + sweeps + census independently; Go
 tree md5-verified pristine).
+
+## Sweep micro-tranche 33 landed (2026-11-03, RIG-VALIDATED) — thisType args + alias variance + mapper report; divergent 873 -> 845
+
+Fresh bidirectional TS2322 census (t26-era stale, corrected): MISSING
+122/57, EXTRA 100/52. Clustered by message shape; the top coherent
+sub-families fixed (three roots):
+- thisType family (EXTRA 11/7): get_declared_type_of_class_or_interface's
+  self-reference resolved_type_arguments used all_type_parameters
+  (thisType included) where Go checker.go:17722 uses TypeParameters()
+  (thisType EXCLUDED) — getTypeWithThisArgument's count guard bailed, so
+  `this` was never substituted with the receiver (`x.self()` typed
+  ()=>this instead of ()=>U).
+- Variance-annotation family (MISSING 8/2): relater get_type_alias_type_
+  parameters was the M6 stub (EMPTY list) — the alias-variance probe
+  compared empty type-argument lists and vacuously succeeded.
+  REAL: the typeAliasLinks row (Go relater.go:3430).
+- Report mappers: report_unreliable_mapper / report_unmeasurable_mapper /
+  report_unreliable_instantiate were no-op stubs while the real
+  marker-flagging mappers already existed in newChecker; wired Go-exactly
+  (checker.go:1146/1154, relater.go:3614).
+TS2322 census delta: MISSING 122->110/57->54; EXTRA 100->92/52->49.
+Newly-identical 30 (the types/thisType family, varianceAnnotations,
+jsdocTemplateTag8, literalTypeWidening, mappedTypes3, parserRealSource11,
+strictBindCallApply1, newOperator pair, superPropertyAccessNoError,
+for-of15-18, iterableArrayPattern7/8). NEWLY-DIVERGENT 2 — root-caused
+with GO probe evidence (go-bench-dbg, fully restored): genericContextual-
+Types2/3 — GO measures AssignAction as INVARIANT (keeps the error chain,
+structural fallback, no 2322); RUST measures NONE (early-false). The
+alias-params fix ACTIVATED the Go-exact probe and unmasked a previously
+ACCIDENTALLY-IDENTICAL pair: the residual is the marker-probe variance
+measurement seam (rust both-probes-false where GO retries the reverse/
+bivariant signature-compare, relater.go:1601) — top of the residual
+queue. PLAIN-sweep census: divergent 845 (666 count / 179 hash),
+identical 6,722/7,567; both drivers 0/3,826/3,741/0; panics 0. 76 suites
+(fcs33 pins 8/8; spike.rs stale assertion updated Go-exactly); clippy 0;
+all gates green fresh (orchestrator re-ran tests + sweeps + census
+independently; checker.go + relater.go md5-verified pristine).

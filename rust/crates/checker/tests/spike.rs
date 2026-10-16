@@ -384,7 +384,13 @@ fn gate_demo_class_declared_type_carries_the_this_type_promotion() {
     );
     assert_eq!(data.all_type_parameters, vec![this_type]);
     assert_eq!(data.outer_type_parameter_count, 0);
-    assert_eq!(data.base.resolved_type_arguments, vec![this_type]);
+    // PORT (FCS tranche 33): Go checker.go:17722 sets the self-reference's
+    // `resolvedTypeArguments = d.TypeParameters()` — the type parameters
+    // EXCLUDING the trailing thisType. A non-generic class therefore
+    // carries NO resolved type arguments (getTypeWithThisArgument's
+    // `len(TypeParameters()) == len(typeArguments)` guard appends the
+    // thisArgument on top of this empty list).
+    assert_eq!(data.base.resolved_type_arguments, Vec::<_>::new());
     let instantiations = data.base.base.instantiations.as_ref().expect("instantiations");
     assert_eq!(instantiations.len(), 1);
     assert!(instantiations.values().all(|&v| v == declared));

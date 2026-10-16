@@ -9399,10 +9399,19 @@ pub(crate) fn fill_missing_type_arguments(c: &mut Checker, type_arguments: &[Typ
     c.fill_missing_type_arguments(type_arguments, params, min_type_argument_count, include_empty_array)
 }
 
-/// Go: the typeAliasLinks `typeParameters` read.
-pub(crate) fn get_type_alias_type_parameters(_c: &mut Checker, _symbol: SymbolId) -> Vec<TypeId> {
-    // TODO(port M6 S2/S7): the declared type-parameter list.
-    Vec::new()
+/// Go: the typeAliasLinks `typeParameters` read
+/// (`c.typeAliasLinks.Get(symbol).typeParameters`, relater.go:3430).
+///
+/// PORT (FCS tranche 33): was an M6 S2/S7 STUB returning an empty list —
+/// the alias-variance probe in structuredTypeRelatedToWorker then filled
+/// BOTH sides' type arguments to empty and `typeArgumentsRelatedTo`
+/// vacuously succeeded, so `Covariant<unknown>` became assignable to
+/// `Covariant<string>` (the rust-MISSING TS2322 variance family:
+/// varianceAnnotations, jsdocTemplateTag8, covariantCallbacks). REAL:
+/// the links row's declared type-parameter list (the same read
+/// get_alias_variances uses).
+pub(crate) fn get_type_alias_type_parameters(c: &mut Checker, symbol: SymbolId) -> Vec<TypeId> {
+    c.type_alias_links.get(symbol).type_parameters.clone()
 }
 
 /// Go: `ast.IsInJSFile(symbol.ValueDeclaration)`.
@@ -9480,24 +9489,38 @@ pub(crate) fn instantiate_type_opt(c: &mut Checker, t: TypeId, mapper: Option<cr
     instantiate_type_ex(c, t, mapper)
 }
 
-/// Go: `c.instantiateType(s, c.reportUnreliableMapper)` — the mapper is nil
-/// until S7 constructs the report mappers; nil-instantiation is identity.
+/// Go: `c.instantiateType(s, c.reportUnreliableMapper)`.
+///
+/// PORT (FCS tranche 33): was the M6 S7 no-op stub (identity instantiation,
+/// mapper dropped). The report mappers ARE constructed in newChecker
+/// (checker.rs — Go checker.go:1146/1154: Function mappers that set
+/// `reliabilityFlags` when a MARKER type flows through). Dropping the mapper
+/// dead-coded "Report unreliable variance for type variables referenced in
+/// template literal type placeholders" (relater.go:3614), so measured alias
+/// variances like `type AGen<T> = { field: \`a${T}\` }` came out strictly
+/// covariant instead of COVARIANT|UNRELIABLE (which allows the structural
+/// fallback the corpus relies on — templateLiteralTypesPatterns).
 pub(crate) fn report_unreliable_instantiate(c: &mut Checker, t: TypeId) {
-    // TODO(port M6 S7): the reportUnreliableMapper instantiation.
-    let _ = instantiate_type_ex(c, t, None);
+    let mapper = c.report_unreliable_mapper;
+    let _ = instantiate_type_ex(c, t, mapper);
 }
 
 /// Go: `c.reportUnreliableMapper` / `c.reportUnmeasurableMapper`.
+///
+/// PORT (FCS tranche 33): was the M6 S7 stub returning None — now the
+/// checker's constructed mappers (see report_unreliable_instantiate).
 pub(crate) fn report_unreliable_mapper(c: &mut Checker) -> Option<crate::todo_shapes::TypeMapperId> {
-    // TODO(port M6 S7): the mapper.go report mappers.
+    let mapper = c.report_unreliable_mapper;
     let _ = c;
-    None
+    mapper
 }
 
 pub(crate) fn report_unmeasurable_mapper(c: &mut Checker) -> Option<crate::todo_shapes::TypeMapperId> {
-    // TODO(port M6 S7).
+    // PORT (FCS tranche 33): the checker's constructed marker mapper
+    // (Go checker.go:1154).
+    let mapper = c.report_unmeasurable_mapper;
     let _ = c;
-    None
+    mapper
 }
 
 /// Go: `newSimpleTypeMapper(source, target)` (mapper.go).
