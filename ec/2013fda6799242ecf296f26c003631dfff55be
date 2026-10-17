@@ -1,0 +1,34 @@
+rust/crates/checker/src/statements.rs
+  s_37960048ff734e::t_9fa6de37ef398c 5466-5468
+  s_37960048ff734e::t_8800de23eaf17f 5524
+  s_37960048ff734e::t_6e9fe9c51f15c7 13347-13350
+  s_37960048ff734e::t_9f000d8297edf9 12925-12930
+  s_37960048ff734e::t_91b56af5511678 13333-13336
+  s_37960048ff734e::t_c3f45dbe86b109 5636-5638
+  s_37960048ff734e::t_d9ead6fdd66eb5 5473-5479
+  s_37960048ff734e::t_93f4643e940f0a 12749-12752
+rust/crates/checker/src/resolvecall.rs
+  s_37960048ff734e::t_f7efad6f73b46f 2288-2319
+  s_37960048ff734e::t_c953bc627ea5a6 2357,2372
+  s_37960048ff734e::t_9e9871917c7fff 2337
+rust/crates/checker/tests/fcs41_top_cluster_pins.rs
+  s_37960048ff734e::t_3619b5f67fe2a4 1-296
+rust/crates/checker/src/expressions.rs
+  s_37960048ff734e::t_2de5d4d15de642 4023-4056,4058-4061,4068-4081
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "ec2013fda6799242ecf296f26c003631dfff55be",
+  "prompts": {},
+  "sessions": {
+    "s_37960048ff734e": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "eb707460-b654-4c20-a77a-d21fd00cc3e9",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
