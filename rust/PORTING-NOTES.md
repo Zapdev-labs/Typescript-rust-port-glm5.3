@@ -3314,3 +3314,35 @@ lines / 0 FAILED (fcs36 pins 4/4); clippy 0; all gates green fresh
 md5-verified pristine). Residual queue: TS2322 remainder, the inferred-
 constraint type-reference arm TODO (M6 S5/S7 seam exposed by root B),
 carried fcs31+ residuals.
+
+## Sweep micro-tranche 37 landed (2026-11-03, RIG-VALIDATED) — destructuring-2322 cluster; divergent 815 -> 780
+
+Fresh census: the destructuring-2322 cluster was 31 missing/13 records
++ 4 extra/3 — spanning ARGUMENT array-literal ELEMENTS (call sites,
+destructuring-var-decl RHS, parameter-property ctor args), NOT binding-
+pattern arms; checkDestructuringAssignment NOT implicated. THREE roots
+(all GO-probe-verified, restored, md5-verified):
+- relater elaborate_array_literal was the M6 S4/S9 STUB (returned
+  false): GO relater.go:522 re-checks the literal with Contextual|
+  ForceTuple under the failing target and elaborates per element — the
+  source of all 31 missing 2322s. Ported exactly.
+- 2353 position family: the excess-property arm's ancestor guard
+  compared Node.id.get() (raw id cell) against the packed NodeId — a
+  VALUE-SPACE MISMATCH that could never match; the error-node reset to
+  the property name was silently dead. Fixed with the binder's NodeId-
+  callback find_ancestor identity compare (Go: pointer identity).
+- get_type_of_parameter was a bare get_type_of_symbol stub; Go
+  checker.go:17429 wraps with addOptionalityEx (initializer!=nil ||
+  isOptionalDeclaration) — fixed the 2345 null-vs-null|undefined
+  rendering + the union-target elaboration bail.
+All 13 records 0 diag diff vs GO. Newly-divergent 0; newly-identical
+35 (13 records + 1ES6 + 21 collateral). Whole-2322 family: MISSING
+95/46 -> 49/25, EXTRA 86/45 -> 74/32. HONEST: destructuringParameter-
+Properties3 was ALREADY count-divergent pre-tranche (rust 20 vs go 17
+same 3 extra 2345 heads) — ROOT 1 re-rendered the pre-existing
+T-inference candidate seam as per-element 2322s; verdict/counts
+unchanged; root-caused, queued (inference family). PLAIN-sweep census:
+divergent 780 (630 count / 150 hash), identical 6,787/7,567; both
+drivers 0/3,826/3,741/0; panics 0. 80 ok lines/0 FAILED (fcs37 pins
+4/4); clippy 0; all gates green fresh (orchestrator re-ran tests +
+sweeps + census independently; Go tree md5-verified pristine).

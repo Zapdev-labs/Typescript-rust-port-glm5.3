@@ -4075,11 +4075,24 @@ impl Relater {
                                         | Kind::SetAccessor
                                 );
                                 if is_object_literal_element
-                                    && crate::ast_shims::find_ancestor(
+                                    // PORT (FCS tranche 37): Go
+                                    // `ast.FindAncestor(prop.ValueDeclaration,
+                                    // func(d *ast.Node) bool { return d ==
+                                    // objectLiteralDeclaration })` compares
+                                    // node IDENTITY. The prior port compared
+                                    // the raw lazily-assigned `Node.id` cell
+                                    // against the packed `NodeId`, a
+                                    // value-space mismatch that could never
+                                    // match — the property-name error-node
+                                    // reset (the 2353 position family)
+                                    // silently never fired. The binder's
+                                    // NodeId-callback find_ancestor restores
+                                    // Go's identity comparison.
+                                    && tsc_binder::ast_shims::find_ancestor(
                                         c.store(),
                                         prop_value_declaration,
-                                        &mut |n: &tsc_ast::Node| {
-                                            n.id.get() == object_literal_declaration.0
+                                        &mut |n: tsc_ast::NodeId| {
+                                            n == object_literal_declaration
                                         },
                                     )
                                     .is_some()
@@ -7977,24 +7990,72 @@ impl Checker {
         reported_error
     }
 
-    /// Go: `func (c *Checker) elaborateArrayLiteral(...) bool`.
+    /// Go: `func (c *Checker) elaborateArrayLiteral(...) bool`
+    /// (relater.go:522). PORT (FCS tranche 37): the M6 S4/S9 stub is
+    /// replaced with Go's exact body — when the array literal's type isn't
+    /// yet tuple-like, it is re-checked with the failing target pushed as
+    /// the contextual type (`CheckModeContextual|CheckModeForceTuple`), and
+    /// then every non-omitted element whose index exists on the target is
+    /// elaborated through `elaborateElement`. This is the source of the
+    /// per-element TS2322s when an array literal is assigned to a
+    /// tuple-like target (the es6/destructuring family: destructuring
+    /// parameters with default initializers, annotated tuple parameters,
+    /// destructuring variable declarations, parameter properties).
     fn elaborate_array_literal(
         &mut self,
         node: NodeId,
         source: TypeId,
         target: TypeId,
         relation: RelationKind,
-        diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
+        mut diagnostic_output: Option<&mut Vec<tsc_ast::Diagnostic>>,
     ) -> bool {
         if self.type_(target).flags.intersects(TypeFlags::PRIMITIVE | TypeFlags::NEVER) {
             return false;
         }
-        // TODO(port M6 S4/S9): checkArrayLiteral via the contextual-type
-        // stack (pushContextualType/popContextualType) + isTupleLikeType +
-        // getEffectiveCheckNode — the array-literal elaboration needs the
-        // flow wave's contextual typing.
-        let _ = (node, source, relation, diagnostic_output);
-        false
+        let mut source = source;
+        if !is_tuple_like_type(self, source) {
+            self.push_contextual_type(Some(node), Some(target), false /*isCache*/);
+            source = self.check_array_literal(
+                node,
+                crate::checker::CheckMode::CONTEXTUAL
+                    .union(crate::checker::CheckMode::FORCE_TUPLE),
+            );
+            self.pop_contextual_type();
+            if !is_tuple_like_type(self, source) {
+                return false;
+            }
+        }
+        let elements: Vec<NodeId> = match &self.store().node(node).data {
+            tsc_ast::NodeData::ArrayLiteralExpression(d) => d
+                .elements
+                .as_ref()
+                .map(|l| l.nodes.to_vec())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let mut reported_error = false;
+        for (i, &element) in elements.iter().enumerate() {
+            if self.store().node(element).kind == Kind::OmittedExpression
+                || is_tuple_like_type(self, target)
+                    && self.get_property_of_type(target, &i.to_string()).is_none()
+            {
+                continue;
+            }
+            let name_type = self.get_number_literal_type(tsc_jsnum::Number(i as f64));
+            let check_node = self.get_effective_check_node(element);
+            reported_error = self.elaborate_element(
+                source,
+                target,
+                relation,
+                Some(check_node),
+                Some(check_node),
+                name_type,
+                None, /*errorMessage*/
+                None, /*diagnosticFactory*/
+                diagnostic_output.as_deref_mut(),
+            ) || reported_error;
+        }
+        reported_error
     }
 
     /// Go: `func (c *Checker) elaborateArrowFunction(node, source, target, relation, diagnosticOutput) bool`
@@ -10190,10 +10251,19 @@ pub(crate) fn get_declared_type_of_symbol(c: &mut Checker, symbol: SymbolId) -> 
     c.get_declared_type_of_symbol(symbol)
 }
 
-/// Go: `func (c *Checker) getTypeOfParameter(p) *Type` — the parameter symbol
-/// read (getTypeOfSymbol on a parameter symbol).
+/// Go: `func (c *Checker) getTypeOfParameter(symbol *ast.Symbol) *Type`
+/// (checker.go:17429) — `addOptionalityEx(getTypeOfSymbol(symbol), false,
+/// declaration != nil && (declaration.Initializer() != nil ||
+/// isOptionalDeclaration(declaration)))`. PORT (FCS tranche 37): the prior
+/// free-fn stub returned the bare symbol type WITHOUT the optionality —
+/// parameters with initializers (or `?` tokens) were missing the `|
+/// undefined` union member, so signature-parameter types rendered `null`
+/// where Go renders `null | undefined` (the 2345-argument family) and the
+/// union-shaped targets skipped the elaboration bail Go performs
+/// (`getBestMatchingType` finds no assignable constituent). The
+/// typeofsymbol.rs method is the Go-exact twin; delegate to it.
 pub(crate) fn get_type_of_parameter(c: &mut Checker, p: SymbolId) -> TypeId {
-    c.get_type_of_symbol(p)
+    c.get_type_of_parameter(p)
 }
 
 /// Go: `func (c *Checker) getConstraintFromTypeParameter(t) *Type` — the
