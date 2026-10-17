@@ -1,0 +1,25 @@
+rust/crates/checker/src/relater.rs
+  s_bec367d6a844cd::t_bb2236b6070701 4078-4091,4094-4095
+  s_bec367d6a844cd::t_3ce50eefd9efff 7993-8003,8010,8015-8019,8022-8058
+  s_bec367d6a844cd::t_63c0b9dd705601 8020-8021
+  s_bec367d6a844cd::t_9355e009b03edd 10254-10264,10266
+rust/crates/checker/tests/fcs37_destructuring_pins.rs
+  s_bec367d6a844cd::t_606329bf35a773 1-78,80-88,90-91,97-98,104-106,108-109,111-112,118-314
+  s_bec367d6a844cd::t_afbfec86ca16cb 79,89,92-96,99-103,107,110,113-117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "a6a03025ed933984a277536965bf10f05e12400a",
+  "prompts": {},
+  "sessions": {
+    "s_bec367d6a844cd": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "8e7eb132-1227-4e70-9217-655acea8cb8a",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
