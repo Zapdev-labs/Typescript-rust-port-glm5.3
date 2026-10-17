@@ -7972,8 +7972,11 @@ impl Checker {
         let symbol = crate::typeofsymbol::get_symbol_of_declaration(self, node)
             .expect("type literal symbol");
         self.check_index_constraints(t, symbol, false /*isStaticIndex*/);
-        // TODO(port M6 S3 class batch): checkTypeForDuplicateIndexSignatures
-        // — lands with checkClassOrInterfaceForDuplicateIndexSignatures.
+        // PORT(FCS tranche 39): Go checker.go:3189 —
+        // checkTypeForDuplicateIndexSignatures (the TODO stub from the
+        // M6 S3 class batch; the interface/class callers were already
+        // REAL, the type-literal caller was not).
+        self.check_type_for_duplicate_index_signatures(node);
         self.check_object_type_for_duplicate_declarations(node, false /*checkPrivateNames*/);
     }
 
@@ -10686,7 +10689,16 @@ impl Checker {
             if self.store().node(declaration).kind == Kind::IndexSignature {
                 let parameters = crate::ast_shims::parameters_of(self.store(), declaration).to_vec();
                 if parameters.len() == 1 {
-                    let param_type = signature_type_node(self.store(), parameters[0]);
+                    // PORT(FCS tranche 39): Go reads the index signature
+                    // PARAMETER's own Type node (checker.go:5024
+                    // `parameters[0].Type()`) — the pre-tranche port read it
+                    // through the function-like RETURN-type accessor
+                    // (signature_type_node), which answers None for a
+                    // Parameter and dropped every duplicate-index probe.
+                    let param_type = match &self.store().node(parameters[0]).data {
+                        tsc_ast::NodeData::ParameterDeclaration(d) => d.type_,
+                        _ => None,
+                    };
                     if let Some(param_type) = param_type {
                         let t = self.get_type_from_type_node(param_type);
                         // Go: .Distributed() — union constituents, else the
@@ -12040,9 +12052,14 @@ impl Checker {
                         &[module_kind_string(self.module_kind)],
                     );
                 }
-            } else if self.compiler_options.no_unchecked_side_effect_imports == Tristate::TSTrue
+            } else if self.compiler_options.no_unchecked_side_effect_imports
+                != Tristate::TSFalse
                 && import_clause.is_none()
             {
+                // PORT(FCS tranche 39): Go checker.go:5477 gates on
+                // NoUncheckedSideEffectImports.IsTrueOrUnknown() — the
+                // unset (Unknown) option fires the side-effect-import
+                // resolution check; `== TSTrue` missed all of it.
                 let ignore_errors = self.compiler_options.no_check == Tristate::TSTrue;
                 let error_message: Option<&'static Message> = if ignore_errors {
                     None

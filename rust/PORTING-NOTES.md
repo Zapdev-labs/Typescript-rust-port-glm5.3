@@ -3383,3 +3383,33 @@ ParameterConstModifiersReturnsAndYields); grammarchecks.rs:3395 (TS7058
 mts/cts) needs the same source_file_name seam when it surfaces; census
 top: EXTRA 2322 x74/32, 2391 x58/40, 1155 x52/36; MISSING 2882 x59/33,
 17009 x58/16, 2856 x57/30, 2374 x56/5.
+
+## Sweep micro-tranche 39 landed (2026-11-03, RIG-VALIDATED) — widened burst: 2882 gate + this-before-super + duplicate index sig; divergent 737 -> 692
+
+Three clusters, all to ZERO:
+- TS2882 rust-MISSING x59/33 (side-effect imports): Go checker.go:
+  5477 gates on NoUncheckedSideEffectImports.IsTrueOrUnknown() — the
+  UNSET option fires in Go, never in rust (port used == TSTrue).
+  Fix: != TSFalse.
+- TS17009 rust-MISSING x58/16 (super-before-this): check_this_before_
+  super was the M6 W3 no-op stub (the flow engine is real now); full
+  Go checker.go:12518-12521 body (extends-heritage + extends-null
+  gates, flow_node_of_node + is_post_super_flow_node, error).
+- TS2374 rust-MISSING x56/5 (duplicate index sig): TWO breaks —
+  check_type_literal never called the check (TODO stub, Go checker.go:
+  3189), and inside the loop the index-signature PARAMETER's type was
+  read through the function-like RETURN-type accessor (signature_
+  type_node -> None for Parameter; probe-evidenced 105x param_type=
+  false, 0 EMIT corpus-wide). Fix: read NodeData::ParameterDeclaration.
+  type_ (Go parameters[0].Type()).
+TS2322 x74/32 deliberately queued (scattered roots, not a coherent
+family); TS2856 x57/30 queued (coherent node import-attributes cjs
+family, next-top). Newly-divergent 0; newly-identical 45 (exactly the
+24+5+16 recovered records; derivedClassSuperProperties stays divergent
+on PRE-EXISTING 2376 extras, byte-identical to t38, verified). PLAIN-
+sweep census: divergent 692 (541 count / 151 hash), identical 6,875/
+7,567; both drivers 0/3,826/3,741/0; panics 0. 82 ok lines/0 FAILED
+(fcs39 pins 11/11); clippy 0; all gates green fresh (orchestrator
+re-ran tests + sweeps + census independently; Go tree md5-verified
+pristine; the foreign crates/fourslash parked by the worker confirmed
+absent from the workspace).

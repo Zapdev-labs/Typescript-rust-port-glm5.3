@@ -4889,17 +4889,31 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkThisBeforeSuper(node, container, diagnosticMessage)` (checker.go:12513).
+    /// PORT(FCS tranche 39): the M6 W3 TODO is now REAL — the flow engine's
+    /// isPostSuperFlowNode drives the error (Go checker.go:12518-12521).
     pub(crate) fn check_this_before_super(
         &mut self,
         node: NodeId,
         container: NodeId,
         diagnostic_message: &'static Message,
     ) {
-        // Go: the isPostSuperFlowNode flow probe (W3). Until the flow engine
-        // lands, the probe answers "post-super" (no error), Go's answer when
-        // the reference carries no flow node.
-        // TODO(port M6 W3): isPostSuperFlowNode.
-        let _ = (node, container, diagnostic_message);
+        let containing_class_decl = self.store().node(container).parent.get();
+        // Go: skip when the containing class has no extends clause, or the
+        // class extends null (checker.go:12516-12517).
+        if crate::statements::get_class_extends_heritage_element(
+            self.store(),
+            containing_class_decl,
+        )
+        .is_some()
+            && !self.class_declaration_extends_null(containing_class_decl)
+        {
+            // Go: node.FlowNodeData() != nil && !isPostSuperFlowNode.
+            if let Some(flow_node) = crate::flow::flow_node_of_node(self.store(), node) {
+                if !self.is_post_super_flow_node(flow_node, false /*noCacheCheck*/) {
+                    self.error(node, diagnostic_message, &[]);
+                }
+            }
+        }
     }
 }
 
