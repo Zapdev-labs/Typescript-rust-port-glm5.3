@@ -3489,3 +3489,42 @@ re-sync + rebuild). QUEUED for t42: EXTRA 2322 x74/32 (scattered), 2339
 x43/22, 2345 x40/18, 2536 x28/11; MISSING 2322 x49/25, 7053 x42/13,
 2790 x25/6 (delete-operator family — coherent, promising), 2307
 x24/17, 2364 x23/1; TS2558 residual x5 (jsx span root); carried queues.
+
+## Sweep micro-tranche 42 landed (2026-11-04, RIG-VALIDATED) — widened burst: resolved-symbol link + compound-assign polarity + type normalization; divergent 527 -> 512
+
+Three clusters, all Go-exact:
+- TS2790 rust-MISSING x25/6 -> 0/0 (delete-operator-optional): check_
+  PropertyAccessExpressionOrQualifiedName never wrote resolvedSymbol =
+  prop (Go checker.go:11610), so getResolvedSymbolOrNil answered nil
+  for EVERY property access and checkDeleteExpressionMustBeOptional
+  never ran (only element-accesses fired, via index.rs's own write).
+- TS2364 x23/1 -> 0 (compound-assign LHS, pure GO-ONLY): the `+` arm's
+  symbol-operand gate was polarity-INVERTED vs Go checker.go:12690
+  (!checkForDisallowedESSymbolOperand) — every passing += returned
+  early before check_assignment_operator (probe: 0 calls corpus-wide).
+- TS2536 rust-EXTRA x28/12 -> 6 (cannot-be-used-to-index): (a) the
+  remapping-mapped-type branch in checkIndexedAccessIndexType (Go
+  checker.go:8433, was the M6 S7 seam); (b) the DEEP half —
+  get_normalized_type was the M6 S7 IDENTITY STUB; ported Go
+  checker.go:28399's full loop (tuple/reference/union-intersection/
+  substitution/simplifiable arms) + three helpers. Collateral: infer
+  Types1/mappedTypeAsClauses/stringMappingReduction/objectTypeWith
+  StringAndNumberIndexSignatureToAny converged.
+BLAST-RADIUS REPAIR (honest): the normalization port exposed two
+pre-existing holes — the reference arm must use the RESOLVING
+resolve_type_arguments (Go checker.go:22352), and it + get_type_
+reference_arity needed the tuple-target arity fallback (Go's
+TupleType-embeds-InterfaceType view). First battery's 3 panics
+DISCARDED as tainted; after the fix: 0 panics, 7,567 records both
+drivers. Newly-divergent 0; newly-identical 15. PLAIN-sweep census:
+divergent 512 (381 count / 131 hash), identical 7,055/7,567; both
+drivers 0/3,826/3,741/0. 85 ok lines/0 FAILED (fcs42 pins 5/5);
+clippy 0; all gates green fresh (orchestrator re-ran tests + sweeps +
+census independently; Go tree md5-verified pristine; no shared-rig
+collision this tranche). QUEUED for t43: EXTRA 2322 x57/25 (normaliza-
+tion collateral already cut 74->57), 2339 x41/21, 2345 x39/17, 2323
+x26/5, 1203 x25/15, 2344 x22/6, 2757 x15/11 (the 1049/1054
+thisTypeInAccessors coherent family candidate); MISSING 2322 x43/23,
+7053 x42/13, 2307 x24/17, 7022 x20/17. Tooling: use cluster_diff.py
+(cluster_records.py is silently wrong on pure-missing codes;
+census_all.py at ~/.fcs42-scratch/census_all.py).

@@ -1557,8 +1557,15 @@ impl Checker {
                     }
                 }
                 // Symbols are not allowed at all in arithmetic expressions
+                // PORT (FCS tranche 42): Go checker.go:12690 gates the early
+                // return on `!c.checkForDisallowedESSymbolOperand(...)` —
+                // return early only when the symbol check REPORTED an error.
+                // The W-era polarity inversion returned early on every
+                // passing check, so `+=` statements never reached
+                // checkAssignmentOperator (the TS2364 compound-assignment
+                // left-hand-side family).
                 if let Some(result) = result_type
-                    && self.check_for_disallowed_es_symbol_operand(left, right, left_type, right_type, operator)
+                    && !self.check_for_disallowed_es_symbol_operand(left, right, left_type, right_type, operator)
                 {
                     return result;
                 }
@@ -3484,6 +3491,14 @@ impl Checker {
                 self.check_property_not_used_before_declaration(prop, node, right);
                 let is_self_reference = self.is_self_type_access(left, parent_symbol);
                 self.mark_property_as_referenced(prop, Some(node), is_self_reference);
+                // Go: `c.symbolNodeLinks.Get(node).resolvedSymbol = prop`
+                // (checker.go:11610) — PORT (FCS tranche 42): the
+                // resolved-symbol link write. The W-era port omitted it, so
+                // every property access answered `getResolvedSymbolOrNil`
+                // with nil (checkDeleteExpression's optional-operand check
+                // TS2790 never fired; getReferencedValueOrAliasSymbol
+                // re-resolved every time).
+                self.symbol_node_links.get(node).resolved_symbol = Some(prop);
                 self.check_property_accessibility(
                     node,
                     self.store().node(left).kind == Kind::SuperKeyword,
@@ -5636,10 +5651,20 @@ impl Checker {
             )
         };
         // skip index type deferral on remapping mapped types
-        // TODO(port M6 S7): getMappedTypeNameTypeKind — the remap probe;
-        // getIndexTypeForMappedType is the non-remap branch's S10 seam carrier.
+        // PORT (FCS tranche 42): Go checker.go:8433-8441 — the remapping-
+        // mapped-type branch is REAL now (was the TODO(port M6 S7) seam: the
+        // unconditioned getIndexTypeEx answered `keyof T` for `{ [K in keyof
+        // T as U]: ... }`, so every remapped key failed the assignability
+        // probe and TS2536 fired rust-extra).
         let object_index_type =
-            relater::get_index_type_ex(self, object_type, crate::types::IndexFlags::NONE);
+            if relater::is_generic_mapped_type(self, object_type)
+                && self.get_mapped_type_name_type_kind(object_type)
+                    == crate::relater::MappedTypeNameTypeKind::Remapping
+            {
+                self.get_index_type_for_mapped_type(object_type, crate::types::IndexFlags::NONE)
+            } else {
+                relater::get_index_type_ex(self, object_type, crate::types::IndexFlags::NONE)
+            };
         let has_number_index_info = self
             .get_index_info_of_type(object_type, self.number_type())
             .is_some();

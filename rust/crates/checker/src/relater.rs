@@ -8836,15 +8836,136 @@ fn is_numeric_literal_name(name: &str) -> bool {
 
 // ── Normalization / constraints / instantiation (S7/S9/S10 seams) ──
 
-/// Go: `func (c *Checker) getNormalizedType(t, writing) *Type` — the fresh /
-/// deferred-reference normalization. The fresh-literal arm is real; the
-/// deferred-reference, tuple and conditional arms are S7.
+/// Go: `func (c *Checker) getNormalizedType(t, writing) *Type` (checker.go:28399)
+/// — REAL (FCS tranche 42): the full normalization loop (fresh literal /
+/// generic tuple / type reference / union-or-intersection / substitution /
+/// simplifiable arms). The `getSingleBaseForNonAugmentingSubtype` read stays
+/// on the existing S7 seam (Go's nil answer = identity in the loop).
 pub(crate) fn get_normalized_type(c: &mut Checker, t: TypeId, writing: bool) -> TypeId {
-    if !writing && crate::is_fresh_literal_type(c, t) {
-        return c.get_regular_type_of_literal_type(t);
+    // Go: `func (c *Checker) getNormalizedType(t *Type, writing bool) *Type`
+    // (checker.go:28399) — the normalization loop. PORT (FCS tranche 42):
+    // was the M6 S7 identity stub (fresh-literal only), so substitution
+    // types never resolved and simplifiable types (indexed access /
+    // conditional / keyof) never simplified on the relation path — the
+    // TS2536 rust-extra family (`isTypeAssignableTo(P, keyof T)` failed
+    // for substitution/type-parameter sources constrained to `keyof T`).
+    let mut t = t;
+    loop {
+        let flags = c.type_(t).flags;
+        let object_flags = c.type_(t).object_flags;
+        let n: TypeId = if crate::is_fresh_literal_type(c, t) {
+            c.get_regular_type_of_literal_type(t)
+        } else if crate::typenodes::is_generic_tuple_type(c, t) {
+            get_normalized_tuple_type(c, t, writing)
+        } else if object_flags.intersects(crate::types::ObjectFlags::REFERENCE)
+            && c.type_(t).as_type_reference().is_some()
+        {
+            let (ref_node, ref_target) = {
+                let reference = c.type_(t).as_type_reference().expect("TypeReference data");
+                (reference.node, reference.base.target)
+            };
+            if ref_node.is_some() {
+                let target = ref_target.expect("reference target");
+                // Go: `c.createTypeReference(t.Target(), c.getTypeArguments(t))`
+                // — the RESOLVING getTypeArguments (checker.go:22352), not
+                // the read-only `get_type_arguments` (deferred references
+                // answer that form with an empty list).
+                let type_arguments = resolve_type_arguments(c, t);
+                c.create_type_reference(target, type_arguments)
+            } else {
+                match get_single_base_for_non_augmenting_subtype(c, t) {
+                    Some(base) => base,
+                    None => t,
+                }
+            }
+        } else if flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+            get_normalized_union_or_intersection_type(c, t, writing)
+        } else if flags.intersects(TypeFlags::SUBSTITUTION) {
+            if writing {
+                c.type_(t)
+                    .as_substitution_type()
+                    .expect("SubstitutionType data")
+                    .base_type
+                    .expect("substitution baseType")
+            } else {
+                crate::inference::get_substitution_intersection(c, t)
+            }
+        } else if flags.intersects(TypeFlags::SIMPLIFIABLE) {
+            get_simplified_type(c, t, writing)
+        } else {
+            return t;
+        };
+        if n == t {
+            return n;
+        }
+        t = n;
     }
-    // TODO(port M6 S7): deferred type references, tuples/conditional
-    // simplification, substitution resolution.
+}
+
+/// Go: `func (c *Checker) getNormalizedUnionOrIntersectionType(t *Type, writing bool) *Type`
+/// (checker.go:28574).
+fn get_normalized_union_or_intersection_type(c: &mut Checker, t: TypeId, writing: bool) -> TypeId {
+    let reduced = get_reduced_type(c, t);
+    if reduced != t {
+        return reduced;
+    }
+    if c.type_(t).flags.intersects(TypeFlags::INTERSECTION) && should_normalize_intersection(c, t) {
+        // Normalization handles cases like (Go's comment, verbatim)
+        // Partial<T>[K] & ({} | null) ==>
+        // Partial<T>[K] & {} | Partial<T}[K] & null ==>
+        // (T[K] | undefined) & {} | (T[K] | undefined) & null ==>
+        // T[K] & {} | undefined & {} | T[K] & null | undefined & null ==>
+        // T[K] & {} | T[K] & null
+        let types = c.type_(t).types().to_vec();
+        let normalized_types: Vec<TypeId> = types
+            .iter()
+            .map(|&u| get_normalized_type(c, u, writing))
+            .collect();
+        if normalized_types != types {
+            return c.get_intersection_type(&normalized_types);
+        }
+    }
+    t
+}
+
+/// Go: `func (c *Checker) shouldNormalizeIntersection(t *Type) bool` (checker.go:28590).
+fn should_normalize_intersection(c: &mut Checker, t: TypeId) -> bool {
+    let mut has_instantiable = false;
+    let mut has_nullable_or_empty = false;
+    for &u in c.type_(t).types().to_vec().iter() {
+        has_instantiable = has_instantiable || c.type_(u).flags.intersects(TypeFlags::INSTANTIABLE);
+        has_nullable_or_empty = has_nullable_or_empty
+            || c.type_(u).flags.intersects(TypeFlags::NULLABLE)
+            || is_empty_anonymous_object_type(c, u);
+        if has_instantiable && has_nullable_or_empty {
+            return true;
+        }
+    }
+    false
+}
+
+/// Go: `func (c *Checker) getNormalizedTupleType(t *Type, writing bool) *Type`
+/// (checker.go:28607).
+fn get_normalized_tuple_type(c: &mut Checker, t: TypeId, writing: bool) -> TypeId {
+    let elements = c.get_element_types(t);
+    let normalized_elements: Vec<TypeId> = elements
+        .iter()
+        .map(|&u| {
+            if c.type_(u).flags.intersects(TypeFlags::SIMPLIFIABLE) {
+                get_simplified_type(c, u, writing)
+            } else {
+                u
+            }
+        })
+        .collect();
+    if normalized_elements != elements {
+        let target = c
+            .type_(t)
+            .as_type_reference()
+            .and_then(|r| r.base.target)
+            .unwrap_or(t);
+        return c.create_normalized_tuple_type(target, normalized_elements);
+    }
     t
 }
 
@@ -9336,10 +9457,19 @@ pub(crate) fn resolve_type_arguments(c: &mut Checker, t: TypeId) -> Vec<TypeId> 
     }
     let node = node.expect("deferred reference carries a node");
     let target = c.type_(t).target().expect("TypeReference target");
+    // Go: `n := d.target.AsInterfaceType(); ... len(n.TypeParameters())` —
+    // PORT (FCS tranche 42): the tuple-target arity fallback (Go's TupleType
+    // embeds InterfaceType; the Rust Tuple TypeData answers through
+    // element_infos — see get_type_reference_arity).
     let type_parameter_count = c
         .type_(target)
         .as_interface_type()
         .map(|n| n.type_parameters().len())
+        .or_else(|| {
+            c.type_(target)
+                .as_tuple_type()
+                .map(|d| d.element_infos.len())
+        })
         .unwrap_or(0);
     if !c.push_type_resolution(
         crate::checker::TypeSystemEntity::Type(t),
@@ -9436,11 +9566,26 @@ pub(crate) fn get_type_arguments(c: &Checker, t: TypeId) -> Vec<TypeId> {
 /// Go: `func (c *Checker) getTypeReferenceArity(t) int` (checker.go:23995)
 /// — REAL (M6 S5): the arity is the target interface's type-parameter count.
 pub(crate) fn get_type_reference_arity(c: &Checker, t: TypeId) -> i32 {
+    // Go: `len(t.TargetInterfaceType().TypeParameters())` — Go's TupleType
+    // embeds InterfaceType, so a synthesized tuple target answers with its
+    // arity type parameters. PORT (FCS tranche 42): the Rust TypeData keeps
+    // Tuple a separate variant, so the tuple-target arity reads through
+    // `element_infos` (created 1:1 with the synthesized type parameters in
+    // create_tuple_target_type — Go's createTupleTargetType parity).
     c.type_(t)
         .target()
-        .and_then(|target| c.type_(target).as_interface_type())
-        .map(|d| d.type_parameters().len() as i32)
-        .unwrap_or(0)
+        .map(|target| {
+            c.type_(target)
+                .as_interface_type()
+                .map(|d| d.type_parameters().len())
+                .or_else(|| {
+                    c.type_(target)
+                        .as_tuple_type()
+                        .map(|d| d.element_infos.len())
+                })
+                .unwrap_or(0)
+        })
+        .unwrap_or(0) as i32
 }
 
 /// Go: `func (c *Checker) getMinTypeArgumentCount(typeParameters) int`
