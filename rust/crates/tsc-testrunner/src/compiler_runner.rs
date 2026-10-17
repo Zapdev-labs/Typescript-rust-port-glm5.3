@@ -80,7 +80,7 @@ use crate::test_case_parser::{
 // The W3 check stage: the per-file checker seam
 // ──────────────────────────────────────────────────────────────────────
 
-use tsc_ast::{NodeId, NodeStore, SourceFile, Symbol, SymbolId};
+use tsc_ast::{NodeId, NodeStore, SourceFile, SourceFileParseOptions, Symbol, SymbolId};
 use tsc_binder::{BindResult, bind_source_file};
 use tsc_checker::{Program, new_checker};
 use tsc_core::options_generated::{CompilerOptions, ModuleKind};
@@ -382,7 +382,29 @@ fn semantic_diagnostics_of_unit(
     let import_helpers_specifier = unit_program
         .get_import_helpers_import_specifier(unit_file.path_key())
         .cloned();
-    let mut source_file = parse_source_file(Default::default(), content, script_kind);
+    // PORT (FCS tranche 40): Go's check twin parses the unit through the
+    // single-file program's own loader, so the SourceFile carries the REAL
+    // unit name — parseSourceFileWorker reads opts.file_name for
+    // IsDeclarationFile (parser.go:433), which sets the parse-time ambient
+    // context flag (NodeFlagsAmbient over every declaration in a .d.ts unit)
+    // and the binder-facing source-file is_declaration_file payload. The
+    // previous anonymous Default::default() parse left .d.ts units
+    // non-ambient, firing TS2391 (function implementation missing) and
+    // TS1155 (declarations must be initialized) extras Go never emits.
+    // opts.path_key is not read by the parser (Go's parser reads only
+    // FileName.IsDeclarationFile from the options), so the default path key
+    // is behaviorally inert here; external_module_indicator_options stays
+    // zeroed exactly as Go's GetExternalModuleIndicatorOptions answers for
+    // declaration files (and as the tranche-32 contract kept it for the
+    // rest).
+    let mut source_file = parse_source_file(
+        SourceFileParseOptions {
+            file_name: RootedFilePath::from(name),
+            ..Default::default()
+        },
+        content,
+        script_kind,
+    );
     let Some(bind) = bind_source_file(&mut source_file) else {
         return Vec::new();
     };

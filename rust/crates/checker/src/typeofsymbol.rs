@@ -4993,7 +4993,14 @@ impl Checker {
     /// Go: `func (c *Checker) isVarConstLike(node *ast.Node) bool`.
     pub(crate) fn is_var_const_like(&mut self, node: NodeId) -> bool {
         let block_scope_kind = self.get_combined_node_flags_cached(node) & NF::BLOCK_SCOPED;
-        block_scope_kind == NF::CONSTANT
+        // PORT (FCS tranche 40): Go checker.go:19107 compares against
+        // `NodeFlagsConst` (1<<1) — NOT the composite `NodeFlagsConstant`
+        // (Const|Using, nodeflags.go:50). The mistranslation made plain
+        // `const` declarations answer false, so checkAmbientInitializer's
+        // const/readonly arm fell through to the TS1039 error for the
+        // string/number/boolean/bigint/literal-enum initializers Go allows
+        // in ambient contexts (the .d.ts/.d.cts unit families).
+        block_scope_kind == NF::CONST
             || block_scope_kind == NF::USING
             || block_scope_kind == NF::AWAIT_USING
     }

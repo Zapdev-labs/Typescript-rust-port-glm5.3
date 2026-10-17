@@ -2478,7 +2478,10 @@ impl Checker {
     /// `get_emit_module_format_of_file` stands in for
     /// `GetEmitSyntaxForUsageLocation` (the per-file format is the single
     /// determinant in the testrunner's single-file programs).
-    fn get_emit_syntax_for_module_specifier_expression(&self, usage: NodeId) -> ModuleKind {
+    // PORT (FCS tranche 40): pub(crate) — statements.rs
+    // check_import_attributes reuses the helper (Go checker.go:5578's
+    // getEmitSyntaxForModuleSpecifierExpression call for the TS2856 arm).
+    pub(crate) fn get_emit_syntax_for_module_specifier_expression(&self, usage: NodeId) -> ModuleKind {
         if tsc_ast::utilities::is_string_literal_like(self.store().node(usage)) {
             let file = self.get_source_file_node_of(usage);
             return self.program.get_emit_module_format_of_file(file);

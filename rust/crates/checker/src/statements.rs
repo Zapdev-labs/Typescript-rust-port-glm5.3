@@ -12237,11 +12237,17 @@ impl Checker {
             return;
         }
 
-        // TODO(port M6 S?): getEmitSyntaxForModuleSpecifierExpression — the
-        // per-specifier emit-syntax seam; permissive never-CommonJS so the
-        // CommonJS grammar error rests until the seam lands.
-        let emits_common_js_require = false;
-        if emits_common_js_require {
+        // PORT (FCS tranche 40): Go checker.go:5576-5581 —
+        // getEmitSyntaxForModuleSpecifierExpression(ast.GetExternalModuleName(
+        // declaration)) == ModuleKindCommonJS fires the CommonJS grammar
+        // error (the node import-attributes CommonJS family, TS2856). The
+        // grammarchecks.rs helper (the source-phase arm's
+        // get_emit_module_format_of_file stand-in for
+        // GetEmitSyntaxForUsageLocation) answers the per-file emit syntax.
+        if let Some(module_specifier) = get_external_module_name(self.store(), declaration)
+            && self.get_emit_syntax_for_module_specifier_expression(module_specifier)
+                == ModuleKind::CommonJS
+        {
             self.grammar_error_on_node(
                 node,
                 &diag::IMPORT_ATTRIBUTES_ARE_NOT_ALLOWED_ON_STATEMENTS_THAT_COMPILE_TO_COMMONJS_REQUIRE_CALLS,

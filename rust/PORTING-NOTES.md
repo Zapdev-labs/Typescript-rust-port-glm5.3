@@ -3413,3 +3413,40 @@ sweep census: divergent 692 (541 count / 151 hash), identical 6,875/
 re-ran tests + sweeps + census independently; Go tree md5-verified
 pristine; the foreign crates/fourslash parked by the worker confirmed
 absent from the workspace).
+
+## Sweep micro-tranche 40 landed (2026-11-04, RIG-VALIDATED) — widened burst: import-attributes cjs + the .d.ts ambient-parse root; divergent 692 -> 552
+
+Labels verified from message text (the task guesses for 2391/1155 were
+wrong — both are .d.ts-unit families). Three roots:
+- ROOT A (TS2856 rust-MISSING x57/30 -> 0/0): check_import_attributes
+  had a permissive emits_common_js_require=false STUB; wired Go
+  checker.go:5576-5581 (get_external_module_name ->
+  get_emit_syntax_for_module_specifier_expression == CommonJS; the
+  grammarchecks.rs helper made pub(crate)).
+- ROOT B (TS2391 x58/40 + TS1155 x52/36, ONE root): the check twin
+  parsed every unit with parse_source_file(Default::default()) —
+  ANONYMOUS file_name, so opts.file_name.is_declaration_file() was
+  false and .d.ts/.d.cts units never got parse-time NodeFlags::AMBIENT
+  (Go parser.go:433). The twin parse now passes SourceFileParseOptions
+  { file_name: RootedFilePath::from(name) } (compiler_runner.rs).
+  TS2391 -> x2/2 (residual = pre-existing distinct .ts-unit roots);
+  TS1155 -> 0/0.
+- ROOT C (latent, exposed by B): is_var_const_like compared
+  block_scope_kind == NF::CONSTANT (the composite Const|Using=6) where
+  Go checker.go:19107 compares NodeFlagsConst (1<<1) — plain const
+  answered FALSE and ambient const initializers fell to TS1039
+  (probe-evidenced 177x vcl=false). Fix: NF::CONST.
+Newly-divergent 0; NEWLY-IDENTICAL 140 (node 56, parser 25,
+moduleResolution 15, externalModules 14, nonjsExtensions 9, jsx 6...);
+collateral: 1036 missing 33->3, 7060 32->0, 1039 extra 8->0, 1203
+33->24, 2694 9->6. PLAIN-sweep census: divergent 552 (411 count / 141
+hash), identical 7,015/7,567; both drivers 0/3,826/3,741/0; panics 0.
+83 ok lines/0 FAILED (fcs40 pins 6/6); clippy 0; all gates green fresh
+(orchestrator re-ran tests + sweeps + census independently; Go tree
+md5-verified pristine). NOTE: the twin-parse file_name fix likely
+unblocks the queued TS7058 mts/cts seam. QUEUED for t41: EXTRA 2322
+x74/32 (scattered), 2339 x43/22, 2446 x43/9, 2345 x40/18, 2558 x36/9,
+2536 x28/11; MISSING 2322 x49/25, 7053 x42/13, 2558 x37/10, 2441
+x32/8, 2790 x25/6, 2307 x24/17. SHARED-RIG: the concurrent workstream's
+mirrors are mutually destructive with ours — re-verify tree state
+before/after every rig batch (fourslash re-parked as needed).
