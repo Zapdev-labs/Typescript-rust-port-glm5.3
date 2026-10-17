@@ -55,6 +55,7 @@ use tsc_diagnostics::{
     AN_EXPRESSION_OF_TYPE_VOID_CANNOT_BE_TESTED_FOR_TRUTHINESS,
     AN_OBJECT_S_SYMBOL_HASINSTANCE_METHOD_MUST_RETURN_A_BOOLEAN_VALUE_FOR_IT_TO_BE_USED_ON_THE_RIGHT_HAND_SIDE_OF_AN_INSTANCEOF_EXPRESSION,
     A_CONST_ASSERTION_CAN_ONLY_BE_APPLIED_TO_REFERENCES_TO_ENUM_MEMBERS_OR_STRING_NUMBER_BOOLEAN_ARRAY_OR_OBJECT_LITERALS,
+    THIS_SYNTAX_IS_RESERVED_IN_FILES_WITH_THE_MTS_OR_CTS_EXTENSION_USE_AN_AS_EXPRESSION_INSTEAD,
     A_REST_ELEMENT_CANNOT_HAVE_AN_INITIALIZER, A_REST_ELEMENT_MUST_BE_LAST_IN_A_DESTRUCTURING_PATTERN,
     CANNOT_ASSIGN_TO_0_BECAUSE_IT_IS_A_READ_ONLY_PROPERTY,
     CANNOT_ASSIGN_TO_PRIVATE_METHOD_0_PRIVATE_METHODS_ARE_NOT_WRITABLE,
@@ -1261,9 +1262,25 @@ impl Checker {
     /// Go: `func (c *Checker) checkAssertion(node, checkMode) *Type` (checker.go:12526).
     pub(crate) fn check_assertion(&mut self, node: NodeId, check_mode: CheckMode) -> TypeId {
         if self.store().node(node).kind == Kind::TypeAssertionExpression {
-            // TODO(port M6 W3): the mts/cts extension-reserved grammar error
-            // (grammarchecks.go's file-extension probe) — permissive skip.
-            let _ = node;
+            // Go: `file := ast.GetSourceFileOfNode(node); if file != nil &&
+            // file.FileName().ExtensionIsOneOf([]string{tspath.ExtensionMts,
+            // tspath.ExtensionCts})` (checker.go:12528-12531). PORT (FCS
+            // tranche 38): the mts/cts extension-reserved grammar error —
+            // `<T>x` assertions are reserved in .mts/.cts files. The file
+            // NAME rides the FCS-tranche-6 `source_file_name` seam (the
+            // check twin's §5.1 parse keeps the SourceFile anonymous, so
+            // CheckerUnitProgram answers from its rooted unit name — the
+            // TS7059s of nodeModulesForbidenSyntax's index.cts/index.mts).
+            if let Some(file) = tsc_ast::utilities::get_source_file_of_node(self.store(), node) {
+                let file_name = self.program.source_file_name(file.as_node_id());
+                if file_name.ends_with(".mts") || file_name.ends_with(".cts") {
+                    self.grammar_error_on_node(
+                        node,
+                        &THIS_SYNTAX_IS_RESERVED_IN_FILES_WITH_THE_MTS_OR_CTS_EXTENSION_USE_AN_AS_EXPRESSION_INSTEAD,
+                        &[],
+                    );
+                }
+            }
         }
         let type_node = crate::ast_shims::type_of_node(self.store(), node)
             .expect("assertion has a type node");

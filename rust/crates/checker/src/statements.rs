@@ -5278,17 +5278,66 @@ impl Checker {
         self.new_decorator_call_signature(vec![target_param, context_param], return_type)
     }
 
+    /// Go: `decl := c.factory.NewFunctionTypeNode(nil, nil, c.factory.NewKeywordTypeNode(ast.KindAnyKeyword))`
+    /// (checker.go:31068) — the synthetic call-signature anchor. PORT (FCS
+    /// tranche 38): the port previously anchored these signatures at
+    /// `declaration: None`, which made getOrCreateTypeFromSignature take its
+    /// declaration-less fallback (`kind == KindUnknown => isConstructor`) and
+    /// store the decorator call signature as a CONSTRUCT signature — so
+    /// getContextualCallSignature(Call) never found it and every decorator
+    /// factory's arrow parameters fell back to assignNonContextualParameterTypes
+    /// (the TS7006 extras of the esDecorators/legacyDecorators-contextualTypes
+    /// family). The anchor mirrors Go's factory node exactly: zero loc, no
+    /// parent, no symbol/links (every declaration-reading outcome other than
+    /// `.kind` answers the same as nil, as before).
+    fn new_synthetic_function_type_node(&mut self) -> NodeId {
+        let keyword = tsc_ast::Node {
+            kind: Kind::AnyKeyword,
+            flags: tsc_ast::NodeFlags::NONE,
+            loc: tsc_ast::TextRange::new(0, 0),
+            id: std::cell::Cell::new(0),
+            parent: std::cell::Cell::new(NodeId::NONE),
+            data: tsc_ast::NodeData::KeywordTypeNode(Box::new(tsc_ast::KeywordTypeNode {})),
+        };
+        let keyword = self.program.node_store_mut().alloc(keyword);
+        let function_type = tsc_ast::Node {
+            kind: Kind::FunctionType,
+            flags: tsc_ast::NodeFlags::NONE,
+            loc: tsc_ast::TextRange::new(0, 0),
+            id: std::cell::Cell::new(0),
+            parent: std::cell::Cell::new(NodeId::NONE),
+            data: tsc_ast::NodeData::FunctionTypeNode(Box::new(tsc_ast::FunctionTypeNode {
+                symbol: None,
+                modifiers: None,
+                locals: tsc_ast::SymbolTable::default(),
+                next_container: None,
+                type_parameters: None,
+                parameters: None,
+                type_: Some(keyword),
+                full_signature: None,
+            })),
+        };
+        let function_type = self.program.node_store_mut().alloc(function_type);
+        self.program
+            .node_store_mut()
+            .node_mut(keyword)
+            .parent
+            .set(function_type);
+        function_type
+    }
+
     /// Go: `func (c *Checker) newCallSignature(typeParameters, thisParameter, parameters, returnType) *Signature`
-    /// (checker.go:31052) — the decorator family's synthetic-signature form.
-    /// PORT (FCS tranche 29): Go anchors the signature at a factory-made
-    /// synthetic FunctionTypeNode declaration; the port has no factory, so
-    /// `declaration` is None — every declaration-reading outcome matches
-    /// (synthetic nodes carry no flags/links, so IsDeprecatedDeclaration
-    /// and friends answer the same as nil).
+    /// (checker.go:31067) — the decorator family's synthetic-signature form.
+    /// PORT (FCS tranche 38): the signature is now anchored at the
+    /// factory-made synthetic FunctionTypeNode declaration exactly like Go —
+    /// `is_constructor` in get_or_create_type_from_signature reads
+    /// `declaration.kind` (KindFunctionType => a CALL signature), which is
+    /// what makes the decorator context type carry a call signature.
     fn new_decorator_call_signature(&mut self, parameters: Vec<SymbolId>, return_type: TypeId) -> crate::types::SignatureId {
+        let decl = self.new_synthetic_function_type_node();
         self.new_signature(
             crate::types::SignatureFlags::NONE,
-            None,
+            Some(decl),
             Vec::new(),
             None,
             parameters.clone(),
@@ -5306,10 +5355,14 @@ impl Checker {
         return_type: TypeId,
     ) -> TypeId {
         // Go's newCallSignature sets minArgumentCount = len(parameters).
+        // PORT (FCS tranche 38): like Go's newFunctionType, route through the
+        // synthetic-FunctionTypeNode-anchored newCallSignature so the
+        // isolated signature type carries a CALL signature.
         let min_argument_count = parameters.len() as i32;
+        let decl = self.new_synthetic_function_type_node();
         let signature = self.new_signature(
             crate::types::SignatureFlags::NONE,
-            None,
+            Some(decl),
             type_parameters,
             this_parameter,
             parameters,

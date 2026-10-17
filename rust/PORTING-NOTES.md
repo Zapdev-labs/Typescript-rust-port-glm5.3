@@ -3346,3 +3346,40 @@ divergent 780 (630 count / 150 hash), identical 6,787/7,567; both
 drivers 0/3,826/3,741/0; panics 0. 80 ok lines/0 FAILED (fcs37 pins
 4/4); clippy 0; all gates green fresh (orchestrator re-ran tests +
 sweeps + census independently; Go tree md5-verified pristine).
+
+## Sweep micro-tranche 38 landed (2026-11-03, RIG-VALIDATED) — WIDENED BURST: three top clusters; divergent 780 -> 737
+
+First widened burst (top-3-clusters cadence per the user speedup
+directive). All three fixed Go-exactly:
+- TS7006 rust-EXTRA x98/9 (decorator factory arrow params): new_
+  decorator_call_signature/new_function_type_for_decorator anchored at
+  declaration: None -> the declaration-less isConstructor fallback
+  stored the decorator context CALL signature as a CONSTRUCT signature ->
+  no contextual call sig -> assignNonContextualParameterTypes -> phantom
+  7006. Go anchors at a factory-made synthetic FunctionTypeNode
+  (checker.go:31067-31070); new_synthetic_function_type_node() added.
+  98 -> 10 extra.
+- TS2504 rust-MISSING x75/26 (yield* in async generators, the emitter
+  O4/O5/C4/C5/F4/F5 family): produce_deferred_diagnostics'
+  ReportTypeNotIterable arm (spine.rs) was the M6 S3 TODO stub
+  DISCARDING the queued callback (queued 16x/unit; Go checker.go:
+  6547-6554 closure). Arm now runs report_type_not_iterable_error +
+  add_related_info. 75 -> 0.
+- TS7059 rust-MISSING x64/4 (nodeModulesForbidenSyntax `<T>x` in .mts/
+  .cts): the checker.go:12528-12531 guard read the SourceFile's OWN
+  name — EMPTY in the check twin (anonymous parse); now rides the
+  FCS-tranche-6 source_file_name Program seam (CheckerUnitProgram
+  carries the rooted unit name). 64 -> 0.
+Newly-divergent 0; newly-identical 43 (4 decorator records, 12
+emitter.asyncGenerators, 2 parser.asyncGenerators, YieldExpression6/
+YieldStarExpression4, 14 generatorTypeCheck/generatorReturnTypeInference
+collateral). PLAIN-sweep census: divergent 737 (586 count / 151 hash),
+identical 6,830/7,567; both drivers 0/3,826/3,741/0; panics 0. 81 ok
+lines/0 FAILED (fcs38 pins 6/6); clippy 0; all gates green fresh
+(orchestrator re-ran tests + sweeps + census independently; Go tree
+md5-verified pristine). QUEUED for t39: TS7006 remnant x10 (salsa
+contextualTypedSpecialAssignment x8, paramTagTypeResolution2, type
+ParameterConstModifiersReturnsAndYields); grammarchecks.rs:3395 (TS7058
+mts/cts) needs the same source_file_name seam when it surfaces; census
+top: EXTRA 2322 x74/32, 2391 x58/40, 1155 x52/36; MISSING 2882 x59/33,
+17009 x58/16, 2856 x57/30, 2374 x56/5.

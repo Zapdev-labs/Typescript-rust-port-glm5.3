@@ -1495,9 +1495,19 @@ impl Checker {
     pub(crate) fn produce_deferred_diagnostics(&mut self) {
         for callback in std::mem::take(&mut self.deferred_diagnostic_callbacks) {
             match callback {
-                // TODO(port M6 S3): reportTypeNotIterableError + the related-info merge.
+                // Go: the deferred closure runs
+                // `diagnostic := c.reportTypeNotIterableError(errorNode, t,
+                // use&AllowsAsyncIterables != 0)` then merges the collected
+                // related diagnostics (checker.go:6547-6554, 6493-6500).
+                // PORT (FCS tranche 38): REAL (was the M6 S3 permissive
+                // stub) — this drain is what emits the TS2504/TS2488
+                // for-await / yield-star "must have a Symbol.asyncIterator
+                // method" family (the asyncGenerators per-unit 2504s).
                 DeferredDiagnosticCallback::ReportTypeNotIterable { error_node, t, allows_async_iterables, related } => {
-                    let _ = (error_node, t, allows_async_iterables, related);
+                    let mut diagnostic = self.report_type_not_iterable_error(error_node, t, allows_async_iterables);
+                    for d in related {
+                        diagnostic.add_related_info(d);
+                    }
                 }
                 // Go: checkWeakMapSetCollision (checker.go:10787) — REAL (M6 W3 t7,
                 // statements.rs; the private-identifier downlevel reservation).
