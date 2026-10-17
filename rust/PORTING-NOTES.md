@@ -3450,3 +3450,42 @@ x74/32 (scattered), 2339 x43/22, 2446 x43/9, 2345 x40/18, 2558 x36/9,
 x32/8, 2790 x25/6, 2307 x24/17. SHARED-RIG: the concurrent workstream's
 mirrors are mutually destructive with ours — re-verify tree state
 before/after every rig batch (fourslash re-parked as needed).
+
+## Sweep micro-tranche 41 landed (2026-11-04, RIG-VALIDATED) — widened burst: protected-instance walk + arity spans + require/exports collisions; divergent 552 -> 527
+
+Three clusters + collaterals, all Go-exact:
+- TS2446 rust-EXTRA x43/9 -> 0/0: is_class_derived_from_declaring_
+  classes was a permissive STUB (answered get_declaring_class(prop).
+  is_some(), ignoring `class`) — Go checker.go:12097's enclosing-class
+  walk stopped at the FIRST container class and hasBaseType fired 2446
+  on every nested-class access. Ported the real body (checker.go:12202)
+  + NEW for_each_property (checker.go:12145 — the synthetic-constituent
+  walk via value_symbol_links.containing_type.types() + get_property_
+  of_type recursion).
+- TS2558 x73/10 -> x5/4: get_type_argument_arity_error built the
+  diagnostic on the whole call node; Go checker.go:10066 spans the
+  SkipTrivia'd TYPE-ARGUMENT LIST. New diagnostic_for_type_argument_
+  arity helper (the jsx.go:559 shape), wired into all 3 arms.
+- TS2441 rust-MISSING x32/8 -> 0/0 (+ TS2725 x16 -> 0): check_collision_
+  with_require_exports_in_generated_code had TWO mistranslations — the
+  module-format gate read the configured module_kind (node16 >= ES2015
+  -> check never ran) instead of Go's per-file GetEmitModuleFormatOf-
+  File; and !(need_req && !need_exp) made the exports arm unreachable
+  (Go: !need_req && !need_exp). Seam fn REMOVED; all 6 call sites
+  (require/exports, global-Object, class-Object 2725, illegal-export-
+  default, verbatim/preserve ESM-syntax) now read the checker Program
+  trait.
+- TS7058 mts/cts seam: CONFIRMED converged by the t40 twin-parse
+  file_name fix (checked first; diff empty).
+Newly-divergent 0; newly-identical 25 (classes 9, node 8, expressions
+4, types 4). TS2445 residual 3/4 (pre-existing distinct roots). PLAIN-
+sweep census: divergent 527 (396 count / 131 hash), identical 7,040/
+7,567; both drivers 0/3,826/3,741/0; panics 0. 84 ok lines/0 FAILED
+(fcs41 pins 5/5); clippy 0; all gates green fresh. SHARED-RIG COLLISION
+(THIRD recurrence, now striking every few minutes — the other
+workstream's mirrors shred our target/ mid-run; the orchestrator's own
+verification sweep also hit it and was re-run on a clean window after
+re-sync + rebuild). QUEUED for t42: EXTRA 2322 x74/32 (scattered), 2339
+x43/22, 2345 x40/18, 2536 x28/11; MISSING 2322 x49/25, 7053 x42/13,
+2790 x25/6 (delete-operator family — coherent, promising), 2307
+x24/17, 2364 x23/1; TS2558 residual x5 (jsx span root); carried queues.

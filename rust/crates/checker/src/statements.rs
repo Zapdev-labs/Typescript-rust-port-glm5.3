@@ -5463,13 +5463,20 @@ impl Checker {
     /// (checker.go:10692).
     fn check_collision_with_require_exports_in_generated_code(&mut self, node: NodeId, name: NodeId) {
         // No need to check for require or exports for ES6 modules and later
-        if self.get_emit_module_format_of_file_seam(node)
+        if self
+            .program
+            .get_emit_module_format_of_file(self.get_source_file_node_of(node))
             >= tsc_core::options_generated::ModuleKind::ES2015
         {
             return;
         }
-        if !(self.need_collision_check_for_identifier(node, Some(name), "require")
-            && !self.need_collision_check_for_identifier(node, Some(name), "exports"))
+        // Go: `if name == nil || !needCollisionCheckForIdentifier(node,
+        // name, "require") && !needCollisionCheckForIdentifier(node, name,
+        // "exports") { return }` — proceed when EITHER reserved name matches.
+        // PORT (FCS tranche 41): the old `!(need_require && !need_exports)`
+        // shape dropped the exports-named arm entirely.
+        if !self.need_collision_check_for_identifier(node, Some(name), "require")
+            && !self.need_collision_check_for_identifier(node, Some(name), "exports")
         {
             return;
         }
@@ -5514,7 +5521,7 @@ impl Checker {
                 && tsc_binder::ast_shims::is_external_or_common_js_module(
                     self.store().file(parent.file_id()),
                 )
-                && self.get_emit_module_format_of_file_seam(parent)
+                && self.program.get_emit_module_format_of_file(parent)
                     == tsc_core::options_generated::ModuleKind::CommonJS
             {
                 // If the declaration happens to be in external module, report error that Object is a reserved identifier.
@@ -5626,7 +5633,9 @@ impl Checker {
     /// Go: `func (c *Checker) checkClassNameCollisionWithObject(name)` (checker.go:10927).
     fn check_class_name_collision_with_object(&mut self, name: NodeId) {
         if tsc_ast::node_text(self.store(), name) == "Object"
-            && self.get_emit_module_format_of_file_seam(name)
+            && self
+                .program
+                .get_emit_module_format_of_file(self.get_source_file_node_of(name))
                 < tsc_core::options_generated::ModuleKind::ES2015
         {
             let module_kind = module_kind_string(self.module_kind);
@@ -12737,7 +12746,10 @@ impl Checker {
         let is_illegal_export_default_in_cjs = !is_export_equals
             && !self.store().node(node).flags.intersects(NF::AMBIENT)
             && self.compiler_options.verbatim_module_syntax == Tristate::TSTrue
-            && self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS;
+            && self
+                .program
+                .get_emit_module_format_of_file(self.get_source_file_node_of(node))
+                == ModuleKind::CommonJS;
         if is_identifier(self.store().node(expression)) {
             let id = expression;
             let id_text = tsc_ast::node_text(self.store(), id).to_string();
@@ -12910,14 +12922,12 @@ impl Checker {
         false
     }
 
-    /// Go: `c.program.GetEmitModuleFormatOfFile(ast.GetSourceFileOfNode(node))`
-    /// — the per-file emit-format seam. TODO(port M6 S?): the checker's
-    /// Program trait doesn't expose the per-file emit format; approximated
-    /// by the configured module_kind (identical whenever the file carries no
-    /// format-implying extension/package context).
-    fn get_emit_module_format_of_file_seam(&self, _node: NodeId) -> ModuleKind {
-        self.module_kind
-    }
+    // Go: `c.program.GetEmitModuleFormatOfFile(ast.GetSourceFileOfNode(node))`
+    // — the per-file emit-format read. PORT (FCS tranche 41): the seam was
+    // removed; the call sites now read the checker Program trait (the
+    // testrunner's CheckerUnitProgram override implements it with the
+    // compiler crate's GetEmitModuleFormatOfFileWorker, Go's
+    // SkipModuleResolution metadata shape).
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -13320,7 +13330,10 @@ impl Checker {
             if self.compiler_options.verbatim_module_syntax == Tristate::TSTrue
                 && !tsc_ast::is_import_equals_declaration(self.store().node(node))
                 && !tsc_ast::utilities::is_in_js_file(self.store().node(node))
-                && self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS
+                && self
+                    .program
+                    .get_emit_module_format_of_file(self.get_source_file_node_of(node))
+                    == ModuleKind::CommonJS
             {
                 self.error(
                     node,
@@ -13331,7 +13344,10 @@ impl Checker {
                 && !tsc_ast::is_import_equals_declaration(self.store().node(node))
                 && self.store().node(node).kind != Kind::VariableDeclaration
                 && self.store().node(node).kind != Kind::BindingElement
-                && self.get_emit_module_format_of_file_seam(node) == ModuleKind::CommonJS
+                && self
+                    .program
+                    .get_emit_module_format_of_file(self.get_source_file_node_of(node))
+                    == ModuleKind::CommonJS
             {
                 // In `--module preserve`, ESM input syntax emits ESM output
                 // syntax, but there will be times when we look at the

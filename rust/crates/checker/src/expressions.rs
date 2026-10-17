@@ -4020,20 +4020,65 @@ impl Checker {
         true
     }
 
+    /// Go: `func (c *Checker) forEachProperty(prop, callback) bool`
+    /// (checker.go:12145) — invoke the callback for each underlying property
+    /// symbol of the given synthetic union property; non-synthetic symbols
+    /// invoke it directly.
+    ///
+    /// PORT (FCS tranche 41): real body — was a permissive stub until the
+    /// relater's hasBaseType/getPropertyOfType landed.
+    pub(crate) fn for_each_property(
+        &mut self,
+        prop: SymbolId,
+        callback: &mut dyn FnMut(&mut Checker, SymbolId) -> bool,
+    ) -> bool {
+        if !self
+            .program_symbol(prop)
+            .check_flags
+            .intersects(tsc_ast::CheckFlags::SYNTHETIC)
+        {
+            return callback(self, prop);
+        }
+        let Some(containing_type) = self.value_symbol_links.try_get(prop).and_then(|l| l.containing_type)
+        else {
+            return false;
+        };
+        let name = self.program_symbol(prop).name.clone();
+        for t in self.type_(containing_type).types().to_vec() {
+            if let Some(p) = self.get_property_of_type(t, &name)
+                && self.for_each_property(p, callback)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Go: `func (c *Checker) isClassDerivedFromDeclaringClasses(class, prop, writing) bool`
-    /// (checker.go:12202).
+    /// (checker.go:12202). PORT (FCS tranche 41): real body — the old stub
+    /// answered `get_declaring_class(prop).is_some()`, stopping the enclosing-
+    /// class walk at the FIRST container class (TS2446 extras in the nested
+    /// protected-access family).
     pub(crate) fn is_class_derived_from_declaring_classes(
         &mut self,
         class: TypeId,
         prop: SymbolId,
         writing: bool,
     ) -> bool {
-        let _ = writing;
-        // PORT: Go walks the property's synthetic constituents against the
-        // class's base types; getBaseTypes/hasBaseType are the S8 relater
-        // seams (permissive empty/false) until the inheritance engine lands.
-        let _ = class;
-        relater::get_declaring_class(self, prop).is_some()
+        !self.for_each_property(prop, &mut |c, p| {
+            if u::get_declaration_modifier_flags_from_symbol_ex(c, c.store(), p, writing)
+                .intersects(ModifierFlags::PROTECTED)
+            {
+                // Go: `!c.hasBaseType(checkClass, c.getDeclaringClass(p))`
+                // — a nil declaring class is never a base type.
+                match relater::get_declaring_class(c, p) {
+                    Some(dc) => !relater::has_base_type(c, class, dc),
+                    None => false,
+                }
+            } else {
+                false
+            }
+        })
     }
 
     /// Go: `func (c *Checker) getEnclosingClassFromThisParameter(node) *Type` (checker.go:12736).

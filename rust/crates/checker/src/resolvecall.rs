@@ -2285,8 +2285,38 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getTypeArgumentArityError(node, signatures, typeArguments, headMessage) *ast.Diagnostic`
-    /// (checker.go:10066). PORT: the position spans the call node (Go trims
-    /// trivia around the type-argument list).
+    /// (checker.go:10066). PORT (FCS tranche 41): the diagnostic span is
+    /// `core.NewTextRange(scanner.SkipTrivia(sourceFile.Text(),
+    /// typeArgumentList.Loc.Pos()), typeArgumentList.Loc.End())` — the
+    /// type-argument list node's span, SkipTrivia'd at the start (the old
+    /// port spanned the whole call node).
+    fn diagnostic_for_type_argument_arity(
+        &mut self,
+        node: NodeId,
+        message: &'static Message,
+        args: Vec<String>,
+    ) -> tsc_ast::Diagnostic {
+        if let Some(file) = tsc_ast::utilities::get_source_file_of_node(self.store(), node)
+            && let Some(type_argument_list) =
+                crate::grammarchecks::type_argument_list_of(self.store(), node)
+        {
+            let pos = tsc_scanner::skip_trivia(file.text(), type_argument_list.pos());
+            let loc = tsc_ast::TextRange::new(pos, type_argument_list.end());
+            return tsc_ast::Diagnostic::new(
+                Some(file.as_node_id()),
+                loc,
+                message.code(),
+                message.category(),
+                "",
+                Some(message),
+                "",
+                message.key(),
+                args,
+            );
+        }
+        u::new_diagnostic_for_node(self.store(), node, message, args)
+    }
+
     fn get_type_argument_arity_error(
         &mut self,
         node: NodeId,
@@ -2304,8 +2334,7 @@ impl Checker {
             if min_count < max_count {
                 expected = format!("{}-{}", expected, max_count);
             }
-            return u::new_diagnostic_for_node(
-                self.store(),
+            return self.diagnostic_for_type_argument_arity(
                 node,
                 &diag::EXPECTED_0_TYPE_ARGUMENTS_BUT_GOT_1,
                 vec![expected, arg_count.to_string()],
@@ -2325,8 +2354,7 @@ impl Checker {
             }
         }
         if below_arg_count != i32::MIN && above_arg_count != i32::MAX {
-            u::new_diagnostic_for_node(
-                self.store(),
+            self.diagnostic_for_type_argument_arity(
                 node,
                 &diag::NO_OVERLOAD_EXPECTS_0_TYPE_ARGUMENTS_BUT_OVERLOADS_DO_EXIST_THAT_EXPECT_EITHER_1_OR_2_TYPE_ARGUMENTS,
                 vec![
@@ -2341,8 +2369,7 @@ impl Checker {
             } else {
                 below_arg_count
             };
-            u::new_diagnostic_for_node(
-                self.store(),
+            self.diagnostic_for_type_argument_arity(
                 node,
                 &diag::EXPECTED_0_TYPE_ARGUMENTS_BUT_GOT_1,
                 vec![expected.to_string(), arg_count.to_string()],
