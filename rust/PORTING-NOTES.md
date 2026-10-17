@@ -3528,3 +3528,42 @@ thisTypeInAccessors coherent family candidate); MISSING 2322 x43/23,
 7053 x42/13, 2307 x24/17, 7022 x20/17. Tooling: use cluster_diff.py
 (cluster_records.py is silently wrong on pure-missing codes;
 census_all.py at ~/.fcs42-scratch/census_all.py).
+
+## Sweep micro-tranche 43 landed (2026-11-04, RIG-VALIDATED) — widened burst: this-parameter text identity + implied node format + export= module exports; divergent 512 -> 491
+
+Three clusters, all to ZERO (labels verified from message text):
+- TS1049+TS1054 EXTRA x20/4 (thisTypeInAccessors): Go IsThisParameter
+  (ast/utilities.go:1371) is TEXT-based (Identifier with text "this" —
+  the parser builds this-param names as Identifier nodes); rust
+  ast_shims::is_this_parameter checked Kind::ThisKeyword -> answered
+  FALSE for every real this param -> getAccessorThisParameter nil
+  (checker.go:20335) -> extra 1049/1054 on every this-param accessor.
+- TS1203 EXTRA x25/15 (export= forbid-guard): Go checker.go:5860 gates
+  on GetImpliedNodeFormatForEmit (per-file); the port approximated with
+  the configured module_kind -> fired on node16/nodenext CJS-package
+  files and non-ESNext d.ts. NEW Program trait method
+  get_implied_node_format_for_emit + CheckerUnitProgram override (the
+  GetImpliedNodeFormatForEmitWorker over unit name + emit kind +
+  SkipModuleResolution metadata).
+- TS2323 EXTRA x26/5 (moduleExportAlias computed-name family, queued
+  since T11): TWO gaps in checkExternalModuleExports (Go checker.go:
+  5888) — the Every(==ExportsProperty) skip was the permissive-false
+  stub (the full classifier was already ported but never wired), and
+  the loop iterated the RAW .exports map instead of Go's getExportsOf-
+  Module (which resolves an export= module to the TARGET's exports —
+  the raw map carries the multi-declaration export= symbol itself).
+Newly-divergent 0; newly-identical 21 (+ moduleExportAlias errors_count
+56->44 = go but stays hash-only on ONE pre-existing TS2339 rendering
+diff — queued, not new). PLAIN-sweep census: divergent 491 (359 count /
+132 hash), identical 7,076/7,567; both drivers 0/3,826/3,741/0; panics
+0. 86 ok lines/0 FAILED (fcs43 pins 7/7); clippy 0; all gates green
+fresh (orchestrator re-ran tests + sweeps + census independently; Go
+tree md5-verified pristine; no rig collision). QUEUED for t44: EXTRA
+2322 x46/17, 2339 x37/19, 2345 x32/15, 2344 x22/6 (inferTypes1 x16/1 —
+the dormant S9 contextual-return seam), 2318 x17/11, 2757 x15/11;
+MISSING 7053 x42/13 (indexSignatures1 x21/1 dominates), 2322 x36/21,
+2307 x24/17, 7022 x20/17, 1361 x18/7 (typeOnly — coherent), 1470 x16/8
+(nodeModulesImportMeta — coherent), 2502 x14/6 (recursiveTypesWithTypeof
+— coherent), 2407 x13/4 (for-inStatementsInvalid x10 — coherent);
+new: TS1205 x2/2, moduleExportAlias TS2339 {}-union rendering; carried
+queues.

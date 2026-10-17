@@ -147,11 +147,20 @@ pub fn is_undefined_literal(node: &Node) -> bool {
     node.kind == Kind::UndefinedKeyword
 }
 
-/// Go: `func IsThisParameter(node *Node) bool` — the parameter's name is the
-/// `this` keyword.
+/// Go: `func IsThisParameter(node *Node) bool` — `IsParameterDeclaration(node)
+/// && node.Name() != nil && IsThisIdentifier(node.Name())`
+/// (ast/utilities.go:1371). PORT (FCS tranche 43): was checking for a
+/// `ThisKeyword`-kind name, but the parser builds `this` parameter names as
+/// Identifier nodes with text `"this"` (Go: IsThisIdentifier is
+/// identifier-text-based) — the shim answered false for every real `this`
+/// parameter, which surfaced as the extra TS1049/TS1054 accessor-arity
+/// diagnostics on `get`/`set` accessors declared with a `this` parameter.
 pub fn is_this_parameter(store: &dyn NodeStore, node: NodeId) -> bool {
     let n = store.node(node);
-    n.kind == Kind::Parameter && n.name().is_some_and(|name| store.node(name).kind == Kind::ThisKeyword)
+    n.kind == Kind::Parameter
+        && n.name().is_some_and(|name| {
+            tsc_ast::utilities::is_this_identifier(store, name)
+        })
 }
 
 /// Go: `type FindAncestorResult int` + `FindAncestorFalse/True/Quit` (ast).

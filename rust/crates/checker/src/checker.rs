@@ -173,6 +173,16 @@ pub trait Program {
     fn get_emit_module_format_of_file(&self, _file: NodeId) -> ModuleKind {
         ModuleKind::None
     }
+    /// Go: `Program.GetImpliedNodeFormatForEmit(sourceFile) ResolutionMode`
+    /// — the export= grammar check's per-file implied-format read
+    /// (Go checker.go:5860's `moduleKindES2015+` forbid-export= guard).
+    ///
+    /// PORT (FCS tranche 43): the permissive default mirrors "no program
+    /// metadata"; the testrunner's CheckerUnitProgram overrides it with the
+    /// compiler crate's GetImpliedNodeFormatForEmitWorker.
+    fn get_implied_node_format_for_emit(&self, _file: NodeId) -> ModuleKind {
+        ModuleKind::None
+    }
     /// Go: `Program.GetSourceFileMetaData(path).ImpliedNodeFormat` — the
     /// Node16-Nodenext await arms' implied-node-format read (the CommonJS
     /// top-level await/for-await errors).

@@ -11545,9 +11545,13 @@ impl Checker {
                 }
             }
             // Checks for export * conflicts
-            for (id, symbol) in self
-                .program_symbol(module_symbol)
-                .exports
+            // PORT (FCS tranche 43): Go iterates `c.getExportsOfModule(moduleSymbol)`
+            // — the RESOLVED exports (a module defined by an `export=` resolves
+            // to the target's exports; the raw `.exports` map carries the
+            // multi-declaration `export=` symbol itself, which fired the
+            // extra TS2323s on the moduleExportAlias re-aliasing family).
+            let resolved_exports = self.get_exports_of_module(module_symbol);
+            for (id, symbol) in resolved_exports
                 .entries()
                 .map(|(k, v)| (k.clone(), *v))
                 .collect::<Vec<_>>()
@@ -11588,9 +11592,21 @@ impl Checker {
                     .declarations
                     .iter()
                     .all(|&_d| {
-                        // TODO(port M6 S4): GetAssignmentDeclarationKind —
-                        // the JS expando family; permissive false.
-                        false
+                        // Go: `core.Every(symbol.Declarations,
+                        // GetAssignmentDeclarationKind(node) ==
+                        // JSDeclarationKindExportsProperty)` — the JS expando
+                        // family (ast/utilities.go:1547). PORT (FCS tranche
+                        // 43): was the TODO(port M6 S4) permissive-false
+                        // seam, which fired the extra TS2323 "Cannot
+                        // redeclare exported variable" on the salsa
+                        // moduleExportAlias/moduleExportDuplicateAlias
+                        // families (every declaration of the aliased
+                        // exports-property symbols is an `exports.x =` /
+                        // `module.exports.x =` assignment).
+                        tsc_ast::utilities::get_assignment_declaration_kind(
+                            self.store(),
+                            _d,
+                        ) == tsc_ast::utilities::JSDeclarationKind::ExportsProperty
                     });
                 if exported_declarations_count > 1 && !all_exports_property {
                     let declarations: Vec<NodeId> =
@@ -12882,10 +12898,14 @@ impl Checker {
         }
         if is_export_equals {
             // Forbid export= in esm implementation files, and esm mode declaration files
-            // TODO(port M6 S?): program.GetImpliedNodeFormatForEmit — the
-            // per-file implied-format seam; approximated by the configured
-            // module_kind.
-            let implied_node_format = self.module_kind;
+            // PORT (FCS tranche 43): program.GetImpliedNodeFormatForEmit —
+            // the per-file implied-format seam (Go checker.go:5860) replaced
+            // the module_kind approximation (the TODO(port M6 S?) seam): the
+            // node16/nodenext CommonJS-package files and non-ESNext
+            // declaration files no longer misclassify.
+            let implied_node_format = self
+                .program
+                .get_implied_node_format_for_emit(self.get_source_file_node_of(node));
             if ModuleKind::ES2015 <= self.module_kind
                 && self.module_kind != ModuleKind::Preserve
                 && ((self.store().node(node).flags.intersects(NF::AMBIENT)

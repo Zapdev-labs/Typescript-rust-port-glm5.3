@@ -212,6 +212,24 @@ impl Program for CheckerUnitProgram {
     fn source_file_implied_node_format(&self, _file: tsc_ast::NodeId) -> ModuleKind {
         tsc_compiler::ast_shims::get_implied_node_format_for_file(&self.name, "")
     }
+    // Go: Program.GetImpliedNodeFormatForEmit (program.go:1775) — the worker
+    // over the unit's name, the case's emit module kind, and the
+    // SkipModuleResolution metadata (PORT (FCS tranche 43): the export=
+    // forbid-guard's per-file read; no emit-module-kind fallback — Go's
+    // implied worker answers ResolutionModeNone, unlike the emit worker).
+    fn get_implied_node_format_for_emit(&self, _file: tsc_ast::NodeId) -> ModuleKind {
+        let implied_node_format =
+            tsc_compiler::ast_shims::get_implied_node_format_for_file(&self.name, "");
+        tsc_compiler::ast_shims::get_implied_node_format_for_emit_worker(
+            &self.name,
+            self.options.get_emit_module_kind(),
+            &tsc_ast::SourceFileMetaData {
+                package_json_type: String::new(),
+                package_json_directory: Default::default(),
+                implied_node_format,
+            },
+        )
+    }
     // ── The FCS-tranche-6 module-resolution-mode seams (Go: file.FileName(),
     // p.sourceFileMetaDatas[...] and program.FileExists — the per-unit twin's
     // answers: the name and meta the adapter already computes for the
