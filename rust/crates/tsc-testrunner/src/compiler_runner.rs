@@ -462,7 +462,38 @@ fn semantic_diagnostics_of_unit(
     let check_unused = options.no_unused_locals == Tristate::TSTrue
         || options.no_unused_parameters == Tristate::TSTrue;
     checker.check_source_file(file, check_unused);
-    checker.semantic_diagnostics()
+    let raw = checker.semantic_diagnostics();
+    // PORT (FCS tranche 49): the REAL Go compiler pipeline applies
+    // filterAndSortDiagnostics — SortAndDeduplicateDiagnostics
+    // (program.go:1675) — to every semantic-diagnostic read
+    // (program.go:733); raw checker collections never reach the
+    // compiler's output. The per-unit seam bypasses the program layer, so
+    // the driver reproduces the post-pass here (tsc-compiler's twin of
+    // Go's SortAndDeduplicateDiagnostics) — the go-bench twin applies the
+    // same pass in confSemanticDiagnosticsOfUnit. Without it the drivers
+    // compared RAW collections (the go checker's re-check duplicates —
+    // e.g. salsa/thisPropertyAssignmentCircular's TS2683 x10-at-one-span —
+    // surfaced where the real compiler pipeline carries 1).
+    //
+    // File pairing: the unit program holds exactly one source file, so a
+    // present `file` on a diagnostic pairs with the unit's name (the
+    // checker's global entries carry none).
+    let unit_file_name = RootedFilePath::from(name);
+    let paired: Vec<FileDiagnostic> = raw
+        .into_iter()
+        .map(|d| {
+            let file_name = if d.file().is_some() {
+                Some(unit_file_name.clone())
+            } else {
+                None
+            };
+            FileDiagnostic { file_name, diagnostic: d }
+        })
+        .collect();
+    tsc_compiler::sort_and_deduplicate_diagnostics(paired)
+        .into_iter()
+        .map(|fd| fd.diagnostic)
+        .collect()
 }
 
 // ──────────────────────────────────────────────────────────────────────

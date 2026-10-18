@@ -1237,7 +1237,19 @@ func confSemanticDiagnosticsOfUnit(unitName, content string, config *tsoptions.P
 	fileChecker, _ := checker.NewChecker(program, nil)
 	diags := fileChecker.GetDiagnostics(context.Background(), files[0])
 	diags = append(diags, fileChecker.GetGlobalDiagnostics()...)
-	return diags
+	// PORT (FCS tranche 49): the REAL Go compiler pipeline applies
+	// filterAndSortDiagnostics — SortAndDeduplicateDiagnostics
+	// (program.go:1675) — to every semantic-diagnostic read
+	// (program.go:733); raw checker collections never reach the
+	// compiler's output. The seam read above bypasses the program layer,
+	// so the driver reproduces the post-pass here. Without it the driver
+	// over-fired the checker's re-check duplicates (the
+	// salsa/thisPropertyAssignmentCircular TS2683 x10-at-one-span family —
+	// the upstream baseline and the real compiler pipeline both carry 1).
+	// The Rust twin applies the same dedup in compiler_runner.rs's
+	// semantic_diagnostics_of_unit (tsc-compiler's
+	// sort_and_deduplicate_diagnostics twin).
+	return compiler.SortAndDeduplicateDiagnostics(diags)
 }
 
 // confViewForDiagnostic — resolve the (file name, file text) a diagnostic

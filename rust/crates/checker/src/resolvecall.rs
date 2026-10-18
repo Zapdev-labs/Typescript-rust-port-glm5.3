@@ -269,11 +269,44 @@ impl Checker {
                     &[func_type_string],
                 );
             } else {
+                // Go checker.go:8751-8758: with exactly one argument, probe
+                // whether the call is really a missing semicolon — a line
+                // break directly after the callee end chains the
+                // Are-you-missing-a-semicolon related info onto the
+                // invocation error. PORT (FCS tranche 49): real now that
+                // invocation_error attaches related information.
+                let mut related_information: Option<tsc_ast::Diagnostic> = None;
+                if binder_node_data::arguments_of(self.store(), node).len() == 1
+                    && expression != NodeId::NONE
+                {
+                    let file = self.store().file(expression.file_id());
+                    let text = file.text();
+                    let expression_end = self.store().node(expression).end();
+                    if expression_end >= 0 && (expression_end as usize) < text.len() {
+                        let options = tsc_scanner::SkipTriviaOptions {
+                            stop_after_line_break: true,
+                            ..Default::default()
+                        };
+                        let skip_end =
+                            tsc_scanner::skip_trivia_ex(text, expression_end, Some(&options));
+                        if skip_end > 0 && (skip_end as usize) <= text.len() {
+                            let prev = text[..skip_end as usize].chars().last();
+                            if prev.is_some_and(tsc_stringutil::is_line_break) {
+                                related_information = Some(u::new_diagnostic_for_node(
+                                    self.store(),
+                                    expression,
+                                    &diag::ARE_YOU_MISSING_A_SEMICOLON,
+                                    vec![],
+                                ));
+                            }
+                        }
+                    }
+                }
                 self.invocation_error(
-                    node,
+                    expression,
                     apparent_type,
                     crate::types::SignatureKind::Call,
-                    None,
+                    related_information,
                 );
             }
             return self.resolve_error_call(node);
@@ -2473,6 +2506,15 @@ impl Checker {
     /// (checker.go:10165). PORT: the union-constituent walk and the
     /// related-info elaborations ride the diagnostic-enrichment surface; the
     /// head message is the real Go form.
+    /// PORT (FCS tranche 49): the FULL chain structure. Go wraps the
+    /// signature-mismatch diagnostic ("Type 0 has no call/construct
+    /// signatures", or the union-arm variants 2755/2756/2758 and
+    /// 2759/2760/2762) in a HEAD message ("This expression is not
+    /// callable/constructable", or the get-accessor head) via
+    /// NewDiagnosticChainForNode; `addDiagnostic` reports the HEAD and the
+    /// baseline renderer flattens the chain under it. The former port fired
+    /// only the inner chained message (TS2757/TS2761) — the TS2349/TS2351
+    /// head never fired, and the union arm was missing entirely.
     fn invocation_error_details(
         &mut self,
         error_target: NodeId,
@@ -2480,33 +2522,128 @@ impl Checker {
         kind: crate::types::SignatureKind,
     ) -> tsc_ast::Diagnostic {
         let is_call = kind == crate::types::SignatureKind::Call;
-        let target = if is_property_access_expression(self.store().node(error_target)) {
-            match &self.store().node(error_target).data {
-                tsc_ast::NodeData::PropertyAccessExpression(p) => p.name,
-                _ => error_target,
+        // Go: awaitedType := c.getAwaitedType(apparentType); maybeMissingAwait :=
+        // awaitedType != nil && len(c.getSignaturesOfType(awaitedType, kind)) > 0.
+        // (Go's getAwaitedType preserves nil; the port's Option keeps it and
+        // applies createAwaitedTypeIfNeeded on Some, as getAwaitedTypeEx does.)
+        let maybe_missing_await = self
+            .get_awaited_type_no_alias_ex(apparent_type, None, None)
+            .map(|awaited_type| self.create_awaited_type_if_needed(awaited_type))
+            .is_some_and(|awaited_type| {
+                !self.get_signatures_of_type(awaited_type, kind).is_empty()
+            });
+        let mut target = error_target;
+        if is_property_access_expression(self.store().node(error_target)) {
+            let parent = self.store().node(error_target).parent.get();
+            if parent != NodeId::NONE && self.store().node(parent).kind == Kind::CallExpression {
+                if let tsc_ast::NodeData::PropertyAccessExpression(p) =
+                    &self.store().node(error_target).data
+                {
+                    target = p.name;
+                }
+            }
+        }
+        let mut inner: Option<tsc_ast::Diagnostic> = None;
+        if self.type_(apparent_type).flags.intersects(TypeFlags::UNION) {
+            let types = self
+                .type_(apparent_type)
+                .as_union_type()
+                .expect("UnionType data")
+                .base
+                .types
+                .clone();
+            let mut has_signatures = false;
+            for constituent in types {
+                let signatures = self.get_signatures_of_type(constituent, kind);
+                if !signatures.is_empty() {
+                    has_signatures = true;
+                    if inner.is_some() {
+                        // Bail early if we already have an error, no chance of
+                        // "No constituent of type is callable" (Go's comment).
+                        break;
+                    }
+                } else {
+                    // Error on the first non callable constituent only (Go).
+                    if inner.is_none() {
+                        let constituent_string = self.type_to_string(constituent);
+                        let no_signatures = u::new_diagnostic_for_node(
+                            self.store(),
+                            target,
+                            if is_call {
+                                &diag::TYPE_0_HAS_NO_CALL_SIGNATURES
+                            } else {
+                                &diag::TYPE_0_HAS_NO_CONSTRUCT_SIGNATURES
+                            },
+                            vec![constituent_string],
+                        );
+                        let apparent_string = self.type_to_string(apparent_type);
+                        let mut chained = u::new_diagnostic_for_node(
+                            self.store(),
+                            target,
+                            if is_call {
+                                &diag::NOT_ALL_CONSTITUENTS_OF_TYPE_0_ARE_CALLABLE
+                            } else {
+                                &diag::NOT_ALL_CONSTITUENTS_OF_TYPE_0_ARE_CONSTRUCTABLE
+                            },
+                            vec![apparent_string],
+                        );
+                        chained.add_message_chain(no_signatures);
+                        inner = Some(chained);
+                    }
+                    if has_signatures {
+                        break;
+                    }
+                }
+            }
+            if !has_signatures {
+                let apparent_string = self.type_to_string(apparent_type);
+                inner = Some(u::new_diagnostic_for_node(
+                    self.store(),
+                    target,
+                    if is_call {
+                        &diag::NO_CONSTITUENT_OF_TYPE_0_IS_CALLABLE
+                    } else {
+                        &diag::NO_CONSTITUENT_OF_TYPE_0_IS_CONSTRUCTABLE
+                    },
+                    vec![apparent_string],
+                ));
+            }
+            if inner.is_none() {
+                let apparent_string = self.type_to_string(apparent_type);
+                inner = Some(u::new_diagnostic_for_node(
+                    self.store(),
+                    target,
+                    if is_call {
+                        &diag::EACH_MEMBER_OF_THE_UNION_TYPE_0_HAS_SIGNATURES_BUT_NONE_OF_THOSE_SIGNATURES_ARE_COMPATIBLE_WITH_EACH_OTHER
+                    } else {
+                        &diag::EACH_MEMBER_OF_THE_UNION_TYPE_0_HAS_CONSTRUCT_SIGNATURES_BUT_NONE_OF_THOSE_SIGNATURES_ARE_COMPATIBLE_WITH_EACH_OTHER
+                    },
+                    vec![apparent_string],
+                ));
             }
         } else {
-            error_target
-        };
-        let (message, type_string) = if is_call {
-            (
-                &diag::TYPE_0_HAS_NO_CALL_SIGNATURES,
-                self.type_to_string(apparent_type),
-            )
+            let apparent_string = self.type_to_string(apparent_type);
+            inner = Some(u::new_diagnostic_for_node(
+                self.store(),
+                target,
+                if is_call {
+                    &diag::TYPE_0_HAS_NO_CALL_SIGNATURES
+                } else {
+                    &diag::TYPE_0_HAS_NO_CONSTRUCT_SIGNATURES
+                },
+                vec![apparent_string],
+            ));
+        }
+        let mut head_message: &'static Message = if is_call {
+            &diag::THIS_EXPRESSION_IS_NOT_CALLABLE
         } else {
-            (
-                &diag::TYPE_0_HAS_NO_CONSTRUCT_SIGNATURES,
-                self.type_to_string(apparent_type),
-            )
+            &diag::THIS_EXPRESSION_IS_NOT_CONSTRUCTABLE
         };
-        // Diagnose get accessors incorrectly called as functions
-        // (checker.go:10217) — the resolved symbol is a get accessor invoked
-        // with no arguments: swap in the dedicated head message.
-        let mut message = message;
-        let mut message_args = vec![type_string];
+        // Diagnose get accessors incorrectly called as functions (Go
+        // checker.go:10217 — the swap applies to the HEAD message; the
+        // parent-is-call condition makes the arm call-only in practice).
         let parent = self.store().node(error_target).parent.get();
-        if is_call
-            && parent != NodeId::NONE
+        if parent != NodeId::NONE
             && self.store().node(parent).kind == Kind::CallExpression
             && binder_node_data::arguments_of(self.store(), parent).is_empty()
         {
@@ -2516,16 +2653,31 @@ impl Checker {
                     .flags
                     .intersects(SymbolFlags::GET_ACCESSOR)
                 {
-                    message = &diag::THIS_EXPRESSION_IS_NOT_CALLABLE_BECAUSE_IT_IS_A_GET_ACCESSOR_DID_YOU_MEAN_TO_USE_IT_WITHOUT;
-                    message_args = Vec::new();
+                    head_message = &diag::THIS_EXPRESSION_IS_NOT_CALLABLE_BECAUSE_IT_IS_A_GET_ACCESSOR_DID_YOU_MEAN_TO_USE_IT_WITHOUT;
                 }
             }
         }
-        u::new_diagnostic_for_node(self.store(), target, message, message_args)
+        // Go: NewDiagnosticChainForNode(diagnostic, target, headMessage) —
+        // the head carries no args and the mismatch diagnostic becomes its
+        // message chain.
+        let mut diagnostic = u::new_diagnostic_for_node(self.store(), target, head_message, vec![]);
+        if let Some(inner) = inner {
+            diagnostic.add_message_chain(inner);
+        }
+        if maybe_missing_await {
+            diagnostic.add_related_info(u::new_diagnostic_for_node(
+                self.store(),
+                error_target,
+                &diag::DID_YOU_FORGET_TO_USE_AWAIT,
+                vec![],
+            ));
+        }
+        diagnostic
     }
 
     /// Go: `func (c *Checker) invocationError(errorTarget, apparentType, kind, relatedInformation)`
-    /// (checker.go:10232).
+    /// (checker.go:10221) — PORT (FCS tranche 49): the relatedInformation
+    /// attach is real (the missing-semicolon probe rides it).
     fn invocation_error(
         &mut self,
         error_target: NodeId,
@@ -2534,12 +2686,58 @@ impl Checker {
         related_information: Option<tsc_ast::Diagnostic>,
     ) {
         let mut diagnostic = self.invocation_error_details(error_target, apparent_type, kind);
-        // TODO(port M6 diagnostic-enrichment): AddRelatedInfo chains and the
-        // originating-import recovery (invocationErrorRecovery reads
-        // exportTypeLinks.originatingImport); the head diagnostic fires.
-        let _ = related_information;
-        let _ = &mut diagnostic;
-        self.add_diagnostic(diagnostic);
+        if let Some(related_information) = related_information {
+            diagnostic.add_related_info(related_information);
+        }
+        let diagnostic = self.add_diagnostic(diagnostic);
+        self.invocation_error_recovery(apparent_type, kind, diagnostic);
+    }
+
+    /// Go: `func (c *Checker) invocationErrorRecovery(apparentType, kind, diagnostic)`
+    /// (checker.go:10230) — PORT (FCS tranche 49): reads
+    /// exportTypeLinks.originatingImport for the originating-import related
+    /// info. The resolveESModuleSymbol write side has not landed in the
+    /// port, so `originating_import` is always None today and the recovery
+    /// is inert (Go-exact on today's data).
+    fn invocation_error_recovery(
+        &mut self,
+        apparent_type: TypeId,
+        kind: crate::types::SignatureKind,
+        mut diagnostic: tsc_ast::Diagnostic,
+    ) {
+        let symbol = match self.type_(apparent_type).symbol {
+            Some(symbol) => symbol,
+            None => return,
+        };
+        let import_node = self
+            .export_type_links
+            .try_get(&symbol)
+            .and_then(|links| links.originating_import);
+        // Create a diagnostic on the originating import if possible onto
+        // which we can attach a quickfix (Go's comment). An import call
+        // expression cannot be rewritten into another form to correct the
+        // error (Go's comment).
+        if let Some(import_node) = import_node {
+            if !is_import_call(self.store(), import_node) {
+                let target = self
+                    .export_type_links
+                    .try_get(&symbol)
+                    .and_then(|links| links.target);
+                if let Some(target) = target {
+                    let target_type = self.get_type_of_symbol(target);
+                    let sigs = self.get_signatures_of_type(target_type, kind);
+                    if sigs.is_empty() {
+                        return;
+                    }
+                    diagnostic.add_related_info(u::new_diagnostic_for_node(
+                        self.store(),
+                        import_node,
+                        &diag::TYPE_ORIGINATES_AT_THIS_IMPORT_A_NAMESPACE_STYLE_IMPORT_CANNOT_BE_CALLED_OR_CONSTRUCTED_AND_WILL_CAUSE_A_FAILURE_AT_RUNTIME_CONSIDER_USING_A_DEFAULT_IMPORT_OR_IMPORT_REQUIRE_HERE_INSTEAD,
+                        vec![],
+                    ));
+                }
+            }
+        }
     }
 
     /// Go: `func (c *Checker) isGenericFunctionReturningFunction(signature) bool`
@@ -2723,18 +2921,19 @@ impl Checker {
         }
         let type_string = self.type_to_string(specifier_type);
         let nullable = self.type_(specifier_type).flags.intersects(TypeFlags::NULLABLE);
+        // PORT (FCS tranche 49): Go checker.go:8487 uses the SILENT
+        // isTypeAssignableTo (no error node — checkTypeRelatedTo's
+        // reportErrors is the errorNode's presence, so a Some(specifier)
+        // error node reports the generic TS2322 even with a nil
+        // headMessage) — the single explicit error below carries the
+        // message. The former port passed the diagnostic + error node into
+        // check_type_assignable_to, so the assignability elaboration
+        // reporter fired the message with the error node AND the explicit
+        // error fired it again — a double-fire on every non-assignable
+        // specifier (and, with the message removed, a spurious TS2322).
         if nullable
-            || !self.check_type_assignable_to(
-                specifier_type,
-                self.string_type(),
-                Some(specifier),
-                Some(&diag::DYNAMIC_IMPORT_S_SPECIFIER_MUST_BE_OF_TYPE_STRING_BUT_HERE_HAS_TYPE_0),
-            )
+            || !self.is_type_assignable_to(specifier_type, self.string_type())
         {
-            // Go reports with the type string; the assignability reporter
-            // already fired the message with the elaborated form when it
-            // fails, so the explicit error below only fires for the
-            // non-assignable-without-report path.
             self.error(
                 specifier,
                 &diag::DYNAMIC_IMPORT_S_SPECIFIER_MUST_BE_OF_TYPE_STRING_BUT_HERE_HAS_TYPE_0,

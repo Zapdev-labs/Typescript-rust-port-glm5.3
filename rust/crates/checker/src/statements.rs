@@ -8573,11 +8573,28 @@ impl Checker {
             // Report an implicit any error if there is no body, no explicit
             // return type, and node is not a private method in an ambient
             // context
-            if body.is_none() && !is_private_within_ambient(self.store(), node) {
+            // PORT (FCS tranche 49): Go gates on ast.NodeIsMissing(body) —
+            // a zero-length SYNTHESIZED body (the parser's recovery shape
+            // for `async * get x() { ... }`-class members) reads as missing;
+            // the port's plain `is_none()` treated it as present.
+            let body_is_missing = body
+                .is_none()
+                || body.is_some_and(|b| tsc_ast::utilities::node_is_missing(self.store().node(b)));
+            if body_is_missing && !is_private_within_ambient(self.store(), node) {
                 let any_type = self.any_type();
                 self.report_implicit_any(node, any_type, crate::typeofsymbol::WideningKind::Normal);
             }
-            if function_flags.intersects(FunctionFlags::GENERATOR) && body.is_some() {
+            // PORT (FCS tranche 49): Go gates on ast.NodeIsPresent(body) —
+            // the synthesized zero-length body of a parser-recovered
+            // generator member is NOT present, so the forced return-type
+            // check (which resolves AsyncIterableIteratorChecked and fires
+            // the location-less TS2318 in a lib-less program) must not run
+            // for it. The port's plain `is_some()` ran it — the
+            // parser.asyncGenerators classMethods/objectLiteralMethods
+            // es2018 x6 AsyncIterableIterator EXTRA family.
+            if function_flags.intersects(FunctionFlags::GENERATOR)
+                && body.is_some_and(|b| tsc_ast::utilities::node_is_present(self.store().node(b)))
+            {
                 // A generator with a body and no type annotation can still
                 // cause errors; trigger them by checking its return type.
                 if let Some(signature) = self.get_signature_from_declaration(node) {

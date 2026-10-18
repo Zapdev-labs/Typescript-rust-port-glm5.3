@@ -3753,3 +3753,47 @@ sweep census: divergent 403 (285 count / 118 hash), identical 7,164/
 (fcs48 pins 4/4 + testrunner 1/1); clippy 0; all gates green fresh
 (orchestrator re-ran tests + sweeps + census independently; Go tree
 md5-verified pristine incl. jsx.go).
+
+## Sweep micro-tranche 49 landed (2026-11-06, RIG-VALIDATED) — widened burst: invocation chain heads + generator body gating + import-call single-fire + driver dedup; divergent 403 -> 372
+
+Four clusters (all Go-exact; the driver fix twin-symmetric):
+- The invocation-error CHAIN HEAD (~48 inst): rust's invocation_error_
+  details fired only the chained INNER message (2757/2761); Go
+  (checker.go:10165-10246) builds NewDiagnosticChainForNode and
+  reports the HEAD (2349/2351). Full chain port in resolvecall.rs:
+  head + inner, the 2755/2756/2758 + 2759/2760/2762 union arms, the
+  get-accessor HEAD swap to 6234, maybeMissingAwait related-info, the
+  caller passes the callee as error target + the 8751-8759 missing-
+  semicolon related-info probe; new invocation_error_recovery (inert
+  until the write side). 2757 15->0; 2761 12->0; 2351 11->0; 2349
+  10->1.
+- TS2318 AsyncIterableIterator x6: the generator arm gated the forced
+  return-type check on body.is_some(); Go gates on ast.NodeIsPresent —
+  a parser-recovered zero-length synthesized body read as missing.
+  node_is_missing/node_is_present gating (also the implicitAny arm).
+- TS7036 double-fire x12: check_import_call_expression passed the
+  diagnostic INTO check_type_assignable_to -> the elaboration reporter
+  double-fired; Go uses the SILENT isTypeAssignableTo (checker.go:
+  8487) + one explicit error.
+- TS2683 x9 (the t48-deferred go-driver over-fire — investigated and
+  FIXED in scope): the real compiler pipeline applies SortAndDedupli-
+  cateDiagnostics to every semantic read (program.go:733/1675); the
+  go-driver's confSemanticDiagnosticsOfUnit read raw GetDiagnostics
+  -> 10 duplicate copies (the upstream baseline has 1; rust was
+  correct). Twin-symmetric fix: the go driver applies the dedup +
+  compiler_runner's semantic_diagnostics_of_unit matches. 2683 9->0;
+  thisPropertyAssignmentCircular converges BOTH drivers.
+Newly-divergent 0; newly-identical 31. PLAIN-sweep census: divergent
+372 (267 count / 105 hash), identical 7,195/7,567; both drivers
+0/3,826/3,741/0; panics 0. 94 ok lines/0 FAILED (fcs49 pins 7/7 + 3
+record pins); clippy 0; all gates green fresh (orchestrator re-ran
+tests + sweeps + census independently; Go tree md5-verified pristine).
+QUEUED: 2318 extra 12 (sub-shapes) + miss 4 (jsdocTemplateTag4/5,
+asyncGenerators es2018 Promise/TemplateStringsArray lookups); the
+generic-constraint family (2349-head extra x6, 2345/2322); the
+staticIndexSignature6 family (2351/2339/2761/2318); neverIntersection
+NotCallable (silent-never union reduction); 2683 extra x1 (jsdocThis
+Type); 2677/2551 type-predicate family; 2534 never-return; 2322
+covariance (conditionalTypes2); 2741 arg shape; top census EXTRA after
+this tranche: 2322 x46/17, 2339 x37/19, 2345 x32/15, 7008 x14/10,
+2318 x12/10, 7005 x11/4.
