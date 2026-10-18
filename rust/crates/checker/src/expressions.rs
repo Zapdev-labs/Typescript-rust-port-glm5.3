@@ -7011,6 +7011,8 @@ impl Checker {
         if let Some(declaration) = declaration
             && self.store().node(declaration).kind == Kind::BindingElement
         {
+            // Go: getNarrowedTypeOfSymbol's FIRST arm (checker.go:14010) — the
+            // dependent-destructured-variable pseudo-reference narrowing.
             // If we have a non-rest binding element with no initializer declared as a const variable or a const-like
             // parameter (a parameter for which there are no assignments in the function body), and if the parent type
             // for the destructuring is a union type, one or more of the binding elements may represent discriminant
@@ -7066,46 +7068,143 @@ impl Checker {
                         {
                             self.node_links.get(parent).flags |=
                                 crate::types::NodeCheckFlags::IN_CHECK_IDENTIFIER;
-                            let parent_type = self
+                            if let Some(parent_type) = self
                                 .get_type_for_binding_element_parent(parent, CheckMode::CHECK_MODE_NORMAL)
-                                .unwrap_or_else(|| self.error_type());
-                            // Guard parent-type resolution only; flow analysis should allow re-entrant narrowing
-                            self.node_links.get(parent).flags &=
-                                !crate::types::NodeCheckFlags::IN_CHECK_IDENTIFIER;
-                            // PORT: Go maps parentType through getBaseConstraintOrType
-                            // (mapType); the S7 mapType seam applies f to the
-                            // type itself.
-                            let parent_type_constraint =
-                                relater::get_base_constraint_or_type(self, parent_type);
-                            // TODO(port M6 W3): isSomeSymbolAssigned — the
-                            // assignment flow probe; permissive false.
-                            if self.type_(parent_type_constraint)
-                                .flags
-                                .intersects(TypeFlags::UNION)
                             {
-                                // TODO(port M6 W3): getFlowTypeOfReferenceEx —
-                                // the flow walk; the seam returns the initial
-                                // (constraint) type.
-                                let narrowed_type = self.get_flow_type_of_reference_ex(
-                                    pattern,
-                                    parent_type_constraint,
-                                    parent_type_constraint,
-                                    NodeId::NONE,
-                                    None,
-                                );
-                                if self.type_(narrowed_type).flags.intersects(TypeFlags::NEVER) {
-                                    t = self.never_type();
-                                } else {
-                                    // Destructurings are validated against the parent type elsewhere. Here we disable tuple bounds
-                                    // checks because the narrowed type may have lower arity than the full parent type.
-                                    t = self.get_binding_element_type_from_parent_type(
-                                        declaration,
-                                        narrowed_type,
-                                        true, /*noTupleBoundsCheck*/
+                                // Guard parent-type resolution only; flow analysis should allow re-entrant narrowing
+                                self.node_links.get(parent).flags &=
+                                    !crate::types::NodeCheckFlags::IN_CHECK_IDENTIFIER;
+                                // PORT: Go maps parentType through getBaseConstraintOrType
+                                // (mapType); the S7 mapType seam applies f to the
+                                // type itself.
+                                let parent_type_constraint =
+                                    relater::get_base_constraint_or_type(self, parent_type);
+                                // Go: `parentTypeConstraint.flags&TypeFlagsUnion != 0 &&
+                                // !(ast.IsParameterDeclaration(rootDeclaration) &&
+                                // c.isSomeSymbolAssigned(rootDeclaration))`. PORT (FCS
+                                // tranche 50): the REAL isSomeSymbolAssigned probe (was
+                                // the M6 W3 permissive-false TODO).
+                                let parameter_assigned = root_is_parameter
+                                    && self.is_some_symbol_assigned(root_declaration);
+                                if self.type_(parent_type_constraint)
+                                    .flags
+                                    .intersects(TypeFlags::UNION)
+                                    && !parameter_assigned
+                                {
+                                    // Go: getFlowTypeOfReferenceEx(pattern, constraint,
+                                    // constraint, nil, getFlowNodeOfNode(location)). PORT
+                                    // (FCS tranche 50): the flowNode argument is the
+                                    // LOCATION's flow node (was None — the walk fell
+                                    // back to the pattern's own flow node, so conditional
+                                    // checks upstream of the location never applied).
+                                    let narrowed_type = self.get_flow_type_of_reference_ex(
+                                        pattern,
+                                        parent_type_constraint,
+                                        parent_type_constraint,
+                                        NodeId::NONE,
+                                        crate::flow::flow_node_of_node(self.store(), location),
                                     );
+                                    if self.type_(narrowed_type).flags.intersects(TypeFlags::NEVER) {
+                                        t = self.never_type();
+                                    } else {
+                                        // Destructurings are validated against the parent type elsewhere. Here we disable tuple bounds
+                                        // checks because the narrowed type may have lower arity than the full parent type.
+                                        t = self.get_binding_element_type_from_parent_type(
+                                            declaration,
+                                            narrowed_type,
+                                            true, /*noTupleBoundsCheck*/
+                                        );
+                                    }
+                                }
+                            } else {
+                                // Guard parent-type resolution only; flow analysis should allow re-entrant narrowing
+                                self.node_links.get(parent).flags &=
+                                    !crate::types::NodeCheckFlags::IN_CHECK_IDENTIFIER;
+                            }
+                        }
+                }
+            }
+        } else if let Some(declaration) = declaration
+            && self.store().node(declaration).kind == Kind::Parameter
+        {
+            // Go: getNarrowedTypeOfSymbol's SECOND arm (checker.go:14079) — a
+            // const-like parameter with no type annotation or initializer,
+            // contextually typed by a signature with a single rest parameter
+            // of a union of tuple types: the parameter list is a destructured
+            // view of the rest tuple, and conditional checks on discriminant
+            // parameters affect the other parameters of the same list (the
+            // function/method node is the pseudo-reference). PORT (FCS
+            // tranche 50): the arm was entirely absent.
+            // ```ts
+            //   type Action = [kind: 'A', payload: number] | [kind: 'B', payload: string];
+            //   const f: (...args: Action) => void = (kind, payload) => {
+            //       if (kind === 'A') { payload.toFixed(); }
+            //   };
+            // ```
+            let has_type = crate::ast_shims::type_of_node(self.store(), declaration).is_some();
+            let has_initializer =
+                crate::ast_shims::initializer_of(self.store(), declaration).is_some();
+            let has_dot_dot_dot = u::has_dot_dot_dot_token(self.store(), declaration);
+            if !has_type && !has_initializer && !has_dot_dot_dot {
+                let fn_node = self.store().node(declaration).parent.get();
+                let params = crate::ast_shims::parameters_of(self.store(), fn_node).to_vec();
+                if params.len() >= 2
+                    && self.is_context_sensitive_function_or_object_literal_method(fn_node)
+                {
+                    if let Some(contextual_signature) = self.get_contextual_signature(fn_node) {
+                        let sig_params =
+                            self.signatures[contextual_signature.0 as usize].parameters.clone();
+                        if sig_params.len() == 1
+                            && u::signature_has_rest_parameter(
+                                &self.signatures[contextual_signature.0 as usize],
+                            )
+                        {
+                            let mapper = self
+                                .get_inference_context(fn_node)
+                                .and_then(|context| {
+                                    self.inference_contexts[context.0 as usize].non_fixing_mapper
+                                });
+                            let rest_symbol_type = self.get_type_of_symbol(sig_params[0]);
+                            let instantiated = match mapper {
+                                Some(mapper) => self.instantiate_type(rest_symbol_type, mapper),
+                                None => rest_symbol_type,
+                            };
+                            let rest_type = self.get_reduced_apparent_type(instantiated);
+                            // Go: restType.flags&TypeFlagsUnion != 0 &&
+                            // everyType(restType, isTupleType) &&
+                            // !core.Some(fn.Parameters(), isSomeSymbolAssigned).
+                            if self.type_(rest_type).flags.intersects(TypeFlags::UNION) {
+                                let constituents = self.type_(rest_type).types().to_vec();
+                                let all_tuples = constituents
+                                    .iter()
+                                    .all(|&ct| relater::is_tuple_type(self, ct));
+                                let some_assigned =
+                                    params.iter().any(|&p| self.is_some_symbol_assigned(p));
+                                if all_tuples && !some_assigned {
+                                    let narrowed_type = self.get_flow_type_of_reference_ex(
+                                        fn_node,
+                                        rest_type,
+                                        rest_type,
+                                        NodeId::NONE,
+                                        crate::flow::flow_node_of_node(self.store(), location),
+                                    );
+                                    let this_offset = usize::from(
+                                        params.first().is_some_and(|&p| {
+                                            crate::ast_shims::is_this_parameter(self.store(), p)
+                                        }),
+                                    );
+                                    let index = params
+                                        .iter()
+                                        .position(|&p| p == declaration)
+                                        .unwrap_or(0)
+                                        - this_offset;
+                                    let index_type = self
+                                        .get_number_literal_type(tsc_jsnum::Number::from(index as f64));
+                                    t = self.get_indexed_access_type(narrowed_type, index_type);
                                 }
                             }
                         }
+                    }
                 }
             }
         }

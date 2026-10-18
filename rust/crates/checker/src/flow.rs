@@ -4362,8 +4362,9 @@ impl Checker {
     }
 
     /// Go: isSomeSymbolAssigned — the flow-side probe isConstantReference uses
-    /// (Go checker.go's each declared symbol of the declaration).
-    fn is_some_symbol_assigned(&mut self, declaration: NodeId) -> bool {
+    /// (Go checker.go's each declared symbol of the declaration). PORT (FCS
+    /// tranche 50): pub(crate) — getNarrowedTypeOfSymbol's arms call it.
+    pub(crate) fn is_some_symbol_assigned(&mut self, declaration: NodeId) -> bool {
         match self.get_symbol_of_declaration_merged(declaration) {
             Some(symbol) => self.is_symbol_assigned(symbol),
             None => false,

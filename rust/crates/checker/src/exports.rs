@@ -238,9 +238,42 @@ impl Checker {
         containing_type: TypeId,
         property: SymbolId,
     ) -> bool {
-        // TODO(port M6 S4): the symbolaccessibility.go port.
-        let _ = (node, is_super, is_write, containing_type, property);
-        false
+        // Go: `func (c *Checker) isPropertyAccessible(node, isSuper, isWrite,
+        // containingType, property) bool` (checker.go:11874 — S4's wave).
+        // PORT (FCS tranche 50): was the M6 S4 permissive-false stub — every
+        // completion-validity candidate was dropped, so spelling suggestions
+        // (2551 via isValidPropertyAccessForCompletions) answered None for
+        // property-access parents.
+        // Short-circuiting for improved performance.
+        if self
+            .type_(containing_type)
+            .flags
+            .intersects(crate::types::TypeFlags::ANY)
+        {
+            return true;
+        }
+        // A #private property access in an optional chain is an error dealt
+        // with by the parser. The checker does not check for it, so we need
+        // to do our own check here.
+        let value_declaration = self.program_symbol(property).value_declaration;
+        if value_declaration.is_some_and(|vd| {
+            tsc_ast::is_private_identifier_class_element_declaration(self.store(), vd)
+        }) {
+            let decl_class = u::get_containing_class(
+                self.store(),
+                value_declaration.expect("checked Some"),
+            );
+            return !tsc_ast::is_optional_chain(self.store().node(node))
+                && decl_class.is_some_and(|dc| u::is_node_descendant_of(self.store(), node, dc));
+        }
+        self.check_property_accessibility_at_location(
+            node,
+            is_super,
+            is_write,
+            containing_type,
+            property,
+            None,
+        )
     }
 
     /// Go: `func (c *Checker) GetTypeOfPropertyOfContextualType(t *Type, name string) *Type`

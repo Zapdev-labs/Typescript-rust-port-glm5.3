@@ -7887,10 +7887,12 @@ impl Checker {
         {
             if type_predicate.parameter_index >= 0 {
                 let signature_params = self.signatures[signature.0 as usize].parameters.clone();
-                // Go: signatureHasRestParameter(signature) && index == len-1
-                // TODO(port M6 S7): signatureHasRestParameter; permissive
-                // false (the rest-parameter predicate arm rests).
-                let has_rest = false;
+                // Go: signatureHasRestParameter(signature) &&
+                // parameterIndex == len(signature.parameters)-1. PORT (FCS
+                // tranche 50): the REAL SignatureFlags probe (was the M6 S7
+                // permissive-false stub — the 1229 rest-parameter arm rested).
+                let has_rest =
+                    u::signature_has_rest_parameter(&self.signatures[signature.0 as usize]);
                 if has_rest && type_predicate.parameter_index == signature_params.len() as i32 - 1 {
                     if let Some(parameter_name) = parameter_name_opt {
                         self.error(
@@ -7914,16 +7916,35 @@ impl Checker {
                             Some(&mut diags),
                         );
                         if !ok && !diags.is_empty() {
-                            // Go: NewDiagnosticChain(diags[0], ...) — the
-                            // chain's head carries the wrap message.
-                            let mut chained = diags.remove(0);
-                            chained.add_related_info(u::new_diagnostic_for_node(
-                                self.store(),
-                                predicate_type.expect("checked"),
-                                &diag::A_TYPE_PREDICATE_S_TYPE_MUST_BE_ASSIGNABLE_TO_ITS_PARAMETER_S_TYPE,
+                            // Go: ast.NewDiagnosticChain(diags[0],
+                            // A_type_predicate_s_type_must_be_assignable_to_its_parameter_s_type)
+                            // (checker.go:3130) — NewDiagnostic(chain.file,
+                            // chain.loc, message).AddMessageChain(chain).SetRelatedInfo(chain.relatedInformation):
+                            // the 2677 message is the chain HEAD at the
+                            // elaboration's own location; the original
+                            // elaboration becomes the chain tail (the
+                            // flattened elaboration). PORT (FCS tranche 50):
+                            // was inverted (the elaboration stayed primary
+                            // with 2677 as related info).
+                            let related_info = diags[0].related_information().to_vec();
+                            let file = diags[0].file();
+                            let loc = diags[0].loc();
+                            let head_message =
+                                &diag::A_TYPE_PREDICATE_S_TYPE_MUST_BE_ASSIGNABLE_TO_ITS_PARAMETER_S_TYPE;
+                            let mut head = tsc_ast::Diagnostic::new(
+                                file,
+                                loc,
+                                head_message.code(),
+                                head_message.category(),
+                                "" /*source*/,
+                                Some(head_message),
+                                "" /*messageText — resolved at format time*/,
+                                head_message.key(),
                                 vec![],
-                            ));
-                            self.add_diagnostic(chained);
+                            );
+                            head.add_message_chain(diags.remove(0));
+                            head.set_related_info(related_info);
+                            self.add_diagnostic(head);
                         }
                     }
                 }

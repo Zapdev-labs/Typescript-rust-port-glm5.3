@@ -3797,3 +3797,38 @@ Type); 2677/2551 type-predicate family; 2534 never-return; 2322
 covariance (conditionalTypes2); 2741 arg shape; top census EXTRA after
 this tranche: 2322 x46/17, 2339 x37/19, 2345 x32/15, 7008 x14/10,
 2318 x12/10, 7005 x11/4.
+
+## Sweep micro-tranche 50 landed (2026-11-06, RIG-VALIDATED) — widened burst: type-predicate chain + did-you-mean filter + dependent-destructured narrowing; divergent 372 -> 368
+
+Three families (all t50 queued figures fresh-verified):
+- TS2677/1229 type-predicate (typeGuardFunctionErrors): checkType
+  Predicate's chain was INVERTED (the elaboration stayed primary, 2677
+  as related info) — Go-exact NewDiagnosticChain head (Go checker.go:
+  3121-3132) + REAL signatureHasRestParameter (the 1229 arm was dead,
+  Go checker.go:17425). FULL (2677/1229/2741/2322/2339 extras all 0).
+- TS2551 did-you-mean suggestions (5 recs): is_property_accessible was
+  the M6 S4 permissive-false STUB -> the completion-validity filter
+  dropped every candidate -> plain 2339 without the suggestion;
+  Go-exact body ported (checker.go:11874-11883). miss 10 -> 0 FULL.
+- Dependent-destructured-variable narrowing (dependentDestructured
+  Variables + 6 siblings): getNarrowedTypeOfSymbol arm 1 walked the
+  PATTERN's flow node instead of the LOCATION's (checker.go:14010-
+  14042); isSomeSymbolAssigned permissive-false; arm 2 (rest-tuple
+  parameters, checker.go:14079-14098) absent entirely. 5 of 7 sibling
+  records converged exact; HONEST residual: 18048 x2 needs the
+  getFlowTypeOfDestructuring SYNTHETIC-ELEMENT-ACCESS port (typeof
+  symbol.rs W3 stub, Go checker.go:18252-18290, arena node synthesis)
+  — queued with NoCrash2 + likely declarationsAndAssignments 2403 x8.
+Collateral: controlFlowAliasing + narrowExceptionVariableInCatchClause
+converged. Newly-divergent 0; newly-identical 4 (direction verified).
+PLAIN-sweep census: divergent 368 (265 count / 103 hash), identical
+7,199/7,567; both drivers 0/3,826/3,741/0; panics 0. 96 ok lines/0
+FAILED (fcs50 pins 6/6 + records 3/3); clippy 0; all gates green fresh
+(orchestrator re-ran tests + sweeps + census independently; Go tree
+md5-verified pristine). QUEUED: the synthetic-element-access port
+(18048 x2 + NoCrash2 + 2403 x8); instanceof generic-constructor
+narrowing (2322 + typeGuardsWithInstanceOf); unicodeEscapesInJsxtags
+2339 x6; spellingUncheckedJS 2552 x4; generatedContextualTyping 2322
+x10; conditionalTypes1 x7; 7008 x14/10; 2318 x12/10; 7005 x11/4;
+staticIndexSignature6 family; generic-constraint 2349-head x6;
+neverIntersectionNotCallable family.
