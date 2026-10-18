@@ -365,6 +365,10 @@ pub struct Checker {
     pub(crate) number_literal_types: FxHashMap<u64, TypeId>,
     pub(crate) nan_type: Option<TypeId>,
     pub(crate) bigint_literal_types: FxHashMap<PseudoBigInt, TypeId>,
+    /// Go: `instantiationExpressionTypes map[InstantiationExpressionKey]*Type`
+    /// (checker.go:10896; PORT FCS tranche 47 — added with the REAL
+    /// getInstantiationExpressionType). Key: (lazy node id, source type id).
+    pub(crate) instantiation_expression_types: FxHashMap<(u64, TypeId), TypeId>,
     // TODO(port M6): enumLiteralTypes / enumNaNLiteralTypes / the ~20
     // CacheHashKey-keyed caches below them in the Go struct.
     pub(crate) undefined_symbol: Option<SymbolId>,
@@ -1759,6 +1763,10 @@ pub fn new_checker(mut program: Box<dyn Program>) -> Checker {
         number_literal_types: FxHashMap::default(),
         nan_type: None,
         bigint_literal_types: FxHashMap::default(),
+        // Go: `instantiationExpressionTypes map[InstantiationExpressionKey]*Type`
+        // (checker.go:10896; PORT FCS tranche 47 — added with the REAL
+        // getInstantiationExpressionType). Key: (lazy node id, source type id).
+        instantiation_expression_types: FxHashMap::default(),
         undefined_symbol: None,
         arguments_symbol: None,
         require_symbol: None,

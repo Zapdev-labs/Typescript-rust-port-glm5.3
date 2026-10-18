@@ -3674,3 +3674,42 @@ x16, 2757 x15, 7008 x14, 7026 x12, 2300 x24, 2351 x11, 8030 x11,
 0/3,826/3,741/0; panics 0. 89 ok lines/0 FAILED (fcs46 pins 5/5);
 clippy 0; all gates green fresh (orchestrator re-ran tests + sweeps +
 census independently; Go tree md5-verified pristine).
+
+## Sweep micro-tranche 47 landed (2026-11-06, RIG-VALIDATED) — widened burst: scattered-pool sub-clusters; divergent 427 -> 412
+
+Split honesty first: the scattered pools (2322/2339/2345/2307/2318)
+confirmed as TRUE SINGLES by (message-shape, case, config) clustering —
+zero collateral. Four coherent sub-clusters fixed (five roots):
+- TS2300 arg family (~80 inst; missing 46->12, extra 46->0):
+  reportDuplicateMemberErrors passed the RAW internal symbol name;
+  Go passes symbolToString (nodebuilder renders #foo, "1", "a b", [s],
+  [OpNamespace.equal]). Companion: the unique-symbol name collision —
+  the ESSymbol type name read symbol.id.get() raw (always 0) vs Go's
+  lazy GetSymbolId -> late-bind collision (uniqueSymbols x12 -> 0).
+- TS2717 x6 -> 0: add_declaration_to_late_bound_symbol overwrote
+  value_declaration; Go ends with binder.SetValueDeclaration (the
+  precedence gate) — full Go gate ported.
+- TS4127 x9 -> 0 (+ esDecorators staticPrivate x3 + privateNames
+  Unique-3): the 4127/4122 arm gated on an always-false stub; real
+  isNonBindableDynamicName (IsDynamicName && !isLateBindableName)
+  existed module-private — made pub(crate) + Go-exact gate.
+- TS2635 x9 -> 0: getInstantiationExpressionType was the whole-function
+  S8 IDENTITY STUB — Go checker.go:10891's FULL body ported (the
+  signature-instantiation walk, object/union/intersection/constraint
+  recursion, the InstantiationExpressionType object + cache, exact-span
+  diagnostic). Mid-flight panic on importAttributes12 (ImportType
+  nodes — Go's resolveImportSymbolType 3rd caller) fixed with the
+  Kind::ImportType arm; its 2694 x4 rust-extras pre-existing.
+Newly-divergent 0; newly-identical 15 (direction verified). PLAIN-sweep
+census: divergent 412 (294 count / 118 hash), identical 7,155/7,567;
+both drivers 0/3,826/3,741/0; panics 0. 90 ok lines/0 FAILED (fcs47
+pins 9/9); clippy 0; all gates green fresh (orchestrator re-ran tests +
+sweeps + census independently; Go tree md5-verified pristine). QUEUED
+(t48 census): MISSING 2322 x51, 2307 x24/17 (rewriteRelativeImport-
+Extensions x6 coherent), 7026 x12/2, 2300 x12 = staticPropertyName-
+Conflicts ONLY (root hint: the binder-injected prototype export vs the
+late-bound static ["prototype"]), 2351 x11, 8030 x11, 2551 x10, 2349
+x10, 2683 x9/1, 1453 x8, 2320 x8/7; EXTRA 7008 x115 (x98 in ONE record —
+constructorParameterProperties), 2339 x105, 2322 x68, 2345 x46, 2318
+x16 (AsyncIterableIterator es2018 x10/4rec), 7036 x12/4, 2761 x12/10;
+plus 4113 x2/4122 x1, 7053 x2, indexSignatures1 residual x8.

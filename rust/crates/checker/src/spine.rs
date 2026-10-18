@@ -140,8 +140,9 @@ fn get_diagnostic_path(d: &FileDiagnostic) -> &str {
 
 /// Go: `func isAssignmentDeclaration(decl *ast.Node) bool` (binder.go:4120)
 /// — inlined for mergeSymbol's SetValueDeclaration gate (the binder-crate
-/// twin is module-private).
-fn is_assignment_declaration(store: &dyn NodeStore, decl: NodeId) -> bool {
+/// twin is module-private). pub(crate) for resolution.rs's late-bound
+/// SetValueDeclaration gate (FCS tranche 47).
+pub(crate) fn is_assignment_declaration(store: &dyn NodeStore, decl: NodeId) -> bool {
     tsc_ast::is_binary_expression(store.node(decl))
         || binder_shims::is_access_expression(store.node(decl))
         || tsc_ast::is_identifier(store.node(decl))
@@ -149,7 +150,9 @@ fn is_assignment_declaration(store: &dyn NodeStore, decl: NodeId) -> bool {
 }
 
 /// Go: `func isEffectiveModuleDeclaration(node *ast.Node) bool` (binder.go:4128).
-fn is_effective_module_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
+/// pub(crate) for resolution.rs's late-bound SetValueDeclaration gate (FCS
+/// tranche 47).
+pub(crate) fn is_effective_module_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
     is_module_declaration(store.node(node)) || tsc_ast::is_identifier(store.node(node))
 }
 
@@ -3629,6 +3632,11 @@ impl Checker {
             TypeData::ReverseMapped(Box::default())
         } else if object_flags.intersects(ObjectFlags::EVOLVING_ARRAY) {
             TypeData::EvolvingArray(Box::default())
+        } else if object_flags.intersects(ObjectFlags::INSTANTIATION_EXPRESSION_TYPE) {
+            // PORT (FCS tranche 47): Go checker.go:25622 — the instantiation-
+            // expression arm, before ANONYMOUS exactly as in Go's switch (the
+            // REAL getInstantiationExpressionType builds these types).
+            TypeData::InstantiationExpression(Box::default())
         } else if object_flags.intersects(ObjectFlags::ANONYMOUS) {
             TypeData::Object(Box::default())
         } else {

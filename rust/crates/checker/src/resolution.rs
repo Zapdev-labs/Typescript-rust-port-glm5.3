@@ -4762,7 +4762,30 @@ impl Checker {
             self.program_symbol_mut(symbol).declarations = declarations;
         }
         if symbol_flags.intersects(SymbolFlags::VALUE) {
-            self.program_symbol_mut(symbol).value_declaration = Some(member);
+            // PORT (FCS tranche 47): Go ends addDeclarationToLateBoundSymbol
+            // with `binder.SetValueDeclaration(symbol, member)` (checker.go:16503
+            // → binder.go:4306) — a PRECEDENCE gate, not an overwrite: the
+            // existing value declaration only loses to a non-assignment
+            // declaration, or to a different-kind non-module declaration
+            // against an effective module declaration. The port previously
+            // overwrote unconditionally, flipping `value_declaration` to the
+            // LAST late-bound declaration and inverting the
+            // errorNextVariableOrPropertyDeclarationMustHaveSameType
+            // first/next roles (TS2717 fired on the first declaration with
+            // swapped type args instead of the subsequent one).
+            let value_declaration = self.program_symbol(symbol).value_declaration;
+            let replace = match value_declaration {
+                None => true,
+                Some(vd) => {
+                    crate::spine::is_assignment_declaration(self.store(), vd)
+                        && !crate::spine::is_assignment_declaration(self.store(), member)
+                        || self.store().node(vd).kind != self.store().node(member).kind
+                            && crate::spine::is_effective_module_declaration(self.store(), vd)
+                }
+            };
+            if replace {
+                self.program_symbol_mut(symbol).value_declaration = Some(member);
+            }
         }
     }
 

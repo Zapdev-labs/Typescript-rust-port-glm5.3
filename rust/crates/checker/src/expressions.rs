@@ -51,6 +51,7 @@ use tsc_core::tristate::Tristate;
 use tsc_diagnostics::Message;
 use tsc_diagnostics::{
     ABSTRACT_METHOD_0_IN_CLASS_1_CANNOT_BE_ACCESSED_VIA_SUPER_EXPRESSION,
+    TYPE_0_HAS_NO_SIGNATURES_FOR_WHICH_THE_TYPE_ARGUMENT_LIST_IS_APPLICABLE,
     AN_ARITHMETIC_OPERAND_MUST_BE_OF_TYPE_ANY_NUMBER_BIGINT_OR_AN_ENUM_TYPE,
     AN_EXPRESSION_OF_TYPE_VOID_CANNOT_BE_TESTED_FOR_TRUTHINESS,
     AN_OBJECT_S_SYMBOL_HASINSTANCE_METHOD_MUST_RETURN_A_BOOLEAN_VALUE_FOR_IT_TO_BE_USED_ON_THE_RIGHT_HAND_SIDE_OF_AN_INSTANCEOF_EXPRESSION,
@@ -167,7 +168,7 @@ use tsc_diagnostics::{
 
 use crate::checker::CheckMode;
 use crate::relater::{self, MappedTypeModifiers, TypeFacts};
-use crate::types::{ObjectFlags, TypeFlags, TypeId};
+use crate::types::{ObjectFlags, SignatureId, TypeFlags, TypeId};
 use crate::utilities as u;
 use crate::Checker;
 
@@ -2334,16 +2335,282 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getInstantiationExpressionType(exprType, node) *Type`
-    /// (checker.go:10891). TODO(port M6 S8): the instantiated-signature
-    /// construction (resolveStructuredTypeMembers + getSignatureInstantiation +
-    /// the newInstantiationExpressionType object); permissive identity (with
-    /// the seam, no signature data exists yet, so the TS2743-style
-    /// "no signatures" diagnostic must not fire — it would be a false error
-    /// for every legal `f<T>`).
+    /// (checker.go:10891) — REAL body (PORT FCS tranche 47; was the S8
+    /// identity stub). The signature-instantiation walk resolves the source
+    /// type's members, instantiates the applicable call/construct signatures,
+    /// and reports TS2635 when no signature is applicable.
     pub(crate) fn get_instantiation_expression_type(&mut self, expr_type: TypeId, node: NodeId) -> TypeId {
-        // TODO(port M6 S8/S7): the signature-instantiation walk.
-        let _ = node;
-        expr_type
+        // Go: `node.TypeArgumentList()` — both ExpressionWithTypeArguments
+        // and TypeQuery (the instantiation-expression form `typeof f<T>`)
+        // carry the shared optional typeArguments list.
+        let type_arguments: Option<tsc_ast::NodeList> = {
+            let n = self.store().node(node);
+            match n.kind {
+                Kind::ExpressionWithTypeArguments => n
+                    .as_expression_with_type_arguments()
+                    .expect("ExpressionWithTypeArguments data")
+                    .type_arguments
+                    .clone(),
+                Kind::ImportType => n
+                    .as_import_type_node()
+                    .expect("ImportTypeNode data")
+                    .type_arguments
+                    .clone(),
+                Kind::TypeQuery => n
+                    .as_type_query_node()
+                    .expect("TypeQueryNode data")
+                    .type_arguments
+                    .clone(),
+                other => panic!(
+                    "Unhandled case in Node.TypeArgumentList: {other:?} (getInstantiationExpressionType)"
+                ),
+            }
+        };
+        if expr_type == self.silent_never_type()
+            || self.is_error_type(expr_type)
+            || type_arguments.is_none()
+        {
+            return expr_type;
+        }
+        let type_arguments = type_arguments.expect("checked");
+        let type_argument_nodes: Vec<NodeId> = type_arguments.nodes.to_vec();
+        // Go: InstantiationExpressionKey{nodeId: ast.GetNodeId(node), typeId: exprType.id}
+        // — the lazily-assigned node id.
+        let node_id = tsc_binder::ast_shims::get_node_id(self.store().node(node));
+        let key = (node_id, expr_type);
+        if let Some(&cached) = self.instantiation_expression_types.get(&key) {
+            return cached;
+        }
+        let mut has_some_applicable_signature = false;
+        let mut non_applicable_type: Option<TypeId> = None;
+        let result = self.get_instantiation_expression_type_worker(
+            expr_type,
+            node,
+            &type_argument_nodes,
+            &mut has_some_applicable_signature,
+            &mut non_applicable_type,
+        );
+        self.instantiation_expression_types.insert(key, result);
+        let error_type = if has_some_applicable_signature {
+            non_applicable_type
+        } else {
+            Some(expr_type)
+        };
+        if let Some(error_type) = error_type {
+            let (source_file_id, loc) = {
+                let source_file =
+                    tsc_ast::utilities::get_source_file_of_node(self.store(), node)
+                        .expect("node file");
+                // Go: loc := core.NewTextRange(scanner.SkipTrivia(
+                //     sourceFile.Text(), typeArguments.Pos()), typeArguments.End()).
+                let pos = tsc_scanner::skip_trivia(source_file.text(), type_arguments.pos());
+                (
+                    source_file.as_node_id(),
+                    tsc_ast::TextRange::new(pos, type_arguments.end()),
+                )
+            };
+            let type_text = self.type_to_string(error_type);
+            let diagnostic = tsc_ast::Diagnostic::new(
+                Some(source_file_id),
+                loc,
+                TYPE_0_HAS_NO_SIGNATURES_FOR_WHICH_THE_TYPE_ARGUMENT_LIST_IS_APPLICABLE
+                    .code(),
+                TYPE_0_HAS_NO_SIGNATURES_FOR_WHICH_THE_TYPE_ARGUMENT_LIST_IS_APPLICABLE
+                    .category(),
+                "",
+                Some(&TYPE_0_HAS_NO_SIGNATURES_FOR_WHICH_THE_TYPE_ARGUMENT_LIST_IS_APPLICABLE),
+                "",
+                TYPE_0_HAS_NO_SIGNATURES_FOR_WHICH_THE_TYPE_ARGUMENT_LIST_IS_APPLICABLE
+                    .key(),
+                vec![type_text],
+            );
+            self.add_diagnostic(diagnostic);
+        }
+        result
+    }
+
+    /// Go: `getInstantiatedSignatures(signatures)` — the closure inside
+    /// getInstantiationExpressionType (checker.go:10903): filter to the
+    /// applicable (generic, correct-arity) signatures and instantiate each.
+    fn instantiation_expression_instantiated_signatures(
+        &mut self,
+        signatures: &[SignatureId],
+        type_arguments: &[NodeId],
+    ) -> Vec<SignatureId> {
+        let mut applicable = Vec::new();
+        for &sig in signatures {
+            let type_parameters_empty =
+                self.signatures[sig.0 as usize].type_parameters.is_empty();
+            if !type_parameters_empty && self.has_correct_type_argument_arity(sig, type_arguments)
+            {
+                applicable.push(sig);
+            }
+        }
+        let mut result = Vec::with_capacity(applicable.len());
+        for sig in applicable {
+            let type_argument_types =
+                self.check_type_arguments(sig, type_arguments, true /*reportErrors*/, None);
+            if let Some(type_argument_types) = type_argument_types {
+                let is_javascript = self.signatures[sig.0 as usize]
+                    .declaration
+                    .is_some_and(|d| tsc_ast::utilities::is_in_js_file(self.store().node(d)));
+                result.push(self.get_signature_instantiation(
+                    sig,
+                    &type_argument_types,
+                    is_javascript,
+                    &[],
+                ));
+            } else {
+                result.push(sig);
+            }
+        }
+        result
+    }
+
+    /// Go: `getInstantiatedType` — the outer walk over one type
+    /// (checker.go:10916): fresh hasSignatures/hasApplicableSignature bookkeeping
+    /// per type, folding into the shared hasSomeApplicableSignature /
+    /// nonApplicableType state.
+    fn get_instantiation_expression_type_worker(
+        &mut self,
+        t: TypeId,
+        node: NodeId,
+        type_arguments: &[NodeId],
+        has_some_applicable_signature: &mut bool,
+        non_applicable_type: &mut Option<TypeId>,
+    ) -> TypeId {
+        let mut has_signatures = false;
+        let mut has_applicable_signature = false;
+        let result = self.get_instantiation_expression_type_part(
+            t,
+            node,
+            type_arguments,
+            &mut has_signatures,
+            &mut has_applicable_signature,
+            has_some_applicable_signature,
+            non_applicable_type,
+        );
+        *has_some_applicable_signature |= has_applicable_signature;
+        if has_signatures && !has_applicable_signature && non_applicable_type.is_none() {
+            *non_applicable_type = Some(t);
+        }
+        result
+    }
+
+    /// Go: `getInstantiatedTypePart` — the per-type recursion
+    /// (checker.go:10919). The shared `has_some_applicable_signature` /
+    /// `non_applicable_type` state rides through for the union arm's call
+    /// back into the outer worker (Go's closure capture, flattened).
+    #[allow(clippy::too_many_arguments)] // Go: getInstantiatedTypePart's closure captures flattened
+    fn get_instantiation_expression_type_part(
+        &mut self,
+        t: TypeId,
+        node: NodeId,
+        type_arguments: &[NodeId],
+        has_signatures: &mut bool,
+        has_applicable_signature: &mut bool,
+        has_some_applicable_signature: &mut bool,
+        non_applicable_type: &mut Option<TypeId>,
+    ) -> TypeId {
+        let flags = self.type_(t).flags;
+        if flags.intersects(TypeFlags::OBJECT) {
+            let resolved = crate::relater::resolve_structured_type_members(self, t);
+            let call_signature_count = resolved.call_signature_count as usize;
+            let original_call: Vec<SignatureId> =
+                resolved.signatures[..call_signature_count].to_vec();
+            let original_construct: Vec<SignatureId> =
+                resolved.signatures[call_signature_count..].to_vec();
+            let call_signatures =
+                self.instantiation_expression_instantiated_signatures(&original_call, type_arguments);
+            let construct_signatures = self
+                .instantiation_expression_instantiated_signatures(&original_construct, type_arguments);
+            *has_signatures =
+                *has_signatures || !original_call.is_empty() || !original_construct.is_empty();
+            *has_applicable_signature = *has_applicable_signature
+                || !call_signatures.is_empty()
+                || !construct_signatures.is_empty();
+            // Go: `!core.Same(callSignatures, resolved.CallSignatures()) ||
+            // !core.Same(constructSignatures, resolved.ConstructSignatures())`
+            // — Same is backing-array identity, i.e. "instantiation changed
+            // something"; element-wise SignatureId equality is the port's
+            // identity (getSignatureInstantiation is identity on the no-op
+            // instantiation, so unchanged signatures compare equal).
+            if call_signatures != original_call || construct_signatures != original_construct {
+                let symbol = self.new_symbol(
+                    SymbolFlags::NONE,
+                    tsc_ast::INTERNAL_SYMBOL_NAME_INSTANTIATION_EXPRESSION,
+                );
+                let t_symbol = self
+                    .type_(t)
+                    .symbol
+                    .expect("Instantiation expression source type must have a symbol");
+                let declarations = self.program_symbol(t_symbol).declarations.clone();
+                self.program_symbol_mut(symbol).declarations = declarations;
+                let result = self.new_object_type(
+                    ObjectFlags::ANONYMOUS | ObjectFlags::INSTANTIATION_EXPRESSION_TYPE,
+                    Some(symbol),
+                );
+                self.set_structured_type_members(
+                    result,
+                    resolved.members,
+                    call_signatures,
+                    construct_signatures,
+                    resolved.index_infos,
+                );
+                self.type_mut(result)
+                    .as_instantiation_expression_type_mut()
+                    .expect("InstantiationExpressionType data")
+                    .node = Some(node);
+                return result;
+            }
+        } else if flags.intersects(TypeFlags::INSTANTIABLE_NON_PRIMITIVE) {
+            if let Some(constraint) = crate::relater::get_base_constraint_of_type(self, t) {
+                let instantiated = self.get_instantiation_expression_type_part(
+                    constraint,
+                    node,
+                    type_arguments,
+                    has_signatures,
+                    has_applicable_signature,
+                    has_some_applicable_signature,
+                    non_applicable_type,
+                );
+                if instantiated != constraint {
+                    return instantiated;
+                }
+            }
+        } else if flags.intersects(TypeFlags::UNION) {
+            // Go: `c.mapType(t, getInstantiatedType)` — the outer worker per
+            // constituent, then the union re-interned.
+            let constituents = self.type_(t).types().to_vec();
+            let mut mapped = Vec::with_capacity(constituents.len());
+            for constituent in constituents {
+                mapped.push(self.get_instantiation_expression_type_worker(
+                    constituent,
+                    node,
+                    type_arguments,
+                    has_some_applicable_signature,
+                    non_applicable_type,
+                ));
+            }
+            return self.get_union_type(&mapped);
+        } else if flags.intersects(TypeFlags::INTERSECTION) {
+            // Go: `c.getIntersectionType(SameMap(t.types, getInstantiatedTypePart))`.
+            let constituents = self.type_(t).types().to_vec();
+            let mut mapped = Vec::with_capacity(constituents.len());
+            for constituent in constituents {
+                mapped.push(self.get_instantiation_expression_type_part(
+                    constituent,
+                    node,
+                    type_arguments,
+                    has_signatures,
+                    has_applicable_signature,
+                    has_some_applicable_signature,
+                    non_applicable_type,
+                ));
+            }
+            return self.get_intersection_type(&mapped);
+        }
+        t
     }
 
     /// Go: `func (c *Checker) checkSatisfiesExpression(node) *Type` (checker.go:10975).

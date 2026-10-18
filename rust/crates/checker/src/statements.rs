@@ -8161,7 +8161,16 @@ impl Checker {
                     {
                         if let Some(symbol) = self.get_symbol_of_declaration_merged(param) {
                             if self.program_symbol(symbol).name == name {
-                                let symbol_name = self.program_symbol(symbol).name.clone();
+                                // PORT (FCS tranche 47): Go's
+                                // reportDuplicateMemberErrors passes
+                                // `c.symbolToString(symbol)` — the nodebuilder
+                                // rendering (private names strip the internal
+                                // `\xFE#id@` prefix to `#name`, non-identifier
+                                // literal names re-quote as string literals,
+                                // late-bound computed names render as `[expr]`)
+                                // never the raw internal symbol name.
+                                let symbol_name =
+                                    crate::nodebuilder::symbol_to_string(self, symbol);
                                 if let Some(pname) = self.store().node(param).name() {
                                     self.error(pname, message, &[symbol_name]);
                                 }
@@ -8173,7 +8182,10 @@ impl Checker {
                 if self.program_symbol(symbol).name == name
                     && (!check_static || is_static == is_static_modifier(self.store(), member))
                 {
-                    let symbol_name = self.program_symbol(symbol).name.clone();
+                    // PORT (FCS tranche 47): Go-exact `c.symbolToString(symbol)`
+                    // (checker.go:3254) — the nodebuilder rendering, not the raw
+                    // internal symbol name.
+                    let symbol_name = crate::nodebuilder::symbol_to_string(self, symbol);
                     if let Some(mname) = self.store().node(member).name() {
                         self.error(mname, message, &[symbol_name]);
                     }
@@ -10341,18 +10353,24 @@ impl Checker {
         let is_js = tsc_ast::utilities::is_in_js_file(self.store().node(node));
         let member_name = self.program_symbol(member).name.clone();
         let value_declaration = self.program_symbol(member).value_declaration;
-        if member_has_override_modifier
-            && value_declaration.is_some_and(|vd| {
-                is_class_element(self.store(), vd) && self.store().node(vd).name().is_some()
-            })
-            && value_declaration.is_some_and(|vd| {
-                let name = self.store().node(vd).name().expect("checked");
-                // TODO(port M6 S8): isNonBindableDynamicName — the dynamic-
-                // name fact; permissive false (static names only here).
-                self.store().node(name).kind == Kind::ComputedPropertyName
-                    && is_non_bindable_dynamic_name_stub(self, name)
-            })
-        {
+        // PORT (FCS tranche 47): Go checker.go:4867 — the 4127/4122 dynamic-
+        // name gate, previously a permissive always-false S8 stub
+        // (`isNonBindableDynamicName`); the real predicate is
+        // `ast.IsDynamicName(name) && !c.isLateBindableName(name)`
+        // (grammarchecks.go:1102), so `override [nonLiteralProp]()` members
+        // now report TS4127 instead of falling through to the 4113 arm.
+        let mut has_non_bindable_dynamic_name = false;
+        if member_has_override_modifier {
+            if let Some(vd) = value_declaration {
+                if is_class_element(self.store(), vd) {
+                    if let Some(name) = self.store().node(vd).name() {
+                        has_non_bindable_dynamic_name =
+                            self.is_non_bindable_dynamic_name(name);
+                    }
+                }
+            }
+        }
+        if has_non_bindable_dynamic_name {
             if let Some(error_node) = error_node {
                 let message = if is_js {
                     &diag::THIS_MEMBER_CANNOT_HAVE_A_JSDOC_COMMENT_WITH_AN_OVERRIDE_TAG_BECAUSE_ITS_NAME_IS_DYNAMIC
@@ -11867,11 +11885,6 @@ fn is_class_element(store: &dyn NodeStore, node: NodeId) -> bool {
             | Kind::ClassStaticBlockDeclaration
             | Kind::SemicolonClassElement
     )
-}
-
-/// TODO(port M6 S8): `isNonBindableDynamicName` — permissive false.
-fn is_non_bindable_dynamic_name_stub(_c: &Checker, _name: NodeId) -> bool {
-    false
 }
 
 /// Go: `isNamedMember` — names not carrying the internal prefix.

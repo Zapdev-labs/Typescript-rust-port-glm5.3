@@ -1294,8 +1294,9 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) isNonBindableDynamicName(node) bool` — a
-    /// dynamic name that cannot be late-bound.
-    fn is_non_bindable_dynamic_name(&mut self, node: NodeId) -> bool {
+    /// dynamic name that cannot be late-bound. pub(crate) for the
+    /// override-modifier 4127/4122 gate (FCS tranche 47).
+    pub(crate) fn is_non_bindable_dynamic_name(&mut self, node: NodeId) -> bool {
         is_dynamic_name(self.store(), node) && !self.is_late_bindable_name(node)
     }
 

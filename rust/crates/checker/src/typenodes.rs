@@ -1318,8 +1318,18 @@ impl Checker {
                 b.push('@');
                 b.push_str(&self.program_symbol(symbol).name);
                 b.push('@');
-                // Go: ast.GetSymbolId(symbol) — the lazily-assigned binder id.
-                b.push_str(&self.program_symbol(symbol).id.get().to_string());
+                // Go: ast.GetSymbolId(symbol) — the LAZILY-ASSIGNED binder id
+                // (utilities.go:912 assigns on read). PORT (FCS tranche 47):
+                // the port previously read `id.get()` raw, which stays 0 for
+                // every symbol whose id was never assigned — two same-named
+                // unique-symbol declarations (`const s: unique symbol` and
+                // `const N = { s: unique symbol }` in uniqueSymbols.ts) then
+                // built the SAME internal name `\xFE@s@0`, collided in the
+                // late-bound member table, and over-fired TS2300 x6 per
+                // record. The binder-crate twin assigns Go-exactly.
+                b.push_str(&tsc_binder::ast_shims::get_symbol_id(
+                    self.program_symbol(symbol),
+                ).to_string());
                 let unique_type = self.new_unique_es_symbol_type(symbol, b);
                 self.unique_essymbol_types.insert(symbol, unique_type);
                 return unique_type;

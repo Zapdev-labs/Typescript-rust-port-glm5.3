@@ -1272,8 +1272,9 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) hasCorrectTypeArgumentArity(signature, typeArguments) bool`
-    /// (checker.go:9445).
-    fn has_correct_type_argument_arity(
+    /// (checker.go:9445). pub(crate) for getInstantiationExpressionType
+    /// (FCS tranche 47).
+    pub(crate) fn has_correct_type_argument_arity(
         &mut self,
         signature: SignatureId,
         type_arguments: &[NodeId],
@@ -1290,9 +1291,10 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) checkTypeArguments(signature, typeArgumentNodes, reportErrors, headMessage) []*Type`
-    /// (checker.go:9458).
+    /// (checker.go:9458). pub(crate) for getInstantiationExpressionType
+    /// (FCS tranche 47).
     #[allow(clippy::too_many_arguments)]
-    fn check_type_arguments(
+    pub(crate) fn check_type_arguments(
         &mut self,
         signature: SignatureId,
         type_argument_nodes: &[NodeId],
