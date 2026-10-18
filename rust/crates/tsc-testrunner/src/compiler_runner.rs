@@ -411,13 +411,26 @@ fn semantic_diagnostics_of_unit(
     // TS1155 (declarations must be initialized) extras Go never emits.
     // opts.path_key is not read by the parser (Go's parser reads only
     // FileName.IsDeclarationFile from the options), so the default path key
-    // is behaviorally inert here; external_module_indicator_options stays
-    // zeroed exactly as Go's GetExternalModuleIndicatorOptions answers for
-    // declaration files (and as the tranche-32 contract kept it for the
-    // rest).
+    // is behaviorally inert here. PORT(FCS tranche 48): the
+    // external_module_indicator_options are now the REAL
+    // GetExternalModuleIndicatorOptions answer for the unit (Go's check
+    // twin parses through the single-file program's own loader, whose
+    // parseSourceFile computes them from the case options) — with
+    // `jsx: react-jsx|react-jsxdev`, JSX tags force module-ness, so the
+    // unit's top-level `declare namespace JSX` stays module-scoped and the
+    // JSX global fallback fails exactly as Go (the
+    // tsxSpreadChildrenInvalidType TS7026 family; metadata is default —
+    // the unit VFS carries only the unit file, no package.json, so the
+    // loader's probing answers the same).
     let mut source_file = parse_source_file(
         SourceFileParseOptions {
             file_name: RootedFilePath::from(name),
+            external_module_indicator_options:
+                tsc_compiler::ast_shims::get_external_module_indicator_options(
+                    &RootedFilePath::from(name),
+                    options,
+                    &tsc_ast::SourceFileMetaData::default(),
+                ),
             ..Default::default()
         },
         content,

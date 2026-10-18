@@ -52,7 +52,6 @@ use tsc_ast::{
     has_syntactic_modifier, is_identifier, is_module_declaration, is_source_file, Kind,
     ModifierFlags, Node, NodeFlags as NF, NodeId, NodeStore, Symbol, SymbolFlags, SymbolId,
     SymbolTable, INTERNAL_SYMBOL_NAME_DEFAULT, INTERNAL_SYMBOL_NAME_EXPORT_EQUALS,
-    INTERNAL_SYMBOL_NAME_EXPORT_STAR,
 };
 use tsc_core::compileroptions::{
     ResolutionMode, ResolutionModeCommonJS, ResolutionModeESM, ResolutionModeNone,
@@ -4485,11 +4484,57 @@ impl Checker {
                     }
                 }
             }
-            let combined = combine_symbol_tables(&early_symbols, &late_symbols);
+            let combined = self.combine_symbol_tables(&early_symbols, &late_symbols);
             self.members_and_exports_links.get(symbol).0[index] = combined.clone();
             return combined;
         }
         self.members_and_exports_links.get(symbol).0[index].clone()
+    }
+
+    /// Go: `func (c *Checker) combineSymbolTables(first, second ast.SymbolTable)`
+    /// (checker.go:14367). PORT(FCS tranche 48): REAL — both tables now
+    /// flow through Go's `mergeSymbolTable`/`mergeSymbol` machinery (was the
+    /// shallow late-wins overwrite), so a late-bound static member whose
+    /// evaluated name collides with an early export (the binder-injected
+    /// class `prototype` — Property|Prototype — vs a late-bound Method,
+    /// whose excludes include Property) reaches `mergeSymbol`'s
+    /// excluded-flags conflict and reports the duplicate identifier (the
+    /// staticPropertyNameConflicts TS2300 family).
+    fn combine_symbol_tables(&mut self, early: &SymbolTable, late: &SymbolTable) -> SymbolTable {
+        if early.is_empty() {
+            return late.clone();
+        }
+        if late.is_empty() {
+            return early.clone();
+        }
+        let mut combined = SymbolTable::new();
+        self.merge_symbol_table_into(&mut combined, early, false /*unidirectional*/);
+        self.merge_symbol_table_into(&mut combined, late, false /*unidirectional*/);
+        combined
+    }
+
+    /// Go: `func (c *Checker) mergeSymbolTable(target, source, unidirectional,
+    /// mergedParent)` (checker.go:14380) — the free-table arm (combine passes
+    /// `mergedParent == nil`, so the transient re-parent fixup never runs
+    /// here).
+    fn merge_symbol_table_into(
+        &mut self,
+        target: &mut SymbolTable,
+        source: &SymbolTable,
+        unidirectional: bool,
+    ) {
+        let entries: Vec<(String, SymbolId)> = source
+            .entries()
+            .map(|(name, symbol)| (name.clone(), *symbol))
+            .collect();
+        for (name, source_symbol) in entries {
+            let target_symbol = target.get(&name).copied();
+            let merged = match target_symbol {
+                Some(target_symbol) => self.merge_symbol(target_symbol, source_symbol, unidirectional),
+                None => self.get_merged_symbol(source_symbol),
+            };
+            target.set(name, merged);
+        }
     }
 
     /// Go: `func (c *Checker) lateBindMember(parent, earlySymbols, lateSymbols, decl) *ast.Symbol`
@@ -6197,19 +6242,6 @@ pub(crate) fn get_excluded_symbol_flags(flags: SymbolFlags) -> SymbolFlags {
     }
     if flags.intersects(SymbolFlags::REPLACEABLE_BY_METHOD) {
         result &= !SymbolFlags::METHOD;
-    }
-    result
-}
-
-/// Go: `func combineSymbolTables(early, late) ast.SymbolTable` (the
-/// getResolvedMembersOrExportsOfSymbol tail).
-fn combine_symbol_tables(early: &SymbolTable, late: &SymbolTable) -> SymbolTable {
-    let mut result = early.clone();
-    for (name, symbol) in late.entries() {
-        if name == INTERNAL_SYMBOL_NAME_EXPORT_STAR || name == INTERNAL_SYMBOL_NAME_DEFAULT {
-            continue;
-        }
-        result.set(name.clone(), *symbol);
     }
     result
 }

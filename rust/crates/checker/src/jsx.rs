@@ -321,10 +321,11 @@ impl Checker {
             .expect("data")
             .dot_dot_dot_token
             .is_some();
-        if dot_dot_dot
-            && !crate::utilities::is_type_any(Some(self.type_(t)))
-            && !self.is_array_type(t)
-        {
+        // Go: `t != c.anyType` — IDENTITY, not a flags test: the error type
+        // carries TypeFlagsAny, so a flag-based isTypeAny would wrongly
+        // exempt errorType (the missing-JSX-Element spread child must fire
+        // TS2609 exactly as Go). PORT(FCS tranche 48).
+        if dot_dot_dot && t != self.any_type() && !self.is_array_type(t) {
             self.error(node, &diag::JSX_SPREAD_CHILD_MUST_BE_AN_ARRAY_TYPE, &[]);
         }
         t

@@ -3063,8 +3063,10 @@ impl Checker {
     /// Go: `func (c *Checker) mergeSymbol(target, source, unidirectional) *ast.Symbol`
     /// (checker.go:14417). If target is transient it is mutated in place;
     /// otherwise the merge works on a transient clone (cloneSymbol) and
-    /// returns it.
-    fn merge_symbol(&mut self, mut target: SymbolId, source: SymbolId, unidirectional: bool) -> SymbolId {
+    /// returns it. PORT(FCS tranche 48): pub(crate) — the
+    /// combineSymbolTables path (resolved members/exports) now merges
+    /// through this Go twin instead of a late-wins overwrite.
+    pub(crate) fn merge_symbol(&mut self, mut target: SymbolId, source: SymbolId, unidirectional: bool) -> SymbolId {
         let source_flags = self.program.symbol(source).flags;
         let target_flags = self.program.symbol(target).flags;
         let excluded = crate::resolution::get_excluded_symbol_flags(source_flags);

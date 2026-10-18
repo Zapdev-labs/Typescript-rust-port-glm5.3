@@ -4172,10 +4172,32 @@ impl Checker {
                     if u::is_type_usable_as_property_name(self.type_(expr_type)) {
                         let name_text = u::get_property_name_from_type(self.type_(expr_type));
                         if let Some(property) = self.get_property_of_type(parent_type, &name_text) {
-                            // TODO(port M6 S4): markPropertyAsReferenced +
-                            // checkPropertyAccessibility (the expando/access
-                            // family); permissive skip.
-                            let _ = property;
+                            // Go: markPropertyAsReferenced +
+                            // checkPropertyAccessibility (checker.go:6031-6033).
+                            // PORT(FCS tranche 48): REAL (was the M6 S4
+                            // permissive skip) — this is the
+                            // destructuring-private/protected arm (the
+                            // privateProtectedMembersAreNotAccessibleDestructuring
+                            // TS2341 family).
+                            self.mark_property_as_referenced(
+                                property,
+                                None, /*nodeForCheckWriteOnly*/
+                                false, /*isSelfTypeAccess*/
+                            );
+                            // A destructuring is never a write-only reference
+                            // (Go comment).
+                            let grandparent_initializer =
+                                crate::ast_shims::initializer_of(self.store(), grandparent);
+                            let is_super = grandparent_initializer.is_some_and(|init| {
+                                self.store().node(init).kind == Kind::SuperKeyword
+                            });
+                            self.check_property_accessibility(
+                                node,
+                                is_super,
+                                false, /*writing*/
+                                parent_type,
+                                property,
+                            );
                         }
                     }
                 }

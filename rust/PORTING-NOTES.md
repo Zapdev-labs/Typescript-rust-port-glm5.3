@@ -3713,3 +3713,43 @@ x10, 2683 x9/1, 1453 x8, 2320 x8/7; EXTRA 7008 x115 (x98 in ONE record —
 constructorParameterProperties), 2339 x105, 2322 x68, 2345 x46, 2318
 x16 (AsyncIterableIterator es2018 x10/4rec), 7036 x12/4, 2761 x12/10;
 plus 4113 x2/4122 x1, 7053 x2, indexSignatures1 residual x8.
+
+## Sweep micro-tranche 48 landed (2026-11-06, RIG-VALIDATED) — widened burst: static-prototype merge + react-jsx module-ness + spread-child identity; divergent 412 -> 403
+
+Fresh census correction first: the queued "TS7008 x115 (x98 in
+constructorParameterProperties)" does NOT reproduce (that record is
+hash-only divergent; 7008 is x14/10 scattered) — the t47 worker's
+queued census figure was wrong. Four clusters, all FULL:
+- TS2300 staticPropertyNameConflicts x12 -> 0: rust combine_symbol_
+  tables was a LATE-WINS OVERWRITE; Go's combineSymbolTables (checker.
+  go:14367) merges via mergeSymbolTable/mergeSymbol — the binder-
+  injected class prototype vs the late-bound static ["prototype"]
+  METHOD hits MethodExcludes (niProperty) -> reportMergeSymbolError
+  with the symbolToString arg. Ported as a method through the existing
+  Go-exact merge_symbol twin (pub(crate)).
+- TS7026 react-jsx IntrinsicElements x12 -> 0: empirical Go probe
+  (jsx.go, restored md5-verified): with jsx=react-jsx, JSX tags FORCE
+  external-module-ness (parser ExternalModuleIndicatorOptions.jsx), so
+  script-scoped declare namespace JSX stays module-local -> global
+  fallback nil -> 6x7026/config. The testrunner unit re-parse kept the
+  options zeroed; now computes real get_external_module_indicator_
+  options.
+- TS2609 x2 -> 0 (collateral): the spread-child gate used flags-based
+  is_type_any where Go uses IDENTITY t != c.anyType — errorType carries
+  Any flags, so rust wrongly exempted it.
+- TS2341 x7 -> 0: the M6 S4 permissive-skip in check_variable_like_
+  declaration's binding-element arm replaced with Go's markPropertyAs
+  Referenced + checkPropertyAccessibility (checker.go:6031-6033).
+Newly-divergent 0; newly-identical 9 (7 target records + inlineJsx
+FactoryDeclarationsLocalTypes + tsxSpreadChildren). HONEST QUEUE:
+TS2683 x9/1 — the GO DRIVER over-fires (10 copies at one span vs
+upstream baseline's 1; rust matches the true baseline) — deferred
+rather than replicating a go re-check quirk; TS2318 x16/10
+(AsyncIterableIterator es2018: global-type lookup ordering); scattered
+pools (2322 x46+x29, 2339 x37, 2345 x32, 2307 x24 with rewriteRelative
+ImportExtensions x6, 7036/2761/7005/1278, 8030/2351/2349/2551). PLAIN-
+sweep census: divergent 403 (285 count / 118 hash), identical 7,164/
+7,567; both drivers 0/3,826/3,741/0; panics 0. 92 ok lines/0 FAILED
+(fcs48 pins 4/4 + testrunner 1/1); clippy 0; all gates green fresh
+(orchestrator re-ran tests + sweeps + census independently; Go tree
+md5-verified pristine incl. jsx.go).
