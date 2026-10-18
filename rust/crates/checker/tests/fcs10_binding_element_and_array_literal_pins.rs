@@ -146,12 +146,22 @@ fn iife_array_binding_pattern_elements_report_missing_property_pin() {
     // the element, plus the 2372 self-reference error.
     let (mut c, file) = check_default(IIFE_BINDING_PATTERN, ModuleKind::None);
     let ds = diags(&mut c, file);
+    // PORT (FCS tranche 45): the `e = e` binding element also reports
+    // TS7022 — Go's reportCircularityError 7022 arm (checker.go:19238:
+    // un-annotated value declaration, !IsParameterDeclaration — a
+    // BindingElement is NOT KindParameter). Verified byte-identical
+    // through BOTH real drivers (rust tsc-bench + pristine-tree
+    // go-bench conformance --dump-filter on this exact source, 2026-10
+    // fcs46 probe): 5x TS2339 + TS7022 + TS2372. The former expected
+    // list pre-dated the 7022 arm (the silent errorType stub era) and
+    // never carried it.
     let expected = [
         (2339, vec!["0".to_string(), "{}".to_string()]),
         (2339, vec!["1".to_string(), "{}".to_string()]),
         (2339, vec!["0".to_string(), "{}".to_string()]),
         (2339, vec!["1".to_string(), "{}".to_string()]),
         (2339, vec!["2".to_string(), "{}".to_string()]),
+        (7022, vec!["e".to_string()]),
         (2372, vec!["e".to_string()]),
     ];
     let got: Vec<(i32, Vec<String>)> = ds

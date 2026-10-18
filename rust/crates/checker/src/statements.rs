@@ -8284,8 +8284,15 @@ impl Checker {
     /// Go: `func (c *Checker) checkInferType(node)` (checker.go:3322).
     pub(crate) fn check_infer_type(&mut self, node: NodeId) {
         // Go: FindAncestor — the extends-clause containment; the parent walk.
+        // PORT (FCS tranche 45): Go's FindAncestor starts the candidate walk
+        // at the node ITSELF (ast/utilities.go:911) — the first candidate is
+        // the InferTypeNode, so an `infer B` that IS the extendsType of its
+        // own parent conditional (`(infer A) extends infer B ? ...`) matches
+        // immediately and never reaches the ladder. The port started at the
+        // parent, so every such extends-position infer fell through and
+        // over-fired TS1338 (inferTypes1's `infer B`).
         let mut in_extends_clause = false;
-        let mut current = self.store().node(node).parent.get();
+        let mut current = node;
         while current != NodeId::NONE {
             let parent = self.store().node(current).parent.get();
             if parent != NodeId::NONE && self.store().node(parent).kind == Kind::ConditionalType {

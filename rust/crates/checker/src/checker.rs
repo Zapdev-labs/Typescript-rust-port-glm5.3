@@ -1400,13 +1400,59 @@ impl Checker {
         }
     }
 
-    /// Go: `func (c *Checker) reportCircularityError(symbol *ast.Symbol) *Type`.
+    /// Go: `func (c *Checker) reportCircularityError(symbol *ast.Symbol) *Type`
+    /// (checker.go:19229).
+    /// PORT (FCS tranche 45): the real body (was the spike's silent
+    /// errorType stub) — reports TS2502 "is referenced directly or
+    /// indirectly in its own type annotation" when the value declaration
+    /// carries a type annotation, TS7022 (implicit any through its own
+    /// initializer) when un-annotated under noImplicitAny, TS2303 for
+    /// alias symbols without a value declaration, and returns errorType
+    /// only in the 2502 arm (anyType otherwise, Go-exactly).
     pub(crate) fn report_circularity_error(&mut self, symbol: SymbolId) -> TypeId {
-        // Go reports "is referenced directly or indirectly in its own type
-        // annotation" / implicit-any diagnostics here — the diagnostics seam
-        // is the M5 compiler crate; the spike returns Go's errorType.
-        let _ = symbol;
-        self.error_type()
+        let declaration = self.program.symbol(symbol).value_declaration;
+        if let Some(declaration) = declaration {
+            if crate::ast_shims::type_of_node(self.store(), declaration).is_some() {
+                let name = crate::relater::symbol_to_string(self, symbol);
+                self.error(
+                    declaration,
+                    &tsc_diagnostics::X_0_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_ITS_OWN_TYPE_ANNOTATION,
+                    &[name],
+                );
+                return self.error_type();
+            }
+            // Go: `c.noImplicitAny && (!ast.IsParameterDeclaration(declaration) || declaration.Initializer() != nil)`.
+            let is_param = tsc_ast::is_parameter_declaration(self.store().node(declaration));
+            let has_initializer =
+                crate::ast_shims::initializer_of(self.store(), declaration).is_some();
+            if self.no_implicit_any && (!is_param || has_initializer) {
+                let name = crate::relater::symbol_to_string(self, symbol);
+                self.error(
+                    declaration,
+                    &tsc_diagnostics::X_0_IMPLICITLY_HAS_TYPE_ANY_BECAUSE_IT_DOES_NOT_HAVE_A_TYPE_ANNOTATION_AND_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_ITS_OWN_INITIALIZER,
+                    &[name],
+                );
+            }
+        } else if self
+            .program
+            .symbol(symbol)
+            .flags
+            .intersects(SymbolFlags::ALIAS)
+        {
+            if let Some(node) = self.get_declaration_of_alias_symbol(symbol) {
+                let name = crate::relater::symbol_to_string(self, symbol);
+                self.error(
+                    node,
+                    &tsc_diagnostics::CIRCULAR_DEFINITION_OF_IMPORT_ALIAS_0,
+                    &[name],
+                );
+            }
+        }
+        // Circularities could also result from parameters in function
+        // expressions that end up having themselves as contextual types
+        // following type argument inference. In those cases we have already
+        // reported an implicit any error so we don't report anything here.
+        self.any_type()
     }
 
     // ────────────────────────────────────────────────────────────────────────

@@ -1711,12 +1711,67 @@ impl Checker {
                     }
                     let parent_kind = self.store().node(parent_node).kind;
                     if parent_kind == Kind::TypeReference && !omit_type_references {
-                        // TODO(port M6 S5/S7): the type-reference inference arm
-                        // (getTypeParametersForTypeReferenceOrImport +
-                        // newDeferredTypeMapper + instantiateType) — lands with
-                        // the type-node family; the other four arms below are
-                        // Go's structure, routed through the same seams.
-                        let _ = (child, parent_node);
+                        // PORT (FCS tranche 45): the type-reference inference
+                        // arm (Go checker.go:17534-17551) — REAL (was the
+                        // TODO(port M6 S5/S7) `let _ = ...` stub). `Foo<infer T>`'s
+                        // T inherits the constraint of Foo's corresponding
+                        // type parameter, instantiated through a DEFERRED
+                        // mapper (each target is a lazily-materialized
+                        // effective type argument; if instantiation yields the
+                        // type parameter itself the inference is discarded —
+                        // e.g. `Foo<T extends string, U extends T>`'s U→X).
+                        // Without this arm every infer param in a type
+                        // reference stayed unconstrained, so
+                        // checkTypeArgumentConstraints over-fired TS2344 on
+                        // extends-clause `Foo<infer U>` nodes (inferTypes1's
+                        // T71/T75/T76/T77/Foo/A1/A2/MustBeString families).
+                        let type_parameters =
+                            self.get_type_parameters_for_type_reference_or_import(parent_node);
+                        if !type_parameters.is_empty() {
+                            let index = crate::statements::type_arguments_of(
+                                self.store(),
+                                parent_node,
+                            )
+                            .iter()
+                            .position(|&n| n == child);
+                            if let Some(index) = index {
+                                if index < type_parameters.len() {
+                                    if let Some(declared_constraint) = self
+                                        .get_constraint_of_type_parameter(type_parameters[index])
+                                    {
+                                        // Go: `newDeferredTypeMapper(typeParameters,
+                                        // MapIndex(...))` — each thunk clones
+                                        // the parameter list (Rust closure
+                                        // capture) and lazily answers the
+                                        // index's effective type argument.
+                                        let sources = type_parameters.clone();
+                                        let targets: Vec<crate::mapper::DeferredThunk> = (0
+                                            ..type_parameters.len())
+                                            .map(|i| {
+                                                let params = type_parameters.clone();
+                                                Box::new(
+                                                    move |c: &mut Checker| {
+                                                        c.get_effective_type_argument_at_index(
+                                                            parent_node,
+                                                            &params,
+                                                            i,
+                                                        )
+                                                    },
+                                                )
+                                                    as crate::mapper::DeferredThunk
+                                            })
+                                            .collect();
+                                        let mapper =
+                                            self.new_deferred_type_mapper(&sources, targets);
+                                        let constraint =
+                                            self.instantiate_type(declared_constraint, mapper);
+                                        if constraint != t {
+                                            inferences.push(constraint);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     } else if parent_kind == Kind::Parameter
                         && self.store().node(parent_node).as_parameter_declaration().is_some_and(|p| p.dot_dot_dot_token.is_some())
                         || parent_kind == Kind::RestType

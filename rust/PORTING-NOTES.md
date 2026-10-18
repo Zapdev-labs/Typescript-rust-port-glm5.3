@@ -3607,3 +3607,37 @@ md5-verified pristine; no rig collision). QUEUED: TS2502 x14/6,
 TS2407 x13/4, 2322 scattered x46+x36, 2339 x37/19, 2345 x32/15, 2344
 x22/6 (dormant S9), 2318 x17/11, 2757 x15/11, 2307 x24/17, 7022 x20/17,
 TS7053 residual 23+3, TS1205 x2, moduleExportAlias TS2339 rendering.
+
+## Sweep micro-tranche 45 landed (2026-11-05, RIG-VALIDATED) — widened burst: circularity report + inferred-constraint type-reference arm; divergent 451 -> 429
+
+Three coherent clusters, all to ZERO:
+- TS2502 x14/6 -> 0 (recursiveTypesWithTypeof): report_circularity_
+  error (Go checker.go:19229) was the spike's silent error_type() stub
+  (checker.rs:1404). Full Go-exact body: the 2502 arm (annotation
+  present -> errorType), the 7022 arm (un-annotated under
+  noImplicitAny, !IsParameterDeclaration || Initializer != nil), the
+  2303 alias arm (getDeclarationOfAliasSymbol), anyType otherwise.
+  BONUS: the TS7022 arm went live corpus-balanced (0/0; stale fcs10 pin
+  expectation corrected with dual-driver verification).
+- TS2344 x22/6 -> 0 (inferTypes1 x16/1): getInferredTypeParameter-
+  Constraint's TYPE-REFERENCE arm (Go checker.go:17534-17551) was the
+  TODO `let _ = ...` stub — every `Foo<infer T>` stayed unconstrained
+  -> checkTypeArgumentConstraints over-fired on extends-clause infers.
+  Ported the real arm (getTypeParametersForTypeReferenceOrImport +
+  newDeferredTypeMapper of lazily-materialized getEffectiveTypeArgument
+  AtIndex targets + discard self-inference) + NEW get_effective_type_
+  argument_at_index (typenodes.rs, Go checker.go:17599).
+- TS1338 x1 (same record): Go checkInferType's FindAncestor starts at
+  the node ITSELF (ast/utilities.go:911); rust's walk started at the
+  parent -> extends-position `infer B` over-fired. Walk starts at node.
+HONEST QUEUE: TS7053 missing x23/2 (indexSignatures1 x21 +
+keyofAndIndexedAccess x2) — NOT a contained seam: the branded-
+intersection relation (is_type_assignable_to(string, string & Tag1)
+answers true where Go answers false) — the relater family SHARED with
+the scattered 2322 x46+33, 2339 x37, 2345 x32, 2307 x24, 2318 x16; also
+TS2407 x13/4 (for-inStatementsInvalid x10) untouched. Newly-divergent
+0; newly-identical 22 (direction verified per-record). PLAIN-sweep
+census: divergent 429 (303 count / 126 hash), identical 7,138/7,567;
+both drivers 0/3,826/3,741/0; panics 0. 88 ok lines/0 FAILED (fcs45
+pins 9/9); clippy 0; all gates green fresh (orchestrator re-ran tests +
+sweeps + census independently; Go tree md5-verified pristine).

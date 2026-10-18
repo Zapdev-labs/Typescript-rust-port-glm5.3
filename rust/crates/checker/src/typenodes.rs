@@ -3576,6 +3576,24 @@ impl Checker {
         self.fill_missing_type_arguments(&type_arguments, type_parameters, min, is_js)
     }
 
+    /// Go: `func (c *Checker) getEffectiveTypeArgumentAtIndex(node, typeParameters, index) *Type`
+    /// (checker.go:17599).
+    /// PORT (FCS tranche 45): needed by getInferredTypeParameterConstraint's
+    /// type-reference arm — the deferred-mapper thunk that lazily materializes
+    /// each effective type argument of the containing `Foo<infer T>`.
+    pub(crate) fn get_effective_type_argument_at_index(
+        &mut self,
+        node: NodeId,
+        type_parameters: &[TypeId],
+        index: usize,
+    ) -> TypeId {
+        let type_argument_nodes = crate::statements::type_arguments_of(self.store(), node);
+        if index < type_argument_nodes.len() {
+            return self.get_type_from_type_node(type_argument_nodes[index]);
+        }
+        self.get_effective_type_arguments(node, type_parameters)[index]
+    }
+
     /// Go: `func (c *Checker) getMinTypeArgumentCount(typeParameters) int` (checker.go:22397)
     /// — REAL body (replaces the W1/W2 permissive count).
     pub fn get_min_type_argument_count(&mut self, type_parameters: &[TypeId]) -> usize {
