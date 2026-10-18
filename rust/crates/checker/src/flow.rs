@@ -3011,7 +3011,10 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getDestructuringPropertyName(node) (string, bool)` (flow.go:1792).
-    fn get_destructuring_property_name(&mut self, node: NodeId) -> Option<String> {
+    /// PORT (FCS tranche 51): pub(crate) — typeofsymbol.rs's synthetic
+    /// element-access factory (getFlowTypeOfDestructuring) reads it, exactly
+    /// like Go's getSyntheticElementAccess calls c.getDestructuringPropertyName.
+    pub(crate) fn get_destructuring_property_name(&mut self, node: NodeId) -> Option<String> {
         let parent = self.store().node(node).parent.get();
         let kind = self.store().node(node).kind;
         if kind == Kind::BindingElement && self.store().node(parent).kind == Kind::ObjectBindingPattern {

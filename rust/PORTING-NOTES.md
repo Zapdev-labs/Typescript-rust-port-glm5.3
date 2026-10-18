@@ -3832,3 +3832,41 @@ narrowing (2322 + typeGuardsWithInstanceOf); unicodeEscapesInJsxtags
 x10; conditionalTypes1 x7; 7008 x14/10; 2318 x12/10; 7005 x11/4;
 staticIndexSignature6 family; generic-constraint 2349-head x6;
 neverIntersectionNotCallable family.
+
+## Sweep micro-tranche 51 landed (2026-11-07, RIG-VALIDATED) — widened burst: the synthetic-element-access port + catch-clause pair + unchecked-JS spelling; divergent 368 -> 364
+
+The designated hard one LANDED (not deeper than a burst — no consumers
+beyond the flow walk needed changes): typeofsymbol.rs get_flow_type_
+of_destructuring now builds Go's SYNTHETIC ElementAccessExpression
+through the NodeStore::alloc arena seam (the same shape as flow.rs's
+new_this_property_access_synthetic): StringLiteral(propName) +
+optional ParenthesizedExpression wrap + the EA carrying
+getFlowNodeOfNode(parentAccess) as its flow node, parents wired,
+narrowed via get_flow_type_of_reference; NEW get_parent_element_access
+(checker.go:18276). dependentDestructuredVariables CONVERGED 65 ==
+go (18048 extra 6->4 corpus-wide). Plus three more, all Go-exact:
+- Catch-clause spurious 7005 (x3/record, 2 records; 11->5 corpus):
+  Go checker.go:17081-17083's arm.
+- Catch-clause TS2492 redeclare walk (was M6 W3 TODO; missing 3 -> 0
+  FULL; both records converged).
+- Unchecked-JS 2552 over-fire (spellingUncheckedJS; Go checker.go:
+  1639-1646; extra 4 -> 0 FULL, record converged).
+Newly-divergent 0; newly-identical 4 (exactly the four targets,
+direction verified); zero collateral on all tracked codes. HONEST
+QUEUE (with evidence): unicodeEscapesInJsxtags 2339 x6 — the root is
+JSX-identifier escape DECODING in rust/crates/{scanner,parser} (go
+decodes \u0061->a so <\u0061-b> resolves against IntrinsicElements) —
+OUTSIDE the tranche writable scope, next tranche with scanner/parser
+access; 2318 objectLiteralMethods x4 (the rust path eagerly resolves
+the async-generator signature return where Go defers — root-caused,
+not fixed); declarationsAndAssignments 2403 x8 — the port hypothesis
+was WRONG (2403 is the subsequent-variable-declaration redeclaration
+check, untouched by flow; still 42 vs 34); NoCrash2 7010 arg-shape
+hash-only; the standing scattered queue (2322 x41/29, 2307 x24/17,
+8030, 1453, 2320, 7008 family, 1278, 2430, 7022, instanceof narrowing,
+neverIntersectionNotCallable, staticIndexSignature6, generic-
+constraint 2349-head). PLAIN-sweep census: divergent 364 (261 count /
+103 hash), identical 7,203/7,567; both drivers 0/3,826/3,741/0;
+panics 0. 98 ok lines/0 FAILED (fcs51 pins 6/6 + records 4/4); clippy
+0; all gates green fresh (orchestrator re-ran tests + sweeps + census
+independently; Go tree md5-verified pristine).

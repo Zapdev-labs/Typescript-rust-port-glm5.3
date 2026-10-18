@@ -117,25 +117,26 @@ fn fcs50_module_with_exported_and_non_exported_functions_record_pin() {
 }
 
 /// The dependent-destructured-variable narrowing record — the 16-diag
-/// divergence collapses to the 2-diag getFlowTypeOfDestructuring residual
-/// (rust 67 vs go 65: the 18048 x2 f22 shape needs the
-/// synthetic-element-access mechanism, still the W3 stub). The pin holds
-/// the residual rust values so the queued remainder stays measurable.
+/// divergence collapsed to the 2-diag getFlowTypeOfDestructuring residual
+/// (rust 67 vs go 65) in FCS tranche 50; FCS tranche 51's
+/// synthetic-element-access port (checker.go:18247-18290) then converged
+/// the record to the Go twin exactly (65 — the 18048 x2 f22 shape now
+/// narrows through the synthetic `action["payload"]` reference).
 #[test]
 fn fcs50_dependent_destructured_variables_record_pin() {
     // The basename prefix also picks up the six
     // dependentDestructuredVariables* sibling records — five of them
-    // converge to the Go twin exactly (collateral of the arm-1/arm-2
-    // fixes); NoCrash2 carries its own residual hash (the same
-    // getFlowTypeOfDestructuring seam).
+    // converged to the Go twin exactly in FCS tranche 50 (collateral of
+    // the arm-1/arm-2 fixes); NoCrash2 carries its own residual hash (the
+    // TS7010 implicit-return arg shape — a separate root, still queued).
     assert_twin_records(
         "x/dependentDestructuredVariables",
         &[
             (
                 "conformance/dependentDestructuredVariables.errors.txt",
                 "mismatch",
-                67,
-                "b98d19b19e6907da",
+                65,
+                "e8574e88b6b538e9",
             ),
             (
                 "conformance/dependentDestructuredVariablesFromNestedPatterns.errors.txt",

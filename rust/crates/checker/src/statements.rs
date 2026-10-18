@@ -50,6 +50,7 @@ use tsc_diagnostics::{
     A_RETURN_STATEMENT_CANNOT_BE_USED_INSIDE_A_CLASS_STATIC_BLOCK,
     CATCH_CLAUSE_VARIABLE_CANNOT_HAVE_AN_INITIALIZER,
     CATCH_CLAUSE_VARIABLE_TYPE_ANNOTATION_MUST_BE_ANY_OR_UNKNOWN_IF_SPECIFIED,
+    CANNOT_REDECLARE_IDENTIFIER_0_IN_CATCH_CLAUSE,
     DUPLICATE_LABEL_0, NOT_ALL_CODE_PATHS_RETURN_A_VALUE, SETTERS_CANNOT_RETURN_A_VALUE,
     THE_BODY_OF_AN_IF_STATEMENT_CANNOT_BE_THE_EMPTY_STATEMENT,
     THE_LEFT_HAND_SIDE_OF_A_FOR_IN_STATEMENT_CANNOT_BE_A_DESTRUCTURING_PATTERN,
@@ -1390,11 +1391,50 @@ impl Checker {
                     &[],
                 );
             } else {
-                // Go walks node.Locals() against the catch block's locals for
-                // redeclarations — binder-set locals; the symbol tables are
-                // the binder crate's seam (permissive: no redeclaration
-                // diagnostics until the locals surface lands).
-                // TODO(port M6 W3): the locals-walk redeclaration check.
+                // Go: for each name in the catch clause's own locals (the
+                // caught variable), a block-scoped local of the SAME name in
+                // the catch block fires TS2492 on the block local's value
+                // declaration (checker.go:4291-4297).
+                // PORT (FCS tranche 51): the binder's node-locals surface
+                // (node_data::locals_of) — was the M6 W3 permissive TODO.
+                let block = self
+                    .store()
+                    .node(node)
+                    .as_catch_clause()
+                    .expect("CatchClause data")
+                    .block;
+                let block_locals_nonempty = tsc_binder::node_data::locals_of(self.store(), block)
+                    .is_some_and(|t| !t.is_empty());
+                if block_locals_nonempty {
+                    let caught_names: Vec<String> =
+                        tsc_binder::node_data::locals_of(self.store(), node)
+                            .map(|t| t.keys().cloned().collect())
+                            .unwrap_or_default();
+                    let block_locals =
+                        tsc_binder::node_data::locals_of(self.store(), block).expect("checked above");
+                    // Collect first — the grammar-error emission below needs
+                    // &mut self while the locals borrow is still live.
+                    let mut redeclared: Vec<(NodeId, String)> = Vec::new();
+                    for caught_name in caught_names {
+                        if let Some(&block_local) = block_locals.get(&caught_name)
+                            && let Some(value_declaration) =
+                                self.program_symbol(block_local).value_declaration
+                            && self
+                                .program_symbol(block_local)
+                                .flags
+                                .intersects(SymbolFlags::BLOCK_SCOPED_VARIABLE)
+                        {
+                            redeclared.push((value_declaration, caught_name));
+                        }
+                    }
+                    for (value_declaration, caught_name) in redeclared {
+                        self.grammar_error_on_node(
+                            value_declaration,
+                            &CANNOT_REDECLARE_IDENTIFIER_0_IN_CATCH_CLAUSE,
+                            &[caught_name],
+                        );
+                    }
+                }
             }
         }
         let block = self

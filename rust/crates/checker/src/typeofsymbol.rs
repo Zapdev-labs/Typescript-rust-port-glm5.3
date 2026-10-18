@@ -21,7 +21,9 @@
 //     stub direction per landing order).
 //   * getTypeFromTypeNode → S5 (checker.rs's error-type stub).
 //   * getFlowTypeInConstructor / getFlowTypeInStaticBlocks / the synthetic
-//     element-access factory → W3 (flow.go) — permissive None/identity.
+//     element-access factory → W3 (flow.go) — REAL as of FCS tranche 51
+//     (getFlowTypeOfDestructuring's synthetic-element-access port; flow.rs
+//     owns the flow walk and the this-property synthetic precedent).
 //   * checkPropertyAssignment / checkShorthandPropertyAssignment /
 //     checkObjectLiteralMethod / checkJsxAttribute / the assignment-declaration
 //     JS paths → S4/W5 (permissive error-type arms, Go's structure kept).
@@ -63,6 +65,8 @@
 // types first appear with S4's checkObjectLiteral). The WideningContext
 // tree is arena-shaped (see the struct's PORT note). S9's wave keeps the
 // body and completes the callee surface.
+
+use std::cell::Cell;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -2813,11 +2817,13 @@ impl Checker {
                 if self.type_(declared_type).flags.intersects(TypeFlags::ANY_OR_UNKNOWN) {
                     return Some(declared_type);
                 }
-                let _ = self.error(
-                    declaration,
-                    &VARIABLE_0_IMPLICITLY_HAS_AN_1_TYPE,
-                    &[String::new(), String::new()],
-                );
+                // PORT (FCS tranche 51): Go returns c.errorType SILENTLY here
+                // (checker.go:17081-17083) — the catch-annotation error
+                // itself (TS1196) is emitted by the grammar-check family,
+                // which the port already runs at parity. The port's former
+                // spurious VARIABLE_0_IMPLICITLY_HAS_AN_1_TYPE (7005, empty
+                // args) made `catch (x: Error)`-shaped records fire an extra
+                // 7005 on every non-any/unknown catch annotation.
                 return Some(self.error_type());
             }
             // If the catch clause is not explicitly annotated, treat it as
@@ -3606,16 +3612,113 @@ impl Checker {
     /// Determine the control flow type associated with a destructuring
     /// declaration or assignment.
     ///
-    /// Go: `func (c *Checker) getFlowTypeOfDestructuring(node, declaredType) *Type`.
+    /// Go: `func (c *Checker) getFlowTypeOfDestructuring(node, declaredType) *Type`
+    /// (checker.go:18247). PORT (FCS tranche 51): the REAL synthetic
+    /// element-access mechanism — Go constructs a synthetic element access
+    /// corresponding to `obj.x` such that the control flow analyzer doesn't
+    /// have to handle all the different destructuring syntactic forms, then
+    /// narrows through getFlowTypeOfReference (was the M6 W3 permissive
+    /// declaredType stub — Go's answer when the reference carries no flow
+    /// node, which remains the None fallback here).
     pub(crate) fn get_flow_type_of_destructuring(&mut self, node: NodeId, declared_type: TypeId) -> TypeId {
-        // Go: getSyntheticElementAccess builds a synthetic element access so
-        // the flow analyzer doesn't have to handle the destructuring syntaxes,
-        // then narrows through getFlowTypeOfReference.
-        // TODO(port M6 W3): the synthetic node factory + flow narrowing —
-        // permissive declaredType (Go's answer when the reference has no flow
-        // node).
-        let _ = node;
+        if let Some(reference) = self.get_synthetic_element_access(node) {
+            return self.get_flow_type_of_reference(reference, declared_type);
+        }
         declared_type
+    }
+
+    /// Go: `func (c *Checker) getSyntheticElementAccess(node) *ast.Node`
+    /// (checker.go:18257). PORT (FCS tranche 51): allocated through the
+    /// `NodeStore::alloc` seam (a real arena node — Go's factory node is a
+    /// real pointer-graph node too; same shape as flow.rs's
+    /// new_this_property_access_synthetic). The synthetic access keeps the
+    /// binding element's Loc (error positions), the parent access's flow
+    /// node, and Go's exact parent wiring.
+    fn get_synthetic_element_access(&mut self, node: NodeId) -> Option<NodeId> {
+        let parent_access = self.get_parent_element_access(node)?;
+        let flow_node = crate::flow::flow_node_of_node(self.store(), parent_access)?;
+        let prop_name = self.get_destructuring_property_name(node)?;
+        let loc = self.store().node(node).loc;
+        // literal := factory.NewStringLiteral(propName, TokenFlagsNone); literal.Loc = node.Loc.
+        let literal = Node {
+            kind: Kind::StringLiteral,
+            flags: NF::NONE,
+            loc,
+            id: Cell::new(0),
+            parent: Cell::new(NodeId::NONE),
+            data: NodeData::StringLiteral(Box::new(tsc_ast::StringLiteral {
+                text: prop_name.into(),
+                token_flags: tsc_ast::TokenFlags::NONE,
+            })),
+        };
+        let literal_id = self.program.node_store_mut().alloc(literal);
+        // lhsExpr := parentAccess, parenthesized unless already a left-hand-side
+        // expression (lhsExpr.Loc = node.Loc on the wrap).
+        let mut lhs_expr = parent_access;
+        if !tsc_ast::utilities::is_left_hand_side_expression(self.store().node(parent_access)) {
+            lhs_expr = self.program.node_store_mut().alloc(Node {
+                kind: Kind::ParenthesizedExpression,
+                flags: NF::NONE,
+                loc,
+                id: Cell::new(0),
+                parent: Cell::new(NodeId::NONE),
+                data: NodeData::ParenthesizedExpression(Box::new(tsc_ast::ParenthesizedExpression {
+                    expression: parent_access,
+                })),
+            });
+        }
+        // result := factory.NewElementAccessExpression(lhsExpr, nil, literal, NodeFlagsNone).
+        let result = self.program.node_store_mut().alloc(Node {
+            kind: Kind::ElementAccessExpression,
+            flags: NF::NONE,
+            loc,
+            id: Cell::new(0),
+            parent: Cell::new(NodeId::NONE),
+            data: NodeData::ElementAccessExpression(Box::new(tsc_ast::ElementAccessExpression {
+                flow_node: Some(flow_node),
+                facts: 0,
+                expression: lhs_expr,
+                question_dot_token: None,
+                argument_expression: literal_id,
+            })),
+        });
+        // literal.Parent = result; result.Parent = node; lhsExpr.Parent = result
+        // (only when wrapped); result.FlowNodeData().FlowNode = getFlowNodeOfNode(parentAccess)
+        // (set at construction above).
+        {
+            let store = self.program.node_store_mut();
+            store.node_mut(literal_id).parent.set(result);
+            store.node_mut(result).parent.set(node);
+            if lhs_expr != parent_access {
+                store.node_mut(lhs_expr).parent.set(result);
+            }
+        }
+        Some(result)
+    }
+
+    /// Go: `func (c *Checker) getParentElementAccess(node) *ast.Node` (checker.go:18276).
+    fn get_parent_element_access(&mut self, node: NodeId) -> Option<NodeId> {
+        let ancestor = self
+            .store()
+            .node(self.store().node(node).parent.get())
+            .parent
+            .get();
+        match self.store().node(ancestor).kind {
+            Kind::BindingElement | Kind::PropertyAssignment => self.get_synthetic_element_access(ancestor),
+            Kind::ArrayLiteralExpression => {
+                let parent = self.store().node(node).parent.get();
+                self.get_synthetic_element_access(parent)
+            }
+            Kind::VariableDeclaration => ast_shims::initializer_of(self.store(), ancestor),
+            Kind::BinaryExpression => Some(
+                self.store()
+                    .node(ancestor)
+                    .as_binary_expression()
+                    .expect("BinaryExpression data")
+                    .right,
+            ),
+            _ => None,
+        }
     }
 
     /// Return the type implied by a binding pattern. This is the type

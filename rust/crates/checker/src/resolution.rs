@@ -1088,9 +1088,13 @@ impl Checker {
             });
         if let Some(suggestion) = suggestion.filter(|_| !ambient_global_augmentation) {
             let suggestion_name = crate::relater::symbol_to_string(self, suggestion);
-            // TODO(port M6 W5/js): isUncheckedJSSuggestion reads the JSDoc
-            // host surface; permissive false (the error form).
-            let is_unchecked_js = false;
+            // PORT (FCS tranche 51): the REAL isUncheckedJSSuggestion probe
+            // (utilities.go:1777, landed FCS tranche 26; was the M6 W5/js
+            // permissive-false TODO — Go's checker.go:1641 uses it here to
+            // pick the "Could not find name" form AND downgrade the
+            // diagnostic to a suggestion, which the error streams drop).
+            let is_unchecked_js = error_location
+                .is_some_and(|loc| u::is_unchecked_js_suggestion(self, loc, Some(suggestion), false /*excludeClasses*/));
             let message = if meaning == SymbolFlags::NAMESPACE {
                 &diag::CANNOT_FIND_NAMESPACE_0_DID_YOU_MEAN_1
             } else if is_unchecked_js {
