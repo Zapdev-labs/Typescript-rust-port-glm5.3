@@ -1662,12 +1662,40 @@ where
 {
     let Some(body) = body else { return false };
     fn visit<F: FnMut(&mut Checker, NodeId) -> bool>(c: &mut Checker, node: NodeId, cb: &mut F) -> bool {
-        if c.store().node(node).kind == Kind::ReturnStatement && cb(c, node) {
-            return true;
+        let kind = c.store().node(node).kind;
+        if kind == Kind::ReturnStatement {
+            return cb(c, node);
         }
-        children_of(c.store(), node)
-            .iter()
-            .any(|&child| visit(c, child, cb))
+        // PORT (FCS tranche 53): Go ast.ForEachReturnStatement
+        // (ast/utilities.go:1157) traverses ONLY the statement container
+        // kinds — it never descends into nested function-likes. The former
+        // children_of walk leaked the return statements of nested
+        // function expressions/arrows into the OUTER function's aggregated
+        // return type (the generatedContextualTyping TS2322 x10 family:
+        // `var x157: () => () => Base[] = () => { return () => [d1, d2]; }`
+        // aggregated the inner arrow's `[d1, d2]` into the outer, so the
+        // outer's return union became `(() => Base[]) | Base[]` and the
+        // assignability check against `() => () => Base[]` failed).
+        match kind {
+            Kind::CaseBlock
+            | Kind::Block
+            | Kind::IfStatement
+            | Kind::DoStatement
+            | Kind::WhileStatement
+            | Kind::ForStatement
+            | Kind::ForInStatement
+            | Kind::ForOfStatement
+            | Kind::WithStatement
+            | Kind::SwitchStatement
+            | Kind::CaseClause
+            | Kind::DefaultClause
+            | Kind::LabeledStatement
+            | Kind::TryStatement
+            | Kind::CatchClause => children_of(c.store(), node)
+                .iter()
+                .any(|&child| visit(c, child, cb)),
+            _ => false,
+        }
     }
     visit(c, body, cb)
 }

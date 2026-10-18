@@ -3404,11 +3404,39 @@ impl Checker {
                     // tuple type of the remaining tuple element types.
                     // Otherwise, the rest element has an array type with
                     // same element type as the parent type.
-                    // TODO(port M6 S7): the mapType base-constraint walk +
-                    // everyType(baseConstraint, isTupleType) + sliceTupleType
-                    // — the permissive array-type identity stub keeps the
-                    // element type.
-                    t = self.create_array_type(element_type);
+                    // PORT (FCS tranche 53): Go checker.go:18156-18166 — the
+                    // mapType base-constraint walk + everyType(isTupleType)
+                    // + sliceTupleType. The former identity stub
+                    // (create_array_type always) typed `var [...a3] = v`
+                    // (v: [number, number, number]) as number[] instead of
+                    // the remaining-tuple [number, number, number], so the
+                    // secondary redeclaration check fired TS2403 ("Variable
+                    // 'a3' must be of type '[number, number, number]', but
+                    // here has type ...") for the declarationsAndAssignments
+                    // rest family (TS2403 x8).
+                    let base_constraint = crate::typenodes::map_type(
+                        self,
+                        parent_type,
+                        |c, t| {
+                            if c.type_(t)
+                                .flags
+                                .intersects(TypeFlags::INSTANTIABLE_NON_PRIMITIVE)
+                            {
+                                crate::relater::get_base_constraint_or_type(c, t)
+                            } else {
+                                t
+                            }
+                        },
+                    );
+                    if crate::typenodes::every_type_ex(self, base_constraint, |c, t| {
+                        c.is_tuple_type(t)
+                    }) {
+                        t = crate::typenodes::map_type(self, base_constraint, |c, t| {
+                            c.slice_tuple_type(t, index, 0)
+                        });
+                    } else {
+                        t = self.create_array_type(element_type);
+                    }
                 } else if self.is_array_like_type(parent_type) {
                     let index_type = self.get_number_literal_type(tsc_jsnum::Number(index as f64));
                     // PORT(FCS tranche 10): Go checker.go:18195-18197 —

@@ -143,8 +143,10 @@ fn fcs51_spelling_unchecked_js_record_pin() {
 /// The residual records this tranche measured but did not fix — the pins
 /// keep the queued roots measurable:
 ///  * declarationsAndAssignments: the TS2403 x8
-///    subsequent-variable-declaration family (42 vs 34 — NOT the
-///    flow-narrowing destructuring root; queued);
+///    subsequent-variable-declaration family was FIXED in FCS tranche 53
+///    (the tuple-rest slice in getBindingElementTypeFromParentType —
+///    typeofsymbol.rs, Go checker.go:18156-18166); the record now matches
+///    the Go twin exactly (was 42 vs 34);
 ///  * dependentDestructuredVariablesNoCrash2: the TS7010
 ///    implicit-return arg shape (16 vs 16, hash-only; queued).
 #[test]
@@ -154,8 +156,8 @@ fn fcs51_residual_records_pin() {
         &[(
             "conformance/declarationsAndAssignments.errors.txt",
             "mismatch",
-            42,
-            "5aa176fcfdaef524",
+            34,
+            "eac38fc7e76b0c30",
         )],
     );
     assert_twin_records(

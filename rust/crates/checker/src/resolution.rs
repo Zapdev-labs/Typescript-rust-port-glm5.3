@@ -6106,6 +6106,76 @@ impl Checker {
         None
     }
 
+    /// Go: `func (c *Checker) isCommonJSRequire(node *ast.Node) bool`
+    /// (checker.go:16060).
+    ///
+    /// PORT (FCS tranche 53): the CommonJS require-call detector behind Go
+    /// checker.go:8551's `IsInJSFile(node) && isCommonJSRequire(node)`
+    /// redirect — a `require("...")` call in a JS file whose `require`
+    /// resolves to the checker's synthetic require symbol (or to an
+    /// ambient function/variable declaration) takes the
+    /// resolveExternalModuleTypeByLiteral path instead of the callee's
+    /// declared return type. Without it the js.js `require("./foo.ts")`
+    /// family (rewriteRelativeImportExtensions) never resolved the module,
+    /// so the unresolvable specifier's TS2307 went missing.
+    pub(crate) fn is_common_js_require(&mut self, node: NodeId) -> bool {
+        if !binder_shims::is_require_call(self.store(), node, true /*requireStringLiteralLikeArgument*/) {
+            return false;
+        }
+        let expression = crate::ast_shims::expression_of(self.store(), node)
+            .expect("IsRequireCall verified an identifier callee");
+        // Make sure require is not a local function (Go's comment) —
+        // resolveName(location, name, SymbolFlagsValue, nil, isUse=true,
+        // excludeGlobals=false).
+        let name = tsc_ast::node_text(self.store(), expression).to_string();
+        let resolved_require = self.resolve_name(&name, expression, SymbolFlags::VALUE, false);
+        if resolved_require == self.require_symbol {
+            return true;
+        }
+        // project includes symbol named 'require' - make sure that it is
+        // ambient and local non-alias (Go's comment).
+        let Some(resolved_require) = resolved_require else {
+            return false;
+        };
+        let flags = self.program_symbol(resolved_require).flags;
+        if flags.intersects(SymbolFlags::ALIAS) {
+            return false;
+        }
+        let target_declaration_kind = if flags.intersects(SymbolFlags::FUNCTION) {
+            Kind::FunctionDeclaration
+        } else if flags.intersects(SymbolFlags::VARIABLE) {
+            Kind::VariableDeclaration
+        } else {
+            Kind::Unknown
+        };
+        if target_declaration_kind != Kind::Unknown {
+            // function/variable declaration should be ambient (Go's comment)
+            return self
+                .get_declaration_of_kind_of_symbol(resolved_require, target_declaration_kind)
+                .is_some_and(|decl| self.store().node(decl).flags.intersects(NF::AMBIENT));
+        }
+        false
+    }
+
+    /// Go: `func (c *Checker) resolveExternalModuleTypeByLiteral(name *ast.Node) *Type`
+    /// (checker.go:14731).
+    ///
+    /// PORT (FCS tranche 53): the require-call return-type resolver —
+    /// resolves the string-literal module reference WITH error reporting
+    /// (TS2307 on failure) and returns the resolved module symbol's type
+    /// (anyType when unresolvable).
+    pub(crate) fn resolve_external_module_type_by_literal(&mut self, name: NodeId) -> TypeId {
+        let module_sym = self.resolve_external_module_name_ex(name, Some(name), false, None);
+        if let Some(module_sym) = module_sym {
+            if let Some(resolved_module_symbol) =
+                self.resolve_external_module_symbol_ex(Some(module_sym), false)
+            {
+                return self.get_type_of_symbol(resolved_module_symbol);
+            }
+        }
+        self.any_type()
+    }
+
     /// Go: `func (c *Checker) resolveESModuleSymbol(moduleSymbol, node, moduleSpecifier) *ast.Symbol`
     /// (checker.go:15954). The export=/alias composition is REAL; the
     /// module-type wrapping half (getTypeWithSyntheticDefaultOnly/

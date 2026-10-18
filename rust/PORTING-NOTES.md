@@ -3910,3 +3910,44 @@ both drivers 0/3,826/3,741/0; panics 0. 106 ok lines/0 FAILED (fcs52
 pins 5/5 + parser 1/1 + records 5/5); clippy 0; all gates green fresh
 (orchestrator re-ran tests + sweeps + census independently; Go tree
 md5-verified pristine).
+
+## Sweep micro-tranche 53 landed (2026-11-07, RIG-VALIDATED) — widened burst: return-statement walker + CommonJS require redirect + tuple-rest slice; divergent 350 -> 321
+
+Three clusters, all FULL:
+- TS2322 EXTRA generatedContextualTyping x10: for_each_return_
+  statement walked ALL children, leaking nested function/arrow returns
+  into the OUTER return union — Go ast.ForEachReturnStatement
+  (ast/utilities.go:1157) traverses only statement containers.
+  2322 extra 41->31; record 110->100 == go.
+- TS2307 MISS x23 + TS2591 x7 (rewriteRelativeImportExtensions +
+  26 salsa/jsDeclarations require-family records): check_call_
+  expression carried a W1-era TODO where Go checker.go:8551 redirects
+  JS-file CommonJS require calls to resolveExternalModuleTypeByLiteral
+  (checker.go:14731). NEW is_common_js_require (checker.go:16060
+  ladder) + the literal resolver in resolution.rs + the call-site arm.
+  2307 MISS 23->0; 2591 7->0.
+- TS2403 EXTRA x9 (declarationsAndAssignments): the rest-element arm
+  of getBindingElementTypeFromParentType was the S7 identity STUB —
+  Go checker.go:18156-18166 slices the tuple (var [...a3] = v ->
+  remaining tuple). mapType(baseConstraintOrType) + everyType(is
+  TupleType) + sliceTupleType. Record 42->34 == go (t51 residual pin
+  updated).
+BONUS (debug-profile underflow panic in infer_tuple_types on
+variadicTuples1 — Go int arithmetic ported as usize; latent
+pre-existing, release wraps, corpus diags byte-identical): fixed
+Go-exactly with isize arithmetic (5 sites) + a debug regression pin;
+also verified the variadicTuples1 2322-miss pair is PRE-EXISTING and
+rust is BASELINE-CORRECT there (go over-emits). Newly-divergent 0;
+newly-identical 29 (direction verified). The apparent new codes
+2536/2663/2565/8032 are top-15-cutoff artifacts (raw counts 4/4/4/4
+identical). PLAIN-sweep census: divergent 321 (226 count / 95 hash),
+identical 7,246/7,567; both drivers 0/3,826/3,741/0; panics 0. 108 ok
+lines/0 FAILED (fcs53 pins 5/5 + records 4/4); clippy 0; all gates
+green fresh (orchestrator re-ran tests + sweeps + census
+independently; Go tree md5-verified pristine). QUEUED (census54b):
+EXTRA 2322 x31/14, 2345 x23/13, 7008 x14/10, 2339 x12/9, 2318 x10/8
+(objectLiteralMethods), 1278/2739/2304/7022/7010/2366/2741; MISSING
+2322 x25/14, 8030 x11/7, 1453 x8/8, 2448 x7/7, 18014 x6/6, 8010
+x6/6, 1117/17019/2695; interfaceExtendingClassWithProtecteds2 2430
+x2; 7006 x2. Tooling note: lowercase unanchored -test.run prefixes
+accept ALL cases (use dir/^emit\.ts forms).

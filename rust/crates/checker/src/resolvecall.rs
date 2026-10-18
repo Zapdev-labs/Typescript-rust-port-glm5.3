@@ -2821,8 +2821,19 @@ impl Checker {
                 }
             }
         }
-        // TODO(port M6 W1/js): IsInJSFile + isCommonJSRequire redirection
-        // (resolveExternalModuleTypeByLiteral) rides the W1/js seam.
+        // PORT (FCS tranche 53): Go checker.go:8551 — a CommonJS require
+        // call in a JS file redirects to the module-resolution return type
+        // (resolveExternalModuleTypeByLiteral): the resolved module symbol's
+        // type, with TS2307 emitted when the specifier doesn't resolve. The
+        // rewriteRelativeImportExtensions js.js `require("./foo.ts")` family
+        // went missing without it (the require symbol / ambient-declaration
+        // ladder rides isCommonJSRequire, resolution.rs).
+        if tsc_ast::utilities::is_in_js_file(self.store().node(node))
+            && self.is_common_js_require(node)
+        {
+            let args = binder_node_data::arguments_of(self.store(), node).to_vec();
+            return self.resolve_external_module_type_by_literal(args[0]);
+        }
         let Some(signature) = signature else {
             return self.any_type();
         };

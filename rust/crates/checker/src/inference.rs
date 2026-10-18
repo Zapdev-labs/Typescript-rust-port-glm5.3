@@ -1436,13 +1436,22 @@ impl Checker {
                     }
                 }
                 if !source_is_tuple
-                    || source_arity as usize - start_length - end_length == 1
+                    || (source_arity as isize - start_length as isize - end_length as isize) == 1
                         && tuple_type_element_flags(self, source, start_length).intersects(ElementFlags::REST)
                 {
                     // Single rest element remains in source, infer from that to every element in target (Go comment, verbatim.)
                     let source_args = crate::relater::resolve_type_arguments(self, source);
                     let rest_type = source_args[start_length];
-                    for i in start_length..target_arity as usize - end_length {
+                    // PORT (FCS tranche 53): Go's `i < targetArity-endLength`
+                    // is SIGNED — a negative bound simply produces an empty
+                    // range. The former usize subtraction underflowed in
+                    // debug (the variadicTuples1 `[...T, ...U]` inference
+                    // reached it with endLength > targetArity) and wrapped
+                    // to a huge bound in release.
+                    let upper =
+                        (target_arity as isize - end_length as isize).max(start_length as isize)
+                            as usize;
+                    for i in start_length..upper {
                         let mut t = rest_type;
                         if element_infos[i].flags.intersects(ElementFlags::VARIADIC) {
                             t = self.create_array_type(t);
@@ -1450,7 +1459,14 @@ impl Checker {
                         self.infer_from_types(n, t, element_types[i]);
                     }
                 } else {
-                    let middle_length = target_arity as usize - start_length - end_length;
+                    // PORT (FCS tranche 53): Go's
+                    // `middleLength := targetArity - startLength - endLength`
+                    // is signed; a negative value fails the `== 2` / `== 1`
+                    // arms. The former usize subtraction underflowed in
+                    // debug (the variadicTuples1 panic) and wrapped in
+                    // release.
+                    let middle_length =
+                        target_arity as isize - start_length as isize - end_length as isize;
                     if middle_length == 2
                         && element_infos[start_length]
                             .flags
@@ -1464,10 +1480,17 @@ impl Checker {
                                 self.inference_contexts[n.inferences.0 as usize].inferences[target_info_index].implied_arity;
                             if implied_arity >= 0 {
                                 // Infer slices from source based on implied arity of T. (Go comment, verbatim.)
+                                // PORT (FCS tranche 53): Go's endSkipCount
+                                // arithmetic is signed; slice_tuple_type's
+                                // end_skip_count is usize — clamp at 0 like
+                                // Go's `(endSkipCount, 0)` max.
                                 let slice1 = self.slice_tuple_type(
                                     source,
                                     start_length,
-                                    end_length + source_arity as usize - implied_arity as usize,
+                                    (end_length as isize
+                                        + source_arity as isize
+                                        - implied_arity as isize)
+                                        .max(0) as usize,
                                 );
                                 self.infer_from_types(n, slice1, element_types[start_length]);
                                 let slice2 =
@@ -1489,10 +1512,15 @@ impl Checker {
                                     && !tuple_type_combined_flags(self, constraint).intersects(ElementFlags::VARIABLE)
                                 {
                                     let implied_arity = tuple_type_fixed_length(self, constraint) as usize;
+                                    // PORT (FCS tranche 53): signed clamp (Go
+                                    // int arithmetic; negative endSkipCount
+                                    // clamps to 0 in sliceTupleType).
                                     let slice = self.slice_tuple_type(
                                         source,
                                         start_length,
-                                        source_arity as usize - (start_length + implied_arity),
+                                        (source_arity as isize
+                                            - (start_length + implied_arity) as isize)
+                                            .max(0) as usize,
                                     );
                                     self.infer_from_types(n, slice, element_types[start_length]);
                                     if let Some(rest_type) = self.get_element_type_of_slice_of_tuple_type(
@@ -1517,10 +1545,19 @@ impl Checker {
                                     && !tuple_type_combined_flags(self, constraint).intersects(ElementFlags::VARIABLE)
                                 {
                                     let implied_arity = tuple_type_fixed_length(self, constraint) as usize;
-                                    let end_index = source_arity as usize
-                                        - crate::relater::get_end_element_count(self, target, ElementFlags::FIXED);
-                                    let start_index = end_index - implied_arity;
-                                    if start_index >= start_length {
+                                    // PORT (FCS tranche 53): Go's
+                                    // `startIndex := endIndex - impliedArity`
+                                    // is signed; the guard `startIndex >=
+                                    // startLength` handles the negative
+                                    // case. usize subtraction underflowed
+                                    // in debug.
+                                    let end_index = source_arity as isize
+                                        - crate::relater::get_end_element_count(self, target, ElementFlags::FIXED)
+                                            as isize;
+                                    let start_index = end_index - implied_arity as isize;
+                                    if start_index >= start_length as isize {
+                                        let (start_index, end_index) =
+                                            (start_index as usize, end_index as usize);
                                         let source_args = crate::relater::resolve_type_arguments(self, source);
                                         let slice_types: Vec<TypeId> = source_args[start_index..end_index].to_vec();
                                         let slice_infos: Vec<crate::types::TupleElementInfo> =
