@@ -1,0 +1,35 @@
+rust/crates/checker/tests/fcs45_top_cluster_pins.rs
+  s_5d839b0973d0e7::t_7417cb3e4a2485 66
+  s_5d839b0973d0e7::t_5517778c319c71 1-65,67-353
+rust/crates/checker/src/statements.rs
+  s_5d839b0973d0e7::t_3a576f93e0ef89 8287-8293,8295
+rust/crates/checker/src/typeofsymbol.rs
+  s_5d839b0973d0e7::t_fe6ee32e402f27 1742-1746,1751,1756,1765
+  s_5d839b0973d0e7::t_241559046ed054 1714-1741,1747-1750,1752-1755,1757-1764,1766-1774
+rust/crates/checker/src/typenodes.rs
+  s_5d839b0973d0e7::t_0c95e06119eccf 3579-3596
+rust/crates/checker/tests/fcs10_binding_element_and_array_literal_pins.rs
+  s_5d839b0973d0e7::t_cced2859802ecc 149-157,164
+rust/crates/checker/src/checker.rs
+  s_5d839b0973d0e7::t_4eb4eef072663e 1403-1411,1413-1415,1417-1424,1426-1428,1430-1442,1444-1455
+  s_5d839b0973d0e7::t_13547f90ec888a 1416
+  s_5d839b0973d0e7::t_0496689bf78301 1425
+  s_5d839b0973d0e7::t_7ed47b5500bbb2 1429
+  s_5d839b0973d0e7::t_2af4e0a795a59c 1443
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "565c5247e52b77d200a8527b053dba2dca42e50e",
+  "prompts": {},
+  "sessions": {
+    "s_5d839b0973d0e7": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "f93fa7ad-2ed8-45da-ba60-3b31e88c28e9",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
