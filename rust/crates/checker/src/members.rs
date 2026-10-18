@@ -814,7 +814,9 @@ impl Checker {
     // ────────────────────────────────────────────────────────────────────────
 
     /// Go: `func (c *Checker) resolveDeclaredMembers(t) *InterfaceType` (checker.go:20047).
-    fn resolve_declared_members(&mut self, t: TypeId) -> bool {
+    // PORT: FCS tranche 52 — pub(crate) for checkInheritedPropertiesAreIdentical
+    // (statements.rs), Go checker.go:5159 `c.resolveDeclaredMembers(t).declaredMembers`.
+    pub(crate) fn resolve_declared_members(&mut self, t: TypeId) -> bool {
         let already = self
             .type_(t)
             .as_interface_type()

@@ -1352,6 +1352,39 @@ impl<'a, 'f> Parser<'a, 'f> {
                             return;
                         }
                     }
+                    Kind::ExpressionStatement => {
+                        // PORT: FCS tranche 52 — Go reparser.go:373-381: a
+                        // `/** @type T */ a.b = expr` JS assignment
+                        // declaration attaches the tag's type node to the
+                        // BINARY (`bin.AsMutable().SetType(...)`) so the
+                        // checker's getContextualTypeForBinaryOperand reads
+                        // it (checker.go:30360) and the RHS object literal
+                        // is contextually typed. The arm was absent, so
+                        // contextualTypedSpecialAssignment's object-literal
+                        // methods fell to implicit-any parameters (TS7006 x8).
+                        let bin = {
+                            let s = self.factory.store();
+                            let expr = s
+                                .node(parent)
+                                .as_expression_statement()
+                                .expect("ExpressionStatement data")
+                                .expression;
+                            if s.node(expr).kind == Kind::BinaryExpression {
+                                Some(expr)
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some(bin) = bin {
+                            let kind = get_assignment_declaration_kind(self.factory.store(), bin);
+                            if kind != JSDeclarationKind::None && te_type.is_some() {
+                                let cloned = self.add_deep_clone_reparse(te_type);
+                                set_type_annotation(self.factory.store(), bin, cloned);
+                                self.finish_mutated_node(bin);
+                                return;
+                            }
+                        }
+                    }
                     _ => {}
                 }
                 if let Some(fun) = get_function_like_host(self.factory.store(), parent) {

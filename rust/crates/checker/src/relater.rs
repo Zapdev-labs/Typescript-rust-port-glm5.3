@@ -9982,11 +9982,44 @@ fn decode_js_string_rune(s: &str) -> usize {
 /// Go: `func (c *Checker) compareProperties(sourceProp, targetProp, compareTypes) Ternary`
 /// (checker.go's property-identity fastpath + comparer).
 pub(crate) fn compare_properties(c: &mut Checker, source_prop: SymbolId, target_prop: SymbolId, kind: TypeComparerKind, relater: Option<&mut Relater>) -> Ternary {
+    // PORT: FCS tranche 52 — Go checker.go:28206's REAL body:
+    // "Two members are considered identical when
+    //  - they are public properties with identical names, optionality, and
+    //    types,
+    //  - they are private or protected properties originating in the same
+    //    declaration and having identical types."
+    // The M6 stub compared only the property TYPES, so the mergedInterfaces*
+    // family (two private `x` members from different classes) answered
+    // identical and the 2320 "cannot simultaneously extend" chain never
+    // fired (2430 "incorrectly extends" leaked instead).
     if source_prop == target_prop {
         return Ternary::True;
     }
-    let source_type = c.get_type_of_symbol(source_prop);
-    let target_type = c.get_type_of_symbol(target_prop);
+    let source_prop_accessibility = get_declaration_modifier_flags_from_symbol(c, source_prop)
+        & ModifierFlags::NON_PUBLIC_ACCESSIBILITY_MODIFIER;
+    let target_prop_accessibility = get_declaration_modifier_flags_from_symbol(c, target_prop)
+        & ModifierFlags::NON_PUBLIC_ACCESSIBILITY_MODIFIER;
+    if source_prop_accessibility != target_prop_accessibility {
+        return Ternary::False;
+    }
+    if source_prop_accessibility != ModifierFlags::NONE {
+        if c.get_target_symbol_impl(source_prop) != c.get_target_symbol_impl(target_prop) {
+            return Ternary::False;
+        }
+    } else {
+        let source_flags = c.program_symbol(source_prop).flags;
+        let target_flags = c.program_symbol(target_prop).flags;
+        if (source_flags & SymbolFlags::OPTIONAL)
+            != (target_flags & SymbolFlags::OPTIONAL)
+        {
+            return Ternary::False;
+        }
+    }
+    if is_readonly_symbol(c, source_prop) != is_readonly_symbol(c, target_prop) {
+        return Ternary::False;
+    }
+    let source_type = get_non_missing_type_of_symbol(c, source_prop);
+    let target_type = get_non_missing_type_of_symbol(c, target_prop);
     match kind {
         TypeComparerKind::Identical => c.compare_types_identical(source_type, target_type),
         TypeComparerKind::Assignable => c.compare_types_assignable_simple(source_type, target_type),

@@ -3870,3 +3870,43 @@ constraint 2349-head). PLAIN-sweep census: divergent 364 (261 count /
 panics 0. 98 ok lines/0 FAILED (fcs51 pins 6/6 + records 4/4); clippy
 0; all gates green fresh (orchestrator re-ran tests + sweeps + census
 independently; Go tree md5-verified pristine).
+
+## Sweep micro-tranche 52 landed (2026-11-07, RIG-VALIDATED) — widened burst: JSX decoded names + reparser @type statement + inherited-property ladder; divergent 364 -> 350
+
+Three clusters, all root-caused + Go-exactly ported (the scanner/parser
+escape hypothesis DISPROVEN by probe — scanner/parser were already
+correct; both drivers emit 17021):
+- unicodeEscapesInJsxtags 2339 x6: the real root was the CHECKER —
+  jsx.rs used get_text_of_node (RAW source-span slice) at 3 sites
+  where Go jsx.go:145/1200/1228 reads the DECODED tagName.Text() — raw
+  \u0061-b never matched IntrinsicElements. Fixed via ast_shims::
+  jsx_name_text. Record 44->38 CONVERGED.
+- contextualTypedSpecialAssignment 7006 x8: reparse_hosted's JSDocTypeTag
+  arm was MISSING Go's KindExpressionStatement case (reparser.go:
+  373-381: bin.SetType(@type)) — the checker's t21 binary_type arm had
+  nothing to read, so /** @type {T} */ ns.x = {...} object-literal
+  methods fell to implicit-any params. Arm added. 7006 extra 12->4;
+  record 31->24 CONVERGED (+1 collateral 2307/2322/2318 record).
+- mergedInterfaces* 2430/2320 family: THREE stacked roots — (1)
+  check_inherited_properties_are_identical seeded seen from ALL
+  properties instead of Go's resolveDeclaredMembers(t).declaredMembers
+  (checker.go:5159); (2) compare_properties was a types-only stub
+  missing Go's accessibility/targetSymbol/optional/readonly ladder
+  (checker.go:28206); (3) the 2320 chain was inverted (buried as
+  related_info) — head via Diagnostic::new + add_message_chain (the
+  t51 2677 pattern). 2320 miss 8->0 FULL; 2430 extra 10->3; 5 records
+  CONVERGED; 2322 miss 51->47.
+Newly-divergent 0; newly-identical 14 (7 targets + 7 collateral incl.
+jsdocTemplateTag4/5 — long-queued). Parse-level gates for the parser
+edit: fixture PARSE twins x3 0 diff; bind 300-slice split 143/163/78
+BOTH drivers. HONEST QUEUE: interfaceExtendingClassWithProtecteds2
+2430 x2 (public-shadows-protected accessibility comparison, pinned
+residual); 2322 x41/15 (generatedContextualTyping x10), 2345 x24/14,
+7008 x14/10, 2318 x12/10 (objectLiteralMethods x4), 2403 x8, 2307
+x23/16 (rewriteRelativeImportExtensions x6), 8030/1453/2448/2591/8010/
+18014/17019, 2695 x7/4 (tsxErrorRecovery, newly visible). PLAIN-sweep
+census: divergent 350 (253 count / 97 hash), identical 7,217/7,567;
+both drivers 0/3,826/3,741/0; panics 0. 106 ok lines/0 FAILED (fcs52
+pins 5/5 + parser 1/1 + records 5/5); clippy 0; all gates green fresh
+(orchestrator re-ran tests + sweeps + census independently; Go tree
+md5-verified pristine).

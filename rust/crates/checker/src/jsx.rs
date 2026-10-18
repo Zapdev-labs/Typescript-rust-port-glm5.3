@@ -453,7 +453,13 @@ impl Checker {
                 let tag_name = jsx_tag_name_of(self.store(), node).expect("tag name");
                 let tag_type: crate::types::TypeId =
                     if crate::utilities::is_jsx_intrinsic_tag_name(self.store(), tag_name) {
-                        let text = crate::ast_shims::get_text_of_node(self.store(), tag_name);
+                        // PORT: FCS tranche 52 — Go jsx.go:145 uses
+                        // `tagName.Text()` (the DECODED identifier text, so a
+                        // tag written `<\u0061-b>` resolves against "a-b" in
+                        // IntrinsicElements). `get_text_of_node` slices the
+                        // RAW source span and kept the escape, so the tag
+                        // name never matched (unicodeEscapesInJsxtags x6).
+                        let text = crate::ast_shims::jsx_name_text(self.store(), tag_name);
                         self.get_string_literal_type(&text)
                     } else {
                         self.check_expression(tag_name)
@@ -2838,7 +2844,9 @@ impl Checker {
         }
         if links_flags.intersects(JsxFlags::INTRINSIC_INDEXED_ELEMENT) {
             let intrinsic_elements_type = self.get_jsx_type(jsx_names::INTRINSIC_ELEMENTS, Some(node));
-            let tag_name_text = crate::ast_shims::get_text_of_node(self.store(), tag_name);
+            // PORT: FCS tranche 52 — Go jsx.go:1200 passes
+            // `node.TagName().Text()` (decoded), not the raw source span.
+            let tag_name_text = crate::ast_shims::jsx_name_text(self.store(), tag_name);
             let index_info = crate::relater::get_applicable_index_info_for_name(
                 self,
                 intrinsic_elements_type,
@@ -2873,7 +2881,10 @@ impl Checker {
             {
                 panic!("Invalid tag name");
             }
-            let prop_name = crate::ast_shims::get_text_of_node(self.store(), tag_name);
+            // PORT: FCS tranche 52 — Go jsx.go:1228 `propName := tagName.Text()`
+            // (decoded identifier text; the raw source span kept `\u0061` and
+            // the IntrinsicElements lookup missed — unicodeEscapesInJsxtags).
+            let prop_name = crate::ast_shims::jsx_name_text(self.store(), tag_name);
             let intrinsic_prop = self.get_property_of_type(intrinsic_elements_type, &prop_name);
             if let Some(intrinsic_prop) = intrinsic_prop {
                 self.jsx_element_links.get(node).jsx_flags |= JsxFlags::INTRINSIC_NAMED_ELEMENT;

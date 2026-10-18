@@ -11148,15 +11148,26 @@ impl Checker {
         if base_types.len() < 2 {
             return true;
         }
-        // Go: c.resolveDeclaredMembers(t).declaredMembers — the declared
-        // member row; the properties walk is the permissive stand-in until
-        // S10's resolveDeclaredMembers lands.
+        // PORT: FCS tranche 52 — Go seeds `seen` from
+        // `c.resolveDeclaredMembers(t).declaredMembers` (checker.go:5159)
+        // — the interface's OWN members only. The permissive stand-in
+        // (get_properties_of_type) included inherited properties, so every
+        // base property matched an existing entry with containingType == t
+        // (`is_inherited_property` false) and the non-identical-inherited
+        // check never fired — the mergedInterfaces* family fell through to
+        // the 2430 "incorrectly extends" loop instead of the 2320 chain
+        // (Go: `Interface_0_cannot_simultaneously_extend_types_1_and_2`).
+        self.resolve_declared_members(t);
+        let declared_members = self
+            .type_(t)
+            .as_interface_type()
+            .expect("InterfaceType data")
+            .declared_members
+            .clone();
         let mut seen: Vec<(String, SymbolId, TypeId)> = Vec::new();
-        let own_properties = relater::get_properties_of_type(self, t);
-        for prop in own_properties {
-            let name = self.program_symbol(prop).name.clone();
-            if is_named_member(&name) {
-                seen.push((name, prop, t));
+        for (name, prop) in declared_members.entries() {
+            if is_named_member(name) {
+                seen.push((name.clone(), *prop, t));
             }
         }
         let mut identical = true;
@@ -11185,20 +11196,41 @@ impl Checker {
                             let type_name_2 = self.type_to_string(base);
                             let prop_text = relater::symbol_to_string(self, prop);
                             let t_text = self.type_to_string(t);
-                            let error_info = u::new_diagnostic_for_node(
+                            // PORT: FCS tranche 52 — Go checker.go:5166-5169:
+                            // `NewDiagnosticChain(errorInfo, Interface_0_cannot
+                            // _simultaneously_extend_types_1_and_2, ...)` —
+                            // the 2320 message is the chain HEAD at the
+                            // typeNode loc, with the Named-property errorInfo
+                            // as the chain tail. The port had the direction
+                            // inverted (2320 added as relatedInfo on the
+                            // Named-property head), so the dump showed the
+                            // 2320 nowhere.
+                            let tail = u::new_diagnostic_for_node(
                                 self.store(),
                                 type_node.unwrap_or_default(),
                                 &diag::NAMED_PROPERTY_0_OF_TYPES_1_AND_2_ARE_NOT_IDENTICAL,
                                 vec![prop_text, type_name_1.clone(), type_name_2.clone()],
                             );
-                            let mut chained = error_info;
-                            chained.add_related_info(u::new_diagnostic_for_node(
-                                self.store(),
-                                type_node.unwrap_or_default(),
-                                &diag::INTERFACE_0_CANNOT_SIMULTANEOUSLY_EXTEND_TYPES_1_AND_2,
-                                vec![t_text, type_name_1, type_name_2],
-                            ));
-                            self.add_diagnostic(chained);
+                            let head = {
+                                let file = tail.file();
+                                let loc = tail.loc();
+                                let message =
+                                    &diag::INTERFACE_0_CANNOT_SIMULTANEOUSLY_EXTEND_TYPES_1_AND_2;
+                                let mut head = tsc_ast::Diagnostic::new(
+                                    file,
+                                    loc,
+                                    message.code(),
+                                    message.category(),
+                                    "" /*source*/,
+                                    Some(message),
+                                    "" /*messageText — resolved at format time*/,
+                                    message.key(),
+                                    vec![t_text, type_name_1, type_name_2],
+                                );
+                                head.add_message_chain(tail);
+                                head
+                            };
+                            self.add_diagnostic(head);
                             let _ = existing_name;
                         }
                     }
