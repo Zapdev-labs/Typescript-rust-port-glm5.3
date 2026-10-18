@@ -952,23 +952,9 @@ fn own_precedence(c: &mut Checker, ctx: &NbCtx, t: TypeId) -> TP {
     if flags.intersects(TypeFlags::BOOLEAN) && ty.alias.is_none() {
         return TP::NonArray;
     }
-    if flags.intersects(TypeFlags::ENUM_LIKE | TypeFlags::UNION | TypeFlags::INTERSECTION) {
-        // enum/enum-member names and single-constituent unions render as
-        // their constituent; multi-constituent unions/unions-as-unions pick
-        // their own precedence.
-        if flags.intersects(TypeFlags::UNION) {
-            // PORT(FCS tranche 3): Go renders a union with an origin through
-            // the ORIGIN type (the ttn union arm below swaps t for
-            // u.origin); the old `ty.target()` read panicked — a union has
-            // no Target (Go's Type.Target() panics on the union kind too).
-            if let Some(origin) = ty.as_union_type().and_then(|ut| ut.origin) {
-                return own_precedence(c, ctx, origin);
-            }
-            return TP::Union;
-        }
-        if flags.intersects(TypeFlags::INTERSECTION) {
-            return TP::Intersection;
-        }
+    if flags.intersects(TypeFlags::ENUM_LIKE) {
+        // Go's EnumLike arm (nodebuilderimpl.go:3404) precedes the alias arm;
+        // enums/enum members render as (chained) type references — NonArray.
         return TP::NonArray;
     }
     if flags.intersects(TypeFlags::LITERAL | TypeFlags::BOOLEAN_LITERAL) {
@@ -984,9 +970,35 @@ fn own_precedence(c: &mut Checker, ctx: &NbCtx, t: TypeId) -> TP {
     if u::is_this_type_parameter(ty) {
         return TP::NonArray;
     }
-    // The alias arm renders a type reference (NonArray).
-    if ty.alias.is_some() {
+    // The alias arm renders a type reference (NonArray). FCS tranche 46:
+    // Go's alias arm (nodebuilderimpl.go:3516) runs BEFORE the
+    // union/intersection arm, so an ALIASED union or intersection renders as
+    // its alias name (TypeReferenceNode — precedence.go NonArray), not as a
+    // UnionTypeNode/IntersectionTypeNode. The old placement returned
+    // TP::Union/TP::Intersection for aliased unions/intersections and the
+    // printer parenthesized them as constituents — `(TaggedString1) |
+    // (TaggedString2)` where Go prints `TaggedString1 | TaggedString2`
+    // (indexSignatures1's branded 7053 arguments). The InTypeAlias gate
+    // mirrors Go's `inTypeAlias == 0` (inside a type-alias declaration the
+    // alias arm is skipped and the structural union/intersection renders).
+    if ctx.flags & nbf::IN_TYPE_ALIAS == 0 && ty.alias.is_some() {
         return TP::NonArray;
+    }
+    if flags.intersects(TypeFlags::UNION | TypeFlags::INTERSECTION) {
+        // enum/enum-member names and single-constituent unions render as
+        // their constituent; multi-constituent unions/unions-as-unions pick
+        // their own precedence.
+        if flags.intersects(TypeFlags::UNION) {
+            // PORT(FCS tranche 3): Go renders a union with an origin through
+            // the ORIGIN type (the ttn union arm below swaps t for
+            // u.origin); the old `ty.target()` read panicked — a union has
+            // no Target (Go's Type.Target() panics on the union kind too).
+            if let Some(origin) = ty.as_union_type().and_then(|ut| ut.origin) {
+                return own_precedence(c, ctx, origin);
+            }
+            return TP::Union;
+        }
+        return TP::Intersection;
     }
     if ty.object_flags.intersects(ObjectFlags::REFERENCE) {
         // Arrays/tuples render as ArrayType/TupleType (Postfix) unless the

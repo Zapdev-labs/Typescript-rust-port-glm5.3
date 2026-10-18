@@ -49,8 +49,16 @@ use crate::Checker;
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Go: `func forEachType(t *Type, f func(*Type))` (checker.go:27061).
+///
+/// FCS tranche 46: distributes UNIONS only — Go's forEachType never
+/// distributes intersections. The prior UNION_OR_INTERSECTION form
+/// destructured branded-intersection index-signature keys
+/// (`[key: string & Tag1]` in indexSignatures1.ts) into their
+/// constituents, silently creating a plain `string` index info instead
+/// of the branded one — every 7053 on the branded accesses went
+/// missing and the I1/I2/I4 index-signature 2322s inverted.
 pub(crate) fn for_each_type(c: &mut Checker, t: TypeId, f: &mut dyn FnMut(&mut Checker, TypeId)) {
-    if c.type_(t).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+    if c.type_(t).flags.intersects(TypeFlags::UNION) {
         let types = c.type_(t).types().to_vec();
         for t in types {
             f(c, t);

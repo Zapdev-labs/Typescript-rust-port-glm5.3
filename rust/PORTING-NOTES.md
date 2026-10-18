@@ -3641,3 +3641,36 @@ census: divergent 429 (303 count / 126 hash), identical 7,138/7,567;
 both drivers 0/3,826/3,741/0; panics 0. 88 ok lines/0 FAILED (fcs45
 pins 9/9); clippy 0; all gates green fresh (orchestrator re-ran tests +
 sweeps + census independently; Go tree md5-verified pristine).
+
+## Sweep micro-tranche 46 landed (2026-11-05, RIG-VALIDATED) — widened burst: union-only forEachType + for-in assignability + alias precedence; divergent 429 -> 427
+
+Three roots (the branded-intersection hypothesis PARTIALLY confirmed —
+the shared-root claim for the scattered pools DISPROVEN, zero
+collateral, they are independent seams):
+- members.rs for_each_type distributed UNION_OR_INTERSECTION where Go's
+  forEachType (checker.go:27061) is UNION-ONLY — branded-intersection
+  index keys ([key: string & Tag1]) were destructured to plain string
+  index info -> 21 of 23 TS7053s recovered (indexSignatures1 fully) +
+  the branded 2322s; keyof I1 now TaggedString1 (was string|number).
+- statements.rs check_for_in_statement gated the RHS on a permissive
+  S10 stub (always true); replaced with the real isTypeAssignableToKind
+  (rightType, NonPrimitive|InstantiableNonPrimitive) (Go checker.go:
+  4050); stub deleted. TS2407 13/4 -> 0/0.
+- nodebuilder.rs own_precedence: Go's ALIAS arm (nodebuilderimpl.go:
+  3516) precedes the union/intersection arm — aliased unions render as
+  TypeReference (never parenthesized as constituents); rust computed
+  Union/Intersection -> printed (TaggedString1) | (TaggedString2).
+  Restructured in Go arm order (ENUM_LIKE first, alias with the
+  InTypeAlias gate before union/intersection).
+Newly-divergent 0; newly-identical 2 (both for-in records; direction
+verified). HONEST QUEUE: 7053 missing x2 (keyofAndIndexedAccess — the
+generic mapped-type-on-intersection seam; same record carries rust-
+extra 2322 x3 + 2345); indexSignatures1 residual x8 (2413 span-order +
+2345 late-bound index-name display); the scattered pools are
+INDEPENDENT seams: 2322 x46+x33, 2339 x37, 2345 x32, 2307 x24, 2318
+x16, 2757 x15, 7008 x14, 7026 x12, 2300 x24, 2351 x11, 8030 x11,
+2551 x10, 2349 x10, 4127 x9, 2635 x9. PLAIN-sweep census: divergent
+427 (302 count / 125 hash), identical 7,140/7,567; both drivers
+0/3,826/3,741/0; panics 0. 89 ok lines/0 FAILED (fcs46 pins 5/5);
+clippy 0; all gates green fresh (orchestrator re-ran tests + sweeps +
+census independently; Go tree md5-verified pristine).

@@ -871,8 +871,15 @@ impl Checker {
         }
         // unknownType is returned i.e. if node.expression is identifier whose
         // name cannot be resolved — the error is already reported.
+        // FCS tranche 46: the permissive S10 stub (always true) is replaced
+        // by the REAL isTypeAssignableToKind body (expressions.rs, Go
+        // checker.go:28175) — the kind here is NonPrimitive |
+        // InstantiableNonPrimitive (no BooleanLike query, so the pinned S7
+        // booleanType panic arm is unreachable), which makes the for-in
+        // right-side TS2407 fire Go-exactly (for-inStatementsInvalid's
+        // void/string/number RHS, privateNameInInExpression's boolean RHS).
         if right_type == self.never_type()
-            || !self.is_type_assignable_to_kind_stub(
+            || !self.is_type_assignable_to_kind(
                 right_type,
                 TypeFlags::NON_PRIMITIVE.union(TypeFlags::INSTANTIABLE_NON_PRIMITIVE),
             )
@@ -1902,14 +1909,6 @@ if candidates.is_empty() {
         !self
             .get_signatures_of_type_impl(facts_type, SignatureKind::Call)
             .is_empty()
-    }
-
-    /// Go: `func (c *Checker) isTypeAssignableToKind(source, kind) bool`
-    /// (checker.go:28175 — S10). Permissive true (the for-in right-side
-    /// diagnostic never fires).
-    pub(crate) fn is_type_assignable_to_kind_stub(&mut self, source: TypeId, kind: TypeFlags) -> bool {
-        let _ = (source, kind);
-        true
     }
 
     /// Go: `func (c *Checker) resolveHelpersModule(file, errorNode) *ast.Symbol`
