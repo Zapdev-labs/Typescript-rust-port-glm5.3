@@ -607,6 +607,21 @@ pub fn members_of(store: &dyn NodeStore, node: NodeId) -> &[NodeId] {
             .as_ref()
             .map(|list| list.nodes.as_ref())
             .unwrap_or(&[]),
+        // Go's `Node.Members()` reads the field on TypeLiteral nodes too —
+        // the checker's `getMembersOfDeclaration` (Go checker/utilities.go:1140)
+        // lists KindTypeLiteral alongside the class/interface kinds, so the
+        // late-binding pass (`getResolvedMembersOrExportsOfSymbol`) walks the
+        // type literal's members. The missing arm made every computed-name
+        // member of a type literal invisible to
+        // `hasLateBindableIndexSignature` (FCS tranche 45: symbolProperty61's
+        // `{ [Symbol.obs]: ... }` never seeded the implied index info, so
+        // gate-2 of `getPropertyTypeForIndexType` fell through to the 7053
+        // ladder where Go returns `indexInfo.valueType` silently).
+        NodeData::TypeLiteralNode(d) => d
+            .members
+            .as_ref()
+            .map(|list| list.nodes.as_ref())
+            .unwrap_or(&[]),
         NodeData::EnumDeclaration(d) => d
             .members
             .as_ref()

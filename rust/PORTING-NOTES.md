@@ -3567,3 +3567,43 @@ MISSING 7053 x42/13 (indexSignatures1 x21/1 dominates), 2322 x36/21,
 — coherent), 2407 x13/4 (for-inStatementsInvalid x10 — coherent);
 new: TS1205 x2/2, moduleExportAlias TS2339 {}-union rendering; carried
 queues.
+
+## Sweep micro-tranche 44 landed (2026-11-05, RIG-VALIDATED) — widened burst: index-expression chain + type-only alias use sites + import.meta implied format; divergent 491 -> 451
+
+Three clusters + one exposed pre-existing gap, all Go-exact:
+- TS7053 rust-MISSING x42 -> 23: report_index_expression_error's
+  chain was gated on diagnostic.is_some() (dropped exactly all 42);
+  now the UNCONDITIONAL chain emit (Go checker.go:27713) with the
+  (apparent) object_type 2nd arg.
+- TS1361 EXTRA x18 -> 0: onSuccessfullyResolvedSymbol's type-only-value
+  arm gated on !ast.IsValidTypeOnlyAliasUseSite (Go checker.go:1902,
+  ast/utilities.go:3200) — was the permissive-true M6 stub; ported
+  Go-exact + 3 helpers. Companion: statements.rs is_type_only_import_
+  or_export_declaration Go-exact (ast/utilities.go:2980-3005: the
+  clause-carried markers, namespace arms, export-with-module-specifier
+  arm) — markSymbolOfAliasDeclarationIfTypeOnly never marked a plain
+  specifier under an `import type` clause.
+- TS1470 EXTRA x16 -> 0: check_import_meta_property was the permissive
+  M6 skip; now reads program.source_file_implied_node_format (Go
+  checker.go:11018, the GetSourceFileMetaData implied node format;
+  CheckerUnitProgram override = the SkipModuleResolution shape).
+- EXPOSED PRE-EXISTING GAP (the only genuinely-new divergent, fixed):
+  symbolProperty61 — binder node_data.rs members_of lacked the
+  TypeLiteralNode arm (Go getMembersOfDeclaration, checker/utilities.
+  go:1140, includes KindTypeLiteral) -> no __index implied index info ->
+  the (now-unconditional) 7053 ladder fired where Go's gate-2 returns
+  silently. Arm added.
+PROCESS NOTE (honest): the initial "35 newly-divergent" alarm was the
+ORCHESTRATOR's own monotonicity script bug (o-n labeled as newly-
+divergent — it printed the RECOVERED set; the real ND count was 1).
+A fix-up worker caught it, root-caused the 1, removed the dead worker's
+debug probes + clippy violation, and re-ran the full battery. Newly-
+divergent 0; newly-identical 40; every recovered cluster stays
+recovered. PLAIN-sweep census: divergent 451 (327 count / 124 hash),
+identical 7,116/7,567; both drivers 0/3,826/3,741/0; panics 0. 87 ok
+lines/0 FAILED (fcs44 pins 9/9); clippy 0; all gates green fresh
+(orchestrator re-ran tests + sweeps + census independently; Go tree
+md5-verified pristine; no rig collision). QUEUED: TS2502 x14/6,
+TS2407 x13/4, 2322 scattered x46+x36, 2339 x37/19, 2345 x32/15, 2344
+x22/6 (dormant S9), 2318 x17/11, 2757 x15/11, 2307 x24/17, 7022 x20/17,
+TS7053 residual 23+3, TS1205 x2, moduleExportAlias TS2339 rendering.

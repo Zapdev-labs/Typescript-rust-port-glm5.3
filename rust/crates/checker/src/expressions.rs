@@ -88,6 +88,7 @@ use tsc_diagnostics::{
     THE_0_OPERATOR_CANNOT_BE_APPLIED_TO_TYPE_SYMBOL,
     THE_0_OPERATOR_IS_NOT_ALLOWED_FOR_BOOLEAN_TYPES_CONSIDER_USING_1_INSTEAD,
     THE_CONTAINING_ARROW_FUNCTION_CAPTURES_THE_GLOBAL_VALUE_OF_THIS,
+    THE_IMPORT_META_META_PROPERTY_IS_NOT_ALLOWED_IN_FILES_WHICH_WILL_BUILD_INTO_COMMONJS_OUTPUT,
     THE_IMPORT_META_META_PROPERTY_IS_ONLY_ALLOWED_WHEN_THE_MODULE_OPTION_IS_ES2020_ES2022_ESNEXT_SYSTEM_NODE16_NODE18_NODE20_OR_NODENEXT,
     THE_LEFT_HAND_SIDE_OF_AN_ARITHMETIC_OPERATION_MUST_BE_OF_TYPE_ANY_NUMBER_BIGINT_OR_AN_ENUM_TYPE,
     THE_LEFT_HAND_SIDE_OF_AN_ASSIGNMENT_EXPRESSION_MAY_NOT_BE_AN_OPTIONAL_PROPERTY_ACCESS,
@@ -2421,9 +2422,27 @@ impl Checker {
         if tsc_core::options_generated::ModuleKind::Node16 <= module_kind
             && module_kind <= tsc_core::options_generated::ModuleKind::NodeNext
         {
-            // TODO(port M6 S6): program.GetSourceFileMetaData — the
-            // impliedNodeFormat read (the program seam); permissive skip of
-            // the CommonJS-output diagnostic.
+            // Go: `sourceFileMetaData := c.program.GetSourceFileMetaData(
+            // ast.GetSourceFileOfNode(node).PathKey()); if
+            // sourceFileMetaData.ImpliedNodeFormat != core.ResolutionModeESNext
+            // { c.error(...) }` (checker.go:11019-11022). PORT (FCS tranche
+            // 44): read through the Program trait's
+            // `source_file_implied_node_format` seam (the metadata's implied
+            // format — the SkipModuleResolution shape on the unit program);
+            // was the TODO(port M6 S6) permissive skip that kept the
+            // CommonJS-output diagnostic dormant.
+            let file = tsc_ast::get_source_file_of_node(self.store(), node)
+                .map(|file| file.as_node_id())
+                .unwrap_or(node);
+            if self.program.source_file_implied_node_format(file)
+                != tsc_core::options_generated::ModuleKind::ESNext
+            {
+                self.error(
+                    node,
+                    &THE_IMPORT_META_META_PROPERTY_IS_NOT_ALLOWED_IN_FILES_WHICH_WILL_BUILD_INTO_COMMONJS_OUTPUT,
+                    &[],
+                );
+            }
         } else if module_kind < tsc_core::options_generated::ModuleKind::ES2020
             && module_kind != tsc_core::options_generated::ModuleKind::System
         {

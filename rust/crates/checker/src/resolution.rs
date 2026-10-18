@@ -2436,16 +2436,92 @@ fn is_accessor(node: &Node) -> bool {
     node.kind == Kind::GetAccessor || node.kind == Kind::SetAccessor
 }
 
-/// Go: `func ast.IsValidTypeOnlyAliasUseSite(useSite) bool` (ast/utilities.go).
-/// TODO(port M6 S6 remainder): the exact use-site predicate
-/// (isIdentifierInNonEmittingHeritageClause /
-/// isPartOfPossiblyValidTypeOrAbstractComputedPropertyName /
-/// isShorthandPropertyNameUseSite) rides the ast-utilities wholesale port;
-/// permissive true keeps the TS1345/TS1361 "imported using import type" arms
-/// dormant (diagnostics-neutral — no false positives).
-fn is_valid_type_only_alias_use_site(_store: &dyn NodeStore, use_site: NodeId) -> bool {
-    let _ = use_site;
-    true
+/// Go: `func ast.IsValidTypeOnlyAliasUseSite(useSite) bool` (ast/utilities.go:3200).
+/// PORT (FCS tranche 44): the real predicate (was the TODO(port M6 S6
+/// remainder) permissive-true stub that kept the TS1361 "imported using
+/// import type" arm in onSuccessfullyResolvedSymbol dormant).
+fn is_valid_type_only_alias_use_site(store: &dyn NodeStore, use_site: NodeId) -> bool {
+    let node = store.node(use_site);
+    node.flags.intersects(NF::AMBIENT.union(NF::JSDOC))
+        || binder_shims::is_part_of_type_query(store, use_site)
+        || is_identifier_in_non_emitting_heritage_clause(store, use_site)
+        || is_part_of_possibly_valid_type_or_abstract_computed_property_name(store, use_site)
+        || !(crate::grammarchecks::is_expression_node(store, use_site)
+            || is_shorthand_property_name_use_site(store, use_site))
+}
+
+/// Go: `func ast.isIdentifierInNonEmittingHeritageClause(node) bool` (ast/utilities.go:3208).
+fn is_identifier_in_non_emitting_heritage_clause(store: &dyn NodeStore, node: NodeId) -> bool {
+    if !is_identifier(store.node(node)) {
+        return false;
+    }
+    let mut current = binder_shims::parent_of(store, node);
+    while let Some(parent) = current {
+        if matches!(
+            store.node(parent).kind,
+            Kind::PropertyAccessExpression | Kind::ExpressionWithTypeArguments
+        ) {
+            current = binder_shims::parent_of(store, parent);
+        } else {
+            break;
+        }
+    }
+    let Some(hc) = current else { return false };
+    let hc_node = store.node(hc);
+    if !tsc_ast::is_heritage_clause(hc_node) {
+        return false;
+    }
+    let token_is_implements = hc_node
+        .as_heritage_clause()
+        .is_some_and(|d| d.token == Kind::ImplementsKeyword);
+    token_is_implements
+        || binder_shims::parent_of(store, hc)
+            .is_some_and(|gp| tsc_ast::is_interface_declaration(store.node(gp)))
+}
+
+/// Go: `func ast.isPartOfPossiblyValidTypeOrAbstractComputedPropertyName(node) bool`
+/// (ast/utilities.go:3219).
+fn is_part_of_possibly_valid_type_or_abstract_computed_property_name(
+    store: &dyn NodeStore,
+    node: NodeId,
+) -> bool {
+    let mut current = node;
+    while matches!(
+        store.node(current).kind,
+        Kind::Identifier | Kind::PropertyAccessExpression
+    ) {
+        let Some(parent) = binder_shims::parent_of(store, current) else {
+            return false;
+        };
+        current = parent;
+    }
+    if store.node(current).kind != Kind::ComputedPropertyName {
+        return false;
+    }
+    let Some(parent) = binder_shims::parent_of(store, current) else {
+        return false;
+    };
+    if has_syntactic_modifier(store.node(parent), ModifierFlags::ABSTRACT) {
+        return true;
+    }
+    binder_shims::parent_of(store, parent).is_some_and(|gp| {
+        matches!(
+            store.node(gp).kind,
+            Kind::InterfaceDeclaration | Kind::TypeLiteral
+        )
+    })
+}
+
+/// Go: `func ast.isShorthandPropertyNameUseSite(useSite) bool` (ast/utilities.go:3232).
+fn is_shorthand_property_name_use_site(store: &dyn NodeStore, use_site: NodeId) -> bool {
+    is_identifier(store.node(use_site))
+        && binder_shims::parent_of(store, use_site).is_some_and(|parent| {
+            let parent_node = store.node(parent);
+            tsc_ast::is_shorthand_property_assignment(parent_node)
+                && parent_node
+                    .as_shorthand_property_assignment()
+                    .is_some_and(|d| d.name == use_site)
+        })
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -3246,29 +3322,40 @@ impl Checker {
         resolved
     }
 
-    /// Go: `func (c *Checker) getTargetOfNamespaceImport(node) *ast.Symbol` (checker.go:14953).
+    /// Go: `func (c *Checker) getTargetOfNamespaceImport(node) *ast.Symbol` (checker.go:14917).
+    /// PORT (FCS tranche 44): Go marks the alias type-only UNCONDITIONALLY
+    /// after the resolution pair (checker.go:14921) — a module that fails to
+    /// resolve (`resolveExternalModuleName` nil) still marks, keeping the
+    /// TS1361 arm alive for `import type * as ns` value uses; the former
+    /// `?`-gated shape returned before the marking.
     pub(crate) fn get_target_of_namespace_import(&mut self, node: NodeId) -> Option<SymbolId> {
-        let module_specifier = self.get_module_specifier_for_import_or_export(node)?;
+        let module_specifier = self.get_module_specifier_for_import_or_export(node);
         let parent_parent = binder_shims::parent_of(self.store(), node)
             .and_then(|p| binder_shims::parent_of(self.store(), p));
         let attributes_type = parent_parent
             .and_then(|pp| crate::statements::get_import_attributes(self.store(), pp))
             .and_then(|a| self.get_type_from_import_attributes(Some(a)));
-        let immediate = self.resolve_external_module_name_ex(node, Some(module_specifier), false, attributes_type)?;
-        let resolved = self.resolve_es_module_symbol(Some(immediate), node, Some(module_specifier));
+        let immediate = module_specifier.and_then(|specifier| {
+            self.resolve_external_module_name_ex(node, Some(specifier), false, attributes_type)
+        });
+        let resolved = self.resolve_es_module_symbol(immediate, node, module_specifier);
         self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
         resolved
     }
 
-    /// Go: `func (c *Checker) getTargetOfNamespaceExport(node) *ast.Symbol` (checker.go:14964).
+    /// Go: `func (c *Checker) getTargetOfNamespaceExport(node) *ast.Symbol` (checker.go:14925).
+    /// PORT (FCS tranche 44): the same unconditional marking (Go
+    /// checker.go:14930).
     pub(crate) fn get_target_of_namespace_export(&mut self, node: NodeId) -> Option<SymbolId> {
-        let module_specifier = self.get_module_specifier_for_import_or_export(node)?;
+        let module_specifier = self.get_module_specifier_for_import_or_export(node);
         let parent = binder_shims::parent_of(self.store(), node);
         let attributes_type = parent
             .and_then(|p| crate::statements::get_import_attributes(self.store(), p))
             .and_then(|a| self.get_type_from_import_attributes(Some(a)));
-        let immediate = self.resolve_external_module_name_ex(node, Some(module_specifier), false, attributes_type)?;
-        let resolved = self.resolve_es_module_symbol(Some(immediate), node, Some(module_specifier));
+        let immediate = module_specifier.and_then(|specifier| {
+            self.resolve_external_module_name_ex(node, Some(specifier), false, attributes_type)
+        });
+        let resolved = self.resolve_es_module_symbol(immediate, node, module_specifier);
         self.mark_symbol_of_alias_declaration_if_type_only(Some(node), None);
         resolved
     }

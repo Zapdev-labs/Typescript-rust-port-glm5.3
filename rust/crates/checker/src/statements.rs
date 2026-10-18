@@ -13474,21 +13474,20 @@ impl Checker {
 // Free helpers for the alias batch.
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Go: `ast.IsTypeOnlyImportOrExportDeclaration(node)` — reads the type-only
-/// markers the parser laid down on the import/export payloads.
+/// Go: `ast.IsTypeOnlyImportOrExportDeclaration(node)` = IsTypeOnlyImportDeclaration
+/// || isTypeOnlyExportDeclaration (ast/utilities.go:2980/2992/3005) — reads the
+/// type-only markers the parser laid down on the import/export payloads.
+/// PORT (FCS tranche 44): Go-exact — the ImportSpecifier/ExportSpecifier arms
+/// OR in the clause/declaration marker (`import type { A }` carries the
+/// keyword on the ImportClause, not the specifier; Go utilities.go:2983/2995),
+/// the NamespaceImport/NamespaceExport arms read the PARENT clause/declaration
+/// (Go utilities.go:2985/3000), and the ExportDeclaration arm requires
+/// moduleSpecifier != nil && exportClause == nil (Go utilities.go:2998). The
+/// former port read only the specifier-own markers and lacked the namespace
+/// arms, so `markSymbolOfAliasDeclarationIfTypeOnly` never marked a plain
+/// specifier under an `import type` clause and the TS1361 arm stayed dormant.
 pub(crate) fn is_type_only_import_or_export_declaration(store: &dyn NodeStore, node: NodeId) -> bool {
     match store.node(node).kind {
-        Kind::ImportDeclaration => store
-            .node(node)
-            .as_import_declaration()
-            .and_then(|d| d.import_clause)
-            .is_some_and(|clause| {
-                store
-                    .node(clause)
-                    .as_import_clause()
-                    .map(|d| d.phase_modifier == Some(Kind::TypeKeyword))
-                    .unwrap_or(false)
-            }),
         Kind::ImportEqualsDeclaration => store
             .node(node)
             .as_import_equals_declaration()
@@ -13497,18 +13496,41 @@ pub(crate) fn is_type_only_import_or_export_declaration(store: &dyn NodeStore, n
         Kind::ExportDeclaration => store
             .node(node)
             .as_export_declaration()
-            .map(|d| d.is_type_only)
+            .map(|d| d.is_type_only && d.module_specifier.is_some() && d.export_clause.is_none())
             .unwrap_or(false),
-        Kind::ImportSpecifier => store
-            .node(node)
-            .as_import_specifier()
-            .map(|d| d.is_type_only)
-            .unwrap_or(false),
-        Kind::ExportSpecifier => store
-            .node(node)
-            .as_export_specifier()
-            .map(|d| d.is_type_only)
-            .unwrap_or(false),
+        Kind::ImportSpecifier => {
+            let own = store
+                .node(node)
+                .as_import_specifier()
+                .map(|d| d.is_type_only)
+                .unwrap_or(false);
+            own || tsc_binder::ast_shims::parent_of(store, node)
+                .and_then(|p| tsc_binder::ast_shims::parent_of(store, p))
+                .is_some_and(|clause| store.node(clause).as_import_clause()
+                    .map(|d| d.phase_modifier == Some(Kind::TypeKeyword))
+                    .unwrap_or(false))
+        }
+        Kind::ExportSpecifier => {
+            let own = store
+                .node(node)
+                .as_export_specifier()
+                .map(|d| d.is_type_only)
+                .unwrap_or(false);
+            own || tsc_binder::ast_shims::parent_of(store, node)
+                .and_then(|p| tsc_binder::ast_shims::parent_of(store, p))
+                .is_some_and(|decl| store.node(decl).as_export_declaration()
+                    .map(|d| d.is_type_only)
+                    .unwrap_or(false))
+        }
+        Kind::NamespaceImport => tsc_binder::ast_shims::parent_of(store, node)
+            .and_then(|clause| store.node(clause).as_import_clause())
+            .is_some_and(|d| d.phase_modifier == Some(Kind::TypeKeyword)),
+        Kind::NamespaceExport => tsc_binder::ast_shims::parent_of(store, node)
+            .is_some_and(|decl| store
+                .node(decl)
+                .as_export_declaration()
+                .map(|d| d.is_type_only)
+                .unwrap_or(false)),
         Kind::ImportClause => store
             .node(node)
             .as_import_clause()

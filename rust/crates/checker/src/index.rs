@@ -841,7 +841,6 @@ impl Checker {
                         && !access_flags.intersects(AccessFlags::SUPPRESS_NO_IMPLICIT_ANY_ERROR)
                     {
                         return self.report_index_expression_error(
-                            original_object_type,
                             object_type,
                             index_type,
                             full_index_type,
@@ -905,7 +904,6 @@ impl Checker {
     #[allow(clippy::too_many_arguments)]
     fn report_index_expression_error(
         &mut self,
-        original_object_type: TypeId,
         object_type: TypeId,
         index_type: TypeId,
         full_index_type: TypeId,
@@ -1018,18 +1016,24 @@ impl Checker {
                 vec![index_string, type_string],
             ));
         }
-        if let Some(diagnostic) = diagnostic {
-            let full_index_string = self.type_to_string(full_index_type);
-            let object_string = self.type_to_string(original_object_type);
-            let chained = u::new_diagnostic_chain_for_node(
-                Some(&diagnostic),
-                self.store(),
-                access_expression,
-                &ELEMENT_IMPLICITLY_HAS_AN_ANY_TYPE_BECAUSE_EXPRESSION_OF_TYPE_0_CAN_T_BE_USED_TO_INDEX_TYPE_1,
-                vec![full_index_string, object_string],
-            );
-            self.add_diagnostic(chained);
-        }
+        // Go calls NewDiagnosticChainForNode UNCONDITIONALLY (checker.go
+        // 27713): with a nil inner diagnostic (an index type that matched
+        // none of the switch arms — e.g. a template-literal / literal-union
+        // index) the worker still emits the 7053 head alone. PORT (FCS
+        // tranche 44): was gated on `diagnostic.is_some()`, which dropped
+        // exactly those (all 42 corpus 7053s rode a nil-arm index type); the
+        // second argument is Go's `objectType` (the apparent type), not the
+        // original.
+        let full_index_string = self.type_to_string(full_index_type);
+        let object_string = self.type_to_string(object_type);
+        let chained = u::new_diagnostic_chain_for_node(
+            diagnostic.as_ref(),
+            self.store(),
+            access_expression,
+            &ELEMENT_IMPLICITLY_HAS_AN_ANY_TYPE_BECAUSE_EXPRESSION_OF_TYPE_0_CAN_T_BE_USED_TO_INDEX_TYPE_1,
+            vec![full_index_string, object_string],
+        );
+        self.add_diagnostic(chained);
         None
     }
 
