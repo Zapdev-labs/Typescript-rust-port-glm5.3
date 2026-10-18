@@ -1,0 +1,34 @@
+rust/crates/checker/src/spine.rs
+  s_7306502668702d::t_c0212b37f69027 3066-3069
+rust/crates/tsc-testrunner/tests/fcs48_react_jsx_7026.rs
+  s_7306502668702d::t_5cd60500056765 85
+  s_7306502668702d::t_cddd3c08193208 1-84,86-113
+rust/crates/checker/src/resolution.rs
+  s_7306502668702d::t_9af4bc4f3d2a5b 4487,4494-4537
+rust/crates/checker/tests/fcs48_top_cluster_pins.rs
+  s_7306502668702d::t_4af909bcf2a9f5 1-20,22-253
+  s_7306502668702d::t_d07df9e26fbabb 21
+rust/crates/tsc-testrunner/src/compiler_runner.rs
+  s_7306502668702d::t_ea1f48aa89ce0d 414-424,428-430,432-433
+  s_7306502668702d::t_5c18624dafe602 431
+rust/crates/checker/src/jsx.rs
+  s_7306502668702d::t_f127cf9f8e1216 324-328
+rust/crates/checker/src/statements.rs
+  s_7306502668702d::t_c97829b442be55 4175-4200
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "71eb70cf1e545eedf17e3d76eb9bd2eb7ef6ea69",
+  "prompts": {},
+  "sessions": {
+    "s_7306502668702d": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "8779ab8e-070a-4836-9a01-ec4f5cbc6ad9",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
