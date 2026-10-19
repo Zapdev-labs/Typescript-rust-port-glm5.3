@@ -7964,12 +7964,24 @@ impl Checker {
         let parent = store.node(node).parent.get();
         let grandparent = store.node(parent).parent.get();
         let grandparent_kind = store.node(grandparent).kind;
+        // Go: `node.Expression()` — the ComputedPropertyName's EXPRESSION
+        // (the `x in Y` BinaryExpression), not the ComputedPropertyName node
+        // itself (the former read of the node's own kind made the whole guard
+        // always false, so every `[x in Y]` member of a type literal / class /
+        // interface re-checked its expression and reported the TS2464/
+        // TS2304/TS2693 trio rust-extra; PORT(FCS tranche 62)).
+        let expression = store
+            .node(node)
+            .as_computed_property_name()
+            .map(|d| d.expression)
+            .unwrap_or(tsc_ast::NodeId::NONE);
         (grandparent_kind == Kind::TypeLiteral
             || crate::statements::is_class_like(store, grandparent)
             || grandparent_kind == Kind::InterfaceDeclaration)
-            && store.node(node).kind == Kind::BinaryExpression
+            && expression != tsc_ast::NodeId::NONE
+            && store.node(expression).kind == Kind::BinaryExpression
             && store
-                .node(node)
+                .node(expression)
                 .as_binary_expression()
                 .map(|d| store.node(d.operator_token).kind == Kind::InKeyword)
                 .unwrap_or(false)

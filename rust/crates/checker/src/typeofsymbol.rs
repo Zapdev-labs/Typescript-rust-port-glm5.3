@@ -3089,9 +3089,16 @@ impl Checker {
             return t;
         }
         let mut members = SymbolTable::new();
-        // TODO(port M6 S8): getPropertiesOfObjectType — the member-resolution
-        // wave; the permissive empty list keeps only the missing elements'
-        // synthesized properties.
+        // PORT (FCS tranche 62): Go checker.go:17225-17227 — seed the
+        // member table with the initializer type's EXISTING properties
+        // (getPropertiesOfObjectType) before adding the missing elements'
+        // synthesized properties (the former permissive empty list dropped
+        // every initializer member, so `{ x, y = 0 } = { x: 0 }` typed as
+        // `{ y?: number }` instead of `{ x?: number; y?: number }`).
+        for prop in crate::relater::get_properties_of_object_type(self, t) {
+            let name = self.program.symbol(prop).name.clone();
+            members.set(name, prop);
+        }
         for e in missing_elements {
             let name = self.get_property_name_from_binding_element(e);
             let symbol = self.new_symbol(
@@ -3129,21 +3136,55 @@ impl Checker {
     /// Go: `func (c *Checker) padTupleType(t *Type, pattern *ast.Node) *Type`.
     fn pad_tuple_type(&mut self, t: TypeId, pattern: NodeId) -> TypeId {
         let pattern_elements = binding_pattern_elements(self.store(), pattern);
-        let target_tuple = {
-            let ty = self.type_(t);
-            ty.target()
-                .map(|target| self.type_(target).as_tuple_type().is_some())
-                .unwrap_or(false)
+        // PORT (FCS tranche 62): Go checker.go:17251-17280 — pad the
+        // initializer's tuple out to the pattern's arity (the former
+        // permissive no-padding arm returned t unchanged, so `[x, y = 0] = [0]`
+        // typed the parameter as `[number]` instead of `[number, number]`).
+        let Some(target) = self.type_(t).target() else {
+            return t;
         };
-        // TODO(port M6 S7): the tuple-target arity/element reads; the
-        // permissive no-padding arm returns t unchanged until the tuple
-        // constructor wave lands (getTypeReferenceTypeArguments' arity read
-        // is S7's — the permissive 0 keeps the arm's `>=` false).
-        if !target_tuple {
+        let (combined_flags, target_element_infos, readonly) = {
+            let Some(d) = self.type_(target).as_tuple_type() else {
+                return t;
+            };
+            (d.combined_flags, d.element_infos.clone(), d.readonly)
+        };
+        let arity = crate::relater::get_type_reference_arity(self, t);
+        if combined_flags.intersects(crate::types::ElementFlags::VARIABLE)
+            || arity >= pattern_elements.len() as i32
+        {
             return t;
         }
-        let _ = &pattern_elements;
-        t
+        let mut element_types = self.get_element_types(t);
+        let mut element_infos = target_element_infos;
+        let any_type = self.any_type();
+        let mut i = arity;
+        while i < pattern_elements.len() as i32 {
+            let e = pattern_elements[i as usize];
+            let is_last = i as usize == pattern_elements.len() - 1;
+            let store = self.store();
+            let is_binding_element_with_rest =
+                store.node(e).kind == Kind::BindingElement && u::has_dot_dot_dot_token(store, e);
+            if !(is_last && is_binding_element_with_rest) {
+                let omitted = self.store().node(e).kind == Kind::OmittedExpression;
+                let has_default = self.has_default_value(e);
+                let element_type = if !omitted && has_default {
+                    self.get_type_from_binding_element(e, false /*includePatternInType*/, false /*reportErrors*/)
+                } else {
+                    any_type
+                };
+                element_types.push(element_type);
+                element_infos.push(crate::types::TupleElementInfo {
+                    flags: crate::types::ElementFlags::OPTIONAL,
+                    labeled_declaration: None,
+                });
+                if !omitted && !has_default {
+                    self.report_implicit_any(e, any_type, WideningKind::Normal);
+                }
+            }
+            i += 1;
+        }
+        self.create_tuple_type_ex(&element_types, &element_infos, readonly)
     }
 
     /// Go: `func (c *Checker) getLiteralTypeFromPropertyName(name *ast.Node) *Type`

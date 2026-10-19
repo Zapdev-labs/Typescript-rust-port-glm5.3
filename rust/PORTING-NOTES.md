@@ -4333,4 +4333,45 @@ clippy 0; 300-check/300-bind + fixture twins x3 byte-identical; program
 twin 15/15; PLAIN sweep 217/7,350 (re-verified on the probe-free binary);
 Go tree md5-verified pristine.
 
+## Sweep micro-tranche 62 landed (2026-10-19, RIG-VALIDATED; pins/PORT notes "FCS tranche 62"; fcs63 pin suites by census epoch) — the computed-name guard + binding-pattern-initializer padding families; divergent 217 -> 214
+Worked DIRECTLY by the orchestrator (no worker) per the user directive.
+Three roots (census t62a count-diff tops):
+- (1) is_invalid_computed_property_name (expressions.rs) read the
+  ComputedPropertyName NODE's own kind (never BinaryExpression) instead
+  of its EXPRESSION's, so Go's `[x in Y]`-member guard (checker.go:27330:
+  type-literal / class-like / interface-declaration grandparent + `in`
+  BinaryExpression + not-accessor) was always false and every
+  `[placeType in PlaceType]` member re-checked its expression (the
+  TS2464 + TS2304 + TS2693 trio rust-extra, x12 in mappedTypeProperties
+  34 vs go 22 — CONVERGED to exactly 22). Fixed the read to
+  as_computed_property_name().expression.
+- (2) pad_object_literal_type (typeofsymbol.rs) seeded the padded member
+  table EMPTY instead of with the initializer type's existing properties
+  (Go checker.go:17225 getPropertiesOfObjectType seed), so the parameter
+  `{ x, y = 0 } = { x: 0 }` typed as `{ y?: number }` (dropping the
+  initializer's x) instead of `{ x?: number; y?: number }` (the
+  TS2353/TS2339 `x`-on-`{ y?: number }` extras at f5's call sites;
+  destructuringWithLiteralInitializers 14 vs go 8).
+- (3) pad_tuple_type (typeofsymbol.rs) was the permissive no-padding
+  arm; implemented Go checker.go:17251 (TargetTupleType
+  combinedFlags-Variable / arity guard; elementTypes+elementInfos cloned
+  from the target and padded with anyType-or-binding-element types as
+  ElementFlagsOptional; reportImplicitAny for defaulted-less
+  non-omitted elements; createTupleTypeEx with the target's readonly),
+  so `[x, y = 0] = [0]` typed `[number, number]` (was `[number]`) and
+  `[x = 0, y = 0] = []` typed `[number, number]` (the TS2345
+  `[number, number]`-vs-`[number]`/`[]` extras at g4/g5's call sites).
+  destructuringWithLiteralInitializers CONVERGED to exactly 8.
+FRESH verification: PLAIN sweep t62b: 214 divergent (139 count + 75
+hash), identical 7,353; verdict-diff 0; per-record diff vs the committed
+T61 sweep: 3 records moved, ZERO newly-divergent (2 fully converged).
+NEXT (census t62b count-diff tops): neverReturningFunctions1 +4 (TS18048
+x-possibly-undefined after never-returning calls — the f01 `if (x ===
+undefined) fail(...)` join shape; a control-flow root), conditionalTypes1
++6 (pre-existing), importAttributes12 +4, thisTypeAccessibility +4;
+mappedTypeConstraints2 parked (see tranche 61).
+FRESH battery: fcs63 pin suites 3+2 pass; 6-crate tests 0 FAILED; clippy
+0; 300-check/300-bind + fixture twins x3 byte-identical; program twin
+15/15; Go tree md5-verified pristine.
+
 
