@@ -4226,3 +4226,60 @@ QUEUED (census 59h, unchanged): EXTRA 2345 x14/7-ish (never family),
 2322 x27/12 + MISS x20/10 (re-clustered, SCATTERED), 2339 x12/9, 2304
 x8/5, 7023 x7/6, 2318 x6/6, 7005/1166, 1117/1162/1221/17019/7031,
 carried residuals.
+
+## Sweep micro-tranche 60 landed (2026-10-19, RIG-VALIDATED; pins/PORT notes "FCS tranche 60"; fcs61 pin suites by census epoch) — the const type-parameter family: is_const_type_variable real walk + create_array_literal_type flag pair + tuple readonly bit + nil-drop mapTypeEx element contextuals + mapped-constraint full resolver; divergent 225 -> 219
+Worked DIRECTLY by the orchestrator (no worker) per the user directive.
+- Five stacked roots, all in the const type-parameter inference family
+  (census 60b: typeParameterConstModifiers 23 extras vs go 16 + the
+  jsdocTemplateTag6 fresh-tuple candidates):
+- (1) is_const_type_variable (inference.rs) was a permissive-false stub:
+  primitiveConstraint in getCovariantInference never fired for
+  `<const T>` and fresh-tuple candidates widened. Implemented Go's
+  checker.go:13916 walk (const modifier via has_syntactic_modifier +
+  the UNION/INTERSECTION/INDEXED-ACCESS/CONDITIONAL/SUBSTITUTION/MAPPED/
+  generic-tuple arms, each answering some_type over the constituents;
+  get_constraint_of_conditional_type surfaced pub(crate)).
+- (2) create_array_literal_type (expressions.rs) was an identity TODO:
+  array-literal ORIGIN types never carried ObjectFlagsArrayLiteral |
+  ObjectFlagsContainsObjectOrArrayLiteral, so union_object_and_array
+  _literal_candidates never merged the two fresh tuple candidates of
+  f4([[1,"x"],[2,"y"]]) and the common supertype picked [1,"x"] over
+  [2,"y"] (4 extra TS2322s; jsdocTemplateTag6 CONVERGED). Landed the
+  cachedTypes ArrayLiteralType key + clone_type_reference + flag pair
+  (Go checker.go:8305-8317).
+- (3) check_array_literal's tuple arm hardcoded readonly=false (Go
+  checker.go:8289 passes inConstContext && !(contextualType != nil &&
+  someType(contextualType, isMutableArrayLikeType))); landed the real
+  bit (some_type_mutable_array_like surfaced pub(crate)) — const-context
+  tuples print `readonly [..]`.
+- (4) get_contextual_type_for_element_expression (contextual.rs) walked
+  union contextuals through the NON-nil map_type twin — a nil-answering
+  constituent collapsed the element contextual to unknown, so the pass-2
+  re-check of f2(["a",["b","c"]]) (param `T|undefined`, const T) widened
+  to `[string, {}]` (2 extra TS2322s). Landed map_type_opt (typenodes.rs,
+  Go mapTypeEx nil-drop semantics) + converted the closure to Option.
+- (5) get_constraint_type_from_mapped_type_impl (members.rs) read the RAW
+  AsTypeParameter().constraint payload instead of Go's FULL resolver, so
+  the FRESH type parameter of an instantiated homomorphic mapped type
+  resolved its constraint to errorType and is_const_type_variable's
+  MAPPED arm answered false (thingMapped({foo:""}) lost its const
+  context). Switched to get_constraint_of_type_parameter_impl.
+- METHODOLOGY (bisect discipline): an earlier tranche-59 "match" list
+  was bogus — a hand-rolled comparison reused a `go` variable as the
+  rust source (Go-vs-Go). Re-verified with a clean T59-HEAD rebuild
+  sweep: T60c = 219 divergent (144 count + 75 hash), identical 7,348;
+  per-record diff vs the T59 binary: 11 records moved, ZERO
+  newly-divergent — 7 converged (jsdocTemplateTag6,
+  typeParameterConstModifiersWithIntersection, keyofAndIndexedAccess2,
+  mappedTypeErrors, mappedTypeErrors2, mappedTypes6,
+  recursiveTypeReferences1), typeParameterConstModifiers 18->17 (go 16),
+  conditionalTypes1/keyofAndIndexedAccess pre-existing shape.
+FRESH verification: PLAIN sweep 219/7,348 (fcs60-final battery); probes
+byte-identical both drivers; NI 0; Go tree md5-verified pristine.
+KNOWN RESIDUAL (deferred): the thingMapped TS2345 tail traces to a 4th
+conditional-instantiation pass mapping T->unknown in
+is_signature_applicable (Go maps T->{ readonly foo: "" }); keyof
+AndIndexedAccess went 51->53 (go 48, pre-existing at 51 — net 5 records
+converged vs 2 worse); mappedTypeConstraints2 13->19 (go 17);
+conditionalTypes1 70 (go 64, pre-existing).
+

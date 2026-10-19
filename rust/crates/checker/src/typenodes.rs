@@ -660,6 +660,55 @@ pub(crate) fn map_type(c: &mut Checker, t: TypeId, mut f: impl FnMut(&mut Checke
     }
 }
 
+/// Go: `func (c *Checker) mapTypeEx(t, f, noReductions) *Type` (checker.go:26099)
+/// — the Option-returning twin: Go's mapper closures answer nil and
+/// mapTypeEx DROPS nil constituents (an all-nil map answers nil; an
+/// unchanged map answers the source union). The plain map_type above
+/// cannot express nil, so union walks through nil-answering closures
+/// (getContextualTypeForElementExpression) collapsed onto unknown.
+/// PORT (FCS tranche 60).
+pub(crate) fn map_type_opt(
+    c: &mut Checker,
+    t: TypeId,
+    f: &mut dyn FnMut(&mut Checker, TypeId) -> Option<TypeId>,
+) -> Option<TypeId> {
+    if c.type_(t).flags.intersects(TypeFlags::NEVER) {
+        return Some(t);
+    }
+    if !c.type_(t).flags.intersects(TypeFlags::UNION) {
+        return f(c, t);
+    }
+    let constituents = c.type_(t).types().to_vec();
+    let mut mapped_types: Vec<TypeId> = Vec::with_capacity(constituents.len());
+    let mut changed = false;
+    for s in constituents {
+        let mapped = if c.type_(s).flags.intersects(TypeFlags::UNION) {
+            map_type_opt(c, s, f)
+        } else {
+            f(c, s)
+        };
+        if mapped != Some(s) {
+            changed = true;
+        }
+        if let Some(m) = mapped {
+            mapped_types.push(m);
+        }
+    }
+    if changed {
+        if mapped_types.is_empty() {
+            return None;
+        }
+        return Some(crate::relater::get_union_type_ex(
+            c,
+            mapped_types,
+            crate::todo_shapes::UnionReduction::Literal,
+            None, /*alias*/
+            None, /*origin*/
+        ));
+    }
+    Some(t)
+}
+
 /// Go: `func (c *Checker) getElementTypeOfSliceOfTupleType(t, index, endSkipCount, writing, noReductions)` (checker.go:25347)
 /// — REAL body (replaces the W2 permissive helper in inference.rs).
 #[allow(clippy::too_many_arguments)]

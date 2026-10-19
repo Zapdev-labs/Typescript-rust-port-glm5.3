@@ -1908,7 +1908,7 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getConstraintOfConditionalType(t *Type) *Type`.
-    fn get_constraint_of_conditional_type(&mut self, t: TypeId) -> Option<TypeId> {
+    pub(crate) fn get_constraint_of_conditional_type(&mut self, t: TypeId) -> Option<TypeId> {
         if self.has_non_circular_base_constraint_impl(t) {
             return self.get_constraint_from_conditional_type(t);
         }

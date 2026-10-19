@@ -3627,7 +3627,20 @@ impl Checker {
             return already;
         }
         let type_parameter = self.get_type_parameter_from_mapped_type_impl(t);
-        let constraint = crate::relater::get_constraint_of_type_parameter(self, type_parameter)
+        // PORT (FCS tranche 60): Go checker.go:23164 calls the FULL
+        // getConstraintOfTypeParameter (hasNonCircularBaseConstraint + the
+        // cloned-parameter target/mapper instantiation arm) — not the raw
+        // `AsTypeParameter().constraint` payload read. The raw read answered
+        // None for the FRESH type parameter of an instantiated homomorphic
+        // mapped type (instantiateAnonymousType clones the parameter and
+        // resolves its constraint through the combined mapper), so the
+        // anonymous `{ [K in keyof T]: T[K] }` instantiated over the
+        // const-parameter `O` resolved its mapped constraint to errorType
+        // ("any") — isConstTypeVariable's MAPPED arm then walked tv=None
+        // and `thingMapped({ foo: "" })` lost its const context (TS2345
+        // `{ foo: string; }` → `never` Go never reports).
+        let constraint = self
+            .get_constraint_of_type_parameter_impl(type_parameter)
             .unwrap_or_else(|| self.error_type());
         if let Some(d) = self.type_mut(t).as_mapped_type_mut() {
             d.constraint_type = Some(constraint);

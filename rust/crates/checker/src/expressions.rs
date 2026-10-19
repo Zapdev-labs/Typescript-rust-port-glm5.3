@@ -171,6 +171,7 @@ use tsc_diagnostics::{
 
 use crate::checker::CheckMode;
 use crate::relater::{self, MappedTypeModifiers, TypeFacts};
+use crate::todo_shapes::CachedTypeKind;
 use crate::types::{ObjectFlags, SignatureId, TypeFlags, TypeId};
 use crate::utilities as u;
 use crate::Checker;
@@ -6286,7 +6287,18 @@ impl Checker {
             return self.create_tuple_type_ex(&element_types, &element_infos, false);
         }
         if check_mode.intersects(CheckMode::FORCE_TUPLE) || in_const_context || in_tuple_context {
-            let tuple = self.create_tuple_type_ex(&element_types, &element_infos, false);
+            // PORT (FCS tranche 60): Go checker.go:8289 passes
+            // `inConstContext && !(contextualType != nil &&
+            // someType(contextualType, c.isMutableArrayLikeType))` as the
+            // readonly bit — const-context tuples are READONLY
+            // (`f1(['a', ['b', 'c']])` under `const T` walks to
+            // `readonly ["a", readonly ["b", "c"]]`) unless the contextual
+            // type is mutable-array-like. The former port hardcoded false.
+            let readonly = in_const_context
+                && !contextual_type.is_some_and(|ct| {
+                    crate::inference::some_type_mutable_array_like(self, ct)
+                });
+            let tuple = self.create_tuple_type_ex(&element_types, &element_infos, readonly);
             return self.create_array_literal_type(tuple);
         }
         let element_type = if !element_types.is_empty() {
@@ -6323,9 +6335,25 @@ impl Checker {
         if !self.type_(t).object_flags.intersects(ObjectFlags::REFERENCE) {
             return t;
         }
-        // TODO(port M6 S7): cloneTypeReference + the ArrayLiteral flag pair
-        // (the cachedTypes key); the identity is the non-reference answer.
-        t
+        // PORT (FCS tranche 60): Go checker.go:8305-8317 — the
+        // ArrayLiteralType cache + the clone with the
+        // ObjectFlagsArrayLiteral | ObjectFlagsContainsObjectOrArrayLiteral
+        // pair. The S7-era identity stub returned the source type verbatim,
+        // so array-literal ORIGIN types never carried the flags:
+        // isObjectOrArrayLiteralType stayed false for tuple/array literal
+        // candidates and unionObjectAndArrayLiteralCandidates never merged
+        // them — with the const type-parameter walk live
+        // (jsdocTemplateTag6's `@template const T`), `f4([[1, "x"], [2,
+        // "y"]])` (`@param {[T, T]}`) walked the common supertype to
+        // `[1, "x"]` instead of the merged union.
+        if let Some(cached) = self.cached_types_get(CachedTypeKind::ArrayLiteralType, t) {
+            return cached;
+        }
+        let literal_type = self.clone_type_reference(t);
+        self.type_mut(literal_type).object_flags |=
+            ObjectFlags::ARRAY_LITERAL.union(ObjectFlags::CONTAINS_OBJECT_OR_ARRAY_LITERAL);
+        self.cached_types_set(CachedTypeKind::ArrayLiteralType, t, Some(literal_type));
+        literal_type
     }
 
     // Go: `func (c *Checker) createArrayTypeEx(elementType, isConstTuple)`

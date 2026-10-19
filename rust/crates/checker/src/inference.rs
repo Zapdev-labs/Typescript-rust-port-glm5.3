@@ -3213,15 +3213,84 @@ pub(crate) fn get_substitution_intersection(c: &mut Checker, t: TypeId) -> TypeI
 }
 
 /// Go: `func (c *Checker) isConstTypeVariable(t, depth) bool`.
+/// Go: `func (c *Checker) isConstTypeVariable(t *Type, depth int) bool`
+/// (checker.go:13916). PORT (FCS tranche 60): the const-modifier/
+/// homomorphic-variable walk — REAL (was the M6 S2/S7 permissive-false
+/// stub). The type-parameter arm checks the declaring symbol's
+/// declarations for the `const` syntactic modifier (the const type
+/// parameter, TS 5.0): without it
+/// `primitiveConstraint` in getCovariantInference never fired for
+/// `function g<const P extends readonly string[]>(path: P)`, so the
+/// fresh-tuple candidate from a `["a", "b", "c"]` argument widened instead
+/// of preserving its literal elements (typeParameterConstModifiers'
+/// GetPath recursion resolved to `never` — the value argument reported
+/// TS2345 `"123"` vs `never`).
 pub(crate) fn is_const_type_variable(c: &mut Checker, t: TypeId, depth: usize) -> bool {
-    // TODO(port M6 S2/S7): the const-modifier/homomorphic-variable walk;
-    // permissive false.
-    let _ = (c, t, depth);
+    if depth >= 5 {
+        return false;
+    }
+    let flags = c.type_(t).flags;
+    if flags.intersects(TypeFlags::TYPE_PARAMETER) {
+        if let Some(symbol) = c.type_(t).symbol {
+            let declarations = c.program.symbol(symbol).declarations.clone();
+            return declarations.iter().any(|&d| {
+                tsc_ast::has_syntactic_modifier(c.store().node(d), tsc_ast::ModifierFlags::CONST)
+            });
+        }
+        return false;
+    }
+    if flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+        let constituents = c.type_(t).types().to_vec();
+        return constituents
+            .iter()
+            .any(|&s| is_const_type_variable(c, s, depth));
+    }
+    if flags.intersects(TypeFlags::INDEXED_ACCESS) {
+        return c
+            .type_(t)
+            .as_indexed_access_type()
+            .and_then(|d| d.object_type)
+            .is_some_and(|object_type| is_const_type_variable(c, object_type, depth + 1));
+    }
+    if flags.intersects(TypeFlags::CONDITIONAL) {
+        let constraint = c.get_constraint_of_conditional_type(t);
+        return constraint.is_some_and(|constraint| is_const_type_variable(c, constraint, depth + 1));
+    }
+    if flags.intersects(TypeFlags::SUBSTITUTION) {
+        return c
+            .type_(t)
+            .as_substitution_type()
+            .and_then(|d| d.base_type)
+            .is_some_and(|base_type| is_const_type_variable(c, base_type, depth));
+    }
+    if c.type_(t).object_flags.intersects(ObjectFlags::MAPPED) {
+        let type_variable = c.get_homomorphic_type_variable(t);
+        return type_variable.is_some_and(|tv| is_const_type_variable(c, tv, depth));
+    }
+    if crate::typenodes::is_generic_tuple_type(c, t) {
+        let element_types = c.get_element_types(t);
+        let element_infos: Vec<crate::types::ElementFlags> = c
+            .type_(t)
+            .target()
+            .and_then(|target| c.type_(target).as_tuple_type().map(|d| d.element_infos.clone()))
+            .map(|infos| infos.into_iter().map(|info| info.flags).collect())
+            .unwrap_or_default();
+        for (i, &s) in element_types.iter().enumerate() {
+            if element_infos
+                .get(i)
+                .is_some_and(|flags| flags.intersects(crate::types::ElementFlags::VARIADIC))
+                && is_const_type_variable(c, s, depth)
+            {
+                return true;
+            }
+        }
+    }
     false
 }
 
-/// Go: `someType(t, c.isMutableArrayLikeType)`.
-fn some_type_mutable_array_like(c: &mut Checker, t: TypeId) -> bool {
+/// Go: `someType(t, c.isMutableArrayLikeType)` — pub(crate) since
+/// expressions.rs's checkArrayLiteral tuple arm consumes it (FCS tranche 60).
+pub(crate) fn some_type_mutable_array_like(c: &mut Checker, t: TypeId) -> bool {
     if c.type_(t).flags.intersects(TypeFlags::UNION) {
         let constituents = c.type_(t).distributed();
         return constituents.iter().any(|&x| is_mutable_array_like_type(c, x));

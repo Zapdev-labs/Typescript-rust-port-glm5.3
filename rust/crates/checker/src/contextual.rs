@@ -2061,7 +2061,15 @@ impl Checker {
         last_spread_index: i32,
     ) -> Option<TypeId> {
         let t = t?;
-        Some(crate::typenodes::map_type(self, t, |c, t| {
+        // PORT (FCS tranche 60): Go checker.go:30521 wraps the closure in
+        // mapTypeEx — the nil-answering closure DROPS non-tuple union
+        // constituents (`T | undefined` with the instantiated T tuple
+        // answers just the tuple element). The plain map_type twin couldn't
+        // answer nil, so a non-tuple constituent collapsed the whole walk
+        // to unknown and the pass-2 re-check of `f2(["a", ["b", "c"]])`
+        // (param `T | undefined`, `const T`) widened its elements to
+        // `[string, {}]` — TS2322s Go never reports.
+        crate::typenodes::map_type_opt(self, t, &mut |c, t| {
             if c.is_tuple_type(t) {
                 // PORT (FCS tranche 20): Go checker.go:30526-30556 — the
                 // tuple arm's spread/ending-fixed geometry (was the M6 S9
@@ -2091,9 +2099,9 @@ impl Checker {
                                     .intersects(crate::types::ElementFlags::OPTIONAL)
                             })
                             .unwrap_or(false);
-                        return crate::relater::remove_missing_type(c, element, is_optional);
+                        return Some(crate::relater::remove_missing_type(c, element, is_optional));
                     }
-                    return c.unknown_type();
+                    return Some(c.unknown_type());
                 }
                 // When the length is known and the index is after all spread
                 // elements we compute the offset from the element to the end
@@ -2127,9 +2135,9 @@ impl Checker {
                     if let Some(&element) = crate::relater::resolve_type_arguments(c, t)
                         .get((arity - offset).max(0) as usize)
                     {
-                        return element;
+                        return Some(element);
                     }
-                    return c.unknown_type();
+                    return Some(c.unknown_type());
                 }
                 // Return a union of the possible contextual element types
                 // with no subtype reduction.
@@ -2149,8 +2157,7 @@ impl Checker {
                     end_skip_count as usize,
                     false, /*writing*/
                     true,  /*noReductions*/
-                )
-                .unwrap_or_else(|| c.unknown_type());
+                );
             }
             // If element index is known and a contextual property with that
             // name exists, return it. Otherwise return the iterated or
@@ -2159,7 +2166,7 @@ impl Checker {
                 if let Some(prop_type) =
                     c.get_type_of_property_of_contextual_type_impl(t, &index.to_string())
                 {
-                    return prop_type;
+                    return Some(prop_type);
                 }
             }
             c.get_iterated_type_or_element_type(
@@ -2169,8 +2176,7 @@ impl Checker {
                 None,     /*errorNode*/
                 false,     /*checkAssignability*/
             )
-            .unwrap_or_else(|| c.unknown_type())
-        }))
+        })
     }
 
     /// Go: `func (c *Checker) getContextualTypeForConditionalOperand(node *ast.Node, contextFlags ContextFlags) *Type`
