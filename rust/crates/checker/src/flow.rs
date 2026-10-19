@@ -3301,8 +3301,27 @@ impl Checker {
             // permissive isLiteralType consumers (object-literal
             // elaboration, spread override) are Go-exact — see
             // relater::is_literal_type's note.
+            //
+            // PORT note (FCS tranche 56): Go's isLiteralType UNION arm
+            // (checker.go:25931-25934), likewise scoped to this consumer:
+            // a union answers literal when it carries TypeFlagsEnumLiteral,
+            // or when every constituent is a unit type. Without the arm the
+            // literal-flags-only probe answered false for the declared
+            // `1 | 2`-style discriminants (and for enum unions without the
+            // EnumLiteral flag), so exhaustive literal switches were never
+            // marked exhaustive and TS2366 over-emitted (the
+            // exhaustiveSwitchStatements1 x7 family). Same scoping rule as
+            // the BOOLEAN arm above — the global helper stays simplified
+            // until its remaining consumers are Go-exact.
             let is_literal = relater::is_literal_type(self, t)
-                || self.type_(t).flags.intersects(TypeFlags::BOOLEAN);
+                || self.type_(t).flags.intersects(TypeFlags::BOOLEAN)
+                || (self.type_(t).flags.intersects(TypeFlags::UNION)
+                    && (self.type_(t).flags.intersects(TypeFlags::ENUM_LITERAL)
+                        || self
+                            .type_(t)
+                            .types()
+                            .iter()
+                            .all(|&u| relater::is_unit_type(self, u))));
             if !is_literal {
                 return false;
             }

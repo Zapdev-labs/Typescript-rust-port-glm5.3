@@ -8492,8 +8492,19 @@ impl Checker {
         check_mode: CheckMode,
     ) -> TypeId {
         self.check_node_deferred(node);
-        // TODO(port M6 S3): checkSourceElement(FullSignature) — the JSDoc
-        // full-signature family; permissive.
+        // PORT (FCS tranche 56): Go checker.go:10341-10343 —
+        // checkSourceElement(FullSignature), the JSDoc @type full-signature
+        // family; was the permissive M6 S3 seam.
+        let full_signature = match &self.store().node(node).data {
+            tsc_ast::NodeData::FunctionDeclaration(d) => d.full_signature,
+            tsc_ast::NodeData::MethodDeclaration(d) => d.full_signature,
+            tsc_ast::NodeData::FunctionExpression(d) => d.full_signature,
+            tsc_ast::NodeData::ArrowFunction(d) => d.full_signature,
+            _ => None,
+        };
+        if let Some(full_signature) = full_signature {
+            self.check_source_element(Some(full_signature));
+        }
         if self.store().node(node).kind == Kind::FunctionExpression {
             // PORT: Go checker.go:10346 (FCS tranche 30) —
             // checkCollisionsForDeclarationName for function expression
@@ -8512,6 +8523,22 @@ impl Checker {
         // Grammar checking
         let _ = self.check_grammar_function_like_declaration(node);
         // TODO(port M6 S3): checkGrammarForGenerator (function expression arm).
+        // PORT (FCS tranche 56): Go checker.go:10372-10376 — the
+        // contextual-call-signature probe over the JSDoc @type
+        // full-signature type; a null contextual call signature fires
+        // TS8030 ("A JSDoc type tag on a function must have a signature
+        // with the correct number of arguments") — the checkJsdocTypeTag
+        // function-expression/method cluster.
+        if let Some(full_signature) = full_signature {
+            let signature_type = self.get_type_from_type_node(full_signature);
+            if self.get_contextual_call_signature(signature_type, node).is_none() {
+                self.error(
+                    full_signature,
+                    &tsc_diagnostics::A_JSDOC_TYPE_TAG_ON_A_FUNCTION_MUST_HAVE_A_SIGNATURE_WITH_THE_CORRECT_NUMBER_OF_ARGUMENTS,
+                    &[],
+                );
+            }
+        }
         // contextuallyCheckFunctionExpressionOrObjectLiteralMethod — REAL
         // (W3T5, contextual.rs checker.go:10387): the contextual
         // parameter/return typing + checkSignatureDeclaration run exactly

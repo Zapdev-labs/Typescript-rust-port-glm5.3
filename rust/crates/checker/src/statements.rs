@@ -3826,11 +3826,19 @@ impl Checker {
             .node(fn_node)
             .flags
             .intersects(NF::HAS_EXPLICIT_RETURN);
-        let error_node = crate::ast_shims::type_of_node(self.store(), fn_node);
+        let mut error_node = crate::ast_shims::type_of_node(self.store(), fn_node);
         if error_node.is_none() {
-            // Go: fn.FunctionLikeData().FullSignature (the JSDoc full
-            // signature) — TODO(port M6 W3): the JSDoc-tag seam; permissive
-            // the declaration node itself.
+            // PORT (FCS tranche 56): Go checker.go:3779-3782 — the error node
+            // falls back to the JSDoc full signature (the @type tag) when
+            // the function carries no return-type annotation; was the M6 W3
+            // permissive seam that reported on the declaration node itself.
+            error_node = match &self.store().node(fn_node).data {
+                tsc_ast::NodeData::FunctionDeclaration(d) => d.full_signature,
+                tsc_ast::NodeData::MethodDeclaration(d) => d.full_signature,
+                tsc_ast::NodeData::FunctionExpression(d) => d.full_signature,
+                tsc_ast::NodeData::ArrowFunction(d) => d.full_signature,
+                _ => None,
+            };
         }
         let error_node = error_node.unwrap_or(fn_node);
         let t_flags = t.map(|tt| self.type_(tt).flags);
@@ -8655,9 +8663,30 @@ impl Checker {
         self.check_source_element(body);
         let return_type_annotation = self.get_return_type_from_annotation(node);
         self.check_all_code_paths_in_non_void_function_return_or_throw(node, return_type_annotation);
-        // TODO(port M6 W4): node.FunctionLikeData().FullSignature — the
-        // JSDoc @type full-signature seam; permissive (the FunctionLike
-        // payload's full_signature lands with the JSDoc wave).
+        // PORT (FCS tranche 56): Go checker.go:3471-3475 — the JSDoc @type
+        // full-signature family: checkSourceElement(FullSignature) plus the
+        // contextual-call-signature probe that fires TS8030 ("A JSDoc type
+        // tag on a function must have a signature with the correct number
+        // of arguments") when the tag's signature shape cannot contextually
+        // call. Was the permissive M6 W4 seam (the full_signature payload
+        // landed with the JSDoc wave; the check never ran — the
+        // checkJsdocTypeTag-family TS8030 x8/x7 cluster).
+        let full_signature = match &self.store().node(node).data {
+            tsc_ast::NodeData::FunctionDeclaration(d) => d.full_signature,
+            tsc_ast::NodeData::MethodDeclaration(d) => d.full_signature,
+            _ => None,
+        };
+        if let Some(full_signature) = full_signature {
+            self.check_source_element(Some(full_signature));
+            let signature_type = self.get_type_from_type_node(full_signature);
+            if self.get_contextual_call_signature(signature_type, node).is_none() {
+                self.error(
+                    full_signature,
+                    &diag::A_JSDOC_TYPE_TAG_ON_A_FUNCTION_MUST_HAVE_A_SIGNATURE_WITH_THE_CORRECT_NUMBER_OF_ARGUMENTS,
+                    &[],
+                );
+            }
+        }
         if signature_type_node(self.store(), node).is_none() {
             // Report an implicit any error if there is no body, no explicit
             // return type, and node is not a private method in an ambient
@@ -12424,10 +12453,16 @@ impl Checker {
         }
         let is_type_only = is_exclusively_type_only_import_or_export(self.store(), declaration)
             || tsc_ast::is_import_type_node(self.store().node(declaration));
-        // TODO(port M6 S?): getResolutionModeOverride (the compiler-crate
-        // ImportAttributesNode seam); permissive none — the X_resolution_mode
-        // grammar error rests until the seam lands.
-        let has_override = false;
+        // PORT (FCS tranche 56): Go checker.go:5569 — getResolutionModeOverride(
+        // node, isTypeOnly): with reportErrors = isTypeOnly the walk fires
+        // TS1453 ("resolution mode should be either require or import") on a
+        // bad resolution-mode value of a TYPE-ONLY import (the
+        // nodeModulesImportModeDeclarationEmit family); for non-type-only
+        // imports the returned override drives the
+        // X_resolution_mode_can_only_be_set_for_type_only_imports grammar
+        // error below (Go checker.go:5586). Was the permissive `false`
+        // stand-in (both the 1453 error and the override check never ran).
+        let override_mode = self.get_resolution_mode_override_checked(node, is_type_only);
         if is_type_only {
             return; // Other grammar checks do not apply to type-only imports with import attributes
         }
@@ -12460,7 +12495,7 @@ impl Checker {
             return;
         }
 
-        if has_override {
+        if override_mode != tsc_core::compileroptions::ResolutionModeNone {
             self.grammar_error_on_node(
                 node,
                 &diag::X_RESOLUTION_MODE_CAN_ONLY_BE_SET_FOR_TYPE_ONLY_IMPORTS,

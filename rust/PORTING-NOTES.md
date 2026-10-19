@@ -3989,3 +3989,43 @@ Properties x4), 7010 x8/4, 7022 x8/3, 2366 x7/1 (single record), 7023/
 2741/18013/2695; MISSING 2322 x23/13, 8030 x11/7 (checkJsdocTypeTag6
 x4), 1453 x8/8, 2448/8010/1117/17019/2695; variadicTuples1 (pinned) +
 7006 x2 residual.
+
+## Sweep micro-tranche 55 landed (2026-10-18, RIG-VALIDATED; worker-labeled "FCS tranche 56" in pins/PORT notes) — widened burst: exhaustive-switch literal union + JSDoc FullSignature checks + resolution-mode override; divergent 308 -> 294
+
+Three clusters, all FULL:
+- TS2366 EXTRA x7/1 (exhaustiveSwitchStatements1, single record,
+  baseline has NO 2366): rust shared is_literal_type is literal-flags-
+  only; Go isLiteralType (checker.go:25927) has a UNION arm (EnumLiteral
+  flag OR every constituent isUnitType) -> discriminant unions answered
+  not-literal -> switches never marked exhaustive -> 2366 over-emitted.
+  UNION arm scoped into compute_exhaustive_switch_statement (flow.rs),
+  same scoping rule as the tranche-26 BOOLEAN arm. 7->0 FULL.
+- TS8030 MISS x11/7 (jsdoc @type family, checkJsdocTypeTag6 x4 +
+  TypeTag5/OnObjectProperty1/2 + jsdocFunction_missingReturn
+  collaterals): BOTH JSDoc FullSignature checks were permissive seams —
+  Go checker.go:3471-3475 (checkFunctionOrMethodDeclaration) + 10341/
+  10372-10376 (checkFunctionExpressionOrObjectLiteralMethod) never ran
+  (checkSourceElement(FullSignature) + getContextualCallSignature probe
+  -> TS8030). Go-exact arms in statements.rs + expressions.rs + the
+  error-node FullSignature fallback (checker.go:3779-3782). 11->0 FULL.
+- TS1453 MISS x8/8 (nodeModulesImportModeDeclarationEmit family):
+  check_import_attributes' getResolutionModeOverride (Go checker.go:
+  5569) was the false stand-in — neither the TS1453 on a bad resolution-
+  mode VALUE of a type-only import nor the type-only override gate ran
+  (checker.go:5586). Real get_resolution_mode_override_checked + the
+  override gate. 8->0 FULL; all 8 records 37 errors hash-identical.
+Newly-divergent 0; newly-identical 14 (direction verified; the EXTRA
+2322 31->29 is same-root x2 collateral in exhaustiveSwitchStatements1,
+NOT new divergence; the "new" census lines 2536/1240/2403/2663/2741 are
+top-15-cutoff artifacts — raw totals unchanged, verified in dumps).
+PLAIN-sweep census: divergent 294 (197 count / 97 hash), identical
+7,273/7,567; both drivers 0/3,826/3,741/0; panics 0. 112 ok lines/0
+FAILED (fcs56 pins 9/9 + records 6/6); clippy 0; all gates green fresh
+(orchestrator re-ran tests + sweeps + census independently; Go tree
+md5-verified pristine). QUEUED (census56b): EXTRA 2322 x29/13, 2345
+x23/13, 2339 x12/9, 1278 x10/9, 2739 x8/7, 7010 x8/4, 2304 x8/5, 7022
+x8/3, 7023 x7/6, 2695 x7/4, 2741 x7/7, 2536/2694 x6/3 (import
+Attributes12 — re-cluster), 18013 x6/6; MISSING 2322 x23/13 (check
+JsdocTypeTag5 x2 residual), 2448 x7/7, 8010 x6/6, 18014 x6/6, 17019
+x6/4, 1117 x6/5, 7031 x5/1, 1221 x5/3, 8032 x4/4, 2678 x4/2;
+variadicTuples1 + 7006 x2 + jsdocThisType 2683 x1 residuals.
