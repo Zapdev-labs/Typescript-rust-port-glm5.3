@@ -1,0 +1,43 @@
+rust/crates/checker/tests/fcs59_top_cluster_pins.rs
+  s_c760161dda2d19::t_23d3978a3e3a62 173-178,190
+  s_c760161dda2d19::t_eede97a7b1ce03 189
+  s_c760161dda2d19::t_bec65edecda59c 181
+  s_c760161dda2d19::t_322433cffef54b 1-140,145-147,149,151-172,179-180,182-188,191-248
+  s_c760161dda2d19::t_50d5c296325027 148
+  s_c760161dda2d19::t_b733d3664d5180 141-144,150
+rust/crates/tsc-testrunner/tests/fcs59_top_cluster_records.rs
+  s_c760161dda2d19::t_226450c2e70b73 1-37,39-115,117-124,126-165,167-182,184-191
+  s_c760161dda2d19::t_832fbbd3fcf434 183
+  s_c760161dda2d19::t_d138a2f4f4b4d9 166
+  s_c760161dda2d19::t_e672a90c4e5bea 116
+  s_c760161dda2d19::t_b771754ceea8e0 125
+  s_c760161dda2d19::t_b108b7dca495c4 38
+rust/crates/checker/src/grammarchecks.rs
+  s_c760161dda2d19::t_f47bf91f7f6f91 4943-4950
+rust/crates/checker/src/typeofsymbol.rs
+  s_c760161dda2d19::t_455788b22665c3 4603-4608,4610-4613,4615-4641
+  s_c760161dda2d19::t_bbd9fdf2b9d4b6 4614
+  s_c760161dda2d19::t_4ebf7f0d7a70eb 113,115
+rust/crates/checker/src/expressions.rs
+  s_c760161dda2d19::t_bcd5bfe04666e4 6011-6020
+rust/crates/checker/src/spine.rs
+  s_c760161dda2d19::t_76252d8ff21874 1676-1677
+  s_c760161dda2d19::t_bf3f10a186c969 1590
+  s_c760161dda2d19::t_798c18c27b16b1 1586-1589,1591-1617
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "62a356115f306a9b57fc973853504fe82899813c",
+  "prompts": {},
+  "sessions": {
+    "s_c760161dda2d19": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "e48660fc-43c1-451f-9234-7c7ba6128c6a",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
