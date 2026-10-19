@@ -2034,7 +2034,6 @@ impl Checker {
                                 is_identifier(self.store().node(n))
                                     || tsc_ast::is_private_identifier(self.store().node(n))
                             }) {
-                                let prop_name = prop_name.unwrap();
                                 let symbol =
                                     self.get_symbol_of_declaration_merged(declaration).expect("symbol");
                                 let t = self.get_type_of_symbol(symbol);
@@ -2045,11 +2044,16 @@ impl Checker {
                                     .copied()
                                     .filter(|&m| self.store().node(m).kind == Kind::ClassStaticBlockDeclaration)
                                     .collect::<Vec<_>>();
+                                // Go: `c.isPropertyInitializedInStaticBlocks(
+                                // propName, t, staticBlocks, declaration.Parent
+                                // .Pos(), current.Pos())` — the start range is
+                                // the CLASS's position (the blocks are inside
+                                // it), not the member's.
                                 if self.is_property_initialized_in_static_blocks(
-                                    prop_name,
+                                    symbol,
                                     t,
                                     &static_blocks,
-                                    self.store().node(declaration).pos(),
+                                    self.store().node(class_parent).pos(),
                                     self.store().node(c).pos(),
                                 ) {
                                     return true;
@@ -2117,83 +2121,45 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) isPropertyInitializedInStaticBlocks(propName, propType, staticBlocks, startPos, endPos) bool`
-    /// (checker.go:5067 — the static-block scan this hook family needs).
+    /// (checker.go:5067).
+    ///
+    /// PORT (FCS tranche 54): real body — was a DIVERGENT STAND-IN that
+    /// scanned the block's statements for a syntactic top-level
+    /// `this.<name> = value` assignment (matching the prop NAME NODE by
+    /// identity — never equal for a real use site — and missing nested
+    /// statement containers). Go probes the block's RETURN FLOW with a
+    /// synthetic `this.<name>` reference (declaredType = propType,
+    /// initialType = getOptionalType(propType, false)) and asks whether
+    /// the flow type contains undefined — the classStaticBlock
+    /// UseBeforeDef TS2729 residual (`static y = this.x` after a static
+    /// block initializes x). The synthetic derives its name from the
+    /// symbol (Go passes the declaration's name node; isMatchingReference
+    /// compares the accessed property name TEXT, not node identity).
     #[allow(clippy::too_many_arguments)]
     fn is_property_initialized_in_static_blocks(
         &mut self,
-        prop_name: NodeId,
+        symbol: SymbolId,
         prop_type: crate::types::TypeId,
         static_blocks: &[NodeId],
         start_pos: i32,
         end_pos: i32,
     ) -> bool {
         for &block in static_blocks {
-            let body = match &self.store().node(block).data {
-                tsc_ast::NodeData::ClassStaticBlockDeclaration(d) => d.body,
-                _ => continue,
-            };
-            let stmts = binder_node_data::statements_of(self.store(), body)
-                .map(|l| l.nodes.to_vec())
-                .unwrap_or_default();
-            for statement in stmts {
-                if self.store().node(statement).kind == Kind::ExpressionStatement
-                    && self.is_assignment_to_property_in_static_block(
-                        statement,
-                        prop_name,
-                        prop_type,
-                        start_pos,
-                        end_pos,
-                    )
-                {
+            // static block must be within the provided range as they are
+            // evaluated in document order (unlike constructors) (Go's
+            // comment).
+            let block_pos = self.store().node(block).pos();
+            if block_pos >= start_pos && block_pos <= end_pos {
+                let reference = self.new_this_property_access_synthetic(symbol, block);
+                let initial_type = self.get_optional_type(prop_type, false /*isProperty*/);
+                let flow_type =
+                    self.get_flow_type_of_reference_ex(reference, prop_type, initial_type, NodeId(0), None);
+                if !self.contains_undefined_type(flow_type) {
                     return true;
                 }
             }
         }
         false
-    }
-
-    /// The per-statement arm of Go's isPropertyInitializedInStaticBlocks —
-    /// `isAssignmentToProperty(expression, propName, propType)` over the
-    /// static-block positions (checker.go:5067's inner walk).
-    fn is_assignment_to_property_in_static_block(
-        &mut self,
-        statement: NodeId,
-        prop_name: NodeId,
-        prop_type: crate::types::TypeId,
-        start_pos: i32,
-        end_pos: i32,
-    ) -> bool {
-        let expression = match &self.store().node(statement).data {
-            tsc_ast::NodeData::ExpressionStatement(d) => d.expression,
-            _ => return false,
-        };
-        if !binder_shims::is_assignment_expression(self.store(), expression, false) {
-            return false;
-        }
-        if self.store().node(expression).pos() < start_pos
-            || self.store().node(expression).end() > end_pos
-        {
-            return false;
-        }
-        let (left, right) = match &self.store().node(expression).data {
-            tsc_ast::NodeData::BinaryExpression(d) => (d.left, d.right),
-            _ => return false,
-        };
-        if !binder_shims::is_assignment_expression(self.store(), right, true) {
-            return false;
-        }
-        if self.store().node(left).name() != Some(prop_name) {
-            return false;
-        }
-        // Go: `c.checkExpressionCached(right)` then compares to propType
-        // through isTypeAssignableTo; the S8 flow of getWriteTypeOfSymbol is
-        // not reachable here yet — the assignment expression's own type
-        // check runs through the real expression spine.
-        // TODO(port M6 W3): the flow-narrowed comparison; permissive true
-        // when the expression's type is assignable (the common case).
-        let _ = self.check_expression(right);
-        let _ = prop_type;
-        true
     }
 
     // ────────────────────────────────────────────────────────────────────────

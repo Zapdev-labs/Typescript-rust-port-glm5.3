@@ -1481,17 +1481,32 @@ impl Checker {
         } else if let Some(declaration) = sig_declaration {
             let mut t = self.get_return_type_from_annotation_impl(declaration);
             if t.is_none() {
-                // Go: NodeIsMissing(body) — the port's function_body_of
-                // reports Option; a present body computes, a missing one is
-                // anyType (Go's overload-signature answer).
+                // Go: `if !ast.NodeIsMissing(sig.declaration.Body())`
+                // (checker.go:20432) — a PRESENT body computes the return
+                // type from the body; a MISSING body (a zero-length
+                // SYNTHESIZED block — the parser's recovery shape for
+                // e.g. `async * get x() { ... }`-class members, where the
+                // member's flags read Async|Generator|Invalid) answers
+                // anyType WITHOUT running getReturnTypeFromBody. PORT
+                // (FCS tranche 54): the port's `function_body_of`
+                // Option alone treats the synthesized zero-length block
+                // as present, so the async-generator body resolution ran
+                // (createGeneratorType → getGlobalAsyncIterableIterator-
+                // TypeChecked) where Go stops at anyType — the
+                // parser.asyncGenerators.objectLiteralMethods es2018
+                // AsyncIterableIterator EXTRA x2-per-baseline family.
                 match crate::statements::function_body_of(self.store(), declaration) {
-                    Some(_) => {
+                    Some(body)
+                        if !tsc_ast::utilities::node_is_missing(
+                            self.store().node(body),
+                        ) =>
+                    {
                         t = Some(self.get_return_type_from_body(
                             declaration,
                             crate::checker::CheckMode::CHECK_MODE_NORMAL,
                         ));
                     }
-                    None => {
+                    _ => {
                         t = Some(self.any_type());
                     }
                 }

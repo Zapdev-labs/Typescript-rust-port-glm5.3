@@ -269,6 +269,11 @@ fn fcs52_collateral_convergences_record_pin() {
 /// from 3 diagnostic diffs to 2); the residual pair is a separate
 /// protected-access property-comparison root in the type relation,
 /// pre-existing at t52, queued.
+///
+/// PORT (FCS tranche 54): the residual is FIXED — the root was the
+/// permissive isValidOverrideOf stub (relater.rs); the record now
+/// converges with the go twin (15/e02e45bdd4a1a87a, verified on the
+/// t55 full-corpus sweep).
 #[test]
 fn fcs52_residual_records_pin() {
     assert_twin_records(
@@ -276,8 +281,8 @@ fn fcs52_residual_records_pin() {
         &[(
             "conformance/interfaceExtendingClassWithProtecteds2.errors.txt",
             "mismatch",
-            13,
-            "d8a84028d075a3bb",
+            15,
+            "e02e45bdd4a1a87a",
         )],
     );
 }

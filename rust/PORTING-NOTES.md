@@ -3951,3 +3951,41 @@ EXTRA 2322 x31/14, 2345 x23/13, 7008 x14/10, 2339 x12/9, 2318 x10/8
 x6/6, 1117/17019/2695; interfaceExtendingClassWithProtecteds2 2430
 x2; 7006 x2. Tooling note: lowercase unanchored -test.run prefixes
 accept ALL cases (use dir/^emit\.ts forms).
+
+## Sweep micro-tranche 54 landed (2026-11-07, RIG-VALIDATED) — widened burst: static-block flow probes + synthesized-body gate + override validity; divergent 321 -> 308
+
+Three clusters, all FULL (two stacked stubs in the first):
+- TS7008 x14 + TS2729 x2 (classStaticBlockUseBeforeDef family, 7
+  records): get_flow_type_of_property was the M6 W3 permissive STUB
+  (never ran getFlowTypeOfReferenceEx — Go checker.go:11688) AND
+  is_property_initialized_in_static_blocks was a divergent syntactic-
+  scan stand-in instead of Go's synthetic return-flow probe (checker.
+  go:5067). Real bodies (the probe rides flow.rs's new_this_property_
+  access_synthetic); the caller start-range fixed to the CLASS pos.
+  7008 extra 14->0; Def1's 2729 gone; 7 records converged.
+- TS2318 x10 -> 0 (objectLiteralMethods es2018 x4 target + x6
+  collateral): after the `async * get x()` parse recovery the member
+  has a MISSING zero-length synthesized body; Go gates !NodeIsMissing
+  (Body) (checker.go:20432) -> anyType without running the async-
+  generator wrap; rust's function_body_of Option treated it as present
+  -> the wrap resolved the global AsyncIterableIterator -> extra 2318.
+  node_is_missing gate in get_return_type_of_signature_impl. Both
+  baselines converged (the long-queued t51 root-cause landed).
+- TS2430 x2 (interfaceExtendingClassWithProtecteds2, the pinned t52
+  residual): is_valid_override_of was the permissive M6 S8 STUB, so
+  the relater's 2443 protected arm (checker.go:4310-4323) never failed
+  the public-shadows-protected assignability. Real body (forEach-
+  Property + NEW is_property_in_class_derived_from, checker.go:
+  12167/12177). 3 protected-family records + 2 collaterals converged.
+Newly-divergent 0; newly-identical 13 (direction verified; the apparent
+new codes verified UNCHANGED in raw dumps — top-15 cutoff artifacts).
+PLAIN-sweep census: divergent 308 (211 count / 97 hash), identical
+7,259/7,567; both drivers 0/3,826/3,741/0; panics 0. 110 ok lines/0
+FAILED (fcs54 pins 7/7 + records 7/7); clippy 0; all gates green fresh
+(orchestrator re-ran tests + sweeps + census independently; Go tree
+md5-verified pristine). QUEUED (census55b): EXTRA 2322 x31/14, 2345
+x23/13, 2339 x12/9, 1278 x10/9, 2739 x8/7, 2304 x8/5 (mappedType
+Properties x4), 7010 x8/4, 7022 x8/3, 2366 x7/1 (single record), 7023/
+2741/18013/2695; MISSING 2322 x23/13, 8030 x11/7 (checkJsdocTypeTag6
+x4), 1453 x8/8, 2448/8010/1117/17019/2695; variadicTuples1 (pinned) +
+7006 x2 residual.

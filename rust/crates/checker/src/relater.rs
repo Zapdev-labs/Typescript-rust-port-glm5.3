@@ -9804,11 +9804,48 @@ pub(crate) fn get_declaration_modifier_flags_from_symbol(c: &Checker, sym: Symbo
     u::get_declaration_modifier_flags_from_symbol(c, c.program.node_store(), sym)
 }
 
-/// Go: `func (c *Checker) isValidOverrideOf(sourceProp, targetProp) bool`.
+/// Go: `func (c *Checker) isValidOverrideOf(sourceProp, targetProp) bool`
+/// (checker.go:12167) — return true if source property is a valid override
+/// of protected parts of target property.
+///
+/// PORT (FCS tranche 54): real body — was the permissive stub
+/// "TODO(port M6 S8): the protected-override relation check. Permissive.",
+/// which let EVERY protected-target property comparison succeed, so the
+/// relater's 2443 arm (propertyRelatedTo, checker.go:4310-4323) never fired
+/// and the 2430 "Interface incorrectly extends" head never reached its
+/// accessibility related-info (interfaceExtendingClassWithProtecteds2's
+/// I4Foo/I4Bar pair — the own public `x` shadowing the bases' protected
+/// `x`).
 pub(crate) fn is_valid_override_of(c: &mut Checker, source_prop: SymbolId, target_prop: SymbolId) -> bool {
-    // TODO(port M6 S8): the protected-override relation check. Permissive.
-    let _ = (c, source_prop, target_prop);
-    true
+    // Go: `!c.forEachProperty(targetProp, ...)`.
+    !c.for_each_property(target_prop, &mut |c, tp| {
+        if get_declaration_modifier_flags_from_symbol(c, tp).intersects(ModifierFlags::PROTECTED) {
+            // Go: `return !c.isPropertyInClassDerivedFrom(sourceProp,
+            // c.getDeclaringClass(tp))`.
+            let base_class = get_declaring_class(c, tp);
+            !is_property_in_class_derived_from(c, source_prop, base_class)
+        } else {
+            false
+        }
+    })
+}
+
+/// Go: `func (c *Checker) isPropertyInClassDerivedFrom(prop, baseClass) bool`
+/// (checker.go:12177) — return true if some underlying source property is
+/// declared in a class that derives from the given base class. A nil
+/// declaring class (or nil base class) never matches (Go's hasBaseType
+/// pointer identity against nil).
+pub(crate) fn is_property_in_class_derived_from(
+    c: &mut Checker,
+    prop: SymbolId,
+    base_class: Option<TypeId>,
+) -> bool {
+    c.for_each_property(prop, &mut |c, sp| {
+        match (get_declaring_class(c, sp), base_class) {
+            (Some(source_class), Some(base)) => has_base_type(c, source_class, base),
+            _ => false,
+        }
+    })
 }
 
 /// Go: `func (c *Checker) isReadonlySymbol(sym) bool` (checker.go — the real

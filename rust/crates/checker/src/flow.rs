@@ -4062,8 +4062,10 @@ impl Checker {
     /// The synthetic `this.<name>` property access Go's factory builds in
     /// getFlowTypeInConstructor / getFlowTypeInStaticBlocks. PORT: allocated
     /// through the `NodeStore::alloc` seam (a real arena node — Go's factory
-    /// node is a real pointer-graph node too).
-    fn new_this_property_access_synthetic(&mut self, symbol: SymbolId, parent: NodeId) -> NodeId {
+    /// node is a real pointer-graph node too). PORT (FCS tranche 54):
+    /// pub(crate) — also Go checker.go:5067's
+    /// isPropertyInitializedInStaticBlocks probe rides it.
+    pub(crate) fn new_this_property_access_synthetic(&mut self, symbol: SymbolId, parent: NodeId) -> NodeId {
         let name = self.program_symbol(symbol).name.clone();
         let name: Box<str> = name.into();
         // The `this` keyword expression.

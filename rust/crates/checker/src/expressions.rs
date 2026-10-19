@@ -3959,11 +3959,17 @@ impl Checker {
                 }
             }
         }
-        // TODO(port M6 W3): getFlowTypeOfReferenceEx(reference, autoType,
-        // initialType) — the flow walk; permissive initial type (Go's answer
-        // when the reference carries no flow node).
-        let _ = reference;
-        initial_type
+        // PORT (FCS tranche 54): Go checker.go:11688 —
+        // getFlowTypeOfReferenceEx(reference, autoType, initialType, nil,
+        // nil). Was the M6 W3 permissive stub that returned `initialType`
+        // alone (Go's answer only when the reference carries no flow
+        // node), so the flow walk never ran: getFlowTypeInConstructor /
+        // getFlowTypeInStaticBlocks saw the UNDECLARED initial type for
+        // every synthetic this.<name> probe — the classStaticBlock
+        // UseBeforeDef family (TS7008 "Member implicitly has an 'any'
+        // type" + TS2729 extras) and the autoType access-expression arm.
+        let auto_type = self.auto_type();
+        self.get_flow_type_of_reference_ex(reference, auto_type, initial_type, NodeId(0), None)
     }
 
 
