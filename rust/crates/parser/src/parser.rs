@@ -7166,6 +7166,75 @@ pub(crate) fn type_of(s: &dyn NodeStore, node: NodeId) -> Option<NodeId> {
                 .expect("SatisfiesExpression data")
                 .type_,
         ),
+        // PORT (FCS tranche 57): Go's `node.Type()` default arm —
+        // `if funcLike := n.FunctionLikeData(); funcLike != nil { return
+        // funcLike.Type }` (ast/ast.go:685-687). The parser previously
+        // dropped every function-like kind, so checkJSSyntax never saw the
+        // return type of an arrow function / method in a JS file and missed
+        // the TS8010 "Type annotations can only be used in TypeScript
+        // files" on arrow return types (parserArrowFunctionExpression{10,
+        // 13-17} family).
+        Kind::CallSignature => Some(
+            n.as_call_signature_declaration()
+                .expect("CallSignatureDeclaration data")
+                .type_?,
+        ),
+        Kind::ConstructSignature => Some(
+            n.as_construct_signature_declaration()
+                .expect("ConstructSignatureDeclaration data")
+                .type_?,
+        ),
+        Kind::Constructor => Some(
+            n.as_constructor_declaration()
+                .expect("ConstructorDeclaration data")
+                .type_?,
+        ),
+        Kind::IndexSignature => Some(
+            n.as_index_signature_declaration()
+                .expect("IndexSignatureDeclaration data")
+                .type_?,
+        ),
+        Kind::MethodSignature => Some(
+            n.as_method_signature_declaration()
+                .expect("MethodSignatureDeclaration data")
+                .type_?,
+        ),
+        Kind::MethodDeclaration => Some(
+            n.as_method_declaration()
+                .expect("MethodDeclaration data")
+                .type_?,
+        ),
+        Kind::GetAccessor => Some(
+            n.as_get_accessor_declaration()
+                .expect("GetAccessorDeclaration data")
+                .type_?,
+        ),
+        Kind::SetAccessor => Some(
+            n.as_set_accessor_declaration()
+                .expect("SetAccessorDeclaration data")
+                .type_?,
+        ),
+        Kind::FunctionDeclaration => Some(
+            n.as_function_declaration()
+                .expect("FunctionDeclaration data")
+                .type_?,
+        ),
+        Kind::FunctionExpression => Some(
+            n.as_function_expression()
+                .expect("FunctionExpression data")
+                .type_?,
+        ),
+        Kind::ArrowFunction => Some(n.as_arrow_function().expect("ArrowFunction data").type_?),
+        Kind::FunctionType => Some(
+            n.as_function_type_node()
+                .expect("FunctionTypeNode data")
+                .type_?,
+        ),
+        Kind::ConstructorType => Some(
+            n.as_constructor_type_node()
+                .expect("ConstructorTypeNode data")
+                .type_?,
+        ),
         _ => None,
     }
 }

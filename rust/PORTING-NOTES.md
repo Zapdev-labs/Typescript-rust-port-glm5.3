@@ -4029,3 +4029,49 @@ Attributes12 — re-cluster), 18013 x6/6; MISSING 2322 x23/13 (check
 JsdocTypeTag5 x2 residual), 2448 x7/7, 8010 x6/6, 18014 x6/6, 17019
 x6/4, 1117 x6/5, 7031 x5/1, 1221 x5/3, 8032 x4/4, 2678 x4/2;
 variadicTuples1 + 7006 x2 + jsdocThisType 2683 x1 residuals.
+
+## Sweep micro-tranche 56 landed (2026-10-18, RIG-VALIDATED; pins/PORT notes "FCS tranche 57") — widened burst: decorator arity heads + private-identifier shadowing + parser type_of function-like arms; divergent 294 -> 273
+
+Three clusters, all FULL:
+- Decorator arity-head family (EXTRA TS1278 x10 + MISSING TS1238
+  x5/3, 1240 x4/4, 1241 x2): get_argument_arity_error had NO head_
+  message param; Go chains the 1238/1240/1241 "Unable to resolve
+  signature of {class,property,method} decorator..." head onto EVERY
+  composing arity arm (checker.go:9930) making it the PRIMARY code
+  (plus the getTypeArgumentArityError tail chain, checker.go:10073/
+  10115). head_message + new_diagnostic_chain on all 4 arms (spread
+  arm unchained like Go); head at both report_call_resolution_errors
+  arity sites (checker.go:9894). 1278 21->11 == go; EXTRA 10->0.
+- privateNameNestedClasses family (EXTRA TS18013 x6 + MISS TS18014
+  x6 over the SAME positions): the shadowed branch of check_private_
+  identifier_property_access emitted generic no-args 18013; Go
+  checker.go:11754-11758 reports 18014 (diagName + TypeToString) +
+  2 related infos — built BEFORE add_diagnostic (the collection
+  stores a clone — post-hoc add would be dropped). 18013 35->29 ==
+  go; both -> 0 FULL.
+- parserArrowFunctionExpression family (MISS TS8010 x6, records
+  10/13..17 each divergent on EXACTLY the arrow's return-type
+  8010): parser type_of dropped Go node.Type()'s FunctionLikeData
+  default arm (ast/ast.go:685-687) so checkJSSyntax never saw an
+  arrow's return type. All function-like arms added (Call/Construct
+  Signature, Constructor, IndexSignature, MethodSignature/Declaration,
+  Get/SetAccessor, FunctionDeclaration/Expression, ArrowFunction,
+  FunctionType, ConstructorType); single consumer, no collateral.
+  8010 6->12 == go; MISS 6->0.
+Newly-divergent 0; newly-identical 21 (direction verified; all "new"
+census lines verified as top-15-cutoff artifacts — raw totals
+unchanged). NEW RESIDUAL (queued, ND=0 holds — record already
+divergent): constructableDecoratorOnClass01 1238 head span (19,28)
+vs go (20,28), a 1-char chain-loc difference in the too-many arity
+span composition. PLAIN-sweep census: divergent 273 (191 count / 82
+hash), identical 7,294/7,567; both drivers 0/3,826/3,741/0; panics
+0. 114 ok lines/0 FAILED (fcs57 pins 9/9 + records 5/5); clippy 0;
+all gates green fresh (orchestrator re-ran tests + sweeps + census
+independently; Go tree md5-verified pristine, no probe patches).
+QUEUED: EXTRA 2322 x29/13 (re-cluster), 2345 x23/13, 2339 x12/9, 2304
+x8/5, 7010 x8/4, 2739 x8/7, 7022 x8/3, 7023 x7/6, 2695 x7/4, 2741
+x7/7, 2318 x6/6, 2536/2694 x6/3 (importAttributes12 re-cluster);
+MISS 2322 x23/13, 2448 x7/7, 17019 x6/4, 1117 x6/5, 1162 x5/4, 1221
+x5/3, 7031 x5/1, 2534/2367/2403/2663/2741/8032/2678/8024 x4;
+carried checkJsdocTypeTag5 2322 x2, jsdocThisType 2683 x1,
+variadicTuples1, 7006 x2.

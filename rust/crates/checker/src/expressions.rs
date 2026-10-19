@@ -110,6 +110,9 @@ use tsc_diagnostics::{
     TYPE_OF_YIELD_OPERAND_IN_AN_ASYNC_GENERATOR_MUST_EITHER_BE_A_VALID_PROMISE_OR_MUST_NOT_CONTAIN_A_CALLABLE_THEN_MEMBER,
     X_AWAIT_HAS_NO_EFFECT_ON_THE_TYPE_OF_THIS_EXPRESSION,
     PROPERTY_0_IS_NOT_ACCESSIBLE_OUTSIDE_CLASS_1_BECAUSE_IT_HAS_A_PRIVATE_IDENTIFIER,
+    THE_PROPERTY_0_CANNOT_BE_ACCESSED_ON_TYPE_1_WITHIN_THIS_CLASS_BECAUSE_IT_IS_SHADOWED_BY_ANOTHER_PRIVATE_IDENTIFIER_WITH_THE_SAME_SPELLING,
+    THE_SHADOWING_DECLARATION_OF_0_IS_DEFINED_HERE,
+    THE_DECLARATION_OF_0_THAT_YOU_PROBABLY_INTENDED_TO_USE_IS_DEFINED_HERE,
     THE_TARGET_OF_AN_OBJECT_REST_ASSIGNMENT_MAY_NOT_BE_AN_OPTIONAL_PROPERTY_ACCESS,
     THE_TARGET_OF_AN_OBJECT_REST_ASSIGNMENT_MUST_BE_A_VARIABLE_OR_A_PROPERTY_ACCESS,
     THIS_CONDITION_WILL_ALWAYS_RETURN_0,
@@ -4076,12 +4079,33 @@ impl Checker {
                     cursor = u::get_containing_class(self.store(), c);
                 }
                 if shadowed {
-                    self.error(
+                    // PORT (FCS tranche 57): Go checker.go:11754-11758 — the
+                    // 18014 shadowed-private-identifier diagnostic (args:
+                    // diagName, TypeToString(leftType)) + the two related-info
+                    // adds (the shadowing declaration / the declaration you
+                    // probably intended to use). Built before add_diagnostic
+                    // so the related infos land on the stored diagnostic
+                    // (Go's c.error returns the in-place diagnostic).
+                    let left_type_str = relater::type_to_string(self, left_type);
+                    let mut diagnostic = u::new_diagnostic_for_node(
+                        self.store(),
                         right,
-                        &PROPERTY_0_IS_NOT_ACCESSIBLE_OUTSIDE_CLASS_1_BECAUSE_IT_HAS_A_PRIVATE_IDENTIFIER,
-                        &[],
+                        &THE_PROPERTY_0_CANNOT_BE_ACCESSED_ON_TYPE_1_WITHIN_THIS_CLASS_BECAUSE_IT_IS_SHADOWED_BY_ANOTHER_PRIVATE_IDENTIFIER_WITH_THE_SAME_SPELLING,
+                        vec![diag_name.clone(), left_type_str],
                     );
-                    // (The related-info adds are the M7 diagnostics chain.)
+                    diagnostic.add_related_info(u::new_diagnostic_for_node(
+                        self.store(),
+                        lexical_value_decl,
+                        &THE_SHADOWING_DECLARATION_OF_0_IS_DEFINED_HERE,
+                        vec![diag_name.clone()],
+                    ));
+                    diagnostic.add_related_info(u::new_diagnostic_for_node(
+                        self.store(),
+                        type_value_decl,
+                        &THE_DECLARATION_OF_0_THAT_YOU_PROBABLY_INTENDED_TO_USE_IS_DEFINED_HERE,
+                        vec![diag_name.clone()],
+                    ));
+                    self.add_diagnostic(diagnostic);
                     return true;
                 }
             }

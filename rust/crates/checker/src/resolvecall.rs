@@ -2076,7 +2076,10 @@ impl Checker {
                 self.add_diagnostic(diagnostic);
             }
         } else if let Some(candidate) = s.candidate_for_argument_arity_error {
-            let diagnostic = self.get_argument_arity_error(node, &[candidate], &s.args);
+            // PORT (FCS tranche 57): the headMessage rides the arity error
+            // (Go checker.go:9894 reportCallResolutionErrors passes it).
+            let diagnostic =
+                self.get_argument_arity_error(node, &[candidate], &s.args, head_message);
             self.add_diagnostic(diagnostic);
         } else if let Some(candidate) = s.candidate_for_type_argument_error {
             let _ = self.check_type_arguments(
@@ -2092,12 +2095,20 @@ impl Checker {
                 .filter(|&sig| self.has_correct_type_argument_arity(sig, &s.type_arguments))
                 .collect();
             if signatures_with_correct_type_argument_arity.is_empty() {
-                let diagnostic =
-                    self.get_type_argument_arity_error(node, signatures, &s.type_arguments);
+                let diagnostic = self.get_type_argument_arity_error(
+                    node,
+                    signatures,
+                    &s.type_arguments,
+                    head_message,
+                );
                 self.add_diagnostic(diagnostic);
             } else {
-                let diagnostic =
-                    self.get_argument_arity_error(node, &signatures_with_correct_type_argument_arity, &s.args);
+                let diagnostic = self.get_argument_arity_error(
+                    node,
+                    &signatures_with_correct_type_argument_arity,
+                    &s.args,
+                    head_message,
+                );
                 self.add_diagnostic(diagnostic);
             }
         }
@@ -2200,11 +2211,19 @@ impl Checker {
     /// the diagnostic-enrichment surface; the parameter-range messages are
     /// the real Go ladder.
     #[allow(clippy::too_many_arguments)]
+    /// Go: `func (c *Checker) getArgumentArityError(node, signatures, args,
+    /// headMessage *diagnostics.Message) *ast.Diagnostic`
+    /// (checker.go:9930). PORT (FCS tranche 57): the `headMessage` parameter
+    /// is real — every composing arm chains the head (the decorator
+    /// 1238/1240/1241 "Unable to resolve signature of {class,property,method}
+    /// decorator when called as an expression" family rides here; the spread
+    /// arm returns unchained, exactly like Go).
     fn get_argument_arity_error(
         &mut self,
         node: NodeId,
         signatures: &[SignatureId],
         args: &[NodeId],
+        head_message: Option<&'static Message>,
     ) -> tsc_ast::Diagnostic {
         let spread_index = get_spread_argument_index(self.store(), args);
         if spread_index > -1 {
@@ -2262,7 +2281,7 @@ impl Checker {
         let _ = closest_signature;
         if min_count < args.len() as i32 && (args.len() as i32) < max_count {
             // between min and max, but with no matching overload
-            return u::new_diagnostic_for_node(
+            let mut diagnostic = u::new_diagnostic_for_node(
                 self.store(),
                 error_node,
                 &diag::NO_OVERLOAD_EXPECTS_0_ARGUMENTS_BUT_OVERLOADS_DO_EXIST_THAT_EXPECT_EITHER_1_OR_2_ARGUMENTS,
@@ -2272,25 +2291,37 @@ impl Checker {
                     min_above.to_string(),
                 ],
             );
+            if let Some(head) = head_message {
+                diagnostic = Self::new_diagnostic_chain(diagnostic, head);
+            }
+            return diagnostic;
         }
         if (args.len() as i32) < min_count {
             // too short: put the error span on the call expression, not any
             // of the args
-            return u::new_diagnostic_for_node(
+            let mut diagnostic = u::new_diagnostic_for_node(
                 self.store(),
                 error_node,
                 message,
-                vec![parameter_range, args.len().to_string()],
+                vec![parameter_range.clone(), args.len().to_string()],
             );
+            if let Some(head) = head_message {
+                diagnostic = Self::new_diagnostic_chain(diagnostic, head);
+            }
+            return diagnostic;
         }
         // Guard against out-of-bounds access when maxCount >= len(args).
         if max_count >= args.len() as i32 {
-            return u::new_diagnostic_for_node(
+            let mut diagnostic = u::new_diagnostic_for_node(
                 self.store(),
                 error_node,
                 message,
-                vec![parameter_range, args.len().to_string()],
+                vec![parameter_range.clone(), args.len().to_string()],
             );
+            if let Some(head) = head_message {
+                diagnostic = Self::new_diagnostic_chain(diagnostic, head);
+            }
+            return diagnostic;
         }
         // Go's too-many case: the span is the FIRST EXCESS argument through
         // the last argument, SkipTrivia'd (ES5SymbolProperty5's 2554 lands
@@ -2307,7 +2338,7 @@ impl Checker {
         if end < pos {
             end = pos;
         }
-        tsc_ast::Diagnostic::new(
+        let mut diagnostic = tsc_ast::Diagnostic::new(
             Some(file.as_node_id()),
             tsc_ast::TextRange::new(pos as i32, end as i32),            message.code(),
             message.category(),
@@ -2316,7 +2347,11 @@ impl Checker {
             "",
             message.key(),
             vec![parameter_range, args.len().to_string()],
-        )
+        );
+        if let Some(head) = head_message {
+            diagnostic = Self::new_diagnostic_chain(diagnostic, head);
+        }
+        diagnostic
     }
 
     /// Go: `func (c *Checker) getTypeArgumentArityError(node, signatures, typeArguments, headMessage) *ast.Diagnostic`
@@ -2352,13 +2387,19 @@ impl Checker {
         u::new_diagnostic_for_node(self.store(), node, message, args)
     }
 
+    /// Go: `func (c *Checker) getTypeArgumentArityError(node, signatures,
+    /// typeArguments, headMessage) *ast.Diagnostic`
+    /// (checker.go:10073). PORT (FCS tranche 57): the headMessage chain at
+    /// the tail (Go checker.go:10115-10117).
     fn get_type_argument_arity_error(
         &mut self,
         node: NodeId,
         signatures: &[SignatureId],
         type_arguments: &[NodeId],
+        head_message: Option<&'static Message>,
     ) -> tsc_ast::Diagnostic {
         let arg_count = type_arguments.len();
+        let mut diagnostic: tsc_ast::Diagnostic;
         if signatures.len() == 1 {
             // No overloads exist
             let sig = signatures[0];
@@ -2369,47 +2410,52 @@ impl Checker {
             if min_count < max_count {
                 expected = format!("{}-{}", expected, max_count);
             }
-            return self.diagnostic_for_type_argument_arity(
+            diagnostic = self.diagnostic_for_type_argument_arity(
                 node,
                 &diag::EXPECTED_0_TYPE_ARGUMENTS_BUT_GOT_1,
                 vec![expected, arg_count.to_string()],
             );
-        }
-        // Overloads exist
-        let mut below_arg_count = i32::MIN;
-        let mut above_arg_count = i32::MAX;
-        for &sig in signatures {
-            let type_parameters = self.signatures[sig.0 as usize].type_parameters.clone();
-            let min_count = self.get_min_type_argument_count(&type_parameters) as i32;
-            let max_count = type_parameters.len() as i32;
-            if min_count > arg_count as i32 {
-                above_arg_count = above_arg_count.min(min_count);
-            } else if max_count < arg_count as i32 {
-                below_arg_count = below_arg_count.max(max_count);
+        } else {
+            // Overloads exist
+            let mut below_arg_count = i32::MIN;
+            let mut above_arg_count = i32::MAX;
+            for &sig in signatures {
+                let type_parameters = self.signatures[sig.0 as usize].type_parameters.clone();
+                let min_count = self.get_min_type_argument_count(&type_parameters) as i32;
+                let max_count = type_parameters.len() as i32;
+                if min_count > arg_count as i32 {
+                    above_arg_count = above_arg_count.min(min_count);
+                } else if max_count < arg_count as i32 {
+                    below_arg_count = below_arg_count.max(max_count);
+                }
+            }
+            if below_arg_count != i32::MIN && above_arg_count != i32::MAX {
+                diagnostic = self.diagnostic_for_type_argument_arity(
+                    node,
+                    &diag::NO_OVERLOAD_EXPECTS_0_TYPE_ARGUMENTS_BUT_OVERLOADS_DO_EXIST_THAT_EXPECT_EITHER_1_OR_2_TYPE_ARGUMENTS,
+                    vec![
+                        arg_count.to_string(),
+                        below_arg_count.to_string(),
+                        above_arg_count.to_string(),
+                    ],
+                );
+            } else {
+                let expected = if below_arg_count == i32::MIN {
+                    above_arg_count
+                } else {
+                    below_arg_count
+                };
+                diagnostic = self.diagnostic_for_type_argument_arity(
+                    node,
+                    &diag::EXPECTED_0_TYPE_ARGUMENTS_BUT_GOT_1,
+                    vec![expected.to_string(), arg_count.to_string()],
+                );
             }
         }
-        if below_arg_count != i32::MIN && above_arg_count != i32::MAX {
-            self.diagnostic_for_type_argument_arity(
-                node,
-                &diag::NO_OVERLOAD_EXPECTS_0_TYPE_ARGUMENTS_BUT_OVERLOADS_DO_EXIST_THAT_EXPECT_EITHER_1_OR_2_TYPE_ARGUMENTS,
-                vec![
-                    arg_count.to_string(),
-                    below_arg_count.to_string(),
-                    above_arg_count.to_string(),
-                ],
-            )
-        } else {
-            let expected = if below_arg_count == i32::MIN {
-                above_arg_count
-            } else {
-                below_arg_count
-            };
-            self.diagnostic_for_type_argument_arity(
-                node,
-                &diag::EXPECTED_0_TYPE_ARGUMENTS_BUT_GOT_1,
-                vec![expected.to_string(), arg_count.to_string()],
-            )
+        if let Some(head) = head_message {
+            diagnostic = Self::new_diagnostic_chain(diagnostic, head);
         }
+        diagnostic
     }
 
     // ────────────────────────────────────────────────────────────────────────
