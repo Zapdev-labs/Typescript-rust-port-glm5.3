@@ -6079,8 +6079,47 @@ impl Relater {
     fn report_unmatched_property(&mut self, c: &mut Checker, source: TypeId, target: TypeId, unmatched_property: SymbolId, require_optional_properties: bool) {
         // give specific error in case where private names have the same
         // description (Go comment, verbatim).
-        // TODO(port M6 S6): the private-identifier description arm
-        // (binder.GetSymbolNameForPrivateIdentifier).
+        // PORT (FCS tranche 58): the private-identifier description arm
+        // (Go relater.go:4379-4391) — when the unmatched target property is a
+        // private identifier and the SOURCE type is a class that has its own
+        // private member with the same description, report 18015 ("refers to
+        // a different member") instead of falling through to the 2741/2739
+        // missing-property messages, and return. The member-table key is the
+        // binder's GetSymbolNameForPrivateIdentifier format (binder.go:373),
+        // re-derived from the class symbol's id like the
+        // lookup_symbol_for_private_identifier_declaration port.
+        if let Some(decl) = c.program_symbol(unmatched_property).value_declaration
+            && let Some(name) = c.store().node(decl).name()
+            && c.store().node(name).kind == Kind::PrivateIdentifier
+            && let Some(source_symbol) = c.type_(source).symbol
+            && c.program_symbol(source_symbol).flags.intersects(SymbolFlags::CLASS)
+        {
+            let private_identifier_description = tsc_ast::node_text(c.store(), name).to_string();
+            let symbol_table_key = format!(
+                "{}#{}@{}",
+                tsc_ast::INTERNAL_SYMBOL_NAME_PREFIX,
+                c.program_symbol(source_symbol).id.get(),
+                private_identifier_description
+            );
+            if get_property_of_type(c, source, &symbol_table_key).is_some() {
+                let source_symbol_str = symbol_to_string(c, source_symbol);
+                let target_symbol_str = c
+                    .type_(target)
+                    .symbol
+                    .map(|s| symbol_to_string(c, s))
+                    .unwrap_or_default();
+                self.report_error(
+                    c,
+                    &msg::PROPERTY_0_IN_TYPE_1_REFERS_TO_A_DIFFERENT_MEMBER_THAT_CANNOT_BE_ACCESSED_FROM_WITHIN_TYPE_2,
+                    &[
+                        DiagArg::Str(private_identifier_description),
+                        DiagArg::Str(source_symbol_str),
+                        DiagArg::Str(target_symbol_str),
+                    ],
+                );
+                return;
+            }
+        }
         let props = get_unmatched_properties(c, source, target, require_optional_properties, false /*matchDiscriminantProperties*/);
         if props.len() == 1 {
             let (source_type, target_type) = c.get_type_names_for_error_display(source, target);
@@ -8821,11 +8860,15 @@ pub(crate) fn is_single_element_generic_tuple_type(c: &Checker, t: TypeId) -> bo
     crate::typenodes::is_single_element_generic_tuple_type(c, t)
 }
 
-/// Go: `func isStaticPrivateIdentifierProperty(prop) bool`.
+/// Go: `func isStaticPrivateIdentifierProperty(prop) bool` (utilities.go:71).
 fn is_static_private_identifier_property(c: &Checker, prop: SymbolId) -> bool {
-    // TODO(port M6 S6): the static-private check.
-    let _ = (c, prop);
-    false
+    // PORT (FCS tranche 58): was the M6 S6 `false` stub. The real check —
+    // the symbol's value declaration is a static private-identifier class
+    // element — is the getUnmatchedPropertiesWorker filter (relater.go:981;
+    // "we currently filter out static private identifier fields in
+    // getUnmatchedProperties") and the addInheritedMembers gate
+    // (checker.go:20004). Delegates to the utilities.go:71 port.
+    u::is_static_private_identifier_property(c.store(), c.program_symbol(prop))
 }
 
 /// Go: `func isNumericLiteralName(name) bool` (utilities.go).
@@ -9770,9 +9813,82 @@ pub(crate) fn get_exact_optional_unassignable_properties(c: &mut Checker, source
 
 /// Go: `func (c *Checker) getSingleBaseForNonAugmentingSubtype(t) *Type`.
 pub(crate) fn get_single_base_for_non_augmenting_subtype(c: &mut Checker, t: TypeId) -> Option<TypeId> {
-    // TODO(port M6 S7/S8): the single-base resolution.
-    let _ = (c, t);
-    None
+    // PORT (FCS tranche 58): was the M6 S7/S8 `None` stub. Go
+    // checker.go:28621 — the single-base collapse for non-augmenting
+    // subtypes, consumed by getNormalizedType's reference arm (checker.go:
+    // 28411) and reportErrorResults' sourceHasBase/targetHasBase
+    // (relater.go:4738). A reference type whose target is a class or
+    // interface with exactly one base type and no local members collapses
+    // to its instantiated base — e.g. `interface A2 extends A1 {}` (A2
+    // gets a this type, hence ObjectFlagsReference) normalizes to A1 for
+    // reading comparisons, so the property-mismatch chain names A1 and the
+    // reportRelationError 2741-suppression args no longer match (the
+    // privateNamesUnique-4 family: 2741 primary vs Go's 2322+chain).
+    let target = c.type_(t).as_type_reference().and_then(|r| r.base.target);
+    if !c.type_(t).object_flags.intersects(crate::types::ObjectFlags::REFERENCE) {
+        return None;
+    }
+    let target = target?;
+    if !c.type_(target).object_flags.intersects(crate::types::ObjectFlags::CLASS_OR_INTERFACE) {
+        return None;
+    }
+    if c.type_(t).object_flags.intersects(crate::types::ObjectFlags::IDENTICAL_BASE_TYPE_CALCULATED) {
+        return c.cached_types_get(crate::todo_shapes::CachedTypeKind::EquivalentBaseType, t);
+    }
+    c.type_mut(t).object_flags |= crate::types::ObjectFlags::IDENTICAL_BASE_TYPE_CALCULATED;
+    if c.type_(target).object_flags.intersects(crate::types::ObjectFlags::CLASS)
+        && let Some(base_type_node) = crate::typeofsymbol::get_base_type_node_of_class(c, target)
+        && let Some(expression) = crate::ast_shims::expression_of(c.store(), base_type_node)
+    {
+        let kind = c.store().node(expression).kind;
+        // A base type expression may circularly reference the class
+        // itself (e.g. as an argument to function call), so we only
+        // check for base types specified as simple qualified names
+        // (Go comment, verbatim).
+        if kind != Kind::Identifier && kind != Kind::PropertyAccessExpression {
+            return None;
+        }
+    }
+    let bases = c.get_base_types(target);
+    if bases.len() != 1 {
+        return None;
+    }
+    // If the interface has any members, they may subtype members in the
+    // base, so we should do a full structural comparison (Go comment,
+    // verbatim).
+    if let Some(symbol) = c.type_(t).symbol
+        && !c.get_members_of_symbol(symbol).is_empty()
+    {
+        return None;
+    }
+    // Go: `typeParameters := target.AsInterfaceType().TypeParameters()` —
+    // allTypeParameters minus the trailing this type (types.go:1046).
+    let type_parameters: Vec<TypeId> = {
+        let d = c.type_(target).as_interface_type().expect("InterfaceType data");
+        if d.all_type_parameters.is_empty() {
+            Vec::new()
+        } else {
+            d.all_type_parameters[..d.all_type_parameters.len() - 1].to_vec()
+        }
+    };
+    let type_arguments = resolve_type_arguments(c, t);
+    let mut instantiated_base = if type_parameters.is_empty() {
+        bases[0]
+    } else {
+        let n = type_parameters.len();
+        let mapper = c.new_type_mapper(&type_parameters, &type_arguments[..n]);
+        c.instantiate_type(bases[0], mapper)
+    };
+    if type_arguments.len() > type_parameters.len() {
+        instantiated_base = get_type_with_this_argument(
+            c,
+            instantiated_base,
+            Some(*type_arguments.last().expect("checked length")),
+            false, /*needApparentType*/
+        );
+    }
+    c.cached_types_set(crate::todo_shapes::CachedTypeKind::EquivalentBaseType, t, Some(instantiated_base));
+    Some(instantiated_base)
 }
 
 /// Go: `func (c *Checker) cloneTypeParameter(t) *Type` — delegates to the

@@ -584,10 +584,17 @@ impl Checker {
         }
         let head_message = self.get_diagnostic_head_message_for_decorator_resolution(node);
         if call_signatures.is_empty() {
-            let chain = self.invocation_error_details(node, apparent_type, crate::types::SignatureKind::Call);
+            // PORT (FCS tranche 58): Go passes node.Expression() — the
+            // decorator's expression — as the error target
+            // (checker.go:8981, `c.invocationErrorDetails(node.Expression(),
+            // ...)`); the former port used the decorator node itself, so the
+            // chained decorator-resolution head spanned the `@` too
+            // (constructableDecoratorOnClass01: (19,28) vs Go's (20,28)).
+            let error_target = crate::ast_shims::expression_of(self.store(), node).unwrap_or(node);
+            let chain = self.invocation_error_details(error_target, apparent_type, crate::types::SignatureKind::Call);
             let diagnostic = match head_message {
                 Some(head) => {
-                    u::new_diagnostic_chain_for_node(Some(&chain), self.store(), node, head, vec![])
+                    u::new_diagnostic_chain_for_node(Some(&chain), self.store(), error_target, head, vec![])
                 }
                 None => chain,
             };

@@ -2285,11 +2285,19 @@ fn is_immediately_used_in_initializer_of_block_scoped_variable(
         }
     }
     // ForIn/ForOf case - use site should not be used in expression part
+    // PORT (FCS tranche 58): Go uses grandparent.Expression() — the for-in/of
+    // ITERATED expression (checker.go:2127) — not the loop initializer; the
+    // former port passed initializer_of(g) (the declaration side), so
+    // `for (let v of v)` never reported the RHS use-before-declaration
+    // (MISS TS2448 on the for-of/using family).
     grandparent.is_some_and(|g| {
         binder_shims::is_for_in_or_of_statement(store.node(g))
-            && crate::ast_shims::initializer_of(store, g).is_some_and(|expr| {
-                is_same_scope_descendent_of(store, usage, Some(expr), decl_container)
-            })
+            && match &store.node(g).data {
+                tsc_ast::NodeData::ForInOrOfStatement(d) => {
+                    is_same_scope_descendent_of(store, usage, Some(d.expression), decl_container)
+                }
+                _ => false,
+            }
     })
 }
 

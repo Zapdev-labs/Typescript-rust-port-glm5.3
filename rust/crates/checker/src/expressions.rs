@@ -1707,11 +1707,34 @@ impl Checker {
                     && self.is_side_effect_free(left)
                     && !self.is_indirect_call(self.store().node(left).parent.get())
                 {
-                    self.error(
-                        left,
-                        &LEFT_SIDE_OF_COMMA_OPERATOR_IS_UNUSED_AND_HAS_NO_SIDE_EFFECTS,
-                        &[],
-                    );
+                    // PORT (FCS tranche 58): the 2657-containment gate (Go
+                    // checker.go:12774-12781) — skip the comma-operator error
+                    // when the left operand's start sits inside a parser
+                    // diagnostic 2657 ("JSX expressions must have one parent
+                    // element"), i.e. error-recovered sibling JSX elements;
+                    // the former port always reported, so the tsx
+                    // error-recovery family over-emitted 2695.
+                    let is_in_diag_2657 = if let Some(file) =
+                        tsc_ast::utilities::get_source_file_of_node(self.store(), left)
+                    {
+                        let start = tsc_scanner::skip_trivia(
+                            file.text(),
+                            self.store().node(left).pos(),
+                        );
+                        file.diagnostics().iter().any(|d| {
+                            d.code() == tsc_diagnostics::JSX_EXPRESSIONS_MUST_HAVE_ONE_PARENT_ELEMENT.code()
+                                && d.loc().contains(start)
+                        })
+                    } else {
+                        false
+                    };
+                    if !is_in_diag_2657 {
+                        self.error(
+                            left,
+                            &LEFT_SIDE_OF_COMMA_OPERATOR_IS_UNUSED_AND_HAS_NO_SIDE_EFFECTS,
+                            &[],
+                        );
+                    }
                 }
                 right_type
             }

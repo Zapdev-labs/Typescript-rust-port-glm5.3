@@ -5449,23 +5449,60 @@ impl Checker {
                     })
                     .collect();
                 for node in heritage {
-                    // Go: ast.GetHeritageClauseElementName(node).
-                    let name = self
-                        .store()
-                        .node(node)
-                        .as_expression_with_type_arguments()
-                        .map(|e| e.expression);
+                    // Go: ast.GetHeritageClauseElementName(node)
+                    // (utilities.go:1759) — the TypeReference arm FIRST (an
+                    // interface's `extends A1` element parses as a
+                    // TypeReference node, not an ExpressionWithTypeArguments),
+                    // then the class-heritage arm. PORT (FCS tranche 58): the
+                    // former port read only AsExpressionWithTypeArguments, so
+                    // the name came back None for interface heritage, the
+                    // base-type loop was skipped entirely, and
+                    // isThislessInterface wrongly answered true — `interface
+                    // A2 extends (class) A1` then had no this type and no
+                    // ObjectFlagsReference, so the relation path never
+                    // collapsed it via getSingleBaseForNonAugmentingSubtype.
+                    let name = match &self.store().node(node).data {
+                        tsc_ast::NodeData::TypeReferenceNode(d) => Some(d.type_name),
+                        tsc_ast::NodeData::ExpressionWithTypeArguments(d) => Some(d.expression),
+                        _ => None,
+                    };
                     if let Some(name) = name {
                         if matches!(self.store().node(name).kind, Kind::Identifier | Kind::QualifiedName)
                             || tsc_ast::utilities::is_entity_name_expression(self.store(), name)
                         {
-                            // TODO(port M6 S6): resolveEntityName — the name
-                            // resolver; until it lands, this base type cannot
-                            // be confirmed interface-and-thisless, so the
-                            // interface conservatively gets a this type
-                            // (Go's answer whenever resolution fails the
-                            // SymbolFlagsInterface test).
-                            return false;
+                            // Go checker.go:17758: resolveEntityName and the
+                            // interface-and-thisless base test. PORT (FCS
+                            // tranche 58): the real resolver (resolution.rs)
+                            // replaces the conservative always-false stub, so
+                            // `interface X extends (thisless interface) Y`
+                            // stays thisless like Go instead of always getting
+                            // a this type.
+                            let base_symbol = self.resolve_entity_name(
+                                name,
+                                SymbolFlags::TYPE,
+                                true,  /*ignoreErrors*/
+                                false, /*dontResolveAlias*/
+                                NodeId::NONE,
+                            );
+                            let not_thisless_interface = match base_symbol {
+                                None => true,
+                                Some(base) => {
+                                    if !self.program_symbol(base).flags.intersects(SymbolFlags::INTERFACE) {
+                                        true
+                                    } else {
+                                        let declared = self.get_declared_type_of_class_or_interface(base);
+                                        self
+                                            .type_(declared)
+                                            .as_interface_type()
+                                            .expect("InterfaceType data")
+                                            .this_type
+                                            .is_some()
+                                    }
+                                }
+                            };
+                            if not_thisless_interface {
+                                return false;
+                            }
                         }
                     }
                 }

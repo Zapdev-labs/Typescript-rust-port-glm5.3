@@ -4075,3 +4075,53 @@ MISS 2322 x23/13, 2448 x7/7, 17019 x6/4, 1117 x6/5, 1162 x5/4, 1221
 x5/3, 7031 x5/1, 2534/2367/2403/2663/2741/8032/2678/8024 x4;
 carried checkJsdocTypeTag5 2322 x2, jsdocThisType 2683 x1,
 variadicTuples1, 7006 x2.
+
+## Sweep micro-tranche 57 landed (2026-10-19, RIG-VALIDATED; pins/PORT notes "FCS tranche 58") — widened burst: static private identifiers + 18015 chaining + non-augmenting single base + for-of/using use-site + jsx sibling comma + decorator span; divergent 273 -> 245
+
+Six clusters (worker labeled epoch fcs58; the worker was cut off
+after its battery but its resumed session closed the two mis-written
+pins — pin root causes: 18015 rides the 2322's message chain, and
+2657 is a PARSER diagnostic asserted via sf.diagnostics(), not the
+checker list — NOT code regressions, records identical at the time):
+- TS2739 x8/7 + TS2741 x7/7 + TS18015 (privateNames static family):
+  is_static_private_identifier_property was the M6 false STUB (Go
+  relater.go:981 filters static private-identifier target props in
+  getUnmatchedPropertiesWorker) + report_unmatched_property missing
+  Go's private-identifier arm (relater.go:4379-4391: class source
+  same-description private member -> TS18015 CHAINED under the 2322
+  and return). Both -> 0 FULL.
+- TS2322-head normalization (the 2741/2322 flip): get_single_base_
+  for_non_augmenting_subtype was the M6 None STUB — ported checker.
+  go:28621 in full (EquivalentBaseType cache, IDENTICAL_BASE_TYPE_
+  CALCULATED flag, class base-node simple-name gate, single-base/
+  no-members, TypeParameters slice, instantiateType mapper, getType
+  WithThisArgument tail). Enables is_thisless_interface: heritage
+  extraction missed the TypeReference arm (Go ast.GetHeritageClause
+  ElementName utilities.go:1759 — interface extends A1 elements are
+  TypeReference nodes) + the real resolve_entity_name base test
+  (checker.go:17758). Collateral NI: intersectionThisTypes,
+  contextualThisType.
+- TS2448 x7/7 (for-of/using): is_immediately_used_in_initializer_
+  of_block_scoped_variable passed the loop INITIALIZER where Go uses
+  grandparent.Expression() (checker.go:2127 — the iterated RHS
+  use-site). -> 0 FULL.
+- TS2695 x7/4 (jsx comma): expressions.rs comma arm missing Go
+  checker.go:12774-12781's gate — skip 2695 when the left operand's
+  start sits inside a parser 2657 span (sibling-JSX recovery). -> 0.
+- constructableDecoratorOnClass01 1238 span residual: the no-call-
+  signatures branch passed the decorator node; Go passes node.
+  Expression() (checker.go:8981). Record now identical.
+2322 residue churn (still-divergent records): EXTRA 29/13->27/12,
+MISS 23/13->20/10 (re-clustered: SCATTERED). Newly-divergent 0;
+newly-identical 28 (26 targets + 2 collaterals; direction verified on
+privateNamesUnique-4). PLAIN-sweep census: divergent 245 (167 count /
+78 hash), identical 7,322/7,567; both drivers 0/3,826/3,741/0;
+panics 0. 116 ok suites/740 passed/0 FAILED (fcs58 pins 9/9); clippy
+0; all gates green fresh (orchestrator re-ran tests + sweeps +
+census independently; Go tree md5-verified pristine). QUEUED (census
+58b): EXTRA 2345 x23/13, 2322 x27/12, 2339 x12/9, 2304 x8/5, 7010
+x8/4, 7022 x8/3, 7023 x7/6, 2536/2694 x6/3, 2318 x6/6, 7005 x5/2,
+1166 x5/4; MISS 2322 x20/10, 1117 x6/5, 1162 x5/4, 1221 x5/3, 17019
+x6/4, 7031 x5/1, 2534/2403/2663/2741/8032 x4, 2678/8024 x4; carried
+checkJsdocTypeTag5 2322 x2, jsdocThisType 2683 x1, variadicTuples1
+(pinned), 7006 x2.
