@@ -4940,7 +4940,14 @@ impl Checker {
                     } else if current_kind.intersects(DeclarationMeaning::PROPERTY_ASSIGNMENT)
                         && existing_kind.intersects(DeclarationMeaning::PROPERTY_ASSIGNMENT)
                     {
-                        return self.grammar_error_on_node(
+                        // PORT (FCS tranche 58): Go grammarchecks.go:1121
+                        // does NOT return after this report — the loop
+                        // continues so EVERY later duplicate property
+                        // reports (e.g. `{ b: 1, ...o, b: 2, ...o2, b: 3 }`
+                        // reports at both b:2 and b:3; the former early
+                        // return dropped the b:3 TS1117 — the tranche-26
+                        // "spread seam" was this, un-root-caused until now).
+                        self.grammar_error_on_node(
                             name,
                             &diag::AN_OBJECT_LITERAL_CANNOT_HAVE_MULTIPLE_PROPERTIES_WITH_THE_SAME_NAME,
                             &[get_text_of_node(self.store(), name)],

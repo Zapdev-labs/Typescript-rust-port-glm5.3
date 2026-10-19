@@ -4125,3 +4125,50 @@ x8/4, 7022 x8/3, 7023 x7/6, 2536/2694 x6/3, 2318 x6/6, 7005 x5/2,
 x6/4, 7031 x5/1, 2534/2403/2663/2741/8032 x4, 2678/8024 x4; carried
 checkJsdocTypeTag5 2322 x2, jsdocThisType 2683 x1, variadicTuples1
 (pinned), 7006 x2.
+
+## Sweep micro-tranche 58 landed (2026-10-19, RIG-VALIDATED; pins/PORT notes "FCS tranche 58"; fcs59 pin suites by census epoch) — widened burst: generator yield-type message + intersection indexed access + quick-type CALL arm + 1117 continuation; divergent 245 -> 234
+Worked DIRECTLY by the orchestrator (no worker) per the user directive.
+- TS7010->TS7055 x4/4 (generators/generatorReturnTypeInferenceNonStrict):
+  report_implicit_any's function-family arm always selected the RETURN
+  message (7010 "return type") where Go selects the YIELD message (7055
+  "yield type", checker.go:18743) for WideningKind.GeneratorYield; landed
+  the GeneratorYield arm + the Reparsed overload arm (checker.go:18736-
+  18742: declaration_name_to_string name -> X_0_WHICH_LACKS..., empty ->
+  THIS_OVERLOAD...) via binder_shims::get_name_of_declaration +
+  tsc_scanner::utilities::declaration_name_to_string. NOTE (unit-pin
+  harness): the bare `yield;` operand types as undefined_widening_type,
+  which create_widening_type only marks when strictNullChecks is FALSE —
+  the corpus runs @strictNullChecks: false; a strict-mode unit harness
+  never forms the report (fcs59 pins run strict_null_checks: TSFalse).
+- TS2536 x4/4 (types/intersection/intersectionReduction{,Strict}):
+  check_indexed_access_index_type's inline of Go's everyType distributed
+  over UNION_OR_INTERSECTION; Go (checker.go:8436) distributes over UNION
+  only — the mapped-type `U[P & keyof U]` intersection index type checks
+  as a whole (someType semantics via the identical keyof member) and
+  never fires. -> 0; collaterals keyofAndIndexedAccessErrors NI.
+- TS7022 x7/7 (controlFlow/controlFlowIterationErrors{,Async}): two
+  stacked roots. (1) get_quick_type_of_expression's CALL arm (Go
+  checker.go:7573-7583) resolves the callee's single non-generic call
+  signature return WITHOUT checking the arguments; the arm had been
+  parked inert since FCS-26, so un-annotated `let y = f(x)` initializers
+  re-checked their arguments through check_expression_cached_ex — which
+  RESETS the loop-nested flow state mid back-antecedent walk — diverging
+  loop-carried references (`let y = f(x); x = y + 1`) into TS7022
+  circularity errors. Re-landed CALL + call-CHAIN arms (guards: callee
+  != Super, !is_require_call(...,true), !is_import_call; un-dead-coded
+  get_return_type_of_single_non_generic_signature_of_call_chain).
+  (2) The re-landing re-exposed the FCS-26 "spread seam": the TS1117
+  duplicate-property grammar arm early-returned after the first report
+  where Go (grammarchecks.go:1121) CONTINUES — `{ b:1, ...o, b:2, ...o2,
+  b:3 }` dropped the later duplicates. No early return; collaterals
+  objectSpreadNegative x2 configs + duplicatePropertyNames +
+  objectTypeWithDuplicateNumericProperty + uniqueSymbolsPropertyNames NI.
+FRESH verification: spread (27) + iteration corpora byte-identical both
+drivers; PLAIN sweeps divergent 234 (157 count / 77 hash), identical
+7,333/7,567; ND 0; NI 11 (5 targets + 6 collaterals, direction verified
+on every target); Go tree restored + md5-verified pristine after
+temporary Go probes (5th shared-rig foreign-clobber incident mid-probe,
+recovered from backups); both drivers 0/3,826/3,741/0; panics 0.
+QUEUED (census 58b, unchanged): EXTRA 2345 x23/13, 2322 x27/12 + MISS
+x20/10 (re-clustered, SCATTERED), 2339 x12/9, 2304 x8/5, 7023 x7/6,
+2318 x6/6, 7005/1166, 1117/1162/1221/17019/7031, carried residuals.

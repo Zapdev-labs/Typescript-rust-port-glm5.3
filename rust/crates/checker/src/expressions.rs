@@ -6008,9 +6008,16 @@ impl Checker {
             .get_index_info_of_type(object_type, self.number_type())
             .is_some();
         let every_assignable = {
-            // Go: everyType(indexType, f) — PORT: the constituent walk
-            // inlined (the closure captures &mut self).
-            if self.type_(index_type).flags.intersects(TypeFlags::UNION_OR_INTERSECTION) {
+            // Go: everyType(indexType, f) — PORT (FCS tranche 58): everyType
+            // distributes over UNION constituents ONLY; an intersection index
+            // type (e.g. the mapped-type `U[P & keyof U]` shape) is checked as
+            // a whole, where the relation's someType-over-intersection /
+            // isTypeDerivedFrom arms answer via the identical keyof member.
+            // The former UNION_OR_INTERSECTION walk checked the intersection's
+            // members INDIVIDUALLY, so the type-parameter member P failed the
+            // keyof-U probe and TS2536 fired rust-extra
+            // (intersectionReduction/Strict x4).
+            if self.type_(index_type).flags.intersects(TypeFlags::UNION) {
                 let constituents = self.type_(index_type).types().to_vec();
                 constituents.iter().all(|&t| {
                     self.index_type_assignable_check(t, object_index_type, has_number_index_info)

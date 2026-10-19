@@ -110,7 +110,9 @@ use tsc_diagnostics::{
     X_0_IMPLICITLY_HAS_AN_1_RETURN_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE,
     X_0_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_ITS_OWN_BASE_EXPRESSION,
     X_0_IS_REFERENCED_DIRECTLY_OR_INDIRECTLY_IN_ITS_OWN_TYPE_ANNOTATION,
+    THIS_OVERLOAD_IMPLICITLY_RETURNS_THE_TYPE_0_BECAUSE_IT_LACKS_A_RETURN_TYPE_ANNOTATION,
     X_0_WHICH_LACKS_RETURN_TYPE_ANNOTATION_IMPLICITLY_HAS_AN_1_RETURN_TYPE,
+    X_0_WHICH_LACKS_RETURN_TYPE_ANNOTATION_IMPLICITLY_HAS_AN_1_YIELD_TYPE,
 };
 
 use tsc_binder::ast_shims as binder_shims;
@@ -4598,11 +4600,45 @@ impl Checker {
                     }
                     return;
                 }
-                Some(if self.no_implicit_any {
-                    &X_0_WHICH_LACKS_RETURN_TYPE_ANNOTATION_IMPLICITLY_HAS_AN_1_RETURN_TYPE
+                // PORT (FCS tranche 58): Go checker.go:18736-18747 — the
+                // Reparsed arm (the declaration-name overload text) and the
+                // generator-yield arm (TS7055 "yield type", not TS7010
+                // "return type"): generatorReturnTypeInferenceNonStrict.
+                if !self.no_implicit_any {
+                    Some(&X_0_IMPLICITLY_HAS_AN_1_RETURN_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE)
                 } else {
-                    &X_0_IMPLICITLY_HAS_AN_1_RETURN_TYPE_BUT_A_BETTER_TYPE_MAY_BE_INFERRED_FROM_USAGE
-                })
+                    let reparsed = self
+                        .store()
+                        .node(declaration)
+                        .flags
+                        .intersects(NF::REPARSED);
+                    if reparsed {
+                        // Go: scanner.DeclarationNameToString(ast.GetNameOfDeclaration(...)).
+                        let name = tsc_scanner::utilities::declaration_name_to_string(
+                            self.store(),
+                            binder_shims::get_name_of_declaration(self.store(), declaration),
+                        );
+                        if !name.is_empty() {
+                            self.error(
+                                declaration,
+                                &X_0_WHICH_LACKS_RETURN_TYPE_ANNOTATION_IMPLICITLY_HAS_AN_1_RETURN_TYPE,
+                                &[name, type_as_string],
+                            );
+                        } else {
+                            self.error(
+                                declaration,
+                                &THIS_OVERLOAD_IMPLICITLY_RETURNS_THE_TYPE_0_BECAUSE_IT_LACKS_A_RETURN_TYPE_ANNOTATION,
+                                &[type_as_string],
+                            );
+                        }
+                        return;
+                    }
+                    Some(if widening_kind == WideningKind::GeneratorYield {
+                        &X_0_WHICH_LACKS_RETURN_TYPE_ANNOTATION_IMPLICITLY_HAS_AN_1_YIELD_TYPE
+                    } else {
+                        &X_0_WHICH_LACKS_RETURN_TYPE_ANNOTATION_IMPLICITLY_HAS_AN_1_RETURN_TYPE
+                    })
+                }
             }
             Kind::MappedType => {
                 if self.no_implicit_any {

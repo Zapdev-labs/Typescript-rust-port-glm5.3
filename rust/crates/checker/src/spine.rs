@@ -1583,32 +1583,38 @@ impl Checker {
             let callee_kind = crate::ast_shims::expression_of(self.store(), expr)
                 .map(|e| self.store().node(e).kind)
                 .unwrap_or(Kind::Unknown);
-            // TODO(port M6 S6): IsRequireCall / isSymbolOrSymbolForCall /
-            // IsImportCall — the call-shape guards; permissive false until
-            // the S6 call surface lands.
-            if callee_kind != Kind::SuperKeyword {
-                // PORT(FCS tranche 26): Go checker.go:7578/7583 — the CALL
-                // and call-CHAIN arms stay inert (None): wiring the real
-                // getSingleSignature flipped the multi-config
-                // types/spread/objectSpread corpus record (target=es5/es2015
-                // matrix) — the spread-override of a
-                // boolean-literal-typed property resolved `never` and a
-                // duplicate-property TS1117 went missing. That seam is not
-                // root-caused yet; only the NEW arm (the
-                // typesWith{Private,Protected}Constructor quick type) is
-                // live. Restore the two arms below when the spread/
-                // duplicate-property seam is ported:
-                //   if u::is_call_chain(self.store(), expr) {
-                //       return self.get_return_type_of_single_non_generic_signature_of_call_chain(expr);
-                //   }
-                //   let callee = crate::ast_shims::expression_of(self.store(), expr)
-                //       .expect("CallExpression has an expression");
-                //   let func_type = self.check_non_null_expression(callee);
-                //   return self.get_return_type_of_single_non_generic_signature(
-                //       func_type,
-                //       crate::types::SignatureKind::Call,
-                //   );
-                return None;
+            // TODO(port M6 S6): isSymbolOrSymbolForCall — the call-shape
+            // guard; permissive false until the S6 call surface lands
+            // (Go: !c.isSymbolOrSymbolForCall(expr)).
+            if callee_kind != Kind::SuperKeyword
+                && !binder_shims::is_require_call(self.store(), expr, true)
+                && !crate::resolvecall::is_import_call(self.store(), expr)
+            {
+                // PORT (FCS tranche 58, re-landing the FCS tranche 26
+                // parked arms): Go checker.go:7573-7583 — the CALL quick
+                // type resolves the callee's single non-generic call
+                // signature return WITHOUT checking the arguments. With the
+                // arm inert, every un-annotated `let y = f(x)` initializer
+                // re-checked its arguments through checkExpressionCachedEx
+                // (which resets the flow loop state mid back-antecedent
+                // walk), so loop-carried references like
+                // `let y = f(x); x = y + 1` diverged into TS7022
+                // circularity errors (controlFlowIterationErrors{,Async}
+                // x7 — Go instead resolves y quickly and the loop junction
+                // in-process branch terminates the nested walk). The
+                // tranche-26 flip (types/spread objectSpread TS1117) is
+                // re-verified with this landing — the spread seam landed
+                // since.
+                if crate::utilities::is_call_chain(self.store().node(expr)) {
+                    return self.get_return_type_of_single_non_generic_signature_of_call_chain(expr);
+                }
+                let callee = crate::ast_shims::expression_of(self.store(), expr)
+                    .expect("CallExpression has an expression");
+                let func_type = self.check_non_null_expression(callee);
+                return self.get_return_type_of_single_non_generic_signature(
+                    func_type,
+                    crate::types::SignatureKind::Call,
+                );
             }
         }
         if is_new_expression(self.store().node(expr)) {
@@ -1667,10 +1673,8 @@ impl Checker {
     }
 
     /// Go: `func (c *Checker) getReturnTypeOfSingleNonGenericSignatureOfCallChain(expr *ast.Node) *Type`
-    /// (checker.go:7587). Inert as of FCS tranche 26: its only caller (the
-    /// quickType call-chain arm) is deferred with the spread seam — see
-    /// the PORT note at the call arm in get_quick_type_of_expression.
-    #[allow(dead_code)] // restored with the objectSpread spread-override seam
+    /// (checker.go:7587). PORT (FCS tranche 58): restored with the quickType
+    /// call arm re-landing (the spread seam landed since tranche 26).
     fn get_return_type_of_single_non_generic_signature_of_call_chain(
         &mut self,
         expr: NodeId,
