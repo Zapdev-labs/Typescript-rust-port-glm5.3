@@ -1,0 +1,29 @@
+rust/crates/checker/tests/fcs60_top_cluster_pins.rs
+  s_c760161dda2d19::t_d1435d8a0d513b 1-197
+rust/crates/tsc-testrunner/tests/fcs60_top_cluster_records.rs
+  s_c760161dda2d19::t_5265d1ff4d65ee 1-146
+rust/crates/checker/src/typeofsymbol.rs
+  s_c760161dda2d19::t_8681b49e28e9e8 2465-2473
+  s_c760161dda2d19::t_617ef9d2936fcb 4802-4809,4819-4820
+  s_c760161dda2d19::t_5161f7745ed502 4810-4818
+  s_c760161dda2d19::t_1d2175640dc291 4894-4959
+rust/crates/checker/src/inference.rs
+  s_c760161dda2d19::t_6658bbfb398842 2728-2741,2747-2754,2764-2766
+  s_c760161dda2d19::t_1bd0d8cdfb629b 2767-2768
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5abc63d21e56a568e0a428c177cfd21acc41c229",
+  "prompts": {},
+  "sessions": {
+    "s_c760161dda2d19": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "e48660fc-43c1-451f-9234-7c7ba6128c6a",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
