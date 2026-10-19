@@ -4374,4 +4374,36 @@ FRESH battery: fcs63 pin suites 3+2 pass; 6-crate tests 0 FAILED; clippy
 0; 300-check/300-bind + fixture twins x3 byte-identical; program twin
 15/15; Go tree md5-verified pristine.
 
+## Sweep micro-tranche 63 landed (2026-10-19, RIG-VALIDATED; pins/PORT notes "FCS tranche 63"; fcs64 pin suites by census epoch) — the never-returning-call flow family; divergent 214 -> 213
+Worked DIRECTLY by the orchestrator (no worker) per the user directive.
+Root (census t62b count-diff top: neverReturningFunctions1 +4): our
+get_type_at_flow_call's (flow.rs) never-return arm was nested INSIDE the
+`if let Some(predicate) = predicate` block, so Go's arm (flow.go:308-310
+— a SIBLING of the asserts-predicate arm, inside the signature check but
+OUTSIDE the predicate check) never fired for predicate-less never calls:
+`function fail(message?: string): never` made the f01 `if (x ===
+undefined) fail("undefined argument")` consequent fall through to the
+FlowType{t: None} return, the CALL dispatch then walked the antecedent
+(the true-narrowed `undefined`) instead of marking the flow unreachable,
+and `x` at the branch join stayed `string | undefined` — TS18048 "x is
+possibly 'undefined'" rust-extra (neverReturningFunctions1 49 vs go 45).
+Probe trace (FCS62_PROBE, removed): get_effects_signature(fail) resolved
+with return "never" (sig_present=true) yet the branch-antecedent walk
+through the fail Call node yielded type=undefined unreachable=false —
+the arm was simply unreachable for predicate-less calls. Un-nested the
+arm to Go's structure. neverReturningFunctions1 CONVERGED to exactly 45
+= the Go count.
+FRESH verification: PLAIN sweep t63a: 213 divergent (138 count + 75
+hash), identical 7,354; verdict-diff 0; per-record diff vs the committed
+T62 sweep (t62b): 1 record moved, ZERO newly-divergent (the one
+neverReturningFunctions1 record, fully converged).
+FRESH battery: fcs64 pin suites 1+1 pass (plus fcs61-63 suites re-green);
+6-crate tests 0 FAILED; clippy 0; 300-check/300-bind + fixture twins x3
+byte-identical; program twin green; Go tree md5-verified pristine.
+NEXT (census t63a count-diff tops): conditionalTypes1 +6 (pre-existing
+70 vs 64), importAttributes12 +4, thisTypeAccessibility +4,
+plainJSGrammarErrors -5 (go-extra), variadicTuples2 -4, plus the
+hash-only 75; parked: mappedTypeConstraints2 (conditional-vs-template
+relation), thingMapped 2345 tail (4th cond-inst pass).
+
 

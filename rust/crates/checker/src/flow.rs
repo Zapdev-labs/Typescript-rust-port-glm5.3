@@ -622,10 +622,19 @@ impl Checker {
                     }
                     return self.new_flow_type(narrowed_type, flow_type.incomplete);
                 }
-                let return_type = self.get_return_type_of_signature(signature);
-                if self.type_(return_type).flags.intersects(TypeFlags::NEVER) {
-                    return FlowType { t: Some(self.unreachable_never_type()), incomplete: false };
-                }
+            }
+            // PORT (FCS tranche 63): Go checker.go/flow.go:308-310 — the
+            // never-return arm is a SIBLING of the asserts-predicate arm
+            // (inside the signature check, OUTSIDE the predicate check), so
+            // calls with NO type predicate (e.g. `function fail(): never`)
+            // still mark the flow unreachable. The former nesting inside the
+            // `if let Some(predicate)` block made the arm unreachable for
+            // predicate-less never calls and the antecedent walk returned
+            // the narrowed type instead (TS18048 possibly-undefined after
+            // `if (x === undefined) fail(...)`).
+            let return_type = self.get_return_type_of_signature(signature);
+            if self.type_(return_type).flags.intersects(TypeFlags::NEVER) {
+                return FlowType { t: Some(self.unreachable_never_type()), incomplete: false };
             }
         }
         FlowType { t: None, incomplete: false }
