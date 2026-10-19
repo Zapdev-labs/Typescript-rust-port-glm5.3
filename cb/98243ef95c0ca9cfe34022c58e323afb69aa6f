@@ -1,0 +1,29 @@
+rust/PORTING-NOTES.md
+  s_c760161dda2d19::t_8edc896a63f1c7 4373-4375
+  s_c760161dda2d19::t_caee39465b3628 4336-4372,4376
+rust/crates/checker/tests/fcs63_top_cluster_pins.rs
+  s_c760161dda2d19::t_6328d9c00669a4 1-202
+rust/crates/checker/src/typeofsymbol.rs
+  s_c760161dda2d19::t_1ab859cb800ce2 3092-3101
+  s_c760161dda2d19::t_afbbfe2040f957 3139-3150,3152-3155,3158-3187
+rust/crates/checker/src/expressions.rs
+  s_c760161dda2d19::t_0f89b62abd9230 7967-7977,7981-7982,7984
+rust/crates/tsc-testrunner/tests/fcs63_top_cluster_records.rs
+  s_c760161dda2d19::t_54222f651714f7 1-100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "cb98243ef95c0ca9cfe34022c58e323afb69aa6f",
+  "prompts": {},
+  "sessions": {
+    "s_c760161dda2d19": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "e48660fc-43c1-451f-9234-7c7ba6128c6a",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
