@@ -4296,3 +4296,41 @@ everything" directive)
   peak RSS go 44,648/84,748 kB vs rust 20,720/45,016 kB (~half). Raw
   outputs in ~/bench-results/phase0 and ~/bench-results/phaseA.
 
+## Sweep micro-tranche 61 landed (2026-10-19, RIG-VALIDATED; pins/PORT notes "FCS tranche 61"; fcs62 pin suites by census epoch) — the unknown-decomposition union family: is_unknown_like_union_type real body; divergent 219 -> 217
+Worked DIRECTLY by the orchestrator (no worker) per the user directive.
+- One root (census t61a top cluster): keyofAndIndexedAccess 53 rust
+  extras vs go 48 — the f92/fn/Unbounded family: `T` / `T[keyof T]` /
+  `T[K]` (and bare `unknown` via the type-variable arm's nil-constraint
+  fallback) all failed assignability to `{} | null | undefined` — the
+  canonical `unknown` decomposition. Go's isSimpleTypeRelatedTo tail arm
+  (relater.go:272) — "Anything is assignable to a union containing
+  undefined, null, and {}" — answers via isUnknownLikeUnionType
+  (checker.go:28337): strictNullChecks + union; cached on the union's
+  objectFlags via IsUnknownLikeUnion{,Computed}; types[0] undefined,
+  types[1] null, and SOME constituent the empty anonymous object type.
+  The port's free helper (relater.rs) was a permissive-false stub.
+  Implemented the real body (flow.rs's isUniformUnionType cached-flag
+  pattern).
+- Verified with the discriminating probes: unknown -> {} | null and
+  unknown -> {} | undefined still ERROR (both drivers) — only the exact
+  triple passes; T's constraint nil -> unknownType walk confirmed.
+- PLAIN sweep t61a: 217 divergent (141 count + 76 hash), identical
+  7,350; verdict-diff 0; per-record diff vs the committed T60 sweep
+  (t60e): 3 records moved, ZERO newly-divergent — keyofAndIndexedAccess
+  53->48 (CONVERGED, go 48), unknownControlFlow 34->31, unknownType1
+  41->40.
+- PARKED (deferred, probes stripped): mappedTypeConstraints2 (19 vs go
+  17; 3 rust-extra TS2536/TS2322 + 1 go-extra TS2322 on the
+  `keyof MappedN<K>` remapped-template family) — traced to the
+  conditional-source vs template-literal-target relation walk (the
+  conditional is NOT simplified — restrictive-instantiation correctly
+  answers false — but our walk exits before the conditional-source arm's
+  default/distributive constraint sub-walks; the Go arm that passes was
+  not yet isolated; next session: probe at the isRelatedToEx return
+  points for the (conditional, template) pair).
+FRESH verification: 6-crate tests all ok (fcs62 pin suites 4+3 pass);
+clippy 0; 300-check/300-bind + fixture twins x3 byte-identical; program
+twin 15/15; PLAIN sweep 217/7,350 (re-verified on the probe-free binary);
+Go tree md5-verified pristine.
+
+

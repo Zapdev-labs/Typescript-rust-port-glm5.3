@@ -10563,9 +10563,37 @@ impl Checker {
 
 /// Go: `func isUnknownLikeUnionType(t) bool` (utilities.go).
 pub(crate) fn is_unknown_like_union_type(c: &mut Checker, t: TypeId) -> bool {
-    // TODO(port M6 S7/S8): the union-contains-undefined/null/{} check.
-    let _ = (c, t);
-    false
+    // PORT(FCS tranche 61): Go checker.go:28337 — under strictNullChecks a union
+    // whose constituents include undefined (first), null (second), and the empty
+    // anonymous object type is the `unknown` decomposition: anything is assignable
+    // to it (the isSimpleTypeRelatedTo tail arm). Cached on the union's
+    // objectFlags via IsUnknownLikeUnion{,Computed}.
+    if !c.strict_null_checks || !c.type_(t).flags.intersects(TypeFlags::UNION) {
+        return false;
+    }
+    if c
+        .type_(t)
+        .object_flags
+        .intersects(ObjectFlags::IS_UNKNOWN_LIKE_UNION_COMPUTED)
+    {
+        return c
+            .type_(t)
+            .object_flags
+            .intersects(ObjectFlags::IS_UNKNOWN_LIKE_UNION);
+    }
+    let constituents = c.type_(t).types().to_vec();
+    let is_unknown_like = constituents.len() >= 3
+        && c.type_(constituents[0]).flags.intersects(TypeFlags::UNDEFINED)
+        && c.type_(constituents[1]).flags.intersects(TypeFlags::NULL)
+        && constituents
+            .iter()
+            .any(|&tt| c.is_empty_anonymous_object_type(tt));
+    c.type_mut(t).object_flags |= if is_unknown_like {
+        ObjectFlags::IS_UNKNOWN_LIKE_UNION_COMPUTED.union(ObjectFlags::IS_UNKNOWN_LIKE_UNION)
+    } else {
+        ObjectFlags::IS_UNKNOWN_LIKE_UNION_COMPUTED
+    };
+    is_unknown_like
 }
 
 /// Go: `func (c *Checker) getReturnTypeOfSignature(sig) *Type` — S8 stub
