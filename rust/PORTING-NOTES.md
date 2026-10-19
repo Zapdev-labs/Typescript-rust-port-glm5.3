@@ -4283,3 +4283,16 @@ AndIndexedAccess went 51->53 (go 48, pre-existing at 51 — net 5 records
 converged vs 2 worse); mappedTypeConstraints2 13->19 (go 17);
 conditionalTypes1 70 (go 64, pre-existing).
 
+## Post-T60 benchmark sweep (2026-10-19, RIG; per the user's "benchmark and
+everything" directive)
+- Phase 0 micro-race (bench-micro.sh, 10 samples): geomean rust/go 0.133x
+  across 45 sub-benches (tspath + jsnum families; every sub-bench
+  "rust faster" or parity — RootedFilePathToPathKey/AlreadyRooted 0.956
+  parity is the closest).
+- Phase A parse race (bench-parse.sh, 5 samples, threads 1/16, excalidraw
+  corpus, nodes 881,067 shape MATCH both thread counts, rsswrap peak RSS):
+  t1 go 152.2ms / rust 188.2ms = 1.236x (FIRST GREEN <=1.30x, hardening
+  to <=1.00x next); t16 go 41.9ms / rust 32.4ms = 0.772x (rust faster);
+  peak RSS go 44,648/84,748 kB vs rust 20,720/45,016 kB (~half). Raw
+  outputs in ~/bench-results/phase0 and ~/bench-results/phaseA.
+
