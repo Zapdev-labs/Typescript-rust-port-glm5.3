@@ -2462,7 +2462,15 @@ impl Checker {
         members: SymbolTable,
         extra_object_flags: crate::types::ObjectFlags,
     ) -> TypeId {
-        let properties: Vec<SymbolId> = members.entries().map(|(_, &s)| s).collect();
+        // PORT (FCS tranche 59): Go's newAnonymousType (checker.go:25624)
+        // routes through setStructuredTypeMembers → getNamedMembers — the
+        // reserved-name/value filter + the declaration-position sort
+        // (sortSymbols). The prior shape copied the members table's
+        // insertion order verbatim, so synthesized members whose
+        // declarations sit at EARLIER source positions than the type's own
+        // members printed out of order (the widened-object-literal sibling
+        // `z?: undefined` additions — the union-of-literals inference).
+        let properties = self.get_named_members(&members, symbol);
         let t = self.new_object_type(ObjectFlags::ANONYMOUS | extra_object_flags, symbol);
         {
             let data = self
@@ -4791,8 +4799,25 @@ impl Checker {
             members.set(name, widened_prop);
         }
         if context.is_some() {
-            // TODO(port M6 S9): getPropertiesOfContext — the sibling
-            // undefined-property additions.
+            // PORT (FCS tranche 59): Go checker.go:18857-18862 — the sibling
+            // undefined-property additions: every property the widening
+            // context's sibling object literals hold that THIS literal
+            // lacks becomes `prop?: undefined` (the union-of-object-
+            // literals widening — `{ x: 1 } | { y: 2 }` widens each arm
+            // with the other's props as optional undefined; Go's
+            // getPropertiesOfContext/getSiblingsOfContext, checker.go:
+            // 18869-18898). The S9 TODO stub added nothing.
+            let resolved_properties: Vec<SymbolId> = match context.as_mut() {
+                Some((arena, index)) => self.get_properties_of_context(arena, *index),
+                None => Vec::new(),
+            };
+            for prop in resolved_properties {
+                let name = self.program.symbol(prop).name.clone();
+                if members.get(&name).is_none() {
+                    let undefined_prop = self.get_undefined_property(prop);
+                    members.set(name, undefined_prop);
+                }
+            }
         }
         let symbol = self.type_(t).symbol;
         let result = self.new_anonymous_type_with_members(symbol, members, crate::types::ObjectFlags::NONE);
@@ -4864,6 +4889,72 @@ impl Checker {
             return prop;
         }
         self.create_symbol_with_type(prop, Some(widened))
+    }
+
+    /// Go: `func (c *Checker) getSiblingsOfContext(context *WideningContext) []*Type`
+    /// (checker.go:18885). PORT (FCS tranche 59): the context tree lives in
+    /// the caller-owned arena; the parent chain walk recurses by index.
+    /// Go's `siblings := []*Type{}` non-nil empty slice is `Some(vec![])`.
+    fn get_siblings_of_context(
+        &mut self,
+        contexts: &mut Vec<WideningContext>,
+        index: usize,
+    ) -> Vec<TypeId> {
+        if let Some(siblings) = &contexts[index].siblings {
+            return siblings.clone();
+        }
+        let parent = contexts[index].parent;
+        let property_name = contexts[index].property_name.clone();
+        let mut siblings: Vec<TypeId> = Vec::new();
+        if let Some(parent_index) = parent {
+            for t in self.get_siblings_of_context(contexts, parent_index) {
+                if u::is_object_literal_type(self.type_(t)) {
+                    if let Some(prop) =
+                        crate::relater::get_property_of_object_type(self, t, &property_name)
+                    {
+                        let prop_type = crate::relater::get_type_of_symbol(self, prop);
+                        for distributed in crate::relater::distributed(self, prop_type) {
+                            siblings.push(distributed);
+                        }
+                    }
+                }
+            }
+        }
+        contexts[index].siblings = Some(siblings.clone());
+        siblings
+    }
+
+    /// Go: `func (c *Checker) getPropertiesOfContext(context *WideningContext) []*ast.Symbol`
+    /// (checker.go:18869). PORT (FCS tranche 59): Go's
+    /// `collections.OrderedMap[string, *ast.Symbol]` — `Set` replaces the
+    /// value (last sibling wins) while keeping first-insertion order.
+    fn get_properties_of_context(
+        &mut self,
+        contexts: &mut Vec<WideningContext>,
+        index: usize,
+    ) -> Vec<SymbolId> {
+        if let Some(resolved) = &contexts[index].resolved_properties {
+            return resolved.clone();
+        }
+        let siblings = self.get_siblings_of_context(contexts, index);
+        let mut order: Vec<String> = Vec::new();
+        let mut by_name: FxHashMap<String, SymbolId> = FxHashMap::default();
+        for t in siblings {
+            if u::is_object_literal_type(self.type_(t))
+                && !self.type_(t).object_flags.intersects(ObjectFlags::CONTAINS_SPREAD)
+            {
+                for prop in crate::relater::get_properties_of_type(self, t) {
+                    let name = self.program.symbol(prop).name.clone();
+                    if !by_name.contains_key(&name) {
+                        order.push(name.clone());
+                    }
+                    by_name.insert(name, prop);
+                }
+            }
+        }
+        let resolved: Vec<SymbolId> = order.into_iter().map(|name| by_name[&name]).collect();
+        contexts[index].resolved_properties = Some(resolved.clone());
+        resolved
     }
 
     /// Go: `func (c *Checker) getUndefinedProperty(prop *ast.Symbol) *ast.Symbol`.

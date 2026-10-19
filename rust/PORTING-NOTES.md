@@ -4172,3 +4172,57 @@ recovered from backups); both drivers 0/3,826/3,741/0; panics 0.
 QUEUED (census 58b, unchanged): EXTRA 2345 x23/13, 2322 x27/12 + MISS
 x20/10 (re-clustered, SCATTERED), 2339 x12/9, 2304 x8/5, 7023 x7/6,
 2318 x6/6, 7005/1166, 1117/1162/1221/17019/7031, carried residuals.
+
+## Sweep micro-tranche 59 landed (2026-10-19, RIG-VALIDATED; pins/PORT notes "FCS tranche 59"; fcs60 pin suites by census epoch) — the TS2345 inference-candidate family: common-supertype strict arm + fresh-literal sibling widening + anonymous member ordering; divergent 234 -> 225
+Worked DIRECTLY by the orchestrator (no worker) per the user directive.
+- TS2345 x21 rust-extra over 12 records (census 58b top cluster). Three
+  stacked roots, all in the naked-type-parameter candidate resolution:
+- (1) getCommonSupertype's strictNullChecks arm (inference.go:1543): under
+  strictNullChecks Go filters each candidate's NULLABLE constituents
+  (filterType; `undefined` collapses to neverType and drops from the
+  supertype walk), computes the supertype over the FILTERED list, and
+  re-adds the removed nullability with getNullableType (the combined
+  nullable flags of the ORIGINAL candidates). The S7-era stub passed the
+  unfiltered list through both arms (its PORT note claimed filter_type's
+  identity made primary_types == types either way — false under
+  strictNullChecks), so [undefined, {x,z}|{x,y}] walked the supertype as
+  `undefined` and the second/third arguments over-reported TS2345
+  (typeArgumentInference a9e/arr,
+  taggedTemplateStringsTypeArgumentInference{,ES6},
+  typeArgumentInferenceWithConstraints x2 each).
+- (2) The union-of-fresh-literals widening (checker.go:18807-18898):
+  getWidenedTypeWithContext's UNION arm constructs the sibling
+  WideningContext when the caller passes none;
+  getWidenedTypeOfObjectLiteral adds every sibling-literal property the
+  literal itself lacks as `prop?: undefined` (getPropertiesOfContext /
+  getSiblingsOfContext / getUndefinedProperty — the S9 TODO stub added
+  nothing); the sibling walk distributes the parent context's property
+  types (relater::distributed). Root-caused with type-revealing probe
+  corpora (`var v: number = f(undefined, {x,z}, {x,y})` reveals T) after
+  the first probe round ran strictNullChecks: false while the corpus
+  default is strict — probe-mode parity matters.
+- (3) newAnonymousType's member list (checker.go:25624): Go routes through
+  setStructuredTypeMembers -> getNamedMembers (the reserved-name/value
+  filter + the declaration-position sortSymbols); the port's
+  new_anonymous_type_with_members copied the members table's insertion
+  order, so the sibling `z?: undefined` addition (whose declaration sits in
+  the EARLIER argument) printed last.
+FRESH verification: probes byte-identical both drivers (6-file probe
+corpus); PLAIN sweeps divergent 225 (150 count / 75 hash), identical
+7,342/7,567; verdict-diff 0; NEWLY-DIVERGENT 0; NI 9 records
+(typeArgumentInference, taggedTemplateStringsTypeArgumentInference{,ES6},
+typeArgumentInferenceWithConstraints, typeArgumentInferenceConstruct
+Signatures, genericCallWithFunctionTypedArguments2,
+destructuringParameterProperties3, typedefCrossModule2,
+typeFromPropertyAssignment29); 6-crate tests 120 suites ok/0 FAILED;
+clippy 0; 300-check/300-bind + fixture twins x3 byte-identical;
+program twin 15/15; Go tree md5-verified pristine.
+REMAINING 2345 never-family (T60 queue, 5 distinct roots — probes staged
+in ~/fcs59-c6): typeParameterConstModifiers GetPath infer-with-constraint
+recursion, intersectionTypeInference2 intersection candidates,
+discriminatedUnionTypes4 template-literal case narrowing,
+unknownControlFlow ff1, keyofAndIndexedAccess T[K].
+QUEUED (census 59h, unchanged): EXTRA 2345 x14/7-ish (never family),
+2322 x27/12 + MISS x20/10 (re-clustered, SCATTERED), 2339 x12/9, 2304
+x8/5, 7023 x7/6, 2318 x6/6, 7005/1166, 1117/1162/1221/17019/7031,
+carried residuals.

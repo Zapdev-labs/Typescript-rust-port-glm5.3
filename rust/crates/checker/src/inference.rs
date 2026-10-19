@@ -2725,17 +2725,33 @@ impl Checker {
         false
     }
 
-    /// Go: `func (c *Checker) getCommonSupertype(types) *Type`.
+    /// Go: `func (c *Checker) getCommonSupertype(types) *Type`
+    /// (inference.go:1543). PORT (FCS tranche 59): the strictNullChecks arm
+    /// is the real Go shape — under strictNullChecks every candidate has its
+    /// nullable constituents filtered (filterType; `undefined` collapses to
+    /// neverType and neverTypes drop from the supertype walk), the supertype
+    /// is computed over the FILTERED list, and the removed nullability is
+    /// re-added with getNullableType (the combined nullable flags of the
+    /// ORIGINAL candidates). The S7-era stub passed the unfiltered list
+    /// through both arms (primary_types == types), so a candidate list like
+    /// [undefined, {x,z}|{x,y}] walked the supertype as `undefined` —
+    /// typeArgumentInference a9e — where Go infers
+    /// `({x,z}|{x,y}) | undefined` (typeArgumentInference.ts,
+    /// taggedTemplateStringsTypeArgumentInference{,ES6},
+    /// typeArgumentInferenceWithConstraints x2 each).
     fn get_common_supertype(&mut self, types: &[TypeId]) -> TypeId {
         if types.len() == 1 {
             return types[0];
         }
         // Remove nullable types from each of the candidates. (Go comment, verbatim.)
-        // PORT: Go's `if c.strictNullChecks { ... filterType ... }` branch
-        // reduces to the identity here — filter_type's W2 stub consults only
-        // the top-level type, so the nullable filtering lands with S7's
-        // reducer (primary_types == types either way).
-        let primary_types: Vec<TypeId> = types.to_vec();
+        let primary_types: Vec<TypeId> = if self.strict_null_checks {
+            types
+                .iter()
+                .map(|&t| self.filter_type(t, |c, u| !c.type_(u).flags.intersects(TypeFlags::NULLABLE)))
+                .collect()
+        } else {
+            types.to_vec()
+        };
         // When the candidate types are all literal types with the same base type, return a union
         // of those literal types. Otherwise, return the leftmost type for which no type to the
         // right is a supertype. (Go comment, verbatim.)
@@ -2745,9 +2761,11 @@ impl Checker {
             self.get_single_common_supertype(&primary_types)
         };
         // Add any nullable types that occurred in the candidates back to the result. (Go comment, verbatim.)
-        // PORT: with filter_type's permissive identity, primary_types == types,
-        // so the getNullableType re-addition is never reached (S7 owns it).
-        supertype
+        if primary_types == types {
+            return supertype;
+        }
+        let nullable_flags = self.get_combined_type_flags(types) & TypeFlags::NULLABLE;
+        self.get_nullable_type(supertype, nullable_flags)
     }
 
     /// Go: `func (c *Checker) getSingleCommonSupertype(types) *Type`.
