@@ -4406,4 +4406,40 @@ plainJSGrammarErrors -5 (go-extra), variadicTuples2 -4, plus the
 hash-only 75; parked: mappedTypeConstraints2 (conditional-vs-template
 relation), thingMapped 2345 tail (4th cond-inst pass).
 
+## Sweep micro-tranche 64 landed (2026-10-19, RIG-VALIDATED; pins/PORT notes "FCS tranche 64"; fcs65 pin suites by census epoch) — the conditional-relation true-type target family; divergent 213 -> 210
+Worked DIRECTLY by the orchestrator (no worker) per the user directive.
+Root (census t63a count-diff top: conditionalTypes1 +6): our
+structured_type_related_to_worker's assignable-relation
+conditional-source arm (relater.rs) transcribed Go relater.go:3785 as
+`is_related_to(instantiate(trueType(source), mapper), target)` —
+passing the whole conditional `target` instead of
+`getTrueTypeFromConditionalType(target)` (the branch's true type).
+Structurally identical deferred conditionals (`type T90<T> = T extends
+0 ? 0 : () => 0` vs the same-bodied `type T91<T>`; also Foo/Bar #21756
+and T94/T95 #21823) therefore related the instantiated source true type
+`0` against the conditional itself, failed, and fell through to the
+default/distributive-constraint paths — TS2322 rust-extra at every
+`const f40 = <U>(a: T90<U>): T91<U> => a` shape. Probe trace
+(FCS63_PROBE, removed): is_related_to_ex WAS entered with
+os=T90<U> ot=T91<U> (Assignable), but the identity-only conditional arm
+(Go relater.go:3360 — inside the `relation == identityRelation` case)
+never printed for them, isolating the failure to the NON-identity
+conditional arm (Go relater.go:3753) — where the true-type relation's
+target read was mis-transcribed. Fixed the read.
+conditionalTypes1 CONVERGED to exactly 64 = the Go count; also
+conditionalTypes2 44 -> 42 and unionAndIntersectionInference3
+25 -> 24 (both remaining-divergent, not converged).
+FRESH verification: PLAIN sweep t64a: 210 divergent (135 count + 75
+hash), identical 7,357; verdict-diff 0; per-record diff vs the committed
+T63 sweep (t63a): 3 records moved (all 3 BETTER), ZERO newly-divergent.
+FRESH battery: fcs65 pin suites 3+3 pass (plus fcs61-64 suites
+re-green); 6-crate tests 0 FAILED; clippy 0; 300-check/300-bind +
+fixture twins x3 byte-identical; program twin green; Go tree
+md5-verified pristine.
+NEXT (census t64a count-diff tops): importAttributes12 +4,
+thisTypeAccessibility +4, plainJSGrammarErrors -5 (go-extra),
+variadicTuples2 -4, plus the hash-only 75; parked: mappedTypeConstraints2
+(conditional-vs-template relation), thingMapped 2345 tail (4th cond-inst
+pass).
+
 

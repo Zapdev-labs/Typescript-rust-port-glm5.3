@@ -5311,7 +5311,18 @@ impl Relater {
                 {
                     let source_true_type = get_true_type_from_conditional_type(c, source);
                     let __lift19 = instantiate_type_opt(c, source_true_type, mapper);
-                    result = self.is_related_to(c, __lift19, target, RecursionFlags::BOTH, report_errors);
+                    // PORT (FCS tranche 64): Go relater.go:3785 — the
+                    // target side of the true-type relation is
+                    // `getTrueTypeFromConditionalType(target)` (the
+                    // branch's true type), NOT the whole conditional
+                    // `target`. The former transcription passed `target`,
+                    // so `T90<U> -> T91<U>` (structurally identical
+                    // deferred conditionals) related `0` against the
+                    // conditional itself, failed, and fell through to the
+                    // default/distributive-constraint paths (TS2322
+                    // rust-extra, conditionalTypes1 70 vs go 64).
+                    let __lift18 = get_true_type_from_conditional_type(c, target);
+                    result = self.is_related_to(c, __lift19, __lift18, RecursionFlags::BOTH, report_errors);
                     if result != Ternary::False {
                         let __lift21 = get_false_type_from_conditional_type(c, source);
                         let __lift20 = get_false_type_from_conditional_type(c, target);
