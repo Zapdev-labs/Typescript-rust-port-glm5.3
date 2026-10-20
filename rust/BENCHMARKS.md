@@ -375,3 +375,52 @@ are parse/resolve/allocation dominated; no single hot spot remains.
 The rig's `target/release/tsc-bench` is a hardlink of the deps artifact
 (feature toggles swap hardlinks in 0.02s legitimately) — see
 PORTING-NOTES for the staleness-check gotcha.
+
+## 2026-10-20 — ts-rust (pingdotgg/ts-rust, tsc-rs 0.7.0) comparison on T3 Code
+
+User-requested duel against pingdotgg/ts-rust (tsc-rs 0.7.0, npm
+`tsc-rs`, ports TypeScript 7.1.0-dev; ships PGO-trained binaries and a
+jemalloc-class global allocator) on its own benchmark codebase, T3 Code
+(pingdotgg/t3code @ HEAD, five app projects: desktop/marketing/mobile/
+server/web), same rig, pnpm install frozen, both sides warm cache.
+
+Their headline metric — full type check, sum of 5-run medians over the
+five `apps/*/tsconfig.json` (all exit clean): **tsc-rs 19.56 s; tsc-rs
+--fast 17.80 s.** Our port cannot run this metric yet: project-mode
+compilation (tsconfig graph, tsc CLI, emit) is M7+, so no full-check
+claim is possible either way today.
+
+Apples-to-apples slice — parse over IDENTICAL file sets (their
+`--listFilesOnly` program graphs materialized as symlink corpora:
+15,993 files, ~224 MB, incl. node_modules .d.ts):
+
+- theirs `tsc-rs --noCheck -p <app> --listFilesOnly` (their loader is
+  single-threaded; `--checkers 1/2/4/8` all 0.75–0.82 s on server):
+  per-app medians 0.282/0.196/0.520/0.775/0.781 s, sum **2.55 s**
+  (includes node startup + tsconfig/module resolution; no per-node
+  histogram).
+- ours default build (contract work incl. the per-node walk+histogram):
+  t1 sum 7.08 s, t16 sum 1.73 s.
+- ours PGO-trained (llvm-profdata, parse/bind/check-trained) +
+  mimalloc feature: t1 sum 5.15 s (per-app 635/443/1056/1754/1265 ms),
+  t16 sum ~1.30 s (server 365 ms = 164 MB/s, web 304 ms = 162 MB/s);
+  parse-only t1 (walk excluded, PGO+mimalloc) sum 4.42 s.
+  Excalidraw Phase A with the same binary: t1 301 ms vs go 357 ms =
+  **0.84×**, t16 102 ms, shape_hash MATCH (parity unaffected).
+
+Verdict (honest): **we are not yet faster than ts-rust.** We beat them
+on multi-threaded parse of the identical file set (their shipped loader
+is serial: server 365 ms @ t16 vs their 750–820 ms), and PGO+mimalloc
+cut our t1 22–24 % and t16 29–33 % — but single-threaded parse remains
+~1.6–2× behind theirs even parse-only-vs-with-resolve (server 1.65 s
+vs 0.82 s), and their full-check metric is not runnable by us (M7).
+gprofng sampling of the remaining gap: ~44 % of sampled CPU is
+allocation (mimalloc internals + `mi_free`) and the per-node `Box`
+payloads (`NodeData::Token(Box<Token>)` … one heap alloc + drop per
+node) are the structural cause — exactly the work ts-rust's "astchunks /
+static node data in the AST arena" campaign removed. The identified
+path to parity-or-better per thread: (1) typed payload arenas replacing
+the per-node `Box`es in `ast_generated.rs`, (2) M7 project-mode so the
+full-check metric is runnable at all. mimalloc remains a declared
+opt-in (this duel used `--features mimalloc`; official Phase A numbers
+above are the default allocator).
