@@ -1,0 +1,19 @@
+rust/PORTING-NOTES.md
+  s_c760161dda2d19::t_0e6958f30861a5 4298-4307
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e578b5ebcd2b44c0d8cbe6a1855beb9bc2d64ae0",
+  "prompts": {},
+  "sessions": {
+    "s_c760161dda2d19": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "e48660fc-43c1-451f-9234-7c7ba6128c6a",
+        "model": "glm-5.3"
+      },
+      "human_author": "Jackson57279 <jackson@email.zapdev.link>"
+    }
+  }
+}
