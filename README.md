@@ -1,50 +1,127 @@
+# TypeScript Compiler — Rust Port
 
-# TypeScript
+A Rust port of the TypeScript compiler's Go port
+(`tsc/internal/checker` et al.), built to beat the Go baseline on
+speed and memory while matching its diagnostics byte-for-byte.
 
-[![CI](https://github.com/microsoft/TypeScript/actions/workflows/ci.yml/badge.svg)](https://github.com/microsoft/TypeScript/actions/workflows/ci.yml)
-[![npm version](https://badge.fury.io/js/typescript.svg)](https://www.npmjs.com/package/typescript)
-[![Downloads](https://img.shields.io/npm/dm/typescript.svg)](https://www.npmjs.com/package/typescript)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/microsoft/TypeScript/badge)](https://securityscorecards.dev/viewer/?uri=github.com/microsoft/TypeScript)
+**Current standing** (2026-10-20, quiet rig): parse race t1 **0.977x**
+and t16 **0.766x** (Rust faster at both thread counts), peak RSS
+~49% of Go, Phase 0 micro geomean **0.101x**; check-stage twin
+divergence 210/7,567 records against the Go driver. Tranche history
+and methodology: [`rust/SPEC.md`](rust/SPEC.md),
+[`rust/PORTING-NOTES.md`](rust/PORTING-NOTES.md),
+[`rust/CONFORMANCE.md`](rust/CONFORMANCE.md),
+[`rust/BENCHMARKS.md`](rust/BENCHMARKS.md).
 
+This README covers **installing and running** the Rust side.
 
-[TypeScript](https://www.typescriptlang.org/) is a language for application-scale JavaScript. TypeScript adds optional types to JavaScript that support tools for large-scale JavaScript applications for any browser, for any host, on any OS. TypeScript compiles to readable, standards-based JavaScript. Try it out at the [playground](https://www.typescriptlang.org/play/), and stay up to date via [our blog](https://devblogs.microsoft.com/typescript/) and [Twitter account](https://twitter.com/typescript).
+## Requirements
 
-Find others who are using TypeScript at [our community page](https://www.typescriptlang.org/community/).
+- **Rust** stable toolchain ≥ 1.85 (the workspace pins
+  `rust/rust-toolchain.toml`; `rustup` picks it up automatically).
+  Install via [rustup](https://rustup.rs):
+  ```sh
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+- **A checkout of this repository** (the Rust workspace lives in
+  `rust/` but reads the TypeScript sources and test data from the
+  surrounding tree: `tsc/`, notably `tsc/testdata/` for the
+  conformance corpus and baselines).
+- Optional, for the Go-vs-Rust benchmarks: **Go** (any recent
+  toolchain) to build the Go driver in `rust/bench/go-driver`, and
+  `cc` for `rust/bench/rsswrap.c` (peak-RSS measurement).
 
-## Installing
+No system packages beyond a C toolchain for the benchmark harness;
+the crates themselves are pure Rust with a small approved dependency
+set (see `rust/Cargo.toml`).
 
-For the latest stable version:
+## Build
 
-```bash
-npm install -D typescript
+From the repository root (or `rust/` — same workspace):
+
+```sh
+cd rust
+cargo build --release -p bench-harness
 ```
 
-For our nightly builds:
+This produces the driver binary:
 
-```bash
-npm install -D typescript@next
+```
+rust/target/release/tsc-bench
 ```
 
-## Contribute
+`tsc-bench` is the all-in-one frontend used for conformance runs and
+benchmarks. Subcommands used day-to-day:
 
-There are many ways to [contribute](CONTRIBUTING.md) to TypeScript.
-* [Submit bugs](https://github.com/microsoft/TypeScript/issues) and help us verify fixes as they are checked in.
-* Review the [source code changes](https://github.com/microsoft/TypeScript/pulls).
-* Engage with other TypeScript users and developers on [StackOverflow](https://stackoverflow.com/questions/tagged/typescript).
-* Help each other in the [TypeScript Community Discord](https://discord.gg/typescript).
-* Join the [#typescript](https://twitter.com/search?q=%23TypeScript) discussion on Twitter.
-* [Contribute bug fixes](CONTRIBUTING.md).
+```sh
+# Conformance sweep (check stage) against the TypeScript baselines:
+rust/target/release/tsc-bench conformance \
+  --corpus  tsc/testdata/tests/cases/conformance \
+  --baselines tsc/testdata/baselines/reference \
+  --suite conformance --stage check
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see
-the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com)
-with any additional questions or comments.
+# Parse/bind stages, thread-count scaling, and a tiny gated corpus:
+rust/target/release/tsc-bench conformance ... --stage parse   # or --stage bind
+rust/target/release/tsc-bench program --corpus rust/bench/gates/program-matrix
+```
 
-## Documentation
+Each run prints one JSON record per case (`verdict`, `errors_count`,
+`shape_hash`) — the twin-test contract against the Go driver.
 
-*  [TypeScript in 5 minutes](https://www.typescriptlang.org/docs/handbook/typescript-in-5-minutes.html)
-*  [Programming handbook](https://www.typescriptlang.org/docs/handbook/intro.html)
-*  [Homepage](https://www.typescriptlang.org/)
+## Test
 
-## Roadmap
+```sh
+cd rust
+cargo test -p tsc-checker -p tsc-testrunner -p tsc-binder \
+           -p tsc-tsoptions -p tsc-scanner -p tsc-parser
+cargo clippy -p tsc-checker   # warnings are kept at zero
+```
 
-For details on our planned features and future direction, please refer to our [roadmap](https://github.com/microsoft/TypeScript/wiki/Roadmap).
+The `fcs*_top_cluster_pins.rs` / `fcs*_top_cluster_records.rs` suites
+pin converged conformance records so regressions fail loudly.
+
+## Benchmarks (optional)
+
+Both scripts run from the repository root and compare the Rust
+binary against the Go driver on identical work (see
+`rust/bench/DRIVER-CONTRACT.md`):
+
+```sh
+bash rust/scripts/bench-micro.sh   # Phase 0 micro benches
+bash rust/scripts/bench-parse.sh    # Phase A parse race (threads 1/16)
+```
+
+## Remote-rig workflow (maintainers)
+
+Heavy builds and full-corpus sweeps are meant to run on the build rig,
+not the local machine. The helper scripts mirror the tree and run
+everything remotely:
+
+```sh
+# sync local edits to the rig (in-place, nice'd):
+TS_RSYNC_INPLACE=1 nice -n 19 bash rust/scripts/remote-sync.sh
+
+# build / test remotely:
+ssh <rig> 'bash -lc "cd ~/TypeScript/rust && \
+  cargo build --release --bin tsc-bench"'
+```
+
+See `rust/scripts/rig-setup.sh` for first-time rig provisioning and
+`rust/scripts/remote-run.sh` / `remote-test.sh` for the remaining
+helpers.
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `rust/crates/` | The port itself — `parser`, `binder`, `checker` (the big one), `tsc-testrunner`, plus support crates (`tsc-core`, `tsc-diagnostics`, `tsc-tspath`, ...). |
+| `rust/bench/` | Go driver, gated corpora, `rsswrap.c`, and the driver contract. |
+| `rust/scripts/` | Benchmarks and rig sync/run/test helpers. |
+| `rust/SPEC.md` | Porting spec: milestones, crate map, gates. |
+| `rust/PORTING-NOTES.md` | Tranche-by-tranche landing log. |
+| `tsc/`, `packages/`, `tools/` | The upstream TypeScript tree (source material; only `rust/**` carries the port's commits). |
+
+---
+
+The upstream Microsoft TypeScript README is available at
+https://github.com/microsoft/TypeScript#readme.
