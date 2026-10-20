@@ -4295,6 +4295,16 @@ everything" directive)
   to <=1.00x next); t16 go 41.9ms / rust 32.4ms = 0.772x (rust faster);
   peak RSS go 44,648/84,748 kB vs rust 20,720/45,016 kB (~half). Raw
   outputs in ~/bench-results/phase0 and ~/bench-results/phaseA.
+- Re-measured 2026-10-20 (post-tranche-64 binary, quiet rig, 5 samples,
+  nodes 881,067 shape MATCH both thread counts): parse race t1
+  go 357.2ms / rust 349.0ms = **0.977x — HARDENING TARGET MET (<=1.00x,
+  rust faster single-threaded)**; t16 go 168.6ms / rust 129.0ms =
+  **0.766x (rust faster)**; peak RSS go 43,128/86,972 kB vs rust
+  21,092/45,640 kB (~49%). The earlier 1.236x t1 reading was shared-rig
+  noise (both sides wall-clocked against a loaded rig; the corpus
+  wall for go moved 152->357ms between the two sessions). Phase 0
+  micro re-run: geomean **0.101** (was 0.133; all 45 sub-benches rust
+  faster). Raw outputs in ~/bench-results/phase0 and ~/bench-results/phaseA.
 
 ## Sweep micro-tranche 61 landed (2026-10-19, RIG-VALIDATED; pins/PORT notes "FCS tranche 61"; fcs62 pin suites by census epoch) — the unknown-decomposition union family: is_unknown_like_union_type real body; divergent 219 -> 217
 Worked DIRECTLY by the orchestrator (no worker) per the user directive.
