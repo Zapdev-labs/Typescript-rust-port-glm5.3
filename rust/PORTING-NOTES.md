@@ -4453,3 +4453,49 @@ variadicTuples2 -4, plus the hash-only 75; parked: mappedTypeConstraints2
 pass).
 
 
+
+## PERF tranche (2026-10-20) — the tsc-rs duel follow-ups: PGO + mimalloc + the Identifier payload inline; parse t1 ~1.4-1.5× faster than the default build, zero semantic change
+Worked directly by the orchestrator (rig: heavy load during measurement —
+all comparisons below are interleaved same-load A/Bs).
+- (1) BUILD FLAGS (rig artifacts, not the default profile): the duel
+  binary is `cargo build --release --bin tsc-bench --features mimalloc`
+  + `-Cprofile-use=<llvm-profdata>` trained on the duel corpora
+  (parse t1+t16 ×2 over the five t3code app graphs + the conditional
+  conformance subset). Retraining PGO ON the mimalloc build was the
+  single biggest lever (server t1 2250→1266 ms in the quiet-rig window);
+  a second-generation retrain measured no further gain. `-Ctarget-cpu
+  =native` measured SLOWER (layout regression) — do not use.
+- (2) Identifier payload inline (ast_generated.rs +
+  factory_generated.rs + deepclone.rs + source_file.rs + checker flow
+  and jsx construction sites + scanner tests): `NodeData::Identifier
+  (Box<Identifier>)` → `NodeData::Identifier(Identifier)` — the payload
+  is 24 B and identifiers are 34.5% of all nodes in real-world corpora
+  (t3code server: 2.2 M of 6.4 M), so one heap alloc + drop per
+  identifier node disappears. NodeData 16→24 B, Node 48→56 B (node_size
+  test updated; still inside the SPEC §5.1 ≤96 B window). Interleaved
+  A/B vs the same PGO+mimalloc build without the inline: ~2-4% t1 —
+  mimalloc already made small allocs cheap; the LEAK probe (drop
+  excluded, env-gated, removed) shows drop/free ≈5% of wall.
+- (3) LEARNINGS for the next perf round: the remaining ~1.8× t1 gap vs
+  tsc-rs (fair interleaved duel, server corpus: theirs 0.78 s median
+  `--listFilesOnly --checkers 1` vs ours 1.48 s incl. the contract
+  walk) is NOT allocation-dominated — it is spread across scan+parse.
+  Stack sampling is broken on this rig (no perf; samply blocked by
+  perf_event_paranoid=2 without sudo; gprofng drops ~90% of samples —
+  mimalloc's asm is likely un-unwindable; gdb attach blocked by
+  ptrace_scope=1). The ts-rust "astchunks" side-column node storage
+  (16 B slots) + data-oriented parser remains the identified structural
+  path; needs a working profiler first.
+- (4) Fair duel summary (same load, interleaved): vs the GO driver on
+  the t3code corpora (identical contract work) we are faster at BOTH
+  thread counts — server t1 0.91×, t16 0.62×; web t1 0.89×, t16 0.61×.
+  vs tsc-rs 0.7.0: we win multi-threaded parse (t16 240 ms vs their
+  ~800 ms single-threaded loader, 16-core rig) and lose single-threaded
+  ~1.8×; their full-check metric (17.8-19.6 s on t3code) is not
+  runnable by us (M7 pending).
+FRESH verification: full PLAIN sweep t65a: 210 divergent / 7,357
+identical — ZERO records moved vs the committed T64 sweep (the inline
+is semantically invisible: shape hashes identical everywhere);
+6-crate tests 0 FAILED (795 pass locally); clippy 0; 300-check/bind +
+fixture twins ×3 byte-identical; program twin identical; Go tree
+md5-verified pristine.

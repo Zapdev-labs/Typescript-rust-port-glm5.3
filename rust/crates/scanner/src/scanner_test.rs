@@ -142,10 +142,10 @@ fn test_is_jsdoc_type_expression_or_child() {
             Kind::Identifier,
             NodeFlags::JSDOC,
             TextRange::undefined(),
-            NodeData::Identifier(Box::new(Identifier {
+            NodeData::Identifier(Identifier {
                 flow_node: None,
                 text: "T".into(),
-            })),
+            }),
         ),
     );
     sf.nodes[js_doc_type_child.local_index() as usize]
@@ -170,10 +170,10 @@ fn test_is_jsdoc_type_expression_or_child() {
             Kind::Identifier,
             NodeFlags::REPARSED,
             TextRange::undefined(),
-            NodeData::Identifier(Box::new(Identifier {
+            NodeData::Identifier(Identifier {
                 flow_node: None,
                 text: "T".into(),
-            })),
+            }),
         ),
     );
     sf.nodes[reparsed_type_child.local_index() as usize]
@@ -214,10 +214,10 @@ fn test_is_jsdoc_type_expression_or_child() {
             Kind::Identifier,
             NodeFlags::JSDOC,
             TextRange::undefined(),
-            NodeData::Identifier(Box::new(Identifier {
+            NodeData::Identifier(Identifier {
                 flow_node: None,
                 text: "param".into(),
-            })),
+            }),
         ),
     );
     sf.nodes[js_doc_tag_child.local_index() as usize]

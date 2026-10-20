@@ -229,8 +229,8 @@ impl ModifierList {
 
 /// SPEC §5.1: the arena slot. Go: `type Node struct { Kind; Flags; Loc; id;
 /// Parent *Node; data nodeData }`. `NodeData` is the generated enum (one
-/// variant per concrete node struct, every payload boxed so the slot is a
-/// fixed 48 bytes — see the `node_size` test and PORTING-NOTES). The `Cell`
+/// variant per concrete node struct; payloads are boxed except the inlined
+/// small hot ones — see the `node_size` test and PORTING-NOTES). The `Cell`
 /// fields hold state set after construction but before escape (id, parent),
 /// exactly as in Go (`atomic.Uint64` id, `*Node` parent).
 pub struct Node {
@@ -377,10 +377,17 @@ mod tests {
     /// a fixed 48-byte arena slot — inside the §12 window ("≤64B without box,
     /// accept ≤96B boxed"), and a single indirection like Go's `nodeData`
     /// interface. Update this number only together with that decision.
+    ///
+    /// PERF (2026-10-20, tsc-rs duel): the `Identifier` payload — 34.5% of
+    /// all nodes in real-world corpora (t3code server: 2.2M of 6.4M) — is
+    /// INLINED (24B, one heap alloc + drop saved per identifier node),
+    /// growing the enum to 24 bytes and `Node` to a 56-byte slot: still
+    /// inside the §5.1 ≤96B window. Identifiers are the hot small payload;
+    /// the rest stay boxed pending the same measurement per kind.
     #[test]
     fn node_size_is_48_bytes() {
-        assert_eq!(std::mem::size_of::<NodeData>(), 16);
-        assert_eq!(std::mem::size_of::<Node>(), 48);
+        assert_eq!(std::mem::size_of::<NodeData>(), 24);
+        assert_eq!(std::mem::size_of::<Node>(), 56);
         // The SPEC §5.1 target window.
         assert!(std::mem::size_of::<Node>() <= 96);
     }

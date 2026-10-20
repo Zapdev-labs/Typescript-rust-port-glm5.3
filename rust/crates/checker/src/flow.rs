@@ -4119,10 +4119,10 @@ impl Checker {
             data: if is_private {
                 NodeData::PrivateIdentifier(Box::new(tsc_ast::PrivateIdentifier { text: name_text }))
             } else {
-                NodeData::Identifier(Box::new(tsc_ast::Identifier {
+                NodeData::Identifier(tsc_ast::Identifier {
                     text: name_text,
                     flow_node: None,
-                }))
+                })
             },
         };
         let name_id = self.program.node_store_mut().alloc(name_node);

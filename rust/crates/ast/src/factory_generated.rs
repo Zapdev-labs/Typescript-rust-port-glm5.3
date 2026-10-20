@@ -38,7 +38,7 @@ impl NodeFactory<'_> {
             flow_node: None,
             text: text.into(),
         };
-        self.new_node(Kind::Identifier, NodeFlags::NONE, NodeData::Identifier(Box::new(data)))
+        self.new_node(Kind::Identifier, NodeFlags::NONE, NodeData::Identifier(data))
     }
 
     /// Go: `func (f *NodeFactory) NewPrivateIdentifier(Text) *Node` (ast_generated.go).

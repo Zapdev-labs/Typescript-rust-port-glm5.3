@@ -768,7 +768,7 @@ mod tests {
                 loc: TextRange::new(0, 1),
                 id: Cell::new(0),
                 parent: Cell::new(NodeId::NONE),
-                data: NodeData::Identifier(Box::new(d)),
+                data: NodeData::Identifier(d),
             })
         };
         let literal = {

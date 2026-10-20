@@ -2254,10 +2254,10 @@ impl Checker {
                         loc: TextRange::undefined(),
                         id: Cell::new(0),
                         parent: Cell::new(NodeId::NONE),
-                        data: NodeData::Identifier(Box::new(tsc_ast::Identifier {
+                        data: NodeData::Identifier(tsc_ast::Identifier {
                             text: name,
                             flow_node: None,
-                        })),
+                        }),
                     }
                 };
                 let children_name_id = self.program.node_store_mut().alloc(children_name_node);
@@ -3163,10 +3163,10 @@ impl Checker {
                     loc: TextRange::undefined(),
                     id: Cell::new(0),
                     parent: Cell::new(NodeId::NONE),
-                    data: NodeData::Identifier(Box::new(tsc_ast::Identifier {
+                    data: NodeData::Identifier(tsc_ast::Identifier {
                         text,
                         flow_node: None,
-                    })),
+                    }),
                 }
             };
             let namespace_id = self.program.node_store_mut().alloc(namespace_node);
@@ -3178,10 +3178,10 @@ impl Checker {
                     loc: TextRange::undefined(),
                     id: Cell::new(0),
                     parent: Cell::new(NodeId::NONE),
-                    data: NodeData::Identifier(Box::new(tsc_ast::Identifier {
+                    data: NodeData::Identifier(tsc_ast::Identifier {
                         text,
                         flow_node: None,
-                    })),
+                    }),
                 }
             };
             let right_id = self.program.node_store_mut().alloc(right_node);
@@ -3311,10 +3311,10 @@ impl Checker {
                     loc: TextRange::undefined(),
                     id: Cell::new(0),
                     parent: Cell::new(NodeId::NONE),
-                    data: NodeData::Identifier(Box::new(tsc_ast::Identifier {
+                    data: NodeData::Identifier(tsc_ast::Identifier {
                         text: d.text.clone(),
                         flow_node: None,
-                    })),
+                    }),
                 };
                 Some(self.program.node_store_mut().alloc(node))
             }

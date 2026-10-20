@@ -8689,7 +8689,7 @@ impl JSDocParameterOrPropertyTag {
 #[derive(Clone)]
 pub enum NodeData {
     Token(Box<Token>),
-    Identifier(Box<Identifier>),
+    Identifier(Identifier),
     PrivateIdentifier(Box<PrivateIdentifier>),
     QualifiedName(Box<QualifiedName>),
     ComputedPropertyName(Box<ComputedPropertyName>),
@@ -9582,7 +9582,7 @@ impl Node {
     /// Go: `func (n *Node) AsIdentifier() *Identifier`
     pub fn as_identifier(&self) -> Option<&Identifier> {
         match &self.data {
-            NodeData::Identifier(d) => Some(&**d),
+            NodeData::Identifier(d) => Some(d),
             _ => None,
         }
     }
@@ -11122,7 +11122,7 @@ impl Node {
     pub fn visit_each_child(&self, v: &mut dyn NodeVisitor) -> Option<Node> {
         let data = match &self.data {
             NodeData::Token(d) => d.visit_each_child(v).map(|x| NodeData::Token(Box::new(x))),
-            NodeData::Identifier(d) => d.visit_each_child(v).map(|x| NodeData::Identifier(Box::new(x))),
+            NodeData::Identifier(d) => d.visit_each_child(v).map(NodeData::Identifier),
             NodeData::PrivateIdentifier(d) => d.visit_each_child(v).map(|x| NodeData::PrivateIdentifier(Box::new(x))),
             NodeData::QualifiedName(d) => d.visit_each_child(v).map(|x| NodeData::QualifiedName(Box::new(x))),
             NodeData::ComputedPropertyName(d) => d.visit_each_child(v).map(|x| NodeData::ComputedPropertyName(Box::new(x))),
