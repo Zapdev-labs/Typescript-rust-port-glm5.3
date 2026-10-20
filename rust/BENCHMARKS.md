@@ -424,3 +424,44 @@ the per-node `Box`es in `ast_generated.rs`, (2) M7 project-mode so the
 full-check metric is runnable at all. mimalloc remains a declared
 opt-in (this duel used `--features mimalloc`; official Phase A numbers
 above are the default allocator).
+
+## 2026-10-20 (II) — local sampled profile of the optimized parse; the t1 architecture verdict
+
+Poor-man's profiler finally landed (the rig cannot sample: no perf,
+samply blocked at perf_event_paranoid=2 without sudo, gprofng drops
+~90% of samples, gdb attach blocked by ptrace_scope=1 — the LOCAL box
+has ptrace_scope=0). Method: the rig's PGO+mimalloc binary (setarch -R,
+no ASLR) run against the duel server corpus; 107 stack samples via
+repeated `gdb -p <pid> -batch -ex bt`, PCs resolved against `nm`.
+
+Self-time profile of `parse --threads 1` (the contract work — remember
+~17 pts of this are benchmark-only walk/histogram that tsc-rs's
+`--listFilesOnly` does not do):
+
+| share | where |
+|---|---|
+| ~15% | `Scanner::scan` |
+| ~23% | mimalloc (`_mi_page_malloc_zero` 10.3, `mi_free` family 8.5, `mi_theap` 2.8) |
+| ~17% | the contract walk (`for_each_child` 8.4 + walk_stats 4.7 + node 1.9 + push_mut 1.9) |
+| ~11% | node creation (`SourceFile::alloc` 3.7 + drop_glue<Node> 4.7 + alloc 1.9) |
+| ~35% | parser machinery, spread across the parse_* ladder (largest single ~4%) |
+
+Conclusions:
+- No single fixable hotspot. `token_value_kind`'s `from_utf8` and the
+  walk probe false-positives from gprofng's broken samples were
+  red herrings (1/107 samples).
+- Payload batch-inlining is exhausted: only Identifier (24B) fit the
+  24B NodeData budget; PropertyAccessExpression is 48B, Parameter 120B,
+  TypeAliasDeclaration 168B (NodeId is 16B), so inlining them grows the
+  node slot past the SPEC §5.1 window.
+- Normalizing away the walk-only 17%: our pure parse is ~1.0 s vs
+  tsc-rs's ~0.7 s (their median 0.78 s `--listFilesOnly --checkers 1`
+  minus ~0.1 s node startup + tsconfig resolution) — a ~1.4-1.5× t1
+  deficit whose mass is allocation (23%) + the 16B NodeId-wide node
+  payloads vs their 16B astchunks slots. Closing it is the
+  side-column AST campaign (per-type payload columns, 16B node slots,
+  byte-offset node ids) — a multi-session architecture change, not an
+  incremental edit. Current honest standing vs tsc-rs 0.7.0 on t3code:
+  t16 win (240 ms vs their ~800 ms single-threaded loader), t1 ~1.5×
+  behind parse-only, full-check not runnable (M7); vs the Go driver on
+  the same corpora: faster at BOTH t1 (0.89-0.91×) and t16 (0.61-0.62×).
