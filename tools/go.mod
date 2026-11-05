@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/anchore/quill v0.7.1
-	github.com/blacktop/go-macho v1.1.283
+	github.com/blacktop/go-macho v1.1.296
 	github.com/golangci/plugin-module-register v0.1.2
 	golang.org/x/mod v0.41.0
 	golang.org/x/tools v0.50.0
@@ -15,7 +15,7 @@ require (
 	github.com/anchore/go-logger v0.0.0-20251106021608-a5b0513fa9a9 // indirect
 	github.com/anchore/go-macholibre v0.0.0-20250826193721-3cd206ca93aa // indirect
 	github.com/bitfield/gotestdox v0.2.2 // indirect
-	github.com/blacktop/go-dwarf v1.0.14 // indirect
+	github.com/blacktop/go-dwarf v1.1.0 // indirect
 	github.com/dnephin/pflag v1.0.7 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
